@@ -1517,9 +1517,7 @@ mod tests {
     use chrono::Utc;
 
     use crate::{
-        plugin::PluginToolDecl,
-        plugin::registry::PluginEntry as RegistryPluginEntry,
-        role::Role,
+        plugin::PluginToolDecl, plugin::registry::PluginEntry as RegistryPluginEntry, role::Role,
     };
 
     use super::*;
@@ -1532,10 +1530,13 @@ mod tests {
     ) -> RegistryPluginEntry {
         RegistryPluginEntry::new(
             "fixture",
-            PluginToolDecl::new(name, crate::entry::definition::json_schema_for::<serde_json::Value>())
-                .description(description)
-                .tags(tags)
-                .concurrency_safe(true),
+            PluginToolDecl::new(
+                name,
+                crate::entry::definition::json_schema_for::<serde_json::Value>(),
+            )
+            .description(description)
+            .tags(tags)
+            .concurrency_safe(true),
         )
     }
 

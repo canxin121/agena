@@ -1,4 +1,4 @@
-//! First-party `agena.workflow` plugin: orchestration tools (task, tool_search,
+//! `agena.workflow` plugin: orchestration tools (task, tool_search,
 //! todo_write, create_goal, get_goal, update_goal, ask_user, enter_plan_mode,
 //! exit_plan_mode, enter_worktree, exit_worktree).
 
@@ -8,11 +8,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::entry::{BundledExecution, ToolExecutionView, ask_user, tool_search};
+use crate::entry::{ToolExecutionView, ToolPayloadExecution, ask_user, tool_search};
 use crate::message::{
     AskUserToolInput, ClearGoalToolInput, CreateGoalToolInput, EnterPlanModeToolInput,
-    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, BundledToolOutput,
-    GetGoalToolInput, TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
+    EnterWorktreeToolInput, ExitPlanModeToolInput, ExitWorktreeToolInput, GetGoalToolInput,
+    TaskToolInput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolPayloadOutput,
     ToolSearchToolInput, WorkflowPromptToolInput,
 };
 use crate::plugin::PluginError;
@@ -24,8 +24,8 @@ use crate::plugin::sdk::host_api::{
     HostUpdateGoalRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, PathAccessSpec, PathRequest,
-    PathKind, Plugin, PluginToolDecl, PluginManifest, Result as SdkResult, ToolInvokeInput,
+    HookSubscription, HostCapability, InitContext, InitOutcome, PathAccessSpec, PathKind,
+    PathRequest, Plugin, PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput,
     ToolInvokeOutput, ToolTag,
 };
 
@@ -107,12 +107,12 @@ impl WorkflowPlugin {
         }
     }
 
-    fn bundled_workflow(name: &str) -> SdkResult<agena_skills::Skill> {
+    fn provided_workflow(name: &str) -> SdkResult<agena_skills::Skill> {
         agena_skills::bundled::all()
             .map_err(|err| PluginError::new(err.to_string()))?
             .into_iter()
             .find(|skill| skill.frontmatter.name == name)
-            .ok_or_else(|| PluginError::new(format!("missing bundled workflow '{name}'")))
+            .ok_or_else(|| PluginError::new(format!("missing default workflow '{name}'")))
     }
 
     fn render_workflow_prompt(body: &str, args: &str) -> String {
@@ -128,12 +128,12 @@ impl WorkflowPlugin {
         }
     }
 
-    async fn invoke_bundled_workflow(
+    async fn invoke_provided_workflow(
         &self,
         workflow_name: &str,
         input: &WorkflowPromptToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let workflow = Self::bundled_workflow(workflow_name)?;
+        let workflow = Self::provided_workflow(workflow_name)?;
         let prompt = Self::render_workflow_prompt(
             workflow.body.as_str(),
             input.args.as_deref().unwrap_or_default(),
@@ -341,7 +341,7 @@ impl WorkflowPlugin {
         }
 
         let execution = ask_user::execution_from_answers(input, answers);
-        Ok(crate::plugins::bundled::router::bundled_to_invoke_output(execution))
+        Ok(crate::plugins::provided::router::tool_execution_to_invoke_output(execution))
     }
 
     async fn invoke_task(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -400,14 +400,14 @@ impl WorkflowPlugin {
             view.metadata.entry(key).or_insert(value);
         }
 
-        let output = BundledToolOutput::Task {
+        let output = ToolPayloadOutput::Task {
             session_id,
             model_provider_id,
             model_id,
         };
         Ok(
-            crate::plugins::bundled::router::bundled_to_invoke_output(
-                BundledExecution::new(output, view),
+            crate::plugins::provided::router::tool_execution_to_invoke_output(
+                ToolPayloadExecution::new(output, view),
             ),
         )
     }
@@ -422,7 +422,7 @@ impl WorkflowPlugin {
             .collect::<Vec<_>>();
         let execution = tool_search::execute_with_tools(&catalog, input)
             .map_err(|err| PluginError::invalid_params(err.to_string()))?;
-        Ok(crate::plugins::bundled::router::bundled_to_invoke_output(execution))
+        Ok(crate::plugins::provided::router::tool_execution_to_invoke_output(execution))
     }
 }
 
@@ -434,7 +434,7 @@ pub(crate) fn new_plugin() -> WorkflowPlugin {
 impl Plugin for WorkflowPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-workflow", env!("CARGO_PKG_VERSION"))
-            .description("Workflow orchestration tools exposed as a bundled plugin.")
+            .description("Workflow orchestration tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .tools(entries())
             .build()
@@ -517,15 +517,15 @@ impl Plugin for WorkflowPlugin {
                     .await
             }
             "workflow_init" => {
-                self.invoke_bundled_workflow("init", &serde_json::from_value(input.input)?)
+                self.invoke_provided_workflow("init", &serde_json::from_value(input.input)?)
                     .await
             }
             "workflow_review" => {
-                self.invoke_bundled_workflow("review", &serde_json::from_value(input.input)?)
+                self.invoke_provided_workflow("review", &serde_json::from_value(input.input)?)
                     .await
             }
             "workflow_security_review" => {
-                self.invoke_bundled_workflow(
+                self.invoke_provided_workflow(
                     "security-review",
                     &serde_json::from_value(input.input)?,
                 )
@@ -571,7 +571,7 @@ fn entries() -> Vec<PluginToolDecl> {
             "workflow_init",
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
         )
-        .description("Generate the bundled init workflow prompt so it can be submitted as a normal turn.")
+        .description("Generate the init workflow prompt so it can be submitted as a normal turn.")
         .tag(ToolTag::ReadOnly)
         .always_load()
         .concurrency_safe(true),
@@ -579,7 +579,7 @@ fn entries() -> Vec<PluginToolDecl> {
             "workflow_review",
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
         )
-        .description("Generate the bundled review workflow prompt so it can be submitted as a normal turn.")
+        .description("Generate the review workflow prompt so it can be submitted as a normal turn.")
         .tag(ToolTag::ReadOnly)
         .always_load()
         .concurrency_safe(true),
@@ -587,7 +587,7 @@ fn entries() -> Vec<PluginToolDecl> {
             "workflow_security_review",
             crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
         )
-        .description("Generate the bundled security review workflow prompt so it can be submitted as a normal turn.")
+        .description("Generate the security review workflow prompt so it can be submitted as a normal turn.")
         .tag(ToolTag::ReadOnly)
         .always_load()
         .concurrency_safe(true),
@@ -845,9 +845,9 @@ mod tests {
             assert_eq!(req.items.len(), 1);
             assert_eq!(req.items[0].content, "ship it");
             Ok(
-                crate::plugins::bundled::router::bundled_to_invoke_output(
-                    BundledExecution::new(
-                        BundledToolOutput::TodoWrite {
+                crate::plugins::provided::router::tool_execution_to_invoke_output(
+                    ToolPayloadExecution::new(
+                        ToolPayloadOutput::TodoWrite {
                             items: vec![TodoItem {
                                 content: "ship it".to_string(),
                                 status: TodoStatus::InProgress,
@@ -936,9 +936,9 @@ mod tests {
             _req: HostEnterPlanModeRequest,
         ) -> SdkResult<ToolInvokeOutput> {
             Ok(
-                crate::plugins::bundled::router::bundled_to_invoke_output(
-                    BundledExecution::new(
-                        BundledToolOutput::EnterPlanMode {
+                crate::plugins::provided::router::tool_execution_to_invoke_output(
+                    ToolPayloadExecution::new(
+                        ToolPayloadOutput::EnterPlanMode {
                             plan_path: "/tmp/plan.md".to_string(),
                             slug: "demo".to_string(),
                         },
@@ -953,9 +953,9 @@ mod tests {
             _req: HostExitPlanModeRequest,
         ) -> SdkResult<ToolInvokeOutput> {
             Ok(
-                crate::plugins::bundled::router::bundled_to_invoke_output(
-                    BundledExecution::new(
-                        BundledToolOutput::ExitPlanMode {
+                crate::plugins::provided::router::tool_execution_to_invoke_output(
+                    ToolPayloadExecution::new(
+                        ToolPayloadOutput::ExitPlanMode {
                             approved: true,
                             plan_path: "/tmp/plan.md".to_string(),
                         },
@@ -972,9 +972,9 @@ mod tests {
             assert_eq!(req.name.as_deref(), Some("demo"));
             assert_eq!(req.path, None);
             Ok(
-                crate::plugins::bundled::router::bundled_to_invoke_output(
-                    BundledExecution::new(
-                        BundledToolOutput::EnterWorktree {
+                crate::plugins::provided::router::tool_execution_to_invoke_output(
+                    ToolPayloadExecution::new(
+                        ToolPayloadOutput::EnterWorktree {
                             path: "/tmp/wt".to_string(),
                             branch: "agena/demo".to_string(),
                         },
@@ -988,9 +988,9 @@ mod tests {
             assert_eq!(req.action, "keep");
             assert!(!req.discard_changes);
             Ok(
-                crate::plugins::bundled::router::bundled_to_invoke_output(
-                    BundledExecution::new(
-                        BundledToolOutput::ExitWorktree {
+                crate::plugins::provided::router::tool_execution_to_invoke_output(
+                    ToolPayloadExecution::new(
+                        ToolPayloadOutput::ExitWorktree {
                             action: "keep".to_string(),
                             path: "/tmp/wt".to_string(),
                         },
@@ -1054,12 +1054,13 @@ mod tests {
             ))
             .await
             .expect("ask_user host invoke");
-        let envelope = crate::plugins::bundled::router::payload_to_bundled_envelope(
+        let output = crate::plugins::provided::router::payload_to_tool_output(
+            "ask_user",
             output.payload.as_ref(),
         )
         .unwrap();
-        match envelope.output {
-            BundledToolOutput::AskUser { answers } => {
+        match output {
+            ToolPayloadOutput::AskUser { answers } => {
                 assert_eq!(answers["color"], vec!["blue".to_string()]);
             }
             other => panic!("unexpected output: {other:?}"),
@@ -1298,12 +1299,13 @@ mod tests {
             ))
             .await
             .expect("task host invoke");
-        let envelope = crate::plugins::bundled::router::payload_to_bundled_envelope(
+        let output = crate::plugins::provided::router::payload_to_tool_output(
+            "task",
             output.payload.as_ref(),
         )
         .unwrap();
-        match envelope.output {
-            BundledToolOutput::Task {
+        match output {
+            ToolPayloadOutput::Task {
                 session_id,
                 model_provider_id,
                 model_id,
@@ -1332,12 +1334,13 @@ mod tests {
             ))
             .await
             .expect("todo_write host invoke");
-        let envelope = crate::plugins::bundled::router::payload_to_bundled_envelope(
+        let output = crate::plugins::provided::router::payload_to_tool_output(
+            "todo_write",
             output.payload.as_ref(),
         )
         .unwrap();
-        match envelope.output {
-            BundledToolOutput::TodoWrite { items } => {
+        match output {
+            ToolPayloadOutput::TodoWrite { items } => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].content, "ship it");
                 assert_eq!(items[0].status, TodoStatus::InProgress);
@@ -1358,12 +1361,13 @@ mod tests {
             ))
             .await
             .expect("enter_plan_mode host invoke");
-        let enter_plan = crate::plugins::bundled::router::payload_to_bundled_envelope(
+        let enter_plan = crate::plugins::provided::router::payload_to_tool_output(
+            "enter_plan_mode",
             enter_plan.payload.as_ref(),
         )
         .unwrap();
-        match enter_plan.output {
-            BundledToolOutput::EnterPlanMode { plan_path, slug } => {
+        match enter_plan {
+            ToolPayloadOutput::EnterPlanMode { plan_path, slug } => {
                 assert_eq!(plan_path, "/tmp/plan.md");
                 assert_eq!(slug, "demo");
             }
@@ -1380,12 +1384,13 @@ mod tests {
             ))
             .await
             .expect("enter_worktree host invoke");
-        let enter_worktree = crate::plugins::bundled::router::payload_to_bundled_envelope(
+        let enter_worktree = crate::plugins::provided::router::payload_to_tool_output(
+            "enter_worktree",
             enter_worktree.payload.as_ref(),
         )
         .unwrap();
-        match enter_worktree.output {
-            BundledToolOutput::EnterWorktree { path, branch } => {
+        match enter_worktree {
+            ToolPayloadOutput::EnterWorktree { path, branch } => {
                 assert_eq!(path, "/tmp/wt");
                 assert_eq!(branch, "agena/demo");
             }
@@ -1402,12 +1407,13 @@ mod tests {
             ))
             .await
             .expect("exit_worktree host invoke");
-        let exit_worktree = crate::plugins::bundled::router::payload_to_bundled_envelope(
+        let exit_worktree = crate::plugins::provided::router::payload_to_tool_output(
+            "exit_worktree",
             exit_worktree.payload.as_ref(),
         )
         .unwrap();
-        match exit_worktree.output {
-            BundledToolOutput::ExitWorktree { action, path } => {
+        match exit_worktree {
+            ToolPayloadOutput::ExitWorktree { action, path } => {
                 assert_eq!(action, "keep");
                 assert_eq!(path, "/tmp/wt");
             }
@@ -1421,12 +1427,13 @@ mod tests {
             ))
             .await
             .expect("exit_plan_mode host invoke");
-        let exit_plan = crate::plugins::bundled::router::payload_to_bundled_envelope(
+        let exit_plan = crate::plugins::provided::router::payload_to_tool_output(
+            "exit_plan_mode",
             exit_plan.payload.as_ref(),
         )
         .unwrap();
-        match exit_plan.output {
-            BundledToolOutput::ExitPlanMode {
+        match exit_plan {
+            ToolPayloadOutput::ExitPlanMode {
                 approved,
                 plan_path,
             } => {
@@ -1451,12 +1458,13 @@ mod tests {
             ))
             .await
             .expect("tool_search host invoke");
-        let envelope = crate::plugins::bundled::router::payload_to_bundled_envelope(
+        let output = crate::plugins::provided::router::payload_to_tool_output(
+            "tool_search",
             output.payload.as_ref(),
         )
         .unwrap();
-        match envelope.output {
-            BundledToolOutput::ToolSearch { results, .. } => {
+        match output {
+            ToolPayloadOutput::ToolSearch { results, .. } => {
                 assert_eq!(results, vec!["bash".to_string()]);
             }
             other => panic!("unexpected output: {other:?}"),
@@ -1464,7 +1472,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bundled_workflow_entries_render_prompt_text() {
+    async fn provided_workflow_entries_render_prompt_text() {
         let (plugin, _) = initialized_plugin().await;
 
         let review = plugin

@@ -1,22 +1,21 @@
-//! First-party handler for the `monitor` tool — translates `MonitorToolInput`
+//! Handler for the `monitor` tool — translates `MonitorToolInput`
 //! into calls on the registry attached to the executor.
 
 use std::collections::HashMap;
 
 use crate::message::{
-    BundledToolOutput, MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary,
-    MonitorToolInput,
+    MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput, ToolPayloadOutput,
 };
 
 use super::monitor::{
     MonitorError, MonitorRead, MonitorStart, MonitorStopOutcome, ReadParams, StartParams,
 };
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
 
 pub(crate) fn execute(
     executor: &ToolExecutor,
     input: &MonitorToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let registry = executor
         .monitor_registry()
         .ok_or_else(|| ToolError::InvalidInput("monitor registry is not enabled".to_string()))?;
@@ -105,7 +104,7 @@ fn inherited_environment() -> HashMap<String, String> {
     std::env::vars().collect()
 }
 
-pub(crate) fn render_start(started: MonitorStart) -> BundledExecution {
+pub(crate) fn render_start(started: MonitorStart) -> ToolPayloadExecution {
     let summary = started.summary;
     let title = format!(
         "Monitor start {}",
@@ -123,7 +122,7 @@ pub(crate) fn render_start(started: MonitorStart) -> BundledExecution {
     let mut view = ToolExecutionView::simple(title, body);
     insert_summary_metadata(&mut view, &summary);
 
-    let output = BundledToolOutput::Monitor {
+    let output = ToolPayloadOutput::Monitor {
         action: "start".to_string(),
         monitor_id: Some(summary.monitor_id.clone()),
         status: Some(summary.status),
@@ -134,10 +133,10 @@ pub(crate) fn render_start(started: MonitorStart) -> BundledExecution {
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
     };
-    BundledExecution::new(output, view)
+    ToolPayloadExecution::new(output, view)
 }
 
-pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> BundledExecution {
+pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> ToolPayloadExecution {
     let body = if monitors.is_empty() {
         "No monitors registered in this session.".to_string()
     } else {
@@ -165,7 +164,7 @@ pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> BundledExecution {
     view.metadata
         .insert("count".to_string(), monitors.len().to_string());
 
-    let output = BundledToolOutput::Monitor {
+    let output = ToolPayloadOutput::Monitor {
         action: "list".to_string(),
         monitor_id: None,
         status: None,
@@ -176,10 +175,10 @@ pub(crate) fn render_list(monitors: Vec<MonitorSummary>) -> BundledExecution {
         dropped_lines: 0,
         exit_code: None,
     };
-    BundledExecution::new(output, view)
+    ToolPayloadExecution::new(output, view)
 }
 
-pub(crate) fn render_read(read: MonitorRead) -> BundledExecution {
+pub(crate) fn render_read(read: MonitorRead) -> ToolPayloadExecution {
     let body = format_events(&read);
     let title = format!("Monitor read {}", read.monitor_id);
     let mut view = ToolExecutionView::simple(title, body);
@@ -200,7 +199,7 @@ pub(crate) fn render_read(read: MonitorRead) -> BundledExecution {
             .insert("exit_code".to_string(), code.to_string());
     }
 
-    let output = BundledToolOutput::Monitor {
+    let output = ToolPayloadOutput::Monitor {
         action: "read".to_string(),
         monitor_id: Some(read.monitor_id),
         status: Some(read.status),
@@ -211,10 +210,10 @@ pub(crate) fn render_read(read: MonitorRead) -> BundledExecution {
         dropped_lines: read.dropped_lines,
         exit_code: read.exit_code,
     };
-    BundledExecution::new(output, view)
+    ToolPayloadExecution::new(output, view)
 }
 
-pub(crate) fn render_stop(stop: MonitorStopOutcome) -> BundledExecution {
+pub(crate) fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
     let summary = stop.summary;
     let title = format!("Monitor stop {}", summary.monitor_id);
     let body = format!(
@@ -229,7 +228,7 @@ pub(crate) fn render_stop(stop: MonitorStopOutcome) -> BundledExecution {
     let mut view = ToolExecutionView::simple(title, body);
     insert_summary_metadata(&mut view, &summary);
 
-    let output = BundledToolOutput::Monitor {
+    let output = ToolPayloadOutput::Monitor {
         action: "stop".to_string(),
         monitor_id: Some(summary.monitor_id.clone()),
         status: Some(summary.status),
@@ -240,7 +239,7 @@ pub(crate) fn render_stop(stop: MonitorStopOutcome) -> BundledExecution {
         dropped_lines: summary.dropped_lines,
         exit_code: summary.exit_code,
     };
-    BundledExecution::new(output, view)
+    ToolPayloadExecution::new(output, view)
 }
 
 fn format_events(read: &MonitorRead) -> String {

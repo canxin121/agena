@@ -1,9 +1,9 @@
 use std::cmp::min;
 use std::fs;
 
-use crate::message::{BundledToolOutput, ReadToolInput};
+use crate::message::{ReadToolInput, ToolPayloadOutput};
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
 
 const DEFAULT_OFFSET: usize = 1;
 const DEFAULT_LIMIT: usize = 2000;
@@ -12,7 +12,7 @@ const MAX_LINE_CHARS: usize = 2000;
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &ReadToolInput,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let target = executor.resolve_target_path(&input.file_path);
     executor.ensure_read_permission(&target)?;
 
@@ -29,7 +29,7 @@ pub(super) fn execute(
 
     if target.is_dir() {
         let (preview, truncated, count) = read_directory_listing(&target, offset, limit)?;
-        let output = BundledToolOutput::Read {
+        let output = ToolPayloadOutput::Read {
             preview: Some(preview.clone()),
             truncated: Some(truncated),
             loaded_paths: vec![display_path.clone()],
@@ -45,7 +45,7 @@ pub(super) fn execute(
             .insert("entry_count".to_string(), count.to_string());
         view.metadata
             .insert("truncated".to_string(), truncated.to_string());
-        return Ok(BundledExecution::new(output, view));
+        return Ok(ToolPayloadExecution::new(output, view));
     }
 
     let content = fs::read(&target)?;
@@ -58,7 +58,7 @@ pub(super) fn execute(
 
     let (preview, truncated, rendered_lines, total_lines) =
         render_file_preview(&text, offset, limit)?;
-    let output = BundledToolOutput::Read {
+    let output = ToolPayloadOutput::Read {
         preview: Some(preview.clone()),
         truncated: Some(truncated),
         loaded_paths: vec![display_path.clone()],
@@ -76,7 +76,7 @@ pub(super) fn execute(
     view.metadata
         .insert("truncated".to_string(), truncated.to_string());
 
-    Ok(BundledExecution::new(output, view))
+    Ok(ToolPayloadExecution::new(output, view))
 }
 
 fn parse_offset(value: Option<u32>) -> usize {

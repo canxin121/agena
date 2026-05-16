@@ -1,6 +1,6 @@
-use crate::message::BundledToolOutput;
+use crate::message::ToolPayloadOutput;
 
-use super::result::BundledExecution;
+use super::result::ToolPayloadExecution;
 
 const DEFAULT_OUTPUT_LIMIT: usize = 16 * 1024;
 
@@ -33,24 +33,24 @@ impl ToolOutputTruncator {
         Self { policy }
     }
 
-    pub fn apply(&self, mut execution: BundledExecution) -> BundledExecution {
+    pub fn apply(&self, mut execution: ToolPayloadExecution) -> ToolPayloadExecution {
         execution.view.output_text =
             truncate_text(&execution.view.output_text, self.policy.max_chars);
 
         match &mut execution.output {
-            BundledToolOutput::Bash { output, .. }
-            | BundledToolOutput::PowerShell { output, .. } => {
+            ToolPayloadOutput::Bash { output, .. }
+            | ToolPayloadOutput::PowerShell { output, .. } => {
                 if let Some(text) = output.as_mut() {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
-            BundledToolOutput::Read { preview, .. } => {
+            ToolPayloadOutput::Read { preview, .. } => {
                 if let Some(text) = preview.as_mut() {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
-            BundledToolOutput::ViewFile { .. } => {}
-            BundledToolOutput::ApplyPatch {
+            ToolPayloadOutput::ViewFile { .. } => {}
+            ToolPayloadOutput::ApplyPatch {
                 inverse_patch,
                 diff,
                 ..
@@ -58,28 +58,28 @@ impl ToolOutputTruncator {
                 *inverse_patch = truncate_text(inverse_patch, self.policy.max_chars);
                 *diff = truncate_text(diff, self.policy.max_chars);
             }
-            BundledToolOutput::Glob { .. }
-            | BundledToolOutput::Grep { .. }
-            | BundledToolOutput::Task { .. }
-            | BundledToolOutput::ToolSearch { .. }
-            | BundledToolOutput::TodoWrite { .. }
-            | BundledToolOutput::AskUser { .. }
-            | BundledToolOutput::Monitor { .. }
-            | BundledToolOutput::WebFetch { .. }
-            | BundledToolOutput::WebSearch { .. }
-            | BundledToolOutput::EnterPlanMode { .. }
-            | BundledToolOutput::ExitPlanMode { .. }
-            | BundledToolOutput::EnterWorktree { .. }
-            | BundledToolOutput::ExitWorktree { .. }
-            | BundledToolOutput::CronCreate { .. }
-            | BundledToolOutput::CronList { .. }
-            | BundledToolOutput::CronDelete { .. }
-            | BundledToolOutput::ScheduleWakeup { .. }
-            | BundledToolOutput::LspDefinition { .. }
-            | BundledToolOutput::LspReferences { .. }
-            | BundledToolOutput::LspHover { .. }
-            | BundledToolOutput::LspDiagnostics { .. }
-            | BundledToolOutput::NotebookEdit { .. } => {}
+            ToolPayloadOutput::Glob { .. }
+            | ToolPayloadOutput::Grep { .. }
+            | ToolPayloadOutput::Task { .. }
+            | ToolPayloadOutput::ToolSearch { .. }
+            | ToolPayloadOutput::TodoWrite { .. }
+            | ToolPayloadOutput::AskUser { .. }
+            | ToolPayloadOutput::Monitor { .. }
+            | ToolPayloadOutput::WebFetch { .. }
+            | ToolPayloadOutput::WebSearch { .. }
+            | ToolPayloadOutput::EnterPlanMode { .. }
+            | ToolPayloadOutput::ExitPlanMode { .. }
+            | ToolPayloadOutput::EnterWorktree { .. }
+            | ToolPayloadOutput::ExitWorktree { .. }
+            | ToolPayloadOutput::CronCreate { .. }
+            | ToolPayloadOutput::CronList { .. }
+            | ToolPayloadOutput::CronDelete { .. }
+            | ToolPayloadOutput::ScheduleWakeup { .. }
+            | ToolPayloadOutput::LspDefinition { .. }
+            | ToolPayloadOutput::LspReferences { .. }
+            | ToolPayloadOutput::LspHover { .. }
+            | ToolPayloadOutput::LspDiagnostics { .. }
+            | ToolPayloadOutput::NotebookEdit { .. } => {}
         }
 
         execution

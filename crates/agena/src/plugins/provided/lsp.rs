@@ -1,8 +1,8 @@
-//! First-party `agena.lsp` plugin: read-only observability of the configured
+//! `agena.lsp` plugin: read-only observability of the configured
 //! LSP servers plus the model-visible LSP entries (`lsp_definition`,
 //! `lsp_references`, `lsp_hover`, `lsp_diagnostics`). `lsp_servers` is
-//! plugin-native and uses `host.lsp_list_servers`; the other LSP entries share
-//! the in-process router bridge while remaining normal plugin tools.
+//! plugin-native and uses `host.lsp_list_servers`; the other LSP entries use
+//! the same in-process executor bridge as other static plugin tools.
 
 use std::sync::{Arc, RwLock};
 
@@ -16,10 +16,10 @@ use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginToolDecl,
-    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginManifest,
+    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
-use crate::plugins::bundled::router;
+use crate::plugins::provided::router;
 
 pub(crate) const LSP_PLUGIN_ID: &str = "agena.lsp";
 
@@ -63,9 +63,7 @@ struct LspServerSummary {
 impl Plugin for LspPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-lsp", env!("CARGO_PKG_VERSION"))
-            .description(
-                "LSP read-only observability and bundled LSP entry surface exposed as a plugin.",
-            )
+            .description("LSP read-only observability and navigation tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .tool(lsp_servers_decl())
             .tool(lsp_definition_decl())
@@ -113,7 +111,7 @@ impl Plugin for LspPlugin {
             }
             name @ ("lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics") => {
                 let _ = self.host()?;
-                router::invoke_bundled_tool(name, input.input, input.session_id, input.call_id)
+                router::invoke_tool(name, input.input, input.session_id, input.call_id)
             }
             other => Err(PluginError::invalid_params(format!(
                 "unknown lsp plugin tool '{other}'"

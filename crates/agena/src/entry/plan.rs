@@ -1,4 +1,4 @@
-//! `enter_plan_mode` / `exit_plan_mode` bundled tools.
+//! `enter_plan_mode` / `exit_plan_mode` plugin tools.
 //!
 //! Plan mode pattern (mirrors claude-code's EnterPlanMode/ExitPlanMode):
 //!
@@ -25,10 +25,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{EnterPlanModeToolInput, ExitPlanModeToolInput, BundledToolOutput};
+use crate::message::{EnterPlanModeToolInput, ExitPlanModeToolInput, ToolPayloadOutput};
 use crate::session::PlanState;
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
 
 /// Process-wide plan state — keyed by session id.  Conceptually this
 /// belongs in `SessionRuntimeState`, but plan-mode checks happen inside
@@ -44,7 +44,7 @@ pub(super) fn execute_enter(
     executor: &ToolExecutor,
     _input: &EnterPlanModeToolInput,
     session_id: Option<i64>,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("enter_plan_mode: no session in execution context".to_string())
     })?;
@@ -87,8 +87,8 @@ pub(super) fn execute_enter(
             file_path.display()
         ),
     );
-    Ok(BundledExecution::new(
-        BundledToolOutput::EnterPlanMode {
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::EnterPlanMode {
             plan_path: file_path.to_string_lossy().to_string(),
             slug,
         },
@@ -100,7 +100,7 @@ pub(super) fn execute_exit(
     executor: &ToolExecutor,
     _input: &ExitPlanModeToolInput,
     session_id: Option<i64>,
-) -> Result<BundledExecution, ToolError> {
+) -> Result<ToolPayloadExecution, ToolError> {
     let session_id = session_id.ok_or_else(|| {
         ToolError::Plugin("exit_plan_mode: no session in execution context".to_string())
     })?;
@@ -121,8 +121,8 @@ pub(super) fn execute_exit(
         ),
     );
 
-    Ok(BundledExecution::new(
-        BundledToolOutput::ExitPlanMode {
+    Ok(ToolPayloadExecution::new(
+        ToolPayloadOutput::ExitPlanMode {
             approved: true,
             plan_path,
         },

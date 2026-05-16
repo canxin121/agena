@@ -1,2 +1,2 @@
-pub mod bundled;
+pub mod provided;
 pub mod storage;

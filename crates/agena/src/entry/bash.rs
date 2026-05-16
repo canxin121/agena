@@ -3,12 +3,12 @@ use std::collections::HashMap;
 
 use super::shell::ShellRequest;
 
-use crate::message::{BashToolInput, BundledToolOutput};
+use crate::message::{BashToolInput, ToolPayloadOutput};
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
 use super::{
-    BundledExecution, BundledExecutionContext, PreparedShellCommand, ToolError,
-    ToolExecutionView, ToolExecutor,
+    PreparedShellCommand, ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution,
+    ToolRuntimeContext,
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -73,8 +73,8 @@ pub(super) fn prepare_command(
 pub(super) fn execute(
     executor: &ToolExecutor,
     input: &BashToolInput,
-    context: BundledExecutionContext,
-) -> Result<BundledExecution, ToolError> {
+    context: ToolRuntimeContext,
+) -> Result<ToolPayloadExecution, ToolError> {
     if input.command.trim().is_empty() {
         return Err(ToolError::InvalidInput(
             "bash command must not be empty".to_string(),
@@ -198,7 +198,7 @@ pub(super) fn execute(
         trimmed_output.clone()
     };
 
-    let output = BundledToolOutput::Bash {
+    let output = ToolPayloadOutput::Bash {
         output: Some(display_output.clone()),
         description: Some(status_text.clone()),
     };
@@ -257,7 +257,7 @@ pub(super) fn execute(
         );
     }
 
-    Ok(BundledExecution::new(output, view))
+    Ok(ToolPayloadExecution::new(output, view))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

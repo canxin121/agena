@@ -38,9 +38,7 @@ use crate::{
     },
     error::AppError,
     memory::{MemoryStore, MemoryType},
-    message::{
-        ApplyPatchToolInput, BundledToolInput, PartContent, StructuredObject, ToolInvocation,
-    },
+    message::{PartContent, StructuredObject, ToolInvocation},
     model::ModelRef,
     permission::{
         PermissionAction, PermissionMode, PermissionPolicy, PermissionReply, PermissionReplyKind,
@@ -1880,15 +1878,17 @@ impl AgenaCli {
                 .with_tool_policy(ToolPermissionPolicy::allow_all()),
         )
         .with_plugin_manager(plugins);
+        let input = StructuredObject::try_from(serde_json::json!({ "patch": patch }))
+            .map_err(|err| AppError::Internal(err.to_string()))?;
         let execution = executor
-            .execute_bundled_detailed(&BundledToolInput::ApplyPatch(ApplyPatchToolInput {
-                patch,
-            }))
+            .execute_invocation_detailed_bypassing_permissions(
+                &ToolInvocation::new("apply_patch", input),
+                -1,
+                -1,
+            )
             .map_err(|err| AppError::Config(err.to_string()))?;
         let patch = execution.apply_patch.ok_or_else(|| {
-            AppError::Internal(
-                "apply_patch bundled tool did not return patch metadata".to_owned(),
-            )
+            AppError::Internal("apply_patch tool did not return patch metadata".to_owned())
         })?;
         if args.json {
             render_serialized(
@@ -3170,11 +3170,7 @@ fn mcp_tool_invocation(
     name: &str,
     input: StructuredObject,
 ) -> Result<ToolInvocation, McpServerError> {
-    let invocation = ToolInvocation::new(name.to_owned(), input);
-    if let Some(builtin) = BundledToolInput::from_invocation(&invocation) {
-        return Ok(builtin.into_invocation());
-    }
-    Ok(invocation)
+    Ok(ToolInvocation::new(name.to_owned(), input))
 }
 
 fn ensure_memory_index_path(store: &MemoryStore) -> Result<PathBuf, AppError> {
@@ -4919,7 +4915,7 @@ enabled = true
     }
 
     #[test]
-    fn apply_command_invokes_apply_patch_builtin() {
+    fn apply_command_invokes_apply_patch_tool() {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time should move forward")

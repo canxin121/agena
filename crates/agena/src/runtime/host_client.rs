@@ -11,9 +11,9 @@ use async_trait::async_trait;
 
 use crate::message::{
     AskUserToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
-    ExitWorktreeToolInput, BundledToolInput, MonitorStatus, MonitorStream, StructuredObject,
-    TaskSubagentType, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation,
-    ToolOutput, UserInputOption, UserInputQuestion,
+    ExitWorktreeToolInput, MonitorStatus, MonitorStream, StructuredObject, TaskSubagentType,
+    TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, ToolOutput,
+    UserInputOption, UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentDescriptor, HostAgentListResponse,
@@ -47,9 +47,6 @@ use crate::plugins::storage::{
 };
 use crate::runtime::AgenaRuntime;
 use crate::tool::{MonitorError, MonitorReadParams, MonitorStartParams};
-use crate::{
-    entry::BundledExecutionContext, plugins::bundled::router::bundled_to_invoke_output,
-};
 
 /// Build a `HostClient` impl for a runtime; use [`NoopHostClient`] when no
 /// runtime is available (e.g. before bootstrap completes).
@@ -493,25 +490,17 @@ fn map_create_goal_error(err: crate::AppError) -> PluginError {
     }
 }
 
-fn workflow_bundled_output(
+fn workflow_tool_output(
     executor: &crate::tool::ToolExecutor,
-    input: BundledToolInput,
+    tool_name: &str,
+    input: serde_json::Value,
     session_id: Option<i64>,
     call_id: Option<i64>,
     session_context: Option<&crate::session::SessionExecutionContext>,
 ) -> Result<ToolInvokeOutput, PluginError> {
-    let execution = crate::entry::orchestrator::execute_bundled(
-        executor,
-        &input,
-        BundledExecutionContext {
-            session_id,
-            call_id,
-            session_context: session_context.cloned(),
-            prepared_shell_command: None,
-        },
-    )
-    .map_err(|err| PluginError::new(err.to_string()))?;
-    Ok(bundled_to_invoke_output(execution))
+    executor
+        .execute_tool_payload_for_host(tool_name, input, session_id, call_id, session_context)
+        .map_err(|err| PluginError::new(err.to_string()))
 }
 
 #[async_trait]
@@ -781,11 +770,13 @@ impl HostClient for RuntimeHostClient {
     async fn todo_write(&self, req: HostTodoWriteRequest) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_bundled_output(
+        workflow_tool_output(
             &executor,
-            BundledToolInput::TodoWrite(TodoWriteToolInput {
+            "todo_write",
+            serde_json::to_value(TodoWriteToolInput {
                 items: req.items.into_iter().map(todo_item_from_host).collect(),
-            }),
+            })
+            .map_err(|err| PluginError::new(err.to_string()))?,
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
@@ -887,9 +878,11 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_bundled_output(
+        workflow_tool_output(
             &executor,
-            BundledToolInput::EnterPlanMode(EnterPlanModeToolInput::default()),
+            "enter_plan_mode",
+            serde_json::to_value(EnterPlanModeToolInput::default())
+                .map_err(|err| PluginError::new(err.to_string()))?,
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
@@ -902,9 +895,11 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_bundled_output(
+        workflow_tool_output(
             &executor,
-            BundledToolInput::ExitPlanMode(ExitPlanModeToolInput::default()),
+            "exit_plan_mode",
+            serde_json::to_value(ExitPlanModeToolInput::default())
+                .map_err(|err| PluginError::new(err.to_string()))?,
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
@@ -917,12 +912,14 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_bundled_output(
+        workflow_tool_output(
             &executor,
-            BundledToolInput::EnterWorktree(EnterWorktreeToolInput {
+            "enter_worktree",
+            serde_json::to_value(EnterWorktreeToolInput {
                 name: req.name,
                 path: req.path,
-            }),
+            })
+            .map_err(|err| PluginError::new(err.to_string()))?,
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
@@ -935,12 +932,14 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<ToolInvokeOutput, PluginError> {
         let context = self.callback_context()?;
         let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_bundled_output(
+        workflow_tool_output(
             &executor,
-            BundledToolInput::ExitWorktree(ExitWorktreeToolInput {
+            "exit_worktree",
+            serde_json::to_value(ExitWorktreeToolInput {
                 action: req.action,
                 discard_changes: req.discard_changes,
-            }),
+            })
+            .map_err(|err| PluginError::new(err.to_string()))?,
             context.session_id.filter(|id| *id >= 0),
             context.call_id.filter(|id| *id >= 0),
             session_context.as_ref(),
@@ -1447,7 +1446,7 @@ fn agent_scope_from_str(scope: &str) -> crate::agents::AgentScope {
     match scope {
         "project" => crate::agents::AgentScope::Project,
         "user" => crate::agents::AgentScope::User,
-        _ => crate::agents::AgentScope::Bundled,
+        _ => crate::agents::AgentScope::Default,
     }
 }
 
@@ -1486,7 +1485,7 @@ fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostAgentDescrip
         scope: match profile.scope {
             crate::agents::AgentScope::Project => "project",
             crate::agents::AgentScope::User => "user",
-            crate::agents::AgentScope::Bundled => "bundled",
+            crate::agents::AgentScope::Default => "default",
         }
         .to_string(),
     }

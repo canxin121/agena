@@ -67,20 +67,19 @@ pub trait HostClient: Send + Sync + 'static {
     async fn invoke_tool(&self, tool: String, input: serde_json::Value)
     -> Result<ToolInvokeOutput>;
 
-    // ---------------- First-party host capabilities ----------------
+    // ---------------- Host workflow capabilities ----------------
     //
-    // These are used by the in-process bundled plugins (bash, ask_user,
-    // task, monitor, ...). External plugins generally don't need to implement them;
-    // the default `NoopHostClient` and host implementations that don't expose
-    // these capabilities should return `HostUnavailable`.
+    // These are optional host APIs that any plugin can request via
+    // `HostCapability`. Hosts that don't expose a capability should return
+    // `HostUnavailable`.
 
     /// Prompt the user for input via the active session UI (used by the
-    /// `ask_user` bundled tool).
+    /// `ask_user` tool).
     async fn ask_user(&self, _req: AskUserRequest) -> Result<AskUserResponse> {
         Err(unavailable())
     }
 
-    /// Spawn a child agent / subtask. Used by the `task` bundled tool.
+    /// Spawn a child agent / subtask. Used by the `task` tool.
     async fn spawn_subtask(&self, _req: SpawnSubtaskRequest) -> Result<SpawnSubtaskResponse> {
         Err(unavailable())
     }

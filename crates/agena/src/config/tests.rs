@@ -1743,7 +1743,7 @@ enabled = true
         .build_plugin_host()
         .await
         .expect("host build accepts but skips broken plugins");
-    // The bogus cdylib entry is skipped; only the in-process bundled
+    // The bogus cdylib entry is skipped; only the provided in-process
     // plugins plus runtime support plugins remain.
     assert_eq!(host.plugins().len(), 9);
     let ids: Vec<&str> = host.plugins().iter().map(|p| p.id.as_str()).collect();

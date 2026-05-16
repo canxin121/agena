@@ -1154,7 +1154,7 @@ mod tests {
 
     use super::*;
     use crate::event::DomainEvent;
-    use crate::message::{BundledToolInput, GlobToolInput, GrepToolInput, ReadToolInput};
+    use crate::message::{GlobToolInput, GrepToolInput, ReadToolInput, ToolPayloadInput};
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::plugin::PluginToolDecl;
     use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
@@ -1322,7 +1322,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_invocation_rejects_unloaded_bundled_tools() {
+    fn parse_tool_invocation_rejects_unloaded_tools() {
         let tools = vec![test_plugin_tool(
             "fixture",
             "read",
@@ -1336,7 +1336,7 @@ mod tests {
         )];
 
         let err = parse_tool_invocation("bash", "{\"command\":\"pwd\"}", tools.as_slice())
-            .expect_err("unexpected bundled should be rejected");
+            .expect_err("unexpected tool should be rejected");
 
         assert!(err.to_string().contains("unsupported tool call from model"));
     }
@@ -1352,7 +1352,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_invocation_accepts_bundled_arguments_with_trailing_text() {
+    fn parse_tool_invocation_accepts_tool_arguments_with_trailing_text() {
         let tools = vec![test_plugin_tool(
             "fixture",
             "grep",
@@ -1370,15 +1370,15 @@ mod tests {
             "{\"pattern\":\"cache marker\"}\nThen report the result.",
             tools.as_slice(),
         )
-        .expect("valid JSON prefix should parse for bundled tools");
+        .expect("valid JSON prefix should parse for tool arguments");
 
-        match invocation.as_bundled() {
-            Some(BundledToolInput::Grep(payload)) => {
+        match invocation.as_tool_payload() {
+            Some(ToolPayloadInput::Grep(payload)) => {
                 assert_eq!(payload.pattern, "cache marker");
                 assert_eq!(payload.path, None);
                 assert_eq!(payload.include, None);
             }
-            other => panic!("expected grep bundled invocation, got {other:?}"),
+            other => panic!("expected grep tool invocation, got {other:?}"),
         }
     }
 

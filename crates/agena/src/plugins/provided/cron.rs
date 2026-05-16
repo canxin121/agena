@@ -1,9 +1,8 @@
-//! First-party `agena.cron` plugin: schedules cron and one-shot wakeup jobs.
+//! `agena.cron` plugin: schedules cron and one-shot wakeup jobs.
 //!
 //! The model-visible `cron_create / cron_list / cron_delete / schedule_wakeup`
-//! entries now belong to this plugin. Their execution currently reuses the
-//! shared in-process router bridge while the runtime keeps a single plugin-entry
-//! surface.
+//! entries belong to this plugin and execute through the same plugin-entry
+//! surface as every other tool.
 
 use std::sync::{Arc, RwLock};
 
@@ -12,10 +11,10 @@ use async_trait::async_trait;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginToolDecl,
-    PluginManifest, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginManifest,
+    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
-use crate::plugins::bundled::router;
+use crate::plugins::provided::router;
 
 pub(crate) const CRON_PLUGIN_ID: &str = "agena.cron";
 
@@ -43,9 +42,7 @@ impl CronPlugin {
 impl Plugin for CronPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-cron", env!("CARGO_PKG_VERSION"))
-            .description(
-                "Cron-style and one-shot wakeup scheduling exposed as a bundled plugin.",
-            )
+            .description("Cron-style and one-shot wakeup scheduling tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .tool(cron_create_decl())
             .tool(cron_list_decl())
@@ -66,7 +63,7 @@ impl Plugin for CronPlugin {
         match input.tool_name.as_str() {
             "cron_create" | "cron_list" | "cron_delete" | "schedule_wakeup" => {
                 let _ = self.host()?;
-                router::invoke_bundled_tool(
+                router::invoke_tool(
                     &input.tool_name,
                     input.input,
                     input.session_id,

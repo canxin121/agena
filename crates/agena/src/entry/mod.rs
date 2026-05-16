@@ -35,31 +35,32 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, CustomToolOutput, FilesystemEffect, BundledToolInput,
-    BundledToolOutput, Message, PartContent, PluginInvocation, StructuredObject,
-    ToolExecutionPart, ToolInvocation, ToolOutput,
+    AskUserToolInput, CustomToolOutput, FilesystemEffect, Message, PartContent, PluginInvocation,
+    StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput, ToolPayloadInput,
+    ToolPayloadOutput,
 };
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
-    registry::PluginEntry as RegistryPluginEntry,
-    ToolDefinitionInput as PluginEntryDefinitionInput, PluginHost, PluginHostBuilder,
-    ToolAfterInput as PluginToolAfterInput,
-    ToolBeforeInput as PluginToolBeforeInput, ToolFailureInput as PluginToolFailureInput,
-    ToolInvokeInput as PluginToolInvokeInput,
+    PluginHost, PluginHostBuilder, ToolAfterInput as PluginToolAfterInput,
+    ToolBeforeInput as PluginToolBeforeInput, ToolDefinitionInput as PluginEntryDefinitionInput,
+    ToolFailureInput as PluginToolFailureInput, ToolInvokeInput as PluginToolInvokeInput,
     ToolPermissionNetworksInput as PluginToolPermissionNetworksInput,
     ToolPermissionPathsInput as PluginToolPermissionPathsInput,
+    registry::PluginEntry as RegistryPluginEntry,
     sdk::{
-        ToolStreamingMode as SdkEntryStreamingMode, InputNetworkSpec as SdkInputNetworkSpec,
-        InputPathSpec as SdkInputPathSpec, PathAccessSpec as SdkPathAccessSpec,
-        NetworkAccessSpec as SdkNetworkAccessSpec, PathKind as SdkPathKind,
-        ShellEnvInput as PluginShellEnvInput,
+        InputNetworkSpec as SdkInputNetworkSpec, InputPathSpec as SdkInputPathSpec,
+        NetworkAccessSpec as SdkNetworkAccessSpec, PathAccessSpec as SdkPathAccessSpec,
+        PathKind as SdkPathKind, ShellEnvInput as PluginShellEnvInput,
+        ToolStreamingMode as SdkEntryStreamingMode,
     },
 };
-use crate::plugins::bundled::{
-    cron as bundled_cron, fs as bundled_fs, lsp as bundled_lsp, mcp, router as bundled_router,
-    shell as bundled_shell, skills_fs, web as bundled_web, workflow as bundled_workflow,
+use crate::plugins::provided::{
+    cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp,
+    router as in_process_router, shell as provided_shell, skills_fs, web as provided_web,
+    workflow as provided_workflow,
 };
 
+pub use crate::plugin::sdk::ToolLoadPriority;
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use monitor::{
@@ -67,9 +68,8 @@ pub use monitor::{
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,
 };
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
-pub use result::{BundledExecution, ToolExecutionView, ToolInvocationExecution};
+pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use shell::{ShellError, ShellOutput, ShellRequest};
-pub use crate::plugin::sdk::ToolLoadPriority;
 pub use truncation::{ToolOutputTruncationPolicy, ToolOutputTruncator};
 pub use worktree::{
     ActiveWorktree, ManagedWorktree, WorktreeRegistry, list_active as worktree_list_active,
@@ -86,56 +86,54 @@ pub fn new_skills_fs_plugin() -> impl crate::plugin::sdk::Plugin {
 }
 
 pub fn lsp_plugin_id() -> &'static str {
-    bundled_lsp::LSP_PLUGIN_ID
+    provided_lsp::LSP_PLUGIN_ID
 }
 
 pub fn new_lsp_plugin() -> impl crate::plugin::sdk::Plugin {
-    bundled_lsp::LspPlugin::new()
+    provided_lsp::LspPlugin::new()
 }
 
 pub fn cron_plugin_id() -> &'static str {
-    bundled_cron::CRON_PLUGIN_ID
+    provided_cron::CRON_PLUGIN_ID
 }
 
 pub fn new_cron_plugin() -> impl crate::plugin::sdk::Plugin {
-    bundled_cron::CronPlugin::new()
+    provided_cron::CronPlugin::new()
 }
 
 pub fn fs_plugin_id() -> &'static str {
-    bundled_fs::FS_PLUGIN_ID
+    provided_fs::FS_PLUGIN_ID
 }
 
 pub fn new_fs_plugin() -> impl crate::plugin::sdk::Plugin {
-    bundled_fs::new_plugin()
+    provided_fs::new_plugin()
 }
 
 pub fn shell_plugin_id() -> &'static str {
-    bundled_shell::SHELL_PLUGIN_ID
+    provided_shell::SHELL_PLUGIN_ID
 }
 
 pub fn new_shell_plugin() -> impl crate::plugin::sdk::Plugin {
-    bundled_shell::new_plugin()
+    provided_shell::new_plugin()
 }
 
 pub fn web_plugin_id() -> &'static str {
-    bundled_web::WEB_PLUGIN_ID
+    provided_web::WEB_PLUGIN_ID
 }
 
 pub fn new_web_plugin() -> impl crate::plugin::sdk::Plugin {
-    bundled_web::new_plugin()
+    provided_web::new_plugin()
 }
 
 pub fn workflow_plugin_id() -> &'static str {
-    bundled_workflow::WORKFLOW_PLUGIN_ID
+    provided_workflow::WORKFLOW_PLUGIN_ID
 }
 
 pub fn new_workflow_plugin() -> impl crate::plugin::sdk::Plugin {
-    bundled_workflow::new_plugin()
+    provided_workflow::new_plugin()
 }
 
-pub fn default_tool_host(
-    workspace_root: impl Into<PathBuf>,
-) -> Result<Arc<PluginHost>, String> {
+pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<PluginHost>, String> {
     let workspace_root = workspace_root.into();
     let skills_fs_id = skills_fs_plugin_id().to_string();
     let lsp_id = lsp_plugin_id().to_string();
@@ -223,14 +221,14 @@ enum PermissionEnforcementMode {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct BundledExecutionContext {
+pub(super) struct ToolRuntimeContext {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
     pub session_context: Option<crate::session::SessionExecutionContext>,
     pub prepared_shell_command: Option<PreparedShellCommand>,
 }
 
-static SYNTHETIC_BUILTIN_CALL_ID: AtomicI64 = AtomicI64::new(-1);
+static SYNTHETIC_TOOL_CALL_ID: AtomicI64 = AtomicI64::new(-1);
 
 pub struct StreamingToolExecution {
     pub stream_id: String,
@@ -409,19 +407,11 @@ impl ToolExecutor {
             .iter()
             .any(|tag| tag == &crate::plugin::sdk::ToolTag::Shell)
         {
-            if let Some(bundled) = self.bundled_from_invocation(invocation)? {
-                let is_read_only = match bundled {
-                    BundledToolInput::Bash(payload) => {
-                        bash::is_read_only_command(payload.command.as_str())
-                    }
-                    BundledToolInput::PowerShell(payload) => {
-                        bash::is_read_only_command(payload.command.as_str())
-                    }
-                    _ => false,
-                };
-                if is_read_only {
-                    return Ok(());
-                }
+            if shell_command_from_invocation(invocation)
+                .as_deref()
+                .is_some_and(bash::is_read_only_command)
+            {
+                return Ok(());
             }
         }
 
@@ -563,8 +553,7 @@ impl ToolExecutor {
         self.catalogued_tools()
             .into_iter()
             .filter(|entry| {
-                entry.should_load_by_default()
-                    || loaded_tools.contains(entry.exposed_name.as_str())
+                entry.should_load_by_default() || loaded_tools.contains(entry.exposed_name.as_str())
             })
             .collect()
     }
@@ -597,15 +586,6 @@ impl ToolExecutor {
             .unwrap_or_else(|| "custom".to_string())
     }
 
-    fn bundled_from_invocation(
-        &self,
-        invocation: &ToolInvocation,
-    ) -> Result<Option<BundledToolInput>, ToolError> {
-        BundledToolInput::from_invocation(invocation)
-            .map(Some)
-            .ok_or_else(|| ToolError::InvalidInput(format!("decode tool input: {}", invocation.name)))
-    }
-
     fn invocation_streaming_mode(
         &self,
         invocation: &ToolInvocation,
@@ -625,24 +605,7 @@ impl ToolExecutor {
     fn authorize_invocation(
         &self,
         invocation: &ToolInvocation,
-        bundled: Option<&BundledToolInput>,
     ) -> Result<(String, PermissionDecision), ToolError> {
-        if let Some(bundled) = bundled {
-            let tool_name = crate::permission::tool_name_for_input(bundled).to_string();
-            let definition = self
-                .invocation_definition(invocation)
-                .ok_or_else(|| ToolError::UnknownTool(tool_name.clone()))?;
-            if !self.tool_catalog().is_tool_enabled(&definition) {
-                return Err(ToolError::PermissionDenied(format!(
-                    "tool '{tool_name}' disabled for current model profile"
-                )));
-            }
-            return Ok((
-                tool_name,
-                self.agent.authorize_bundled_tool(bundled),
-            ));
-        }
-
         let tool_name = invocation_name(invocation);
         let definition = self
             .invocation_definition(invocation)
@@ -652,30 +615,30 @@ impl ToolExecutor {
                 "tool '{tool_name}' disabled for current model profile"
             )));
         }
+        let command = shell_command_from_invocation(invocation);
         Ok((
             tool_name.clone(),
-            self.agent
-                .authorize_tool_tags(tool_name.as_str(), &definition.effective_tags()),
+            self.agent.authorize_tool(
+                tool_name.as_str(),
+                command.as_deref(),
+                &definition.effective_tags(),
+            ),
         ))
     }
 
     fn plugin_resolution_for_invocation(
         &self,
         invocation: &ToolInvocation,
-        bundled: Option<&BundledToolInput>,
     ) -> Option<crate::plugin::registry::PluginEntry> {
-        self.plugin_resolution_for_plugin_invocation(
-            &PluginInvocation::from_tool_invocation(invocation),
-            bundled,
-        )
+        self.plugin_resolution_for_plugin_invocation(&PluginInvocation::from_tool_invocation(
+            invocation,
+        ))
     }
 
     fn plugin_resolution_for_plugin_invocation(
         &self,
         invocation: &PluginInvocation,
-        bundled: Option<&BundledToolInput>,
     ) -> Option<crate::plugin::registry::PluginEntry> {
-        let _ = bundled;
         self.plugins.lookup_entry(invocation.entry_name.as_str())
     }
 
@@ -780,68 +743,20 @@ impl ToolExecutor {
     fn collect_declared_filesystem_effect_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        bundled: Option<&BundledToolInput>,
+        tool_name: &str,
+        input: &serde_json::Value,
     ) -> Result<(), ToolError> {
-        match bundled {
-            Some(BundledToolInput::Bash(input)) => {
-                validate_shell_filesystem_effects(
-                    "bash",
-                    input.command.as_str(),
-                    &input.filesystem_effects,
-                )?;
-                let base = self.shell_effect_base_path(input.workdir.as_deref());
-                self.push_filesystem_effect_checks(
-                    checks,
-                    &input.filesystem_effects,
-                    base.as_path(),
-                );
+        if let Some(effects) = filesystem_effects_from_input(input)? {
+            let command = input
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if !command.is_empty() {
+                validate_shell_filesystem_effects(tool_name, command, effects.as_slice())?;
             }
-            Some(BundledToolInput::PowerShell(input)) => {
-                let base = self.shell_effect_base_path(input.workdir.as_deref());
-                self.push_filesystem_effect_checks(
-                    checks,
-                    &input.filesystem_effects,
-                    base.as_path(),
-                );
-            }
-            Some(BundledToolInput::Monitor(crate::message::MonitorToolInput::Start {
-                command,
-                workdir,
-                filesystem_effects,
-                ..
-            })) => {
-                validate_shell_filesystem_effects("monitor", command.as_str(), filesystem_effects)?;
-                let base = self.shell_effect_base_path(workdir.as_deref());
-                self.push_filesystem_effect_checks(checks, filesystem_effects, base.as_path());
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn collect_bundled_network_checks(
-        &self,
-        checks: &mut Vec<ToolPermissionCheck>,
-        bundled: Option<&BundledToolInput>,
-    ) -> Result<(), ToolError> {
-        match bundled {
-            Some(BundledToolInput::WebFetch(input)) => {
-                let raw_url = input.url.trim();
-                if raw_url.is_empty() {
-                    return Ok(());
-                }
-                let url = if let Some(rest) = raw_url.strip_prefix("http://") {
-                    format!("https://{rest}")
-                } else {
-                    raw_url.to_string()
-                };
-                self.push_network_check(checks, url.as_str())?;
-            }
-            Some(BundledToolInput::WebSearch(_)) => {
-                let backend = self.web_search_backend();
-                self.push_network_check(checks, web_search::web_search_backend_target(&backend))?;
-            }
-            _ => {}
+            let workdir = input.get("workdir").and_then(serde_json::Value::as_str);
+            let base = self.shell_effect_base_path(workdir);
+            self.push_filesystem_effect_checks(checks, effects.as_slice(), base.as_path());
         }
         Ok(())
     }
@@ -883,21 +798,21 @@ impl ToolExecutor {
         }
     }
 
-    pub fn execute_bundled_detailed(
+    pub fn execute_tool_payload_detailed(
         &self,
-        input: &BundledToolInput,
-    ) -> Result<BundledExecution, ToolError> {
-        self.execute_bundled_detailed_with_context(input, BundledExecutionContext::default())
+        input: &ToolPayloadInput,
+    ) -> Result<ToolPayloadExecution, ToolError> {
+        self.execute_tool_payload_detailed_with_context(input, ToolRuntimeContext::default())
     }
 
-    pub fn execute_bundled_output_for_session(
+    pub fn execute_tool_payload_output_for_session(
         &self,
-        input: &BundledToolInput,
+        input: &ToolPayloadInput,
         session_id: i64,
-    ) -> Result<BundledToolOutput, ToolError> {
-        self.execute_bundled_detailed_with_context(
+    ) -> Result<ToolPayloadOutput, ToolError> {
+        self.execute_tool_payload_detailed_with_context(
             input,
-            BundledExecutionContext {
+            ToolRuntimeContext {
                 session_id: Some(session_id),
                 call_id: None,
                 session_context: None,
@@ -907,110 +822,90 @@ impl ToolExecutor {
         .map(|execution| execution.output)
     }
 
-    #[cfg(test)]
-    pub(crate) fn execute_bundled_payload_for_host(
+    pub fn execute_tool_payload_for_host(
         &self,
         tool_name: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
         call_id: Option<i64>,
+        session_context: Option<&crate::session::SessionExecutionContext>,
     ) -> Result<crate::plugin::ToolInvokeOutput, ToolError> {
-        let bundled =
-            bundled_router::parse_bundled_tool(tool_name, input).map_err(|err| {
-                ToolError::InvalidInput(format!("parse bundled tool {tool_name}: {err}"))
-            })?;
-        let execution = orchestrator::execute_bundled(
-            self,
-            &bundled,
-            BundledExecutionContext {
+        let scoped_executor = session_context
+            .map(|session_context| self.for_session_context(session_context))
+            .unwrap_or_else(|| self.clone());
+        let execution = orchestrator::execute_tool(
+            &scoped_executor,
+            tool_name,
+            input,
+            ToolRuntimeContext {
                 session_id,
                 call_id,
                 session_context: None,
                 prepared_shell_command: None,
             },
         )?;
-        Ok(bundled_router::bundled_to_invoke_output(
-            self.truncator.apply(execution),
+        Ok(in_process_router::tool_execution_to_invoke_output(
+            scoped_executor.truncator.apply(execution),
         ))
     }
 
-    fn execute_bundled_detailed_with_context(
+    fn execute_tool_payload_detailed_with_context(
         &self,
-        input: &BundledToolInput,
-        context: BundledExecutionContext,
-    ) -> Result<BundledExecution, ToolError> {
+        input: &ToolPayloadInput,
+        context: ToolRuntimeContext,
+    ) -> Result<ToolPayloadExecution, ToolError> {
         let scoped_executor = context
             .session_context
             .as_ref()
             .map(|session_context| self.for_session_context(session_context))
             .unwrap_or_else(|| self.clone());
         let invocation = input.clone().into_invocation();
-        let tool_name = crate::permission::tool_name_for_input(input);
+        let tool_name = input.tool_name();
         let definition = scoped_executor
             .invocation_definition(&invocation)
             .ok_or_else(|| ToolError::UnknownTool(tool_name.to_string()))?;
-        if !scoped_executor
-            .tool_catalog()
-            .is_tool_enabled(&definition)
-        {
+        if !scoped_executor.tool_catalog().is_tool_enabled(&definition) {
             return Err(ToolError::UnsupportedInvocation(tool_name.to_string()));
         }
 
         if scoped_executor.permission_mode == PermissionEnforcementMode::Enforced {
-            match scoped_executor.agent.authorize_bundled_tool(input) {
-                PermissionDecision::Allow => {}
-                PermissionDecision::Ask { reason } => return Err(ToolError::PermissionAsk(reason)),
-                PermissionDecision::Deny { reason } => {
-                    return Err(ToolError::PermissionDenied(reason));
+            for check in scoped_executor.collect_permission_checks_for_invocation(&invocation)? {
+                match check.decision {
+                    PermissionDecision::Allow => {}
+                    PermissionDecision::Ask { reason } => {
+                        return Err(ToolError::PermissionAsk(reason));
+                    }
+                    PermissionDecision::Deny { reason } => {
+                        return Err(ToolError::PermissionDenied(reason));
+                    }
                 }
             }
         }
-
-        let scoped_executor = context
-            .session_context
-            .as_ref()
-            .map(|session_context| self.for_session_context(session_context))
-            .unwrap_or_else(|| self.clone());
-        let tool_name = crate::permission::tool_name_for_input(input).to_string();
         let session_id = context.session_id.unwrap_or(-1);
         let call_id = context
             .call_id
-            .unwrap_or_else(|| SYNTHETIC_BUILTIN_CALL_ID.fetch_sub(1, Ordering::Relaxed));
-        let payload_value = bundled_input_payload(input)?;
-        let response = bundled_router::with_executor(
-            &scoped_executor,
+            .unwrap_or_else(|| SYNTHETIC_TOOL_CALL_ID.fetch_sub(1, Ordering::Relaxed));
+        let execution = scoped_executor.execute_invocation_detailed_inner(
+            &invocation,
             session_id,
             call_id,
-            tool_name.clone(),
-            || {
-                bundled_router::invoke_bundled_tool(
-                    &tool_name,
-                    payload_value.clone(),
-                    session_id,
-                    call_id,
-                )
-            },
-        )
-        .map_err(|err| bundled_plugin_error(tool_name.as_str(), err))?;
-
-        let output = bundled_router::payload_to_bundled_envelope(response.payload.as_ref())
-            .map_err(|err| ToolError::Plugin(format!("decode {tool_name} output: {err}")))?;
-        let view = ToolExecutionView {
-            title: response.title,
-            output_text: response.output_text,
-            metadata: response.metadata.into_iter().collect(),
-            attachments: response.attachments,
-        };
-        let mut execution = BundledExecution::new(output.output, view);
-        if let Some(apply) = output.apply_patch {
-            execution = execution.with_apply_patch(apply);
-        }
-        Ok(scoped_executor.truncator.apply(execution))
+            context.prepared_shell_command,
+        )?;
+        let output = execution.output.as_tool_payload().ok_or_else(|| {
+            ToolError::Plugin(format!(
+                "decode {tool_name} output: payload did not match tool payload schema"
+            ))
+        })?;
+        Ok(scoped_executor.truncator.apply(ToolPayloadExecution {
+            output,
+            view: execution.view,
+            apply_patch: execution.apply_patch,
+        }))
     }
 
     pub fn collect_permission_checks(
         &self,
-        input: &BundledToolInput,
+        input: &ToolPayloadInput,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.collect_permission_checks_for_invocation(&input.clone().into_invocation())
     }
@@ -1030,11 +925,12 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
-        let Some(crate::message::BundledToolInput::Bash(bash_input)) =
-            self.bundled_from_invocation(invocation)?
-        else {
+        if invocation.name.rsplit('/').next() != Some("bash") {
             return Ok((invocation.clone(), None));
-        };
+        }
+        let mut input_value = invocation_input_value(invocation);
+        let bash_input: crate::message::BashToolInput = serde_json::from_value(input_value.clone())
+            .map_err(|err| ToolError::InvalidInput(format!("bash input: {err}")))?;
         let prepared_shell = self.prepare_shell_command(&bash_input, session_id, call_id)?;
         let Some(prepared_shell) = prepared_shell.clone() else {
             return Ok((invocation.clone(), None));
@@ -1044,8 +940,12 @@ impl ToolExecutor {
         }
         let mut rewritten = bash_input;
         rewritten.command = prepared_shell.command.clone();
+        input_value = serde_json::to_value(rewritten)
+            .map_err(|err| ToolError::InvalidInput(format!("bash input: {err}")))?;
+        let input = StructuredObject::try_from(input_value)
+            .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
         Ok((
-            crate::message::BundledToolInput::Bash(rewritten).into_invocation(),
+            ToolInvocation::new(invocation.name.clone(), input),
             Some(prepared_shell),
         ))
     }
@@ -1090,24 +990,24 @@ impl ToolExecutor {
         &self,
         invocation: &ToolInvocation,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
-        let bundled = self.bundled_from_invocation(invocation)?;
-        let (tool_name, decision) = self.authorize_invocation(invocation, bundled.as_ref())?;
-        let action = if let Some(bundled) = bundled.as_ref() {
-            crate::permission::tool_action(bundled, Some(&self.agent.tool_policy))
-        } else {
-            PermissionAction::Tool {
-                tool_name: tool_name.clone(),
-                qualifier: None,
-            }
-        };
+        let (tool_name, decision) = self.authorize_invocation(invocation)?;
+        let command = shell_command_from_invocation(invocation);
+        let action = crate::permission::tool_action(
+            tool_name.as_str(),
+            command.as_deref(),
+            Some(&self.agent.tool_policy),
+        );
         let mut checks = vec![ToolPermissionCheck { action, decision }];
 
         let input_value = invocation_input_value(invocation);
-        if let Some(resolution) =
-            self.plugin_resolution_for_invocation(invocation, bundled.as_ref())
-        {
-            self.collect_declared_filesystem_effect_checks(&mut checks, bundled.as_ref())?;
-            self.collect_bundled_network_checks(&mut checks, bundled.as_ref())?;
+        if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {
+            if resolution.has_tag(crate::plugin::sdk::ToolTag::Shell) {
+                self.collect_declared_filesystem_effect_checks(
+                    &mut checks,
+                    tool_name.as_str(),
+                    &input_value,
+                )?;
+            }
             self.collect_declared_path_checks(
                 &mut checks,
                 &input_value,
@@ -1144,6 +1044,12 @@ impl ToolExecutor {
             .plugins
             .lookup_entry(plugin_invocation.entry_name.as_str())
             .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.entry_name.clone()))?;
+        let _executor_guard = in_process_router::install_executor_context(
+            self,
+            session_id,
+            call_id,
+            resolution.original_name.clone(),
+        );
         let stream = self
             .plugins
             .invoke_tool_stream(
@@ -1163,7 +1069,7 @@ impl ToolExecutor {
         let end = stream.end;
         let executor = self.clone();
         let invocation = invocation.clone();
-        let tool_name = plugin_invocation.entry_name.clone();
+        let tool_name = resolution.original_name.clone();
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let result = match end.await {
@@ -1174,33 +1080,20 @@ impl ToolExecutor {
                         metadata: end.metadata.into_iter().collect(),
                         attachments: end.attachments,
                     };
-                    let mut execution = if let Ok(envelope) =
-                        bundled_router::payload_to_bundled_envelope(end.payload.as_ref())
-                    {
-                        ToolInvocationExecution::new(
-                            ToolOutput::Custom {
-                                output: envelope.output.into_custom_output(),
-                            },
-                            view,
-                        )
-                        .with_apply_patch_option(envelope.apply_patch)
-                    } else {
-                        let payload = end
-                            .payload
-                            .as_ref()
-                            .map(|value| parse_custom_payload(&value.to_string()))
-                            .transpose()?
-                            .unwrap_or_default();
-                        ToolInvocationExecution::new(
-                            ToolOutput::Custom {
-                                output: CustomToolOutput {
-                                    name: tool_name,
-                                    payload,
-                                },
-                            },
-                            view,
-                        )
+                    let payload = end
+                        .payload
+                        .as_ref()
+                        .map(|value| parse_custom_payload(&value.to_string()))
+                        .transpose()?
+                        .unwrap_or_default();
+                    let output = ToolOutput::Custom {
+                        output: CustomToolOutput {
+                            name: tool_name.clone(),
+                            payload,
+                        },
                     };
+                    let mut execution = ToolInvocationExecution::new(output.clone(), view)
+                        .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
                     executor.apply_after_hooks(&invocation, session_id, call_id, &mut execution)?;
                     Ok(execution)
                 })(),
@@ -1260,6 +1153,12 @@ impl ToolExecutor {
             .plugins
             .lookup_entry(plugin_invocation.entry_name.as_str())
             .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.entry_name.clone()))?;
+        let _executor_guard = in_process_router::install_executor_context(
+            self,
+            session_id,
+            call_id,
+            resolution.original_name.clone(),
+        );
 
         let response = self
             .plugins
@@ -1281,33 +1180,20 @@ impl ToolExecutor {
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
         };
-        let mut execution = if let Ok(envelope) =
-            bundled_router::payload_to_bundled_envelope(response.payload.as_ref())
-        {
-            ToolInvocationExecution::new(
-                ToolOutput::Custom {
-                    output: envelope.output.into_custom_output(),
-                },
-                view,
-            )
-            .with_apply_patch_option(envelope.apply_patch)
-        } else {
-            let payload = response
-                .payload
-                .as_ref()
-                .map(|v| parse_custom_payload(&v.to_string()))
-                .transpose()?
-                .unwrap_or_default();
-            ToolInvocationExecution::new(
-                ToolOutput::Custom {
-                    output: CustomToolOutput {
-                        name: plugin_invocation.entry_name.clone(),
-                        payload,
-                    },
-                },
-                view,
-            )
+        let payload = response
+            .payload
+            .as_ref()
+            .map(|v| parse_custom_payload(&v.to_string()))
+            .transpose()?
+            .unwrap_or_default();
+        let output = ToolOutput::Custom {
+            output: CustomToolOutput {
+                name: resolution.original_name.clone(),
+                payload,
+            },
         };
+        let mut execution = ToolInvocationExecution::new(output.clone(), view)
+            .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
         self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
         Ok(execution)
     }
@@ -1357,11 +1243,11 @@ impl ToolExecutor {
         Ok(patch.set.into_iter().collect())
     }
 
-    pub fn execute_bundled(
+    pub fn execute_tool_payload(
         &self,
-        input: &BundledToolInput,
-    ) -> Result<(BundledToolOutput, Option<ApplyPatchExecution>), ToolError> {
-        let execution = self.execute_bundled_detailed(input)?;
+        input: &ToolPayloadInput,
+    ) -> Result<(ToolPayloadOutput, Option<ApplyPatchExecution>), ToolError> {
+        let execution = self.execute_tool_payload_detailed(input)?;
         Ok((execution.output, execution.apply_patch))
     }
 
@@ -1677,6 +1563,27 @@ fn validate_shell_filesystem_effects(
     Ok(())
 }
 
+fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> {
+    let value = invocation_input_value(invocation);
+    value
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .map(str::to_string)
+}
+
+fn filesystem_effects_from_input(
+    input: &serde_json::Value,
+) -> Result<Option<Vec<FilesystemEffect>>, ToolError> {
+    let Some(value) = input.get("filesystem_effects") else {
+        return Ok(None);
+    };
+    let effects = serde_json::from_value(value.clone())
+        .map_err(|err| ToolError::InvalidInput(format!("filesystem_effects: {err}")))?;
+    Ok(Some(effects))
+}
+
 fn invocation_name(invocation: &ToolInvocation) -> String {
     plugin_invocation_name(&PluginInvocation::from_tool_invocation(invocation))
 }
@@ -1685,33 +1592,61 @@ fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
     invocation.entry_name.clone()
 }
 
-/// Serialize a `BundledToolInput` to the JSON shape expected by the
-/// in-process bundled plugin. The plugin parses by tool name (passed as
-/// `ToolInvokeInput::tool_name`) and consumes the inner payload only.
-fn bundled_input_payload(input: &BundledToolInput) -> Result<serde_json::Value, ToolError> {
-    let value = serde_json::to_value(input)
-        .map_err(|err| ToolError::Plugin(format!("encode bundled input: {err}")))?;
-    let mut obj = match value {
-        serde_json::Value::Object(o) => o,
-        other => return Ok(other),
+fn apply_patch_execution_from_tool_output(output: &ToolOutput) -> Option<ApplyPatchExecution> {
+    let ToolOutput::Custom { output } = output else {
+        return None;
     };
-    obj.remove("tool");
-    Ok(serde_json::Value::Object(obj))
-}
-
-fn bundled_plugin_error(tool_name: &str, err: crate::plugin::PluginError) -> ToolError {
-    let prefix = format!("{tool_name}: ");
-    let detail = err.message.strip_prefix(&prefix).unwrap_or(&err.message);
-    if let Some(reason) = detail.strip_prefix("permission denied: ") {
-        return ToolError::PermissionDenied(reason.to_string());
+    if output.name.rsplit('/').next() != Some("apply_patch") {
+        return None;
     }
-    if let Some(reason) = detail.strip_prefix("permission confirmation required: ") {
-        return ToolError::PermissionAsk(reason.to_string());
-    }
-    if let Some(reason) = detail.strip_prefix("invalid tool input: ") {
-        return ToolError::InvalidInput(reason.to_string());
-    }
-    ToolError::Plugin(err.message)
+    let payload = serde_json::Value::from(output.payload.clone());
+    let operation_id = payload.get("operation_id")?.as_str()?.to_string();
+    let changes: Vec<crate::message::FileChangeEntry> =
+        serde_json::from_value(payload.get("changes")?.clone()).ok()?;
+    let before_hash = payload
+        .get("before_hash")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let after_hash = payload
+        .get("after_hash")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let inverse_patch = payload.get("inverse_patch")?.as_str()?.to_string();
+    let diff = payload
+        .get("diff")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let progress = serde_json::from_value(
+        payload
+            .get("progress")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .ok()?;
+    Some(ApplyPatchExecution {
+        operation_id,
+        files: changes
+            .into_iter()
+            .map(|change| AppliedFileChange {
+                path: change.path,
+                kind: match change.kind {
+                    crate::message::FileChangeKind::Added => apply_patch::PatchOpKind::Add,
+                    crate::message::FileChangeKind::Updated => apply_patch::PatchOpKind::Update,
+                    crate::message::FileChangeKind::Deleted => apply_patch::PatchOpKind::Delete,
+                    crate::message::FileChangeKind::Moved => apply_patch::PatchOpKind::Move,
+                },
+                from_path: change.from_path,
+            })
+            .collect(),
+        before_hash,
+        after_hash,
+        inverse_patch,
+        diff,
+        progress,
+    })
 }
 
 fn invocation_input_json(invocation: &ToolInvocation) -> Result<String, ToolError> {
@@ -1758,12 +1693,7 @@ fn collect_loaded_tool_names(
         .flat_map(|message| message.parts.iter())
         .filter_map(|part| match part.content.as_ref() {
             Some(PartContent::ToolExecution(ToolExecutionPart::Completed { details, .. })) => {
-                match details.as_bundled() {
-                    Some(BundledToolOutput::ToolSearch { loaded_tools, .. }) => {
-                        Some(loaded_tools)
-                    }
-                    _ => None,
-                }
+                loaded_tools_from_tool_output(details)
             }
             _ => None,
         })
@@ -1780,6 +1710,14 @@ fn collect_loaded_tool_names(
     );
 
     loaded
+}
+
+fn loaded_tools_from_tool_output(details: &ToolOutput) -> Option<Vec<String>> {
+    let ToolOutput::Custom { output } = details else {
+        return None;
+    };
+    let payload = serde_json::Value::from(output.payload.clone());
+    serde_json::from_value(payload.get("loaded_tools")?.clone()).ok()
 }
 
 fn parse_custom_payload(payload_json: &str) -> Result<StructuredObject, ToolError> {
@@ -1955,11 +1893,11 @@ mod tests {
 
     use crate::message::{
         ApplyPatchToolInput, BashToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-        FileChangeKind, FilesystemAccess, FilesystemEffect, BundledToolInput,
-        BundledToolOutput, GlobToolInput, GrepToolInput, Message, PartContent, ReadToolInput,
-        StructuredObject, TaskSubagentType, TaskToolInput, TimeRange, TodoItem, TodoPriority,
-        TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation, ToolOutput,
-        ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
+        FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, Message,
+        PartContent, ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TimeRange,
+        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation,
+        ToolOutput, ToolPayloadInput, ToolPayloadOutput, ToolSearchToolInput, ViewFileToolInput,
+        WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -1973,7 +1911,7 @@ mod tests {
     use crate::role::Role;
 
     use super::{ToolError, ToolExecutor};
-    use crate::plugins::bundled::router as bundled_router;
+    use crate::plugins::provided::router as in_process_router;
 
     #[derive(Debug)]
     struct TempWorkspace {
@@ -1996,7 +1934,7 @@ mod tests {
 
     fn build_executor(root: &Path) -> ToolExecutor {
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all());
-        ToolExecutor::new(root, agent).with_plugin_manager(build_bundled_plugin_manager(root))
+        ToolExecutor::new(root, agent).with_plugin_manager(build_default_plugin_manager(root))
     }
 
     #[derive(Debug)]
@@ -2064,16 +2002,17 @@ mod tests {
             let session_id = context.session_id.unwrap_or(-1);
             let call_id = context.call_id.unwrap_or(-1);
             let executor =
-                bundled_router::current_executor_for_test(session_id, call_id, "todo_write")
+                in_process_router::current_executor_for_test(session_id, call_id, "todo_write")
                     .ok_or_else(|| {
                         PluginError::new("test host: no executor available for todo_write")
                     })?;
             executor
-                .execute_bundled_payload_for_host(
+                .execute_tool_payload_for_host(
                     "todo_write",
                     serde_json::to_value(req).map_err(|err| PluginError::new(err.to_string()))?,
                     Some(session_id).filter(|id| *id >= 0),
                     Some(call_id).filter(|id| *id >= 0),
+                    None,
                 )
                 .map_err(|err| PluginError::new(err.to_string()))
         }
@@ -2318,7 +2257,7 @@ mod tests {
         })
     }
 
-    fn build_bundled_plugin_manager(root: &Path) -> Arc<PluginHost> {
+    fn build_default_plugin_manager(root: &Path) -> Arc<PluginHost> {
         use std::collections::BTreeMap;
 
         let skills_fs_id = super::skills_fs_plugin_id().to_string();
@@ -2367,7 +2306,7 @@ mod tests {
                 .register_static(workflow_id, super::new_workflow_plugin())
                 .build()
                 .await
-                .expect("bundled plugin host should build")
+                .expect("default plugin host should build")
         })
     }
 
@@ -2383,7 +2322,7 @@ mod tests {
                 crate::message::ExecutionStatus::Completed,
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
                     call_id: 1,
-                    invocation: BundledToolInput::ToolSearch(ToolSearchToolInput {
+                    invocation: ToolPayloadInput::ToolSearch(ToolSearchToolInput {
                         query: "load mutating tools".to_string(),
                         load: loaded_tools.iter().map(|name| name.to_string()).collect(),
                         limit: None,
@@ -2393,7 +2332,7 @@ mod tests {
                     blocks: Vec::new(),
                     attachments: Vec::new(),
                     details: ToolOutput::Custom {
-                        output: BundledToolOutput::ToolSearch {
+                        output: ToolPayloadOutput::ToolSearch {
                             results: Vec::new(),
                             loaded_tools: loaded_tools
                                 .iter()
@@ -2421,22 +2360,22 @@ mod tests {
     }
 
     #[test]
-    fn read_bundled_returns_line_numbered_preview() {
+    fn read_provided_returns_line_numbered_preview() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("notes.txt");
         fs::write(&file_path, "one\ntwo\nthree\n").expect("failed to seed file");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::Read(ReadToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Read(ReadToolInput {
                 file_path: "notes.txt".to_string(),
                 offset: Some(2),
                 limit: Some(2),
             }))
-            .expect("read bundled should succeed");
+            .expect("read default tool should succeed");
 
         match result.output {
-            BundledToolOutput::Read {
+            ToolPayloadOutput::Read {
                 preview,
                 truncated,
                 loaded_paths,
@@ -2452,7 +2391,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_patch_bundled_reports_typed_file_changes() {
+    fn apply_patch_provided_reports_typed_file_changes() {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("keep.txt"), "before\n").expect("failed to seed keep.txt");
         fs::write(workspace.root.join("remove.txt"), "delete me\n")
@@ -2460,7 +2399,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::ApplyPatch(ApplyPatchToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
                 patch: "\
 *** Begin Patch
 *** Add File: added.txt
@@ -2476,7 +2415,7 @@ mod tests {
             .expect("apply_patch should succeed");
 
         match result.output {
-            BundledToolOutput::ApplyPatch { changes, .. } => {
+            ToolPayloadOutput::ApplyPatch { changes, .. } => {
                 assert_eq!(changes.len(), 3);
                 assert!(changes.iter().any(|change| {
                     change.path == "added.txt" && change.kind == FileChangeKind::Added
@@ -2493,13 +2432,13 @@ mod tests {
     }
 
     #[test]
-    fn apply_patch_bundled_moves_files_and_reports_diff() {
+    fn apply_patch_provided_moves_files_and_reports_diff() {
         let workspace = TempWorkspace::new();
         fs::write(workspace.root.join("old.txt"), "before\n").expect("failed to seed old.txt");
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::ApplyPatch(ApplyPatchToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
                 patch: "\
 *** Begin Patch
 *** Update File: old.txt
@@ -2518,7 +2457,7 @@ mod tests {
             "after\n"
         );
         match result.output {
-            BundledToolOutput::ApplyPatch {
+            ToolPayloadOutput::ApplyPatch {
                 changes,
                 diff,
                 progress,
@@ -2541,20 +2480,20 @@ mod tests {
     }
 
     #[test]
-    fn view_file_bundled_returns_metadata_and_attachment() {
+    fn view_file_provided_returns_metadata_and_attachment() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("pixel.png");
         fs::write(&file_path, sample_png_bytes()).expect("failed to seed png");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::ViewFile(ViewFileToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::ViewFile(ViewFileToolInput {
                 path: "pixel.png".to_string(),
             }))
             .expect("view_file should succeed");
 
         match result.output {
-            BundledToolOutput::ViewFile {
+            ToolPayloadOutput::ViewFile {
                 path,
                 kind,
                 mime,
@@ -2590,20 +2529,20 @@ mod tests {
     }
 
     #[test]
-    fn view_file_bundled_attaches_generic_text_file() {
+    fn view_file_provided_attaches_generic_text_file() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("notes.txt");
         fs::write(&file_path, "hello from agena\n").expect("failed to seed text file");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::ViewFile(ViewFileToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::ViewFile(ViewFileToolInput {
                 path: "notes.txt".to_string(),
             }))
             .expect("view_file should succeed for text file");
 
         match result.output {
-            BundledToolOutput::ViewFile {
+            ToolPayloadOutput::ViewFile {
                 path,
                 kind,
                 mime,
@@ -2650,21 +2589,21 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let glob_result = executor
-            .execute_bundled_detailed(&BundledToolInput::Glob(GlobToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Glob(GlobToolInput {
                 pattern: "**/*.rs".to_string(),
                 path: Some("src".to_string()),
             }))
             .expect("glob should succeed");
 
         match glob_result.output {
-            BundledToolOutput::Glob { count } => {
+            ToolPayloadOutput::Glob { count } => {
                 assert_eq!(count, Some(2));
             }
             other => panic!("expected glob output, got {other:?}"),
         }
 
         let grep_result = executor
-            .execute_bundled_detailed(&BundledToolInput::Grep(GrepToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Grep(GrepToolInput {
                 pattern: "hello".to_string(),
                 path: Some("src".to_string()),
                 include: Some("**/*.rs".to_string()),
@@ -2672,7 +2611,7 @@ mod tests {
             .expect("grep should succeed");
 
         match grep_result.output {
-            BundledToolOutput::Grep { matches } => {
+            ToolPayloadOutput::Grep { matches } => {
                 assert_eq!(matches, Some(1));
             }
             other => panic!("expected grep output, got {other:?}"),
@@ -2683,7 +2622,7 @@ mod tests {
     fn task_plugin_entry_generates_session_id() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
-        let invocation = BundledToolInput::Task(TaskToolInput {
+        let invocation = ToolPayloadInput::Task(TaskToolInput {
             description: "inspect code".to_string(),
             prompt: "find modules".to_string(),
             subagent_type: TaskSubagentType::Explore,
@@ -2716,10 +2655,10 @@ mod tests {
         match result.output {
             ToolOutput::Custom { output } => {
                 assert_eq!(output.name, "task");
-                let payload = BundledToolOutput::from_custom(&output)
-                    .expect("task output should decode as bundled payload");
+                let payload = ToolPayloadOutput::from_custom(&output)
+                    .expect("task output should decode as tool payload");
                 match payload {
-                    BundledToolOutput::Task { session_id, .. } => {
+                    ToolPayloadOutput::Task { session_id, .. } => {
                         assert!(session_id.is_some());
                     }
                     other => panic!("expected task payload, got {other:?}"),
@@ -2730,12 +2669,12 @@ mod tests {
     }
 
     #[test]
-    fn tool_search_bundled_discovers_and_loads_deferred_tools() {
+    fn tool_search_provided_discovers_and_loads_deferred_tools() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::ToolSearch(ToolSearchToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::ToolSearch(ToolSearchToolInput {
                 query: "patch files".to_string(),
                 load: vec!["apply_patch".to_string()],
                 limit: None,
@@ -2743,7 +2682,7 @@ mod tests {
             .expect("tool_search should succeed");
 
         match result.output {
-            BundledToolOutput::ToolSearch {
+            ToolPayloadOutput::ToolSearch {
                 results,
                 loaded_tools,
             } => {
@@ -2762,7 +2701,11 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let initial = executor.available_tools();
-        assert!(initial.iter().any(|tool| tool.exposed_name == "tool_search"));
+        assert!(
+            initial
+                .iter()
+                .any(|tool| tool.exposed_name == "tool_search")
+        );
         assert!(initial.iter().any(|tool| tool.exposed_name == "todo_write"));
         assert!(!initial.iter().any(|tool| tool.exposed_name == "bash"));
         assert!(!initial.iter().any(|tool| tool.exposed_name == "task"));
@@ -2778,7 +2721,7 @@ mod tests {
     fn plugin_entries_drive_available_tool_catalog() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let tools = executor.available_tools();
         let read = tools
@@ -2828,7 +2771,7 @@ mod tests {
     fn plugin_entries_are_projected_into_available_tool_catalog() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let available = executor
             .available_tools()
@@ -2862,12 +2805,12 @@ mod tests {
     }
 
     #[test]
-    fn todo_write_bundled_returns_items_for_session_state() {
+    fn todo_write_provided_returns_items_for_session_state() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::TodoWrite(TodoWriteToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::TodoWrite(TodoWriteToolInput {
                 items: vec![TodoItem {
                     content: "Implement tool_search".to_string(),
                     status: TodoStatus::InProgress,
@@ -2877,7 +2820,7 @@ mod tests {
             .expect("todo_write should succeed");
 
         match result.output {
-            BundledToolOutput::TodoWrite { items } => {
+            ToolPayloadOutput::TodoWrite { items } => {
                 assert_eq!(items.len(), 1);
                 assert_eq!(items[0].content, "Implement tool_search");
                 assert_eq!(items[0].status, TodoStatus::InProgress);
@@ -2887,7 +2830,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_bundled_runs_command() {
+    fn bash_provided_runs_command() {
         if cfg!(windows) {
             // Windows host environments can include PATH entries whose ACL cannot be audited
             // in shell preflight, which makes this smoke test flaky/non-portable.
@@ -2898,17 +2841,17 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
                 command: "echo hello_agena".to_string(),
                 description: "smoke bash".to_string(),
                 timeout_ms: Some(30_000),
                 workdir: None,
                 filesystem_effects: Vec::new(),
             }))
-            .expect("bash bundled should succeed");
+            .expect("bash default tool should succeed");
 
         match &result.output {
-            BundledToolOutput::Bash {
+            ToolPayloadOutput::Bash {
                 output,
                 description,
             } => {
@@ -2924,7 +2867,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_bundled_explains_no_match_exit_codes() {
+    fn bash_provided_explains_no_match_exit_codes() {
         if cfg!(windows) {
             return;
         }
@@ -2935,7 +2878,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
                 command: "grep missing notes.txt".to_string(),
                 description: "search missing text".to_string(),
                 timeout_ms: Some(30_000),
@@ -2945,10 +2888,10 @@ mod tests {
                     access: crate::message::FilesystemAccess::Read,
                 }],
             }))
-            .expect("bash bundled should succeed");
+            .expect("bash default tool should succeed");
 
         match result.output {
-            BundledToolOutput::Bash {
+            ToolPayloadOutput::Bash {
                 output,
                 description,
             } => {
@@ -2977,7 +2920,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_bundled_explains_diff_exit_codes() {
+    fn bash_provided_explains_diff_exit_codes() {
         if cfg!(windows) {
             return;
         }
@@ -2988,7 +2931,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
                 command: "diff left.txt right.txt".to_string(),
                 description: "compare files".to_string(),
                 timeout_ms: Some(30_000),
@@ -3004,10 +2947,10 @@ mod tests {
                     },
                 ],
             }))
-            .expect("bash bundled should succeed");
+            .expect("bash default tool should succeed");
 
         match &result.output {
-            BundledToolOutput::Bash { description, .. } => {
+            ToolPayloadOutput::Bash { description, .. } => {
                 assert!(
                     description
                         .as_deref()
@@ -3028,7 +2971,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_bundled_rejects_obvious_write_without_declared_effects() {
+    fn bash_provided_rejects_obvious_write_without_declared_effects() {
         if cfg!(windows) {
             return;
         }
@@ -3037,7 +2980,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let err = executor
-            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
                 command: "echo hi > created.txt".to_string(),
                 description: "attempt write".to_string(),
                 timeout_ms: Some(30_000),
@@ -3077,10 +3020,11 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_plugin_manager(&workspace.root));
 
-        assert!(executor.available_tools().iter().any(|tool| {
-            tool.exposed_name == "plugin_echo"
-                && tool.plugin_name == "fixture"
-        }));
+        assert!(
+            executor.available_tools().iter().any(|tool| {
+                tool.exposed_name == "plugin_echo" && tool.plugin_name == "fixture"
+            })
+        );
 
         let invocation = ToolInvocation {
             name: "plugin_echo".to_string(),
@@ -3127,10 +3071,10 @@ mod tests {
     }
 
     #[test]
-    fn prepare_invocation_keeps_bundled_calls_in_custom_wire_shape() {
+    fn prepare_invocation_keeps_provided_calls_in_custom_wire_shape() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
-        let invocation = BundledToolInput::Read(ReadToolInput {
+        let invocation = ToolPayloadInput::Read(ReadToolInput {
             file_path: "notes.txt".to_string(),
             offset: Some(3),
             limit: Some(5),
@@ -3139,7 +3083,7 @@ mod tests {
 
         let prepared = executor
             .prepare_invocation(&invocation, 7, 9)
-            .expect("prepare should succeed for bundled");
+            .expect("prepare should succeed for provided");
 
         let ToolInvocation { name, input } = prepared.invocation;
         assert_eq!(name, "read");
@@ -3234,11 +3178,11 @@ mod tests {
     }
 
     #[test]
-    fn collect_permission_checks_for_bundled_invocation_uses_dynamic_plugin_paths() {
+    fn collect_permission_checks_for_provided_invocation_uses_dynamic_plugin_paths() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
-        let invocation = BundledToolInput::ApplyPatch(ApplyPatchToolInput {
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
             patch: "*** Begin Patch\n*** Add File: notes.txt\n+hello\n*** Delete File: old.txt\n*** End Patch"
                 .to_string(),
         })
@@ -3246,7 +3190,7 @@ mod tests {
 
         let checks = executor
             .collect_permission_checks_for_invocation(&invocation)
-            .expect("bundled permission collection should succeed");
+            .expect("default permission collection should succeed");
 
         let path_actions = checks
             .iter()
@@ -3274,9 +3218,9 @@ mod tests {
     fn collect_permission_checks_for_workflow_plan_uses_declared_path_access() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let invocation =
-            BundledToolInput::EnterPlanMode(EnterPlanModeToolInput::default()).into_invocation();
+            ToolPayloadInput::EnterPlanMode(EnterPlanModeToolInput::default()).into_invocation();
 
         let checks = executor
             .collect_permission_checks_for_invocation(&invocation)
@@ -3304,9 +3248,9 @@ mod tests {
     fn collect_permission_checks_for_workflow_worktree_uses_dynamic_plugin_paths() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
-        let named_invocation = BundledToolInput::EnterWorktree(EnterWorktreeToolInput {
+        let named_invocation = ToolPayloadInput::EnterWorktree(EnterWorktreeToolInput {
             name: Some("demo".to_string()),
             path: None,
         })
@@ -3338,7 +3282,7 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .unwrap_or("agena")
         ));
-        let existing_invocation = BundledToolInput::EnterWorktree(EnterWorktreeToolInput {
+        let existing_invocation = ToolPayloadInput::EnterWorktree(EnterWorktreeToolInput {
             name: None,
             path: Some(outside.to_string_lossy().to_string()),
         })
@@ -3375,10 +3319,10 @@ mod tests {
             })
             .expect("network permission config compiles");
         let executor = ToolExecutor::new(workspace.root.clone(), agent)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let err = executor
-            .execute_bundled_detailed(&BundledToolInput::WebFetch(WebFetchToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::WebFetch(WebFetchToolInput {
                 url: "http://localhost:8000/".to_string(),
                 prompt: None,
             }))
@@ -3394,7 +3338,7 @@ mod tests {
     fn collect_permission_checks_for_bash_invocation_uses_declared_filesystem_effects() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let outside = workspace.root.with_file_name(format!(
             "{}-outside.txt",
             workspace
@@ -3403,7 +3347,7 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .unwrap_or("agena")
         ));
-        let invocation = BundledToolInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(BashToolInput {
             command: "cat src/lib.rs > target/out.txt".to_string(),
             description: "declared effects".to_string(),
             timeout_ms: Some(30_000),
@@ -3478,8 +3422,8 @@ mod tests {
             ),
         );
         let executor = ToolExecutor::new(&workspace.root, agent)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
-        let invocation = BundledToolInput::Bash(BashToolInput {
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::Bash(BashToolInput {
             command: "touch created.txt".to_string(),
             description: "declared write".to_string(),
             timeout_ms: Some(30_000),
@@ -3559,8 +3503,8 @@ mod tests {
     fn bash_invocation_rejects_obvious_write_without_declared_effects() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
-        let invocation = BundledToolInput::Bash(BashToolInput {
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::Bash(BashToolInput {
             command: "touch created.txt".to_string(),
             description: "missing effects".to_string(),
             timeout_ms: Some(30_000),
@@ -3596,10 +3540,10 @@ mod tests {
             ),
         );
         let executor = ToolExecutor::new(&workspace.root, agent)
-            .with_plugin_manager(build_bundled_plugin_manager(&workspace.root));
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let err = executor
-            .execute_bundled_detailed(&BundledToolInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
                 command: "printf ok".to_string(),
                 description: "declared write denied".to_string(),
                 timeout_ms: Some(30_000),
@@ -3631,7 +3575,7 @@ mod tests {
 
         let execution = executor
             .execute_invocation_detailed(
-                &BundledToolInput::Bash(BashToolInput {
+                &ToolPayloadInput::Bash(BashToolInput {
                     command: "printf %s \"$PLUGIN_FLAG\"".to_string(),
                     description: "print plugin env".to_string(),
                     timeout_ms: Some(30_000),
@@ -3644,8 +3588,8 @@ mod tests {
             )
             .expect("bash invocation should succeed");
 
-        match execution.output.as_bundled() {
-            Some(BundledToolOutput::Bash {
+        match execution.output.as_tool_payload() {
+            Some(ToolPayloadOutput::Bash {
                 output,
                 description: _,
             }) => {
@@ -3674,7 +3618,7 @@ mod tests {
         );
 
         let bash_input = |cmd: &str| -> ToolInvocation {
-            BundledToolInput::Bash(BashToolInput {
+            ToolPayloadInput::Bash(BashToolInput {
                 command: cmd.to_string(),
                 description: String::new(),
                 timeout_ms: None,
@@ -3730,7 +3674,7 @@ mod tests {
             },
         );
 
-        let inv = BundledToolInput::Bash(BashToolInput {
+        let inv = ToolPayloadInput::Bash(BashToolInput {
             command: "rm -rf /".to_string(),
             description: String::new(),
             timeout_ms: None,

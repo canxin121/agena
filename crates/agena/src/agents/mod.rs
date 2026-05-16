@@ -34,7 +34,7 @@ use thiserror::Error;
 pub enum AgentScope {
     Project,
     User,
-    Bundled,
+    Default,
 }
 
 impl AgentScope {
@@ -42,7 +42,7 @@ impl AgentScope {
         match self {
             Self::Project => "project",
             Self::User => "user",
-            Self::Bundled => "bundled",
+            Self::Default => "default",
         }
     }
 }
@@ -163,8 +163,8 @@ impl SubagentRegistry {
     pub fn reload_disk(&self, workspace_root: &Path, user_root: Option<&Path>) {
         let mut inner = self.inner.write();
         inner.by_name.clear();
-        for profile in builtin_profiles() {
-            agents_upsert(&mut inner.by_name, profile, AgentScope::Bundled);
+        for profile in default_profiles() {
+            agents_upsert(&mut inner.by_name, profile, AgentScope::Default);
         }
         if let Some(user) = user_root {
             agents_load_dir(&mut inner.by_name, user, AgentScope::User);
@@ -362,7 +362,7 @@ fn collect_project_agent_dirs(workspace_root: &Path) -> Vec<PathBuf> {
 
 fn scope_priority(scope: AgentScope) -> u8 {
     match scope {
-        AgentScope::Bundled => 0,
+        AgentScope::Default => 0,
         AgentScope::User => 1,
         AgentScope::Project => 2,
     }
@@ -383,7 +383,7 @@ fn home_dir() -> Option<PathBuf> {
         })
 }
 
-fn builtin_permission(
+fn default_permission(
     workspace_write: crate::permission::PermissionMode,
     external: crate::permission::PermissionMode,
     names: &[(&str, crate::permission::PermissionMode)],
@@ -411,13 +411,13 @@ fn builtin_permission(
     }
 }
 
-fn builtin_profiles() -> Vec<AgentProfile> {
+fn default_profiles() -> Vec<AgentProfile> {
     vec![
-        builtin_profile(
+        default_profile(
             "build",
             "Primary coding agent for normal end-to-end implementation work.",
             &[],
-            builtin_permission(
+            default_permission(
                 crate::permission::PermissionMode::Ask,
                 crate::permission::PermissionMode::Ask,
                 &[
@@ -433,7 +433,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             &["default", "main"],
             "You are the primary engineering agent. Own the task end to end, choose tools pragmatically, delegate when it helps, preserve surrounding behavior, and avoid reverting unrelated work.",
         ),
-        builtin_profile(
+        default_profile(
             "general",
             "General-purpose delegated agent for broad research and mixed tasks.",
             &[
@@ -448,7 +448,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "ask_user",
                 "tool_search",
             ],
-            builtin_permission(
+            default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
@@ -468,7 +468,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             &["delegate", "helper"],
             "You are a general-purpose delegated agent. Investigate broadly, combine code reading with focused web research when useful, and return evidence-backed conclusions without making workspace edits unless explicitly allowed.",
         ),
-        builtin_profile(
+        default_profile(
             "explore",
             "Read-only codebase explorer for fast repo analysis.",
             &[
@@ -480,7 +480,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "web_fetch",
                 "web_search",
             ],
-            builtin_permission(
+            default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
@@ -497,7 +497,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             &["read", "reader"],
             "You are a focused read-only engineering explorer. Gather evidence quickly, inspect code paths, summarize findings concisely, and do not make edits.",
         ),
-        builtin_profile(
+        default_profile(
             "scout",
             "Read-only external research agent for docs, APIs, and dependency behavior.",
             &[
@@ -509,7 +509,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "web_fetch",
                 "web_search",
             ],
-            builtin_permission(
+            default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
@@ -526,7 +526,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             &["research", "docs"],
             "You are a read-only research agent for external documentation, APIs, and dependency behavior. Prefer direct evidence from docs, source, or fetched pages, separate verified facts from inference, and do not modify the user's workspace.",
         ),
-        builtin_profile(
+        default_profile(
             "implement",
             "Editing agent for making targeted code changes.",
             &[
@@ -539,7 +539,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "notebook_edit",
                 "todo_write",
             ],
-            builtin_permission(
+            default_permission(
                 crate::permission::PermissionMode::Ask,
                 crate::permission::PermissionMode::Ask,
                 &[],
@@ -548,11 +548,11 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             &["edit", "builder", "codex"],
             "You are a pragmatic implementation agent. Make the requested code changes, preserve surrounding behavior, adapt to concurrent edits, and avoid reverting unrelated work.",
         ),
-        builtin_profile(
+        default_profile(
             "verify",
             "Validation agent for targeted testing and regression checks.",
             &["read", "view_file", "glob", "grep", "bash", "todo_write"],
-            builtin_permission(
+            default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[("bash", crate::permission::PermissionMode::Ask)],
@@ -561,7 +561,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             &["review", "reviewer", "test"],
             "You are a verification agent. Run focused checks, inspect outputs critically, look for regressions, and report the remaining risks plainly.",
         ),
-        builtin_profile(
+        default_profile(
             "planner",
             "Planning agent for read-only decomposition and execution strategy.",
             &[
@@ -574,7 +574,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "enter_plan_mode",
                 "exit_plan_mode",
             ],
-            builtin_permission(
+            default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
@@ -587,11 +587,11 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             &["plan", "planning", "design"],
             "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable. Prefer read-only investigation unless the user explicitly asks to execute.",
         ),
-        builtin_profile(
+        default_profile(
             "reviewer",
             "Code review agent focused on bugs, risks, and missing tests.",
             &["read", "view_file", "glob", "grep", "bash"],
-            builtin_permission(
+            default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[("bash", crate::permission::PermissionMode::Ask)],
@@ -603,7 +603,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
     ]
 }
 
-fn builtin_profile(
+fn default_profile(
     name: &str,
     description: &str,
     allowed_tools: &[&str],
@@ -632,7 +632,7 @@ fn builtin_profile(
         },
         prompt: prompt.to_string(),
         source_path: None,
-        scope: AgentScope::Bundled,
+        scope: AgentScope::Default,
     }
 }
 
@@ -767,11 +767,11 @@ mod tests {
     }
 
     #[test]
-    fn builtins_are_available_in_empty_registry_discovery() {
-        let work = temp_dir("builtins");
+    fn default_profiles_are_available_in_empty_registry_discovery() {
+        let work = temp_dir("defaults");
         let registry = SubagentRegistry::discover(&work, None);
-        let explore = registry.get("explore").expect("builtin explore profile");
-        assert_eq!(explore.scope, AgentScope::Bundled);
+        let explore = registry.get("explore").expect("default explore profile");
+        assert_eq!(explore.scope, AgentScope::Default);
         assert!(
             explore
                 .frontmatter

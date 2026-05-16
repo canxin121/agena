@@ -13,8 +13,7 @@ use agena::{
     memory::MemoryStore,
     message::{
         AttachmentItem, AttachmentKind, AttachmentSource, EnterWorktreeToolInput,
-        ExitWorktreeToolInput, BundledToolInput, BundledToolOutput, PartContent,
-        ToolInvocation, UserInputReply,
+        ExitWorktreeToolInput, PartContent, ToolInvocation, UserInputReply,
     },
     model::ModelRef,
     permission::PermissionReplyKind,
@@ -22,6 +21,20 @@ use agena::{
     runtime::AgenaRuntime,
     tool,
 };
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WorktreeCommandOutput {
+    #[serde(default)]
+    pub action: Option<String>,
+    pub path: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+}
+
+fn parse_worktree_payload(payload: Option<serde_json::Value>) -> Result<WorktreeCommandOutput> {
+    let payload = payload.ok_or_else(|| anyhow!("worktree tool returned no payload"))?;
+    serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
+}
 use agena_api::{
     commands::{
         Command as ApiCommand, CommandResult, ContinueRunParams, CreateSessionParams,
@@ -1165,15 +1178,19 @@ impl Backend {
         session_id: i64,
         name: Option<String>,
         path: Option<String>,
-    ) -> Result<BundledToolOutput> {
+    ) -> Result<WorktreeCommandOutput> {
         let manager = self.session_manager()?;
-        manager
+        let output = manager
             .tool_executor()
-            .execute_bundled_output_for_session(
-                &BundledToolInput::EnterWorktree(EnterWorktreeToolInput { name, path }),
-                session_id,
+            .execute_tool_payload_for_host(
+                "enter_worktree",
+                serde_json::to_value(EnterWorktreeToolInput { name, path })?,
+                Some(session_id),
+                None,
+                None,
             )
-            .map_err(|error| anyhow!(error.to_string()))
+            .map_err(|error| anyhow!(error.to_string()))?;
+        parse_worktree_payload(output.payload)
     }
 
     pub fn exit_worktree(
@@ -1181,18 +1198,22 @@ impl Backend {
         session_id: i64,
         action: String,
         discard_changes: bool,
-    ) -> Result<BundledToolOutput> {
+    ) -> Result<WorktreeCommandOutput> {
         let manager = self.session_manager()?;
-        manager
+        let output = manager
             .tool_executor()
-            .execute_bundled_output_for_session(
-                &BundledToolInput::ExitWorktree(ExitWorktreeToolInput {
+            .execute_tool_payload_for_host(
+                "exit_worktree",
+                serde_json::to_value(ExitWorktreeToolInput {
                     action,
                     discard_changes,
-                }),
-                session_id,
+                })?,
+                Some(session_id),
+                None,
+                None,
             )
-            .map_err(|error| anyhow!(error.to_string()))
+            .map_err(|error| anyhow!(error.to_string()))?;
+        parse_worktree_payload(output.payload)
     }
 
     pub fn runtime_entry_exists(&self, name: &str) -> bool {

@@ -27,7 +27,7 @@ CLI / TUI / Studio Web / Desktop / API clients
 - `crates/agena-api-server` 把这些 type 挂到 HTTP/REST、SSE、WebSocket、IPC、JSON-RPC app-server。
 - Studio Web 通过 REST 和 session SSE 与 Studio server 通信。
 - TUI 和 CLI 直接使用 `agena` core，不需要 HTTP server。
-- Desktop app 是 Tauri shell，启动并连接 bundled `agena-studio` sidecar。
+- Desktop app 是 Tauri shell，启动并连接 packaged `agena-studio` sidecar。
 - 插件通过 `agena-plugin-host` 接入，既可以贡献 entries，也可以通过 hook 影响 prompt、provider、权限、shell env、事件、状态栏等。
 
 ## Workspace 结构
@@ -99,7 +99,7 @@ Studio 后端应用，二进制名 `agena-studio`。它做三件事：
 
 ### `apps/agena-studio-desktop`
 
-Tauri 桌面封装。包含标准 WebView2/Wry variant 和实验 CEF variant。桌面 app 不依赖外部代理目标，而是启动 bundled `agena-studio` backend sidecar。
+Tauri 桌面封装。包含标准 WebView2/Wry variant 和实验 CEF variant。桌面 app 不依赖外部代理目标，而是启动 packaged `agena-studio` backend sidecar。
 
 ### `packages/agena-studio-web`
 
@@ -116,8 +116,8 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 - `db`: SeaORM entities、migration、CRUD。
 - `provider`: model providers、credential、auth、runtime retry、streaming。
 - `permission`: path/network/tool permission、persisted rule、runtime request/reply。
-- `agent` / `agents`: bundled agent policy、disk/runtime subagent registry。
-- `tool` / `plugins/bundled`: bundled tools and bundled static plugins.
+- `agent` / `agents`: default agent policy、disk/runtime subagent registry。
+- `tool` / `plugins/provided`: provided tools and runtime-provided static plugins.
 - `hooks`: user-configurable shell/HTTP hooks, exposed as a static plugin.
 - `memory`: project instructions and memory plugin.
 - `storage`: database URL/path resolution.
@@ -191,7 +191,7 @@ The resolved config builds:
 - `EventPublisher`: 发布 domain events。
 - `EventBus`: live broadcast。
 - `SessionProcessor`: provider 调用、tool call loop、prompt window。
-- `ToolExecutor`: bundled/plugin tool 执行。
+- `ToolExecutor`: provided/plugin tool 执行。
 - `CompactionWorker`: 上下文压缩。
 - `TurnRegistry`: active turn control/cancel。
 - session cache。
@@ -235,7 +235,7 @@ provider complete/complete_stream
          v
       ToolExecutor
          |
-         +--> bundled plugin tools
+         +--> provided plugin tools
          +--> configured plugins
          +--> permission runtime
          +--> path/network/tool policies
@@ -319,7 +319,7 @@ Plugin manifest defines:
 - loading, plan-mode, and streaming policy.
 - host capabilities.
 
-Core registers bundled static plugins during runtime build, including:
+Core registers runtime-provided static plugins during runtime build, including:
 
 - filesystem entries.
 - shell entries.
@@ -432,7 +432,7 @@ Desktop packaging lives in `apps/agena-studio-desktop`:
 - `src-tauri`: standard WebView2/Wry build.
 - `src-tauri-cef`: experimental CEF build.
 
-Build scripts in `ops/agena-studio/desktop/` prepare the `agena-studio` backend sidecar and Studio Web assets. Desktop runtime connects the webview to the bundled backend.
+Build scripts in `ops/agena-studio/desktop/` prepare the `agena-studio` backend sidecar and Studio Web assets. Desktop runtime connects the webview to the packaged backend.
 
 ## Database architecture
 
@@ -486,7 +486,7 @@ interval_secs = 30
 Use these extension points depending on what you need:
 
 - New model backend: add provider implementation under `crates/agena/src/provider/` and materialize it in `config/registry.rs`, or provide a plugin provider through `provider.list`.
-- New bundled tool: implement plugin tool under `crates/agena/src/plugins/bundled/` or an internal tool module and register it in plugin host build.
+- New provided tool: implement plugin tool under `crates/agena/src/plugins/provided/` or an internal tool module and register it in plugin host build.
 - External plugin tool/plugin: use `agena-plugin-sdk` and configure `[plugins.list.<id>]`.
 - New API operation: add type to `crates/agena-api`, map it in `crates/agena-api-server/src/dispatch.rs`, and expose REST route if Studio/Web needs direct HTTP.
 - New Studio UI feature: add API wrapper in `packages/agena-studio-web/src/agena/lib/agenaApi.ts`, then page/state/component code.

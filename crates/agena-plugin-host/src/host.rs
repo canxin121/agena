@@ -50,16 +50,15 @@ use crate::sdk::{
     ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput, ChatMessagesTransformPatch,
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
-    CommandBeforeResponse, ConfigInput, ConfigPatch, ToolDefinitionInput, ToolDefinitionPatch,
-    EventEnvelope, EventFilter, HookSubscription, HostCapability, NotificationInput,
-    PermissionAdvice, PermissionAskDecision, PermissionAskInput, PermissionDecision,
-    PluginError, PluginErrorCode, PluginManifest, PostTurnInput, PreTurnInput,
+    CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
+    HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
+    PermissionDecision, PluginError, PluginErrorCode, PluginManifest, PostTurnInput, PreTurnInput,
     ProviderListInput, ProviderListPatch, SessionCompactedInput, SessionCompactingInput,
     SessionCompactingPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
     ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput,
-    UserPromptSubmitPatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -145,9 +144,10 @@ impl LoadedPlugin {
     }
 
     pub fn entry_name_for_tool(&self, tool_name: &str) -> Option<String> {
-        self.manifest.entries.iter().find_map(|entry| {
-            (entry.name == tool_name).then(|| entry.name.clone())
-        })
+        self.manifest
+            .entries
+            .iter()
+            .find_map(|entry| (entry.name == tool_name).then(|| entry.name.clone()))
     }
 }
 
@@ -316,11 +316,7 @@ impl PluginHost {
     }
 
     pub fn lookup_entry(&self, exposed_name: &str) -> Option<RegistryPluginEntry> {
-        self.entries
-            .read()
-            .ok()?
-            .lookup(exposed_name)
-            .cloned()
+        self.entries.read().ok()?.lookup(exposed_name).cloned()
     }
 
     pub fn entry_entries(&self) -> Vec<RegistryPluginEntry> {
@@ -545,7 +541,9 @@ impl PluginHost {
             .plugins_by_id
             .get(&entry.plugin_name)
             .cloned()
-            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name)))?;
+            .ok_or_else(|| {
+                PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name))
+            })?;
         let timeout = self.timeouts.tool_invoke_or(Duration::from_secs(300));
         let mut input = input;
         // ensure tool name is the plugin-original name (in case caller passed exposed)
@@ -583,7 +581,9 @@ impl PluginHost {
             .plugins_by_id
             .get(&entry.plugin_name)
             .cloned()
-            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name)))?;
+            .ok_or_else(|| {
+                PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name))
+            })?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let mut input = input;
         input.tool_name = entry.original_name.clone();
@@ -617,7 +617,9 @@ impl PluginHost {
             .plugins_by_id
             .get(&entry.plugin_name)
             .cloned()
-            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name)))?;
+            .ok_or_else(|| {
+                PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name))
+            })?;
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let mut input = input;
         input.tool_name = entry.original_name.clone();
@@ -661,7 +663,9 @@ impl PluginHost {
             .plugins_by_id
             .get(&entry.plugin_name)
             .cloned()
-            .ok_or_else(|| PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name)))?;
+            .ok_or_else(|| {
+                PluginError::new(format!("plugin `{}` not loaded", entry.plugin_name))
+            })?;
         let mut input = input;
         input.tool_name = entry.original_name.clone();
 

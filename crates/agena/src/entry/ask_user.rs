@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, HashSet};
 
-use crate::message::{AskUserToolInput, BundledToolOutput};
+use crate::message::{AskUserToolInput, ToolPayloadOutput};
 
-use super::{BundledExecution, ToolError, ToolExecutionView};
+use super::{ToolError, ToolExecutionView, ToolPayloadExecution};
 
 const MAX_QUESTIONS: usize = 3;
 const MAX_OPTIONS: usize = 8;
 const MAX_HEADER_CHARS: usize = 12;
 
-pub(crate) fn execute(input: &AskUserToolInput) -> Result<super::BundledExecution, ToolError> {
+pub(crate) fn execute(input: &AskUserToolInput) -> Result<super::ToolPayloadExecution, ToolError> {
     validate(input)?;
     Err(ToolError::UserInputRequired(input.clone()))
 }
@@ -82,7 +82,7 @@ pub(crate) fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
 pub(crate) fn execution_from_answers(
     input: &AskUserToolInput,
     answers: BTreeMap<String, Vec<String>>,
-) -> BundledExecution {
+) -> ToolPayloadExecution {
     let mut lines = vec!["Answers:".to_string()];
     for question in &input.questions {
         if let Some(answer) = answers.get(question.id.as_str()) {
@@ -99,7 +99,7 @@ pub(crate) fn execution_from_answers(
         input.questions.len().to_string(),
     );
 
-    BundledExecution::new(BundledToolOutput::AskUser { answers }, view)
+    ToolPayloadExecution::new(ToolPayloadOutput::AskUser { answers }, view)
 }
 
 #[cfg(test)]

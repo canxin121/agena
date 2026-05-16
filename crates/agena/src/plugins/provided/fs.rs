@@ -1,4 +1,4 @@
-//! First-party `agena.fs` plugin: filesystem read/write/search tools.
+//! `agena.fs` plugin: filesystem read/write/search tools.
 
 use crate::message::{
     ApplyPatchToolInput, GlobToolInput, GrepToolInput, NotebookEditToolInput, ReadToolInput,
@@ -6,12 +6,12 @@ use crate::message::{
 };
 use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
 use crate::plugin::sdk::{PluginToolDecl, ToolTag};
-use crate::plugins::bundled::router::BundledRouterPlugin;
+use crate::plugins::provided::router::InProcessToolPlugin;
 
 pub(crate) const FS_PLUGIN_ID: &str = "agena.fs";
 
-pub(crate) fn new_plugin() -> BundledRouterPlugin {
-    BundledRouterPlugin::new(
+pub(crate) fn new_plugin() -> InProcessToolPlugin {
+    InProcessToolPlugin::new(
         "agena-fs",
         "Filesystem tools (read, view_file, glob, grep, apply_patch, notebook_edit).",
         entries(),

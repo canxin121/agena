@@ -1,7 +1,10 @@
-use crate::message::{FileChangeEntry, FileChangeKind, BundledToolInput, BundledToolOutput};
+use serde::de::DeserializeOwned;
+use serde_json::Value as JsonValue;
+
+use crate::message::{FileChangeEntry, FileChangeKind, ToolPayloadOutput};
 
 use super::{
-    BundledExecution, BundledExecutionContext, ToolError, ToolExecutionView, ToolExecutor,
+    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolRuntimeContext,
     apply_patch, ask_user, bash, cron, glob, grep, lsp, monitor_tool, notebook_edit, plan,
     powershell, read, task, todo_write, tool_search, view_file, web_fetch, web_search, worktree,
 };
@@ -16,15 +19,17 @@ fn apply_patch_output_text(result: &apply_patch::ApplyPatchExecution) -> String 
     lines.join("\n")
 }
 
-pub(crate) fn execute_bundled(
+pub(crate) fn execute_tool(
     executor: &ToolExecutor,
-    input: &BundledToolInput,
-    context: BundledExecutionContext,
-) -> Result<BundledExecution, ToolError> {
-    match input {
-        BundledToolInput::ApplyPatch(payload) => {
-            let result = apply_patch::execute(executor, payload)?;
-            let output = BundledToolOutput::ApplyPatch {
+    tool_name: &str,
+    input: JsonValue,
+    context: ToolRuntimeContext,
+) -> Result<ToolPayloadExecution, ToolError> {
+    match tool_name {
+        "apply_patch" => {
+            let payload = parse_input(input)?;
+            let result = apply_patch::execute(executor, &payload)?;
+            let output = ToolPayloadOutput::ApplyPatch {
                 operation_id: result.operation_id.clone(),
                 changes: result
                     .files
@@ -57,45 +62,46 @@ pub(crate) fn execute_bundled(
             view.metadata
                 .insert("changed_files".to_string(), result.files.len().to_string());
 
-            Ok(BundledExecution::new(output, view).with_apply_patch(result.clone()))
+            Ok(ToolPayloadExecution::new(output, view).with_apply_patch(result.clone()))
         }
-        BundledToolInput::Read(payload) => read::execute(executor, payload),
-        BundledToolInput::ViewFile(payload) => view_file::execute(executor, payload),
-        BundledToolInput::Glob(payload) => glob::execute(executor, payload),
-        BundledToolInput::Grep(payload) => grep::execute(executor, payload),
-        BundledToolInput::Task(payload) => task::execute(executor, payload),
-        BundledToolInput::ToolSearch(payload) => tool_search::execute(executor, payload),
-        BundledToolInput::TodoWrite(payload) => Ok(todo_write::execute(payload)),
-        BundledToolInput::AskUser(payload) => ask_user::execute(payload),
-        BundledToolInput::Bash(payload) => bash::execute(executor, payload, context),
-        BundledToolInput::Monitor(payload) => monitor_tool::execute(executor, payload),
-        BundledToolInput::WebFetch(payload) => web_fetch::execute(executor, payload),
-        BundledToolInput::WebSearch(payload) => web_search::execute(executor, payload),
-        BundledToolInput::EnterPlanMode(payload) => {
-            plan::execute_enter(executor, payload, context.session_id)
+        "read" => read::execute(executor, &parse_input(input)?),
+        "view_file" => view_file::execute(executor, &parse_input(input)?),
+        "glob" => glob::execute(executor, &parse_input(input)?),
+        "grep" => grep::execute(executor, &parse_input(input)?),
+        "task" => task::execute(executor, &parse_input(input)?),
+        "tool_search" => tool_search::execute(executor, &parse_input(input)?),
+        "todo_write" => Ok(todo_write::execute(&parse_input(input)?)),
+        "ask_user" => ask_user::execute(&parse_input(input)?),
+        "bash" => bash::execute(executor, &parse_input(input)?, context),
+        "monitor" => monitor_tool::execute(executor, &parse_input(input)?),
+        "web_fetch" => web_fetch::execute(executor, &parse_input(input)?),
+        "web_search" => web_search::execute(executor, &parse_input(input)?),
+        "enter_plan_mode" => {
+            plan::execute_enter(executor, &parse_input(input)?, context.session_id)
         }
-        BundledToolInput::ExitPlanMode(payload) => {
-            plan::execute_exit(executor, payload, context.session_id)
+        "exit_plan_mode" => plan::execute_exit(executor, &parse_input(input)?, context.session_id),
+        "enter_worktree" => {
+            worktree::execute_enter(executor, &parse_input(input)?, context.session_id)
         }
-        BundledToolInput::EnterWorktree(payload) => {
-            worktree::execute_enter(executor, payload, context.session_id)
+        "exit_worktree" => {
+            worktree::execute_exit(executor, &parse_input(input)?, context.session_id)
         }
-        BundledToolInput::ExitWorktree(payload) => {
-            worktree::execute_exit(executor, payload, context.session_id)
+        "cron_create" => cron::execute_create(executor, &parse_input(input)?, context.session_id),
+        "cron_list" => cron::execute_list(executor, &parse_input(input)?),
+        "cron_delete" => cron::execute_delete(executor, &parse_input(input)?),
+        "schedule_wakeup" => {
+            cron::execute_wakeup(executor, &parse_input(input)?, context.session_id)
         }
-        BundledToolInput::CronCreate(payload) => {
-            cron::execute_create(executor, payload, context.session_id)
-        }
-        BundledToolInput::CronList(payload) => cron::execute_list(executor, payload),
-        BundledToolInput::CronDelete(payload) => cron::execute_delete(executor, payload),
-        BundledToolInput::ScheduleWakeup(payload) => {
-            cron::execute_wakeup(executor, payload, context.session_id)
-        }
-        BundledToolInput::LspDefinition(payload) => lsp::execute_definition(executor, payload),
-        BundledToolInput::LspReferences(payload) => lsp::execute_references(executor, payload),
-        BundledToolInput::LspHover(payload) => lsp::execute_hover(executor, payload),
-        BundledToolInput::LspDiagnostics(payload) => lsp::execute_diagnostics(executor, payload),
-        BundledToolInput::NotebookEdit(payload) => notebook_edit::execute(executor, payload),
-        BundledToolInput::PowerShell(payload) => powershell::execute(executor, payload, context),
+        "lsp_definition" => lsp::execute_definition(executor, &parse_input(input)?),
+        "lsp_references" => lsp::execute_references(executor, &parse_input(input)?),
+        "lsp_hover" => lsp::execute_hover(executor, &parse_input(input)?),
+        "lsp_diagnostics" => lsp::execute_diagnostics(executor, &parse_input(input)?),
+        "notebook_edit" => notebook_edit::execute(executor, &parse_input(input)?),
+        "powershell" => powershell::execute(executor, &parse_input(input)?, context),
+        other => Err(ToolError::UnknownTool(other.to_string())),
     }
+}
+
+fn parse_input<T: DeserializeOwned>(input: JsonValue) -> Result<T, ToolError> {
+    serde_json::from_value(input).map_err(|err| ToolError::InvalidInput(err.to_string()))
 }

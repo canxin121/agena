@@ -73,21 +73,13 @@ impl PluginEntryRegistry {
         }
     }
 
-    pub fn extend_from_plugin(
-        &mut self,
-        plugin_name: &str,
-        decls: &[PluginToolDecl],
-    ) {
+    pub fn extend_from_plugin(&mut self, plugin_name: &str, decls: &[PluginToolDecl]) {
         for decl in decls {
             self.upsert_from_plugin(plugin_name, decl.clone());
         }
     }
 
-    pub fn upsert_from_plugin(
-        &mut self,
-        plugin_name: &str,
-        decl: PluginToolDecl,
-    ) -> PluginEntry {
+    pub fn upsert_from_plugin(&mut self, plugin_name: &str, decl: PluginToolDecl) -> PluginEntry {
         let original_name = decl.name.clone();
         let mut entries = self.entries_owned();
         entries.retain(|entry| {
@@ -167,7 +159,11 @@ impl PluginEntryRegistry {
             *counts.entry(entry.original_name.clone()).or_default() += 1;
         }
         for entry in &mut entries {
-            entry.exposed_name = if counts.get(&entry.original_name).copied().unwrap_or_default() > 1
+            entry.exposed_name = if counts
+                .get(&entry.original_name)
+                .copied()
+                .unwrap_or_default()
+                > 1
             {
                 format!("{}/{}", entry.plugin_name, entry.original_name)
             } else {
@@ -181,9 +177,9 @@ impl PluginEntryRegistry {
     }
 
     fn lookup_for_plugin(&self, plugin_name: &str, original_name: &str) -> Option<&PluginEntry> {
-        self.by_exposed.values().find(|entry| {
-            entry.plugin_name == plugin_name && entry.original_name == original_name
-        })
+        self.by_exposed
+            .values()
+            .find(|entry| entry.plugin_name == plugin_name && entry.original_name == original_name)
     }
 }
 
@@ -277,8 +273,8 @@ mod tests {
         let mut registry = PluginEntryRegistry::new();
         assert_eq!(registry.generation(), 0);
 
-        let entry =
-            registry.upsert_from_plugin("alpha", PluginToolDecl::new("ping", serde_json::json!({})));
+        let entry = registry
+            .upsert_from_plugin("alpha", PluginToolDecl::new("ping", serde_json::json!({})));
         assert_eq!(entry.exposed_name, "ping");
         assert_eq!(registry.generation(), 1);
         assert!(registry.lookup("ping").is_some());

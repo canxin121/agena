@@ -4,7 +4,6 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::message::BundledToolInput;
 use crate::permission::{
     AccessKind, AccessSelector, NetworkPermissionPolicy, NetworkTarget, PermissionConfigError,
     PermissionDecision, PermissionMode, PermissionPolicy, ToolPermissionPolicy,
@@ -661,13 +660,18 @@ impl Agent {
         }
     }
 
-    pub fn authorize_bundled_tool(&self, input: &BundledToolInput) -> PermissionDecision {
+    pub fn authorize_tool(
+        &self,
+        tool_name: &str,
+        command: Option<&str>,
+        tags: &[ToolTag],
+    ) -> PermissionDecision {
         if self.disable {
             return PermissionDecision::Deny {
                 reason: format!("agent '{}' is disabled", self.name),
             };
         }
-        self.tool_policy.check_tool_input(input)
+        self.tool_policy.check_tool(tool_name, command, tags)
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
@@ -680,7 +684,7 @@ impl Agent {
                 reason: format!("agent '{}' is disabled", self.name),
             };
         }
-        self.tool_policy.check_tool(tool_name, None, tags)
+        self.authorize_tool(tool_name, None, tags)
     }
 
     pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {
@@ -738,14 +742,28 @@ impl PermissionDecisionExt for PermissionDecision {
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
-    use crate::message::{BashToolInput, BundledToolInput, ReadToolInput};
+    use crate::message::{BashToolInput, ReadToolInput, ToolPayloadInput};
     use crate::permission::{AccessKind, PermissionDecision, PermissionMode, PermissionPolicy};
+    use crate::plugin::sdk::ToolTag;
     use indexmap::IndexMap;
 
     use super::{
         Agent, AgentMode, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
         PermissionConfig, ToolPermissionConfig, ToolPermissionRules,
     };
+
+    fn authorize_tool_payload(agent: &Agent, input: &ToolPayloadInput) -> PermissionDecision {
+        let command = match input {
+            ToolPayloadInput::Bash(payload) => Some(payload.command.as_str()),
+            _ => None,
+        };
+        let tags = match input {
+            ToolPayloadInput::Bash(_) => vec![ToolTag::Mutating, ToolTag::Shell],
+            ToolPayloadInput::Read(_) => vec![ToolTag::ReadOnly, ToolTag::FilesystemRead],
+            _ => Vec::new(),
+        };
+        agent.authorize_tool(input.tool_name(), command, &tags)
+    }
 
     #[test]
     fn new_agent_has_reasonable_defaults() {
@@ -776,16 +794,16 @@ mod tests {
     }
 
     #[test]
-    fn disabled_agent_denies_bundled_tools() {
+    fn disabled_agent_denies_tools() {
         let mut agent = Agent::new("build", PermissionPolicy::allow_all());
         agent.disable = true;
-        let input = BundledToolInput::Read(ReadToolInput {
+        let input = ToolPayloadInput::Read(ReadToolInput {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
         });
 
-        match agent.authorize_bundled_tool(&input) {
+        match authorize_tool_payload(&agent, &input) {
             crate::permission::PermissionDecision::Deny { reason } => {
                 assert!(reason.contains("disabled"));
             }
@@ -830,13 +848,16 @@ mod tests {
             })
             .expect("permission config compiles");
 
-        match agent.authorize_bundled_tool(&BundledToolInput::Bash(BashToolInput {
-            command: "git status".to_string(),
-            description: String::new(),
-            timeout_ms: None,
-            workdir: None,
-            filesystem_effects: Vec::new(),
-        })) {
+        match authorize_tool_payload(
+            &agent,
+            &ToolPayloadInput::Bash(BashToolInput {
+                command: "git status".to_string(),
+                description: String::new(),
+                timeout_ms: None,
+                workdir: None,
+                filesystem_effects: Vec::new(),
+            }),
+        ) {
             PermissionDecision::Ask { .. } => {}
             other => panic!("expected ask for bash, got {other:?}"),
         }
@@ -952,23 +973,29 @@ mod tests {
             .with_allowed_tools(["bash"]);
 
         assert_eq!(
-            agent.authorize_bundled_tool(&BundledToolInput::Bash(BashToolInput {
-                command: "git status".to_string(),
+            authorize_tool_payload(
+                &agent,
+                &ToolPayloadInput::Bash(BashToolInput {
+                    command: "git status".to_string(),
+                    description: String::new(),
+                    timeout_ms: None,
+                    workdir: None,
+                    filesystem_effects: Vec::new(),
+                })
+            ),
+            PermissionDecision::Allow
+        );
+
+        match authorize_tool_payload(
+            &agent,
+            &ToolPayloadInput::Bash(BashToolInput {
+                command: "git push origin main".to_string(),
                 description: String::new(),
                 timeout_ms: None,
                 workdir: None,
                 filesystem_effects: Vec::new(),
-            })),
-            PermissionDecision::Allow
-        );
-
-        match agent.authorize_bundled_tool(&BundledToolInput::Bash(BashToolInput {
-            command: "git push origin main".to_string(),
-            description: String::new(),
-            timeout_ms: None,
-            workdir: None,
-            filesystem_effects: Vec::new(),
-        })) {
+            }),
+        ) {
             PermissionDecision::Deny { .. } => {}
             other => panic!("expected deny decision, got {other:?}"),
         }

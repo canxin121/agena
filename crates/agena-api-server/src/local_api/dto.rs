@@ -1,3 +1,4 @@
+use agena_api::resource::MessageRole;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -13,12 +14,13 @@ use agena::{
     permission::PermissionMode,
     permission::{PermissionReply, PermissionRequest},
     provider::ProviderModel,
-    role::Role,
     session::{GoalStatus, SessionStatus, SessionSummary},
 };
 
 #[cfg(test)]
 use agena::message::ExecutionStatus;
+#[cfg(test)]
+use agena::role::Role;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthResponse {
@@ -956,7 +958,7 @@ pub enum PartLoadMode {
 pub struct MessageResource {
     pub id: i64,
     pub session_id: i64,
-    pub role: Role,
+    pub role: MessageRole,
     pub state: MessageStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

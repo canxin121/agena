@@ -192,6 +192,7 @@ impl Backend {
                     .map(|provider| ProviderSummaryResource {
                         default_model_ref: format!("{provider_id}/{}", provider.default_model()),
                         default_model: provider.default_model().to_string(),
+                        catalog_default_model: None,
                         provider_id,
                     })
             })

@@ -31,7 +31,7 @@ use agena::{
     model::ModelRef,
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,
-    session::{ProjectedMessageHeader, Session, SessionGoal, SessionManager},
+    session::{Session, SessionGoal, SessionManager},
 };
 
 use super::{
@@ -52,6 +52,9 @@ use super::{
 };
 
 type ApiResult<T> = Result<T, ApiError>;
+
+#[cfg(test)]
+use agena::message::MessageStatus;
 
 #[derive(Clone)]
 pub struct ApiService {
@@ -540,51 +543,23 @@ impl ApiService {
             .as_deref()
             .map(decode_cursor::<MessageCursor>)
             .transpose()?;
-        let projection_cursor = cursor.map(|cursor| (cursor.created_at_ms, cursor.id));
-        match query.parts {
-            PartLoadMode::None => {
-                let (messages, has_more, next_cursor) = manager
-                    .list_projected_message_headers_page(session_id, projection_cursor, limit)
-                    .await
-                    .map_err(api_error_from_app)?;
-                let items: Vec<MessageResource> = messages
-                    .iter()
-                    .map(|m| message_resource_from_header(session_id, m))
-                    .collect();
+        let visible =
+            load_visible_message_projection(manager, session_id, query.parts == PartLoadMode::Full)
+                .await?;
+        let (messages, has_more, next_cursor) =
+            paginate_visible_messages(visible.messages.as_slice(), cursor, limit);
+        let items: Vec<MessageResource> = messages
+            .iter()
+            .map(|message| message_resource_from_message(session_id, message, query.parts))
+            .collect();
 
-                build_page(
-                    items,
-                    has_more,
-                    next_cursor.map(|(created_at_ms, id)| MessageCursor { created_at_ms, id }),
-                    PageOrder::Asc,
-                    limit,
-                )
-            }
-            PartLoadMode::Summary | PartLoadMode::Full => {
-                let include_full_parts = query.parts == PartLoadMode::Full;
-                let (messages, has_more, next_cursor) = manager
-                    .list_projected_messages_page(
-                        session_id,
-                        include_full_parts,
-                        projection_cursor,
-                        limit,
-                    )
-                    .await
-                    .map_err(api_error_from_app)?;
-                let items: Vec<MessageResource> = messages
-                    .iter()
-                    .map(|m| message_resource_from_message(session_id, m, query.parts))
-                    .collect();
-
-                build_page(
-                    items,
-                    has_more,
-                    next_cursor.map(|(created_at_ms, id)| MessageCursor { created_at_ms, id }),
-                    PageOrder::Asc,
-                    limit,
-                )
-            }
-        }
+        build_page(
+            items,
+            has_more,
+            next_cursor.map(|(created_at_ms, id)| MessageCursor { created_at_ms, id }),
+            PageOrder::Asc,
+            limit,
+        )
     }
 
     pub async fn get_message(
@@ -600,27 +575,12 @@ impl ApiService {
         else {
             return Ok(None);
         };
-        match parts {
-            PartLoadMode::None => {
-                let message = manager
-                    .find_projected_message_header(session_id, message_id)
-                    .await
-                    .map_err(api_error_from_app)?;
-                Ok(message
-                    .as_ref()
-                    .map(|m| message_resource_from_header(session_id, m)))
-            }
-            PartLoadMode::Summary | PartLoadMode::Full => {
-                let include_full_parts = parts == PartLoadMode::Full;
-                let message = manager
-                    .find_projected_message(session_id, message_id, include_full_parts)
-                    .await
-                    .map_err(api_error_from_app)?;
-                Ok(message
-                    .as_ref()
-                    .map(|m| message_resource_from_message(session_id, m, parts)))
-            }
-        }
+        let visible =
+            load_visible_message_projection(manager, session_id, parts == PartLoadMode::Full)
+                .await?;
+        Ok(visible
+            .find_message(message_id)
+            .map(|message| message_resource_from_message(session_id, message, parts)))
     }
 
     pub async fn list_message_parts(
@@ -629,7 +589,7 @@ impl ApiService {
         message_id: i64,
         mode: PartLoadMode,
     ) -> ApiResult<Vec<MessagePart>> {
-        let Some(_) = manager
+        let Some(session_id) = manager
             .find_session_id_for_message(message_id)
             .await
             .map_err(api_error_from_app)?
@@ -641,12 +601,20 @@ impl ApiService {
         if mode == PartLoadMode::None {
             return Ok(Vec::new());
         }
-        let include_full_parts = mode == PartLoadMode::Full;
-        let parts = manager
-            .list_projected_parts(message_id, include_full_parts)
-            .await
-            .map_err(api_error_from_app)?;
-        Ok(parts.into_iter().map(|p| project_part(p, mode)).collect())
+        let visible =
+            load_visible_message_projection(manager, session_id, mode == PartLoadMode::Full)
+                .await?;
+        let Some(message) = visible.find_message(message_id) else {
+            return Err(ApiError::not_found(format!(
+                "message not found: {message_id}"
+            )));
+        };
+        Ok(message
+            .parts
+            .iter()
+            .cloned()
+            .map(|part| project_part(part, mode))
+            .collect())
     }
 
     pub async fn get_message_part(
@@ -654,17 +622,15 @@ impl ApiService {
         manager: &SessionManager,
         part_id: i64,
     ) -> ApiResult<Option<MessagePart>> {
-        let Some(_) = manager
+        let Some(session_id) = manager
             .find_session_id_for_part(part_id)
             .await
             .map_err(api_error_from_app)?
         else {
             return Ok(None);
         };
-        Ok(manager
-            .find_projected_part(part_id)
-            .await
-            .map_err(api_error_from_app)?)
+        let visible = load_visible_message_projection(manager, session_id, true).await?;
+        Ok(visible.find_part(part_id))
     }
 
     pub async fn list_permission_rules(
@@ -1803,7 +1769,7 @@ fn message_resource_from_message(
     MessageResource {
         id: message.id,
         session_id,
-        role: message.role,
+        role: visible_message_role(message.role),
         state: message.state,
         created_at: message.created_at,
         // The append-only event log carries no separate "updated_at" — every
@@ -1817,23 +1783,198 @@ fn message_resource_from_message(
     }
 }
 
-fn message_resource_from_header(
-    session_id: i64,
-    message: &ProjectedMessageHeader,
-) -> MessageResource {
-    MessageResource {
-        id: message.id,
-        session_id,
-        role: message.role,
-        state: message.state,
-        created_at: message.created_at,
-        updated_at: message.created_at,
-        metadata: message.metadata.clone(),
-        usage: message.usage.clone(),
-        finish: message.finish.clone(),
-        part_count: message.part_count,
-        parts: None,
+#[derive(Debug, Clone)]
+struct VisibleMessageProjection {
+    messages: Vec<Message>,
+    hidden_message_aliases: HashMap<i64, i64>,
+}
+
+impl VisibleMessageProjection {
+    fn find_message(&self, message_id: i64) -> Option<&Message> {
+        let visible_id = self
+            .hidden_message_aliases
+            .get(&message_id)
+            .copied()
+            .unwrap_or(message_id);
+        self.messages
+            .iter()
+            .find(|message| message.id == visible_id)
     }
+
+    fn find_part(&self, part_id: i64) -> Option<MessagePart> {
+        self.messages.iter().find_map(|message| {
+            message
+                .parts
+                .iter()
+                .find(|part| part.id == part_id)
+                .cloned()
+        })
+    }
+}
+
+fn visible_message_role(role: agena::role::Role) -> agena_api::resource::MessageRole {
+    match role {
+        agena::role::Role::User => agena_api::resource::MessageRole::User,
+        agena::role::Role::Assistant | agena::role::Role::Tool => {
+            agena_api::resource::MessageRole::Assistant
+        }
+        agena::role::Role::System => agena_api::resource::MessageRole::System,
+    }
+}
+
+async fn load_visible_message_projection(
+    manager: &SessionManager,
+    session_id: i64,
+    include_full_parts: bool,
+) -> ApiResult<VisibleMessageProjection> {
+    let messages = manager
+        .list_projected_messages(session_id, include_full_parts)
+        .await
+        .map_err(api_error_from_app)?;
+    Ok(project_visible_messages(messages))
+}
+
+fn project_visible_messages(messages: Vec<Message>) -> VisibleMessageProjection {
+    let mut visible = Vec::with_capacity(messages.len());
+    let mut hidden_message_aliases = HashMap::new();
+    let mut assistant_indices_by_id = HashMap::<i64, usize>::new();
+    let mut assistant_indices_by_operation = HashMap::<String, usize>::new();
+
+    for mut message in messages {
+        if message.role != agena::role::Role::Tool {
+            normalize_message_parts(&mut message);
+            let visible_index = visible.len();
+            if message.role == agena::role::Role::Assistant {
+                assistant_indices_by_id.insert(message.id, visible_index);
+                index_assistant_operations(
+                    &message,
+                    visible_index,
+                    &mut assistant_indices_by_operation,
+                );
+            }
+            visible.push(message);
+            continue;
+        }
+
+        let target_index = visible_tool_parent_index(
+            &message,
+            visible.as_slice(),
+            &assistant_indices_by_id,
+            &assistant_indices_by_operation,
+        );
+
+        let Some(target_index) = target_index else {
+            message.role = agena::role::Role::Assistant;
+            normalize_message_parts(&mut message);
+            let visible_index = visible.len();
+            assistant_indices_by_id.insert(message.id, visible_index);
+            index_assistant_operations(
+                &message,
+                visible_index,
+                &mut assistant_indices_by_operation,
+            );
+            visible.push(message);
+            continue;
+        };
+
+        let target_message_id = visible[target_index].id;
+        hidden_message_aliases.insert(message.id, target_message_id);
+
+        for mut part in message.parts {
+            part.message_id = target_message_id;
+            part.part_index = visible[target_index].parts.len() as i32;
+            if let Some(operation_id) = part.operation_id.clone() {
+                assistant_indices_by_operation.insert(operation_id, target_index);
+            }
+            visible[target_index].parts.push(part);
+        }
+    }
+
+    VisibleMessageProjection {
+        messages: visible,
+        hidden_message_aliases,
+    }
+}
+
+fn normalize_message_parts(message: &mut Message) {
+    for (index, part) in message.parts.iter_mut().enumerate() {
+        part.message_id = message.id;
+        part.part_index = index as i32;
+    }
+}
+
+fn index_assistant_operations(
+    message: &Message,
+    visible_index: usize,
+    assistant_indices_by_operation: &mut HashMap<String, usize>,
+) {
+    for operation_id in message
+        .parts
+        .iter()
+        .filter_map(|part| part.operation_id.as_ref())
+    {
+        assistant_indices_by_operation.insert(operation_id.clone(), visible_index);
+    }
+}
+
+fn visible_tool_parent_index(
+    tool_message: &Message,
+    visible: &[Message],
+    assistant_indices_by_id: &HashMap<i64, usize>,
+    assistant_indices_by_operation: &HashMap<String, usize>,
+) -> Option<usize> {
+    if let Some(parent_message_id) = tool_message.metadata.parent_message_id {
+        if let Some(index) = assistant_indices_by_id.get(&parent_message_id).copied() {
+            return Some(index);
+        }
+    }
+
+    for operation_id in tool_message
+        .parts
+        .iter()
+        .filter_map(|part| part.operation_id.as_deref())
+    {
+        if let Some(index) = assistant_indices_by_operation.get(operation_id).copied() {
+            return Some(index);
+        }
+    }
+
+    visible
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, message)| message.role == agena::role::Role::Assistant)
+        .map(|(index, _)| index)
+}
+
+fn paginate_visible_messages(
+    messages: &[Message],
+    cursor: Option<MessageCursor>,
+    limit: u64,
+) -> (Vec<Message>, bool, Option<(i64, i64)>) {
+    let mut filtered = messages
+        .iter()
+        .filter(|message| match cursor {
+            Some(cursor) => {
+                let key = (message.created_at.timestamp_millis(), message.id);
+                key > (cursor.created_at_ms, cursor.id)
+            }
+            None => true,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let has_more = filtered.len() > limit as usize;
+    filtered.truncate(limit as usize);
+    let next_cursor = if has_more {
+        filtered
+            .last()
+            .map(|message| (message.created_at.timestamp_millis(), message.id))
+    } else {
+        None
+    };
+
+    (filtered, has_more, next_cursor)
 }
 
 fn project_part(mut part: MessagePart, mode: PartLoadMode) -> MessagePart {
@@ -1896,6 +2037,104 @@ fn command_available(command: &str) -> bool {
         .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success())
+}
+
+#[cfg(test)]
+mod visible_message_projection_tests {
+    use super::*;
+    use agena::message::{MessageMetadata, ToolExecutionPart, ToolInvocation};
+    use agena::role::Role;
+    use chrono::Utc;
+
+    fn assistant_with_tool_call(message_id: i64, operation_id: &str) -> Message {
+        let created_at = Utc::now();
+        let mut part = MessagePart::with_content(
+            10,
+            message_id,
+            created_at,
+            ExecutionStatus::Pending,
+            PartContent::ToolExecution(ToolExecutionPart::Pending {
+                call_id: 0,
+                invocation: ToolInvocation::new("read", Default::default()),
+                title: "read".to_string(),
+                lifecycle: Default::default(),
+            }),
+        );
+        part.operation_id = Some(operation_id.to_string());
+        Message {
+            id: message_id,
+            role: Role::Assistant,
+            state: MessageStatus::Completed,
+            parts: vec![part],
+            created_at,
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: Some("tool_calls".to_string()),
+        }
+    }
+
+    fn tool_result_message(
+        message_id: i64,
+        parent_message_id: i64,
+        operation_id: &str,
+        output_text: &str,
+    ) -> Message {
+        let created_at = Utc::now();
+        let mut part = MessagePart::with_content(
+            20,
+            message_id,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::ToolExecution(ToolExecutionPart::Completed {
+                call_id: 0,
+                invocation: ToolInvocation::new("read", Default::default()),
+                output_text: output_text.to_string(),
+                blocks: Vec::new(),
+                attachments: Vec::new(),
+                details: Default::default(),
+                lifecycle: Default::default(),
+            }),
+        );
+        part.operation_id = Some(operation_id.to_string());
+        Message {
+            id: message_id,
+            role: Role::Tool,
+            state: MessageStatus::Completed,
+            parts: vec![part],
+            created_at,
+            metadata: MessageMetadata {
+                parent_message_id: Some(parent_message_id),
+                ..MessageMetadata::default()
+            },
+            usage: None,
+            finish: None,
+        }
+    }
+
+    #[test]
+    fn visible_projection_merges_tool_messages_into_assistant() {
+        let projection = project_visible_messages(vec![
+            assistant_with_tool_call(1, "call_read_1"),
+            tool_result_message(2, 1, "call_read_1", "README body"),
+        ]);
+
+        assert_eq!(projection.messages.len(), 1);
+        assert_eq!(projection.hidden_message_aliases.get(&2), Some(&1));
+
+        let message = &projection.messages[0];
+        assert_eq!(message.role, Role::Assistant);
+        assert_eq!(message.parts.len(), 2);
+        assert_eq!(message.parts[1].message_id, 1);
+        assert_eq!(
+            message.parts[1].operation_id.as_deref(),
+            Some("call_read_1")
+        );
+        assert!(matches!(
+            message.parts[1].content.as_ref(),
+            Some(PartContent::ToolExecution(ToolExecutionPart::Completed { output_text, .. }))
+                if output_text == "README body"
+        ));
+    }
 }
 
 fn git_success<const N: usize>(workspace_root: &Path, args: [&str; N]) -> bool {

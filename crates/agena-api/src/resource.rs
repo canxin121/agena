@@ -445,6 +445,14 @@ pub struct RunOptions {
 
 // ─── Messages ────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MessageRole {
+    User,
+    Assistant,
+    System,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PartLoadMode {
@@ -458,7 +466,7 @@ pub enum PartLoadMode {
 pub struct MessageResource {
     pub id: i64,
     pub session_id: i64,
-    pub role: Role,
+    pub role: MessageRole,
     pub state: MessageStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

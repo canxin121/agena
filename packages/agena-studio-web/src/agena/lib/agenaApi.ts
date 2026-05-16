@@ -525,7 +525,7 @@ export type MessagePart = {
 export type MessageResource = {
   id: number
   session_id: number
-  role: 'user' | 'assistant' | 'system' | 'tool'
+  role: 'user' | 'assistant' | 'system'
   state: string
   created_at: string
   updated_at: string

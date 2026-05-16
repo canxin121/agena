@@ -367,6 +367,21 @@ export type WorkspaceResource = {
   session_count?: number | null
 }
 
+export type SessionGoalStatus = 'active' | 'paused' | 'budget_limited' | 'completed' | string
+
+export type SessionGoalResource = {
+  id: number
+  session_id: number
+  objective: string
+  status: SessionGoalStatus
+  token_budget?: number | null
+  tokens_used: number
+  time_used_seconds: number
+  created_at: string
+  updated_at: string
+  completed_at?: string | null
+}
+
 export type PermissionMode = 'allow' | 'ask' | 'deny'
 
 export type PermissionInheritance =
@@ -492,6 +507,7 @@ export type SessionResource = {
   message_count: number
   child_session_count: number
   last_message_at?: string | null
+  goal?: SessionGoalResource | null
 }
 
 export type SessionTreeResource = SessionResource
@@ -600,6 +616,7 @@ export type SessionExecutionResource = {
   execution: SessionExecutionContextResource
   pending_permission_requests: PermissionRequest[]
   pending_user_input_requests: UserInputRequest[]
+  goal?: SessionGoalResource | null
 }
 
 export type SessionEventRecord = {
@@ -1287,6 +1304,39 @@ export async function deleteSession(input: { sessionId: number; version?: number
 
 export async function getSessionState(sessionId: number): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${sessionId}/state`)
+}
+
+export async function getSessionGoal(sessionId: number): Promise<SessionGoalResource | null> {
+  return await apiJson<SessionGoalResource | null>(`/api/v1/sessions/${sessionId}/goal`)
+}
+
+export async function setSessionGoal(input: {
+  sessionId: number
+  objective?: string
+  status?: SessionGoalStatus
+  tokenBudget?: number | null
+}): Promise<SessionGoalResource> {
+  return await apiJson<SessionGoalResource>(`/api/v1/sessions/${input.sessionId}/goal`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...(input.objective?.trim() ? { objective: input.objective.trim() } : {}),
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.tokenBudget !== undefined ? { token_budget: input.tokenBudget } : {}),
+    }),
+  })
+}
+
+export async function completeSessionGoal(sessionId: number): Promise<SessionGoalResource> {
+  return await apiJson<SessionGoalResource>(`/api/v1/sessions/${sessionId}/goal/complete`, {
+    method: 'POST',
+  })
+}
+
+export async function clearSessionGoal(sessionId: number): Promise<{ ok: boolean }> {
+  return await apiJson<{ ok: boolean }>(`/api/v1/sessions/${sessionId}/goal`, {
+    method: 'DELETE',
+  })
 }
 
 export async function exportSessionJsonl(sessionId: number): Promise<string> {

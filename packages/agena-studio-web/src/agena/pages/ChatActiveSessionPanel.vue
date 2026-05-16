@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+
 import type { SessionExecutionResource, SessionResource, WorkspaceResource } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
@@ -24,6 +26,10 @@ const props = defineProps<{
   cancelCurrentSessionTurn: () => void | Promise<void>
   formatMessageTime: (value: string) => string
 }>()
+
+const activeGoal = computed(
+  () => props.sessionState?.goal || props.sessionState?.session.goal || props.selectedSession?.goal || null,
+)
 </script>
 
 <template>
@@ -40,22 +46,50 @@ const props = defineProps<{
           props.sessionState?.blocked ? 'true' : 'false'
         }}
       </div>
+      <div v-if="activeGoal" class="goal-summary">
+        <div class="page-header" style="align-items: flex-start">
+          <div>
+            <strong>{{ activeGoal.objective }}</strong>
+            <div class="muted mono">
+              tokens={{ activeGoal.tokens_used }}{{ activeGoal.token_budget ? `/${activeGoal.token_budget}` : '' }} ·
+              time={{ activeGoal.time_used_seconds }}s
+            </div>
+          </div>
+          <span class="badge">goal={{ activeGoal.status }}</span>
+        </div>
+      </div>
       <div class="button-row" style="margin-top: 8px">
         <button v-if="props.parentSession" class="button ghost" @click="props.selectSession(props.parentSession.id)">
           Open Parent #{{ props.parentSession.id }}
         </button>
-        <button class="button ghost" :disabled="!props.selectedSessionId || props.loading" @click="props.renameCurrentSession">
+        <button
+          class="button ghost"
+          :disabled="!props.selectedSessionId || props.loading"
+          @click="props.renameCurrentSession"
+        >
           Rename Session
         </button>
-        <button class="button ghost" :disabled="!props.selectedSessionId || props.loading" @click="props.forkCurrentSession">
+        <button
+          class="button ghost"
+          :disabled="!props.selectedSessionId || props.loading"
+          @click="props.forkCurrentSession"
+        >
           Fork Current Session
         </button>
-        <button class="button ghost" :disabled="!props.selectedSessionId || props.loading" @click="props.exportCurrentSession">
+        <button
+          class="button ghost"
+          :disabled="!props.selectedSessionId || props.loading"
+          @click="props.exportCurrentSession"
+        >
           Export Session
         </button>
         <button
           class="button ghost"
-          :disabled="!props.selectedSessionId || props.continuing || props.sessionState?.run_state === 'idle' && !props.sessionState?.blocked"
+          :disabled="
+            !props.selectedSessionId ||
+            props.continuing ||
+            (props.sessionState?.run_state === 'idle' && !props.sessionState?.blocked)
+          "
           @click="props.continueCurrentSession"
         >
           {{ props.continuing ? 'Continuing…' : 'Continue Run' }}
@@ -67,7 +101,11 @@ const props = defineProps<{
         >
           {{ props.continuing ? 'Cancelling…' : 'Cancel Run' }}
         </button>
-        <button class="button danger" :disabled="!props.selectedSessionId || props.loading" @click="props.deleteCurrentSession">
+        <button
+          class="button danger"
+          :disabled="!props.selectedSessionId || props.loading"
+          @click="props.deleteCurrentSession"
+        >
           Delete Session
         </button>
       </div>
@@ -88,9 +126,8 @@ const props = defineProps<{
       <template v-if="props.sessionState?.automation">
         <div class="muted">automation_jobs={{ props.sessionState.automation.job_count }}</div>
         <div v-if="props.sessionState.automation.latest_job?.last_run" class="muted">
-          automation_status={{ props.sessionState.automation.latest_job.last_run.status }} · triggered {{
-            props.formatMessageTime(props.sessionState.automation.latest_job.last_run.triggered_at)
-          }}
+          automation_status={{ props.sessionState.automation.latest_job.last_run.status }} · triggered
+          {{ props.formatMessageTime(props.sessionState.automation.latest_job.last_run.triggered_at) }}
         </div>
         <div v-else-if="props.sessionState.automation.latest_job?.next_fire_at" class="muted">
           next_automation={{ props.formatMessageTime(props.sessionState.automation.latest_job.next_fire_at) }}

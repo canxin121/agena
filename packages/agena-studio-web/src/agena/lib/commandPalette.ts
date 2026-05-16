@@ -1,10 +1,7 @@
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type { Router } from 'vue-router'
 
-import {
-  buildRuntimeSectionPath,
-  sectionTabNavigationItems,
-} from '../pages/runtimePageStateModel'
+import { buildRuntimeSectionPath, sectionTabNavigationItems } from '../pages/runtimePageStateModel'
 import type { RuntimeSkill } from './agenaApi'
 
 export type CommandSource = 'navigation' | 'runtime-skill' | 'runtime-command' | 'chat-action' | 'workspace-action'
@@ -51,10 +48,12 @@ export type CommandPaletteCatalogInput = {
 }
 
 function normalize(value: string): string {
-  return String(value || '').trim().toLowerCase()
+  return String(value || '')
+    .trim()
+    .toLowerCase()
 }
 
-function parseCommandInput(input: string): { slash: string; args: string[] } {
+export function parseCommandInput(input: string): { slash: string; args: string[] } {
   const trimmed = String(input || '').trim()
   if (!trimmed.startsWith('/')) {
     return { slash: '', args: [] }
@@ -66,7 +65,7 @@ function parseCommandInput(input: string): { slash: string; args: string[] } {
   }
 }
 
-function sourceLabel(source: CommandSource): string {
+export function sourceLabel(source: CommandSource): string {
   switch (source) {
     case 'navigation':
       return 'Navigation'
@@ -79,6 +78,20 @@ function sourceLabel(source: CommandSource): string {
     case 'workspace-action':
       return 'Workspace Action'
   }
+}
+
+export function commandSearchText(item: CommandItem): string {
+  return [
+    item.title,
+    item.description,
+    item.category,
+    item.slash || '',
+    item.usage || '',
+    item.sourceLabel || sourceLabel(item.source),
+    ...(item.aliases || []),
+  ]
+    .join(' ')
+    .toLowerCase()
 }
 
 function buildNavigationCommands(router: Router): CommandItem[] {
@@ -180,28 +193,22 @@ function matchesQuery(item: CommandItem, query: string): boolean {
   if (q.startsWith('/')) {
     const parsed = parseCommandInput(query)
     if (parsed.slash) {
-      return normalize(item.slash || '') === parsed.slash
+      const itemSlash = normalize(item.slash || '')
+      if (!itemSlash) return false
+      if (itemSlash === parsed.slash) return true
+      if (!parsed.args.length && itemSlash.startsWith(parsed.slash)) return true
     }
   }
 
-  const haystack = [
-    item.title,
-    item.description,
-    item.category,
-    item.slash || '',
-    item.usage || '',
-    ...(item.aliases || []),
-  ]
-    .join(' ')
-    .toLowerCase()
-  return haystack.includes(q)
+  return commandSearchText(item).includes(q)
 }
 
 function skillToCommand(skill: RuntimeSkill, source: 'runtime-skill' | 'runtime-command'): Omit<CommandItem, 'run'> {
   return {
     id: `${source}.${skill.name}`,
     title: skill.name,
-    description: skill.description || (source === 'runtime-command' ? 'Runtime-discovered command.' : 'Runtime-discovered skill.'),
+    description:
+      skill.description || (source === 'runtime-command' ? 'Runtime-discovered command.' : 'Runtime-discovered skill.'),
     category: source === 'runtime-command' ? 'Runtime Commands' : 'Runtime Skills',
     source,
     slash: `/${skill.name}`,
@@ -273,7 +280,8 @@ export function createCommandPalette(input: CommandPaletteCatalogInput): Command
 
     const inputText = String(query.value || '').trim()
     const parsed = parseCommandInput(inputText)
-    const context = parsed.slash && normalize(item.slash || '') === parsed.slash ? { input: inputText, args: parsed.args } : undefined
+    const context =
+      parsed.slash && normalize(item.slash || '') === parsed.slash ? { input: inputText, args: parsed.args } : undefined
 
     await item.run(context)
     closePalette()

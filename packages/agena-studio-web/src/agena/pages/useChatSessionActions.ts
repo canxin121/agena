@@ -4,11 +4,14 @@ import {
   cancelSessionTurn,
   cancelUserInput,
   continueSession,
+  clearSessionGoal,
+  completeSessionGoal,
   createSession,
   deleteSession,
   createWorkspace,
   exportSessionJsonl,
   forkSession,
+  getSessionGoal,
   getMessage,
   getMessagePart,
   importSessionJsonl,
@@ -17,11 +20,13 @@ import {
   replyUserInput,
   resolveWorkspace,
   rewindSession,
+  setSessionGoal,
   submitTurn,
   updateSession,
   unrewindSession,
   type MessagePart,
   type MessageResource,
+  type SessionGoalResource,
   type SessionExecutionResource,
 } from '../lib/agenaApi'
 
@@ -40,7 +45,10 @@ export type ChatSessionActionsInput = {
   refreshConversation: (foreground: boolean) => Promise<void>
   runSlashCommand: (inputText: string) => Promise<{
     matched: boolean
-    command?: { title: string; source?: 'navigation' | 'runtime-skill' | 'runtime-command' | 'chat-action' | 'workspace-action' }
+    command?: {
+      title: string
+      source?: 'navigation' | 'runtime-skill' | 'runtime-command' | 'chat-action' | 'workspace-action'
+    }
   }>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
@@ -63,12 +71,15 @@ export type ChatSessionActionsInput = {
 export type ChatSessionActionsDeps = {
   cancelSessionTurn: typeof cancelSessionTurn
   cancelUserInput: typeof cancelUserInput
+  clearSessionGoal: typeof clearSessionGoal
+  completeSessionGoal: typeof completeSessionGoal
   continueSession: typeof continueSession
   createSession: typeof createSession
   createWorkspace: typeof createWorkspace
   deleteSession: typeof deleteSession
   exportSessionJsonl: typeof exportSessionJsonl
   forkSession: typeof forkSession
+  getSessionGoal: typeof getSessionGoal
   getMessage: typeof getMessage
   getMessagePart: typeof getMessagePart
   importSessionJsonl: typeof importSessionJsonl
@@ -77,6 +88,7 @@ export type ChatSessionActionsDeps = {
   replyUserInput: typeof replyUserInput
   resolveWorkspace: typeof resolveWorkspace
   rewindSession: typeof rewindSession
+  setSessionGoal: typeof setSessionGoal
   submitTurn: typeof submitTurn
   unrewindSession: typeof unrewindSession
   updateSession: typeof updateSession
@@ -85,12 +97,15 @@ export type ChatSessionActionsDeps = {
 const defaultDeps: ChatSessionActionsDeps = {
   cancelSessionTurn,
   cancelUserInput,
+  clearSessionGoal,
+  completeSessionGoal,
   continueSession,
   createSession,
   createWorkspace,
   deleteSession,
   exportSessionJsonl,
   forkSession,
+  getSessionGoal,
   getMessage,
   getMessagePart,
   importSessionJsonl,
@@ -99,12 +114,30 @@ const defaultDeps: ChatSessionActionsDeps = {
   replyUserInput,
   resolveWorkspace,
   rewindSession,
+  setSessionGoal,
   submitTurn,
   unrewindSession,
   updateSession,
 }
 
+function formatGoalNotice(goal: SessionGoalResource): string {
+  const budgetLabel = goal.token_budget ? `${goal.tokens_used}/${goal.token_budget}` : `${goal.tokens_used}`
+  return `Goal #${goal.id} ${goal.status}: ${goal.objective} · tokens=${budgetLabel} · time=${goal.time_used_seconds}s`
+}
+
 export function useChatSessionActions(input: ChatSessionActionsInput, deps: ChatSessionActionsDeps = defaultDeps) {
+  function patchCurrentGoal(goal: SessionGoalResource | null) {
+    if (!input.sessionState.value) return
+    input.sessionState.value = {
+      ...input.sessionState.value,
+      goal,
+      session: {
+        ...input.sessionState.value.session,
+        goal,
+      },
+    }
+  }
+
   async function inspectMessage(messageId: number, partId?: number) {
     input.loading.value = true
     input.errorMessage.value = ''
@@ -165,6 +198,89 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.newSessionTitle.value = ''
       await input.loadSessionsForWorkspace(workspaceId, false)
       await input.selectSession(session.id)
+      input.localCommandNotice.value = `Created session #${session.id}.`
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
+  async function showSessionGoalAction() {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return
+
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      const goal =
+        input.sessionState.value?.goal ??
+        input.sessionState.value?.session.goal ??
+        (await deps.getSessionGoal(sessionId))
+      patchCurrentGoal(goal ?? null)
+      input.localCommandNotice.value = goal ? formatGoalNotice(goal) : `Session #${sessionId} has no active goal.`
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
+  async function setSessionGoalAction(objective: string, tokenBudget?: number | null) {
+    const sessionId = input.selectedSessionId.value
+    const trimmedObjective = objective.trim()
+    if (!sessionId || !trimmedObjective) return
+
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      const goal = await deps.setSessionGoal({
+        sessionId,
+        objective: trimmedObjective,
+        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+      })
+      patchCurrentGoal(goal)
+      input.localCommandNotice.value = `Set ${formatGoalNotice(goal)}`
+      input.syncEventStream()
+      await input.refreshConversation(false)
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
+  async function completeSessionGoalAction() {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return
+
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      const goal = await deps.completeSessionGoal(sessionId)
+      patchCurrentGoal(goal)
+      input.localCommandNotice.value = `Completed ${formatGoalNotice(goal)}`
+      input.syncEventStream()
+      await input.refreshConversation(false)
+    } catch (err) {
+      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      input.loading.value = false
+    }
+  }
+
+  async function clearSessionGoalAction() {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return
+
+    input.loading.value = true
+    input.errorMessage.value = ''
+    try {
+      await deps.clearSessionGoal(sessionId)
+      patchCurrentGoal(null)
+      input.localCommandNotice.value = `Cleared goal for session #${sessionId}.`
+      input.syncEventStream()
+      await input.refreshConversation(false)
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)
     } finally {
@@ -257,10 +373,10 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   async function sendPrompt() {
-    const sessionId = input.selectedSessionId.value
     const text = input.composer.value.trim()
-    if (!sessionId || !text) return
+    if (!text) return
 
+    const noticeBeforeSlash = input.localCommandNotice.value
     const slashResult = await input.runSlashCommand(text)
     if (slashResult.matched) {
       input.composer.value = ''
@@ -269,10 +385,17 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
           input.localCommandNotice.value ||
           `Direct execution for ${slashResult.command.title} is not available in Agena Web yet.`
       } else {
-        input.localCommandNotice.value = `Executed ${slashResult.command?.title || text}`
+        const commandNoticeChanged =
+          input.localCommandNotice.value && input.localCommandNotice.value !== noticeBeforeSlash
+        if (!commandNoticeChanged) {
+          input.localCommandNotice.value = `Executed ${slashResult.command?.title || text}`
+        }
       }
       return
     }
+
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return
 
     input.sending.value = true
     input.errorMessage.value = ''
@@ -281,7 +404,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         sessionId,
         text,
         providerId: input.selectedProviderId.value || undefined,
-        modelId: input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
+        modelId:
+          input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
         variant:
           input.selectedProviderId.value && input.selectedModelId.value && input.selectedVariant.value
             ? input.selectedVariant.value
@@ -308,7 +432,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.sessionState.value = await deps.continueSession({
         sessionId,
         providerId: input.selectedProviderId.value || undefined,
-        modelId: input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
+        modelId:
+          input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
         variant:
           input.selectedProviderId.value && input.selectedModelId.value && input.selectedVariant.value
             ? input.selectedVariant.value
@@ -494,6 +619,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     cancelCurrentSessionTurn,
     approvePermission,
     cancelUserAnswers,
+    clearSessionGoalAction,
+    completeSessionGoalAction,
     continueCurrentSession,
     createSessionAction,
     deleteCurrentSession,
@@ -505,6 +632,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     resolveWorkspaceAction,
     rewindToMessage,
     sendPrompt,
+    setSessionGoalAction,
+    showSessionGoalAction,
     submitUserAnswers,
     unrewindToMessage,
   }

@@ -37,6 +37,10 @@ export type ChatCommandCatalogActions = {
   selectWorkspace: (workspaceId: number) => void | Promise<void>
   resolveWorkspaceAction: (createIfMissing: boolean) => void | Promise<void>
   setWorkspacePath: (value: string) => void
+  showSessionGoalAction: () => void | Promise<void>
+  setSessionGoalAction: (objective: string, tokenBudget?: number | null) => void | Promise<void>
+  completeSessionGoalAction: () => void | Promise<void>
+  clearSessionGoalAction: () => void | Promise<void>
   loadSessionTree: (rootId: number) => void | Promise<void>
   loadRewindCheckpoints: (sessionId: number) => void | Promise<void>
   setLocalCommandNotice: (value: string) => void
@@ -46,10 +50,65 @@ function readCommandArgument(context: CommandContext | undefined): string {
   return context?.args.join(' ').trim() || ''
 }
 
-function createWorkspaceShortcutCommand(
-  shortcut: WorkspaceShortcut,
-  actions: ChatCommandCatalogActions,
-): CommandItem {
+type GoalCommandPlan =
+  | { kind: 'show' }
+  | { kind: 'set'; objective: string; tokenBudget?: number | null }
+  | { kind: 'complete' }
+  | { kind: 'clear' }
+  | { kind: 'error'; message: string }
+
+function readPositiveInteger(value: string): number | null {
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function readGoalCommandPlan(context: CommandContext | undefined): GoalCommandPlan {
+  const args = context?.args ?? []
+  if (!args.length) return { kind: 'show' }
+
+  const first = (args[0] || '').toLowerCase()
+  if (first === 'show' || first === 'status') return { kind: 'show' }
+  if (first === 'done' || first === 'complete' || first === 'completed') return { kind: 'complete' }
+  if (first === 'clear' || first === 'unset' || first === 'remove') return { kind: 'clear' }
+
+  const objectiveParts: string[] = []
+  let tokenBudget: number | null | undefined
+
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index] || ''
+    const [flag, inlineValue] = token.split('=', 2)
+    const normalizedFlag = flag.toLowerCase()
+
+    if (normalizedFlag === '--tokens' || normalizedFlag === '--budget' || normalizedFlag === '--token-budget') {
+      const rawValue = inlineValue ?? args[index + 1]
+      if (!rawValue) {
+        return { kind: 'error', message: 'Usage: /goal <objective> [--tokens <budget>]' }
+      }
+      const parsedBudget = readPositiveInteger(rawValue)
+      if (parsedBudget === null) {
+        return { kind: 'error', message: 'Goal token budget must be a positive integer.' }
+      }
+      tokenBudget = parsedBudget
+      if (inlineValue === undefined) index += 1
+      continue
+    }
+
+    if (normalizedFlag === '--no-budget') {
+      tokenBudget = null
+      continue
+    }
+
+    objectiveParts.push(token)
+  }
+
+  const objective = objectiveParts.join(' ').trim()
+  if (!objective) {
+    return { kind: 'error', message: 'Usage: /goal <objective> [--tokens <budget>]' }
+  }
+  return { kind: 'set', objective, tokenBudget }
+}
+
+function createWorkspaceShortcutCommand(shortcut: WorkspaceShortcut, actions: ChatCommandCatalogActions): CommandItem {
   return {
     id: `workspace-shortcut.${shortcut.id}`,
     title: `Open ${shortcut.title}`,
@@ -81,10 +140,100 @@ function createParameterizedChatCommands(
       usage: '/new-session [title]',
       aliases: ['new session', 'create session'],
       run: async (context) => {
-        if (!state.selectedWorkspaceId.value) return
+        if (!state.selectedWorkspaceId.value) {
+          actions.setLocalCommandNotice('Select a workspace before running /new-session.')
+          return
+        }
         const title = readCommandArgument(context)
         if (title) actions.setNewSessionTitle(title)
         await actions.createSessionAction()
+      },
+    },
+    {
+      id: 'chat.new-session',
+      title: 'New Session',
+      description: 'Create a new session in the currently selected workspace.',
+      category: 'Chat Actions',
+      source: 'chat-action',
+      slash: '/new',
+      usage: '/new [title]',
+      aliases: ['new session', 'create session', 'fresh chat'],
+      run: async (context) => {
+        if (!state.selectedWorkspaceId.value) {
+          actions.setLocalCommandNotice('Select a workspace before running /new.')
+          return
+        }
+        const title = readCommandArgument(context)
+        if (title) actions.setNewSessionTitle(title)
+        await actions.createSessionAction()
+      },
+    },
+    {
+      id: 'chat.session-goal',
+      title: 'Session Goal',
+      description: 'Show, set, complete, or clear the active goal for the selected session.',
+      category: 'Chat Actions',
+      source: 'chat-action',
+      slash: '/goal',
+      usage: '/goal [objective] [--tokens <budget>]',
+      aliases: ['objective', 'active goal', 'token budget'],
+      run: async (context) => {
+        if (!state.selectedSessionId.value) {
+          actions.setLocalCommandNotice('Select a session before running /goal.')
+          return
+        }
+        const plan = readGoalCommandPlan(context)
+        if (plan.kind === 'error') {
+          actions.setLocalCommandNotice(plan.message)
+          return
+        }
+        if (plan.kind === 'show') {
+          await actions.showSessionGoalAction()
+          return
+        }
+        if (plan.kind === 'complete') {
+          await actions.completeSessionGoalAction()
+          return
+        }
+        if (plan.kind === 'clear') {
+          await actions.clearSessionGoalAction()
+          return
+        }
+        await actions.setSessionGoalAction(plan.objective, plan.tokenBudget)
+      },
+    },
+    {
+      id: 'chat.complete-session-goal',
+      title: 'Complete Goal',
+      description: 'Mark the active session goal as completed.',
+      category: 'Chat Actions',
+      source: 'chat-action',
+      slash: '/goal-done',
+      usage: '/goal-done',
+      aliases: ['complete goal', 'finish goal'],
+      run: async () => {
+        if (!state.selectedSessionId.value) {
+          actions.setLocalCommandNotice('Select a session before running /goal-done.')
+          return
+        }
+        await actions.completeSessionGoalAction()
+      },
+    },
+    {
+      id: 'chat.clear-session-goal',
+      title: 'Clear Goal',
+      description: 'Remove the active goal from the selected session.',
+      category: 'Chat Actions',
+      source: 'chat-action',
+      slash: '/goal-clear',
+      usage: '/goal-clear',
+      aliases: ['unset goal', 'remove goal'],
+      run: async () => {
+        if (!state.selectedSessionId.value) {
+          actions.setLocalCommandNotice('Select a session before running /goal-clear.')
+          return
+        }
+        await actions.clearSessionGoalAction()
       },
     },
     {
@@ -165,7 +314,9 @@ function createParameterizedChatCommands(
           return
         }
         const matched = await actions.openSessionById(sessionId)
-        actions.setLocalCommandNotice(matched ? `Opened session #${sessionId}.` : `Session #${sessionId} was not found.`)
+        actions.setLocalCommandNotice(
+          matched ? `Opened session #${sessionId}.` : `Session #${sessionId} was not found.`,
+        )
       },
     },
     {
@@ -246,7 +397,9 @@ function createParameterizedChatCommands(
         }
         const topModel = state.sessionUsageSummary.value.byModel[0]
         const modelLabel = topModel ? ` · top_model=${topModel.providerId}/${topModel.modelId}` : ''
-        actions.setLocalCommandNotice(`Session usage: ${chatUsageFacts(state.sessionUsageSummary.value).join(' · ')}${modelLabel}`)
+        actions.setLocalCommandNotice(
+          `Session usage: ${chatUsageFacts(state.sessionUsageSummary.value).join(' · ')}${modelLabel}`,
+        )
       },
     },
     {

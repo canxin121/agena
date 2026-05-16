@@ -748,6 +748,18 @@ pub struct SessionGoalResource {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SessionGoalSetRequest {
+    #[serde(default)]
+    pub objective: Option<String>,
+    #[serde(default)]
+    pub status: Option<GoalStatus>,
+    #[serde(default)]
+    pub token_budget: Option<Option<u64>>,
+    #[serde(default)]
+    pub clear: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionResource {
     pub id: i64,

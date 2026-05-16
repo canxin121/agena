@@ -21,10 +21,10 @@ use crate::local_api::{
     PermissionRuleListQuery, PermissionRuleRevokeRequest, PermissionRuleWriteRequest,
     PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
     RuntimeReloadResponse, SessionContinueRequestBody, SessionCreateRequest,
-    SessionEventStreamQuery, SessionListQuery, SessionPermissionReplyRequestBody,
-    SessionReplaceRequest, SessionRewindRequestBody, SessionRunOptionsRequest, SessionTurnRequest,
-    SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery,
-    WorkspaceResolveRequest, WorkspaceWriteRequest,
+    SessionEventStreamQuery, SessionGoalSetRequest, SessionListQuery,
+    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
+    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::config::{
     ProviderAuthConfig, ProviderConfigCredentialStore, ResolvedProviderConfig, provider_auth_data,
@@ -1298,6 +1298,139 @@ pub async fn get_session_state(
         .await
         .map_err(server_error_from_http)?;
     Ok(Json(resource))
+}
+
+pub async fn get_session_goal(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let session = manager
+        .get_session(session_id)
+        .await
+        .map_err(ServerError::Core)?;
+    let goal = match session.goal.as_ref() {
+        Some(goal) => Some(
+            state
+                .service()
+                .session_goal_resource(manager.as_ref(), &session, goal)
+                .await
+                .map_err(server_error_from_http)?,
+        ),
+        None => None,
+    };
+    Ok(Json(goal))
+}
+
+pub async fn set_session_goal(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    Json(request): Json<SessionGoalSetRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    if request.clear {
+        let cleared = manager
+            .clear_goal(session_id)
+            .await
+            .map_err(ServerError::Core)?;
+        if !cleared {
+            return Err(ServerError::NotFound(format!(
+                "session {session_id} goal not found"
+            )));
+        }
+        return Ok(Json(serde_json::Value::Null));
+    }
+
+    let goal = if manager
+        .get_goal(session_id)
+        .await
+        .map_err(ServerError::Core)?
+        .is_some()
+    {
+        manager
+            .update_goal(agena::session::SessionGoalUpdateRequest {
+                session_id,
+                objective: request.objective,
+                status: request.status,
+                token_budget: request.token_budget,
+                expected_goal_id: None,
+            })
+            .await
+            .map_err(ServerError::Core)?
+    } else {
+        if !matches!(
+            request.status,
+            None | Some(agena::session::GoalStatus::Active)
+        ) {
+            return Err(ServerError::BadRequest(format!(
+                "session {session_id} goal must be created with status active"
+            )));
+        }
+        let objective = request.objective.ok_or_else(|| {
+            ServerError::BadRequest(format!(
+                "session {session_id} goal objective is required when creating a goal"
+            ))
+        })?;
+        manager
+            .create_goal(agena::session::SessionGoalCreateRequest {
+                session_id,
+                objective,
+                token_budget: request.token_budget.flatten(),
+            })
+            .await
+            .map_err(ServerError::Core)?
+    };
+
+    let session = manager
+        .get_session(session_id)
+        .await
+        .map_err(ServerError::Core)?;
+    let resource = state
+        .service()
+        .session_goal_resource(manager.as_ref(), &session, &goal)
+        .await
+        .map_err(server_error_from_http)?;
+    Ok(Json(serde_json::to_value(resource).map_err(|error| {
+        ServerError::Internal(error.to_string())
+    })?))
+}
+
+pub async fn complete_session_goal(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let goal = manager
+        .complete_goal(session_id)
+        .await
+        .map_err(ServerError::Core)?;
+    let session = manager
+        .get_session(session_id)
+        .await
+        .map_err(ServerError::Core)?;
+    let resource = state
+        .service()
+        .session_goal_resource(manager.as_ref(), &session, &goal)
+        .await
+        .map_err(server_error_from_http)?;
+    Ok(Json(resource))
+}
+
+pub async fn clear_session_goal(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let cleared = manager
+        .clear_goal(session_id)
+        .await
+        .map_err(ServerError::Core)?;
+    if !cleared {
+        return Err(ServerError::NotFound(format!(
+            "session {session_id} goal not found"
+        )));
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 #[tracing::instrument(skip_all)]

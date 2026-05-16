@@ -105,6 +105,10 @@ describe('chatCommandCatalog', () => {
       selectWorkspace: async () => {},
       resolveWorkspaceAction: async () => {},
       setWorkspacePath: () => {},
+      showSessionGoalAction: async () => {},
+      setSessionGoalAction: async () => {},
+      completeSessionGoalAction: async () => {},
+      clearSessionGoalAction: async () => {},
       loadSessionTree: async () => {},
       loadRewindCheckpoints: async () => {},
       setLocalCommandNotice: (value) => {
@@ -137,6 +141,10 @@ describe('chatCommandCatalog', () => {
       selectWorkspace: async () => {},
       resolveWorkspaceAction: async () => {},
       setWorkspacePath: () => {},
+      showSessionGoalAction: async () => {},
+      setSessionGoalAction: async () => {},
+      completeSessionGoalAction: async () => {},
+      clearSessionGoalAction: async () => {},
       loadSessionTree: async () => {},
       loadRewindCheckpoints: async () => {},
       setLocalCommandNotice: (value) => {
@@ -172,6 +180,10 @@ describe('chatCommandCatalog', () => {
       selectWorkspace: async () => {},
       resolveWorkspaceAction: async () => {},
       setWorkspacePath: () => {},
+      showSessionGoalAction: async () => {},
+      setSessionGoalAction: async () => {},
+      completeSessionGoalAction: async () => {},
+      clearSessionGoalAction: async () => {},
       loadSessionTree: async () => {},
       loadRewindCheckpoints: async () => {},
       setLocalCommandNotice: () => {},
@@ -206,6 +218,10 @@ describe('chatCommandCatalog', () => {
       selectWorkspace: async () => {},
       resolveWorkspaceAction: async () => {},
       setWorkspacePath: () => {},
+      showSessionGoalAction: async () => {},
+      setSessionGoalAction: async () => {},
+      completeSessionGoalAction: async () => {},
+      clearSessionGoalAction: async () => {},
       loadSessionTree: async () => {},
       loadRewindCheckpoints: async () => {},
       setLocalCommandNotice: () => {},
@@ -218,5 +234,64 @@ describe('chatCommandCatalog', () => {
       { section: 'runtime', tab: 'workflow' },
       { section: 'settings', tab: 'desktop' },
     ])
+  })
+
+  test('wires /new and /goal to real chat actions', async () => {
+    const state = createState()
+    const newTitles: string[] = []
+    const goalCalls: string[] = []
+    const notices: string[] = []
+    const commands = createChatCommandCatalog(state, {
+      openWorkspaceBrowser: () => {},
+      openRuntimeSection: () => {},
+      openSessionById: async () => true,
+      setNewSessionTitle: (value) => {
+        newTitles.push(value)
+      },
+      createSessionAction: async () => {
+        goalCalls.push('create-session')
+      },
+      continueCurrentSession: async () => {},
+      forkCurrentSession: async () => {},
+      exportCurrentSession: async () => {},
+      importSessionFromJsonl: async () => {},
+      selectWorkspace: async () => {},
+      resolveWorkspaceAction: async () => {},
+      setWorkspacePath: () => {},
+      showSessionGoalAction: async () => {
+        goalCalls.push('show-goal')
+      },
+      setSessionGoalAction: async (objective, tokenBudget) => {
+        goalCalls.push(`set-goal:${objective}:${tokenBudget ?? ''}`)
+      },
+      completeSessionGoalAction: async () => {
+        goalCalls.push('complete-goal')
+      },
+      clearSessionGoalAction: async () => {
+        goalCalls.push('clear-goal')
+      },
+      loadSessionTree: async () => {},
+      loadRewindCheckpoints: async () => {},
+      setLocalCommandNotice: (value) => {
+        notices.push(value)
+      },
+    })
+
+    await commands.find((item) => item.id === 'chat.new-session')?.run({ input: '/new Fix bug', args: ['Fix', 'bug'] })
+    await commands
+      .find((item) => item.id === 'chat.session-goal')
+      ?.run({
+        input: '/goal Finish slash commands --tokens 2048',
+        args: ['Finish', 'slash', 'commands', '--tokens', '2048'],
+      })
+    await commands.find((item) => item.id === 'chat.session-goal')?.run({ input: '/goal', args: [] })
+    await commands.find((item) => item.id === 'chat.session-goal')?.run({ input: '/goal done', args: ['done'] })
+    await commands
+      .find((item) => item.id === 'chat.session-goal')
+      ?.run({ input: '/goal --tokens nope', args: ['--tokens', 'nope'] })
+
+    expect(newTitles).toEqual(['Fix bug'])
+    expect(goalCalls).toEqual(['create-session', 'set-goal:Finish slash commands:2048', 'show-goal', 'complete-goal'])
+    expect(notices.at(-1)).toBe('Goal token budget must be a positive integer.')
   })
 })

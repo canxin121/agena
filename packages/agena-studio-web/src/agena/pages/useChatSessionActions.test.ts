@@ -1,9 +1,29 @@
 import { describe, expect, test } from 'bun:test'
 import { ref } from 'vue'
 
-import type { MessagePart, MessageResource, SessionExecutionResource } from '@/agena/lib/agenaApi'
+import type { MessagePart, MessageResource, SessionExecutionResource, SessionGoalResource } from '@/agena/lib/agenaApi'
 
-import { useChatSessionActions, type ChatSessionActionsDeps, type ChatSessionActionsInput } from './useChatSessionActions'
+import {
+  useChatSessionActions,
+  type ChatSessionActionsDeps,
+  type ChatSessionActionsInput,
+} from './useChatSessionActions'
+
+function goal(overrides?: Partial<SessionGoalResource>): SessionGoalResource {
+  return {
+    id: 5,
+    session_id: 3,
+    objective: 'ship refactor',
+    status: 'active',
+    token_budget: null,
+    tokens_used: 0,
+    time_used_seconds: 0,
+    created_at: '2026-05-10T00:00:00Z',
+    updated_at: '2026-05-10T00:00:00Z',
+    completed_at: null,
+    ...overrides,
+  }
+}
 
 function sessionState(overrides?: Partial<SessionExecutionResource>): SessionExecutionResource {
   return {
@@ -95,9 +115,21 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`exportSessionJsonl:${sessionId}`)
       return '{"session":3}'
     },
+    clearSessionGoal: async (sessionId) => {
+      calls.push(`clearSessionGoal:${sessionId}`)
+      return { ok: true }
+    },
+    completeSessionGoal: async (sessionId) => {
+      calls.push(`completeSessionGoal:${sessionId}`)
+      return goal({ status: 'completed', completed_at: '2026-05-10T00:01:00Z' })
+    },
     forkSession: async ({ sessionId, atMessageId, title }) => {
       calls.push(`forkSession:${sessionId}:${atMessageId || ''}:${title}`)
       return sessionState({ session: { ...sessionState().session, id: 13, title: title || 'forked' } })
+    },
+    getSessionGoal: async (sessionId) => {
+      calls.push(`getSessionGoal:${sessionId}`)
+      return goal()
     },
     getMessage: async (messageId, parts) => {
       calls.push(`getMessage:${messageId}:${parts || 'summary'}`)
@@ -121,7 +153,15 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
     },
     getMessagePart: async (partId) => {
       calls.push(`getMessagePart:${partId}`)
-      return { id: partId, message_id: 21, part_index: 0, status: 'complete', kind: 'text', created_at: '2026-05-10T00:00:00Z', content: { type: 'text', text: 'hello' } }
+      return {
+        id: partId,
+        message_id: 21,
+        part_index: 0,
+        status: 'complete',
+        kind: 'text',
+        created_at: '2026-05-10T00:00:00Z',
+        content: { type: 'text', text: 'hello' },
+      }
     },
     importSessionJsonl: async (jsonl) => {
       calls.push(`importSessionJsonl:${jsonl}`)
@@ -158,6 +198,10 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
     rewindSession: async ({ sessionId, messageId }) => {
       calls.push(`rewindSession:${sessionId}:${messageId}`)
       return sessionState()
+    },
+    setSessionGoal: async ({ sessionId, objective, tokenBudget }) => {
+      calls.push(`setSessionGoal:${sessionId}:${objective || ''}:${tokenBudget ?? ''}`)
+      return goal({ objective: objective || 'ship refactor', token_budget: tokenBudget })
     },
     submitTurn: async ({ sessionId, text, providerId, modelId, variant }) => {
       calls.push(`submitTurn:${sessionId}:${text}:${providerId || ''}:${modelId || ''}:${variant || ''}`)
@@ -211,7 +255,7 @@ function createInput() {
             message_id: 21,
             part_index: 0,
             status: 'complete',
-            kind: 'permission_request',
+            kind: 'request',
             summary: 'Awaiting permission: Need to inspect git status',
             has_detail: true,
             created_at: '2026-05-10T00:00:00Z',
@@ -252,7 +296,15 @@ function createInput() {
     },
   }
 
-  return { input, refreshCalls, syncCalls, loadSidebarCalls, loadSessionsCalls, selectSessionCalls, selectWorkspaceCalls }
+  return {
+    input,
+    refreshCalls,
+    syncCalls,
+    loadSidebarCalls,
+    loadSessionsCalls,
+    selectSessionCalls,
+    selectWorkspaceCalls,
+  }
 }
 
 describe('useChatSessionActions', () => {
@@ -260,7 +312,10 @@ describe('useChatSessionActions', () => {
     const deps = createDeps()
     const { input, refreshCalls, syncCalls } = createInput()
     input.composer.value = '/cost'
-    input.runSlashCommand = async () => ({ matched: true, command: { title: 'Show Session Cost', source: 'chat-action' } })
+    input.runSlashCommand = async () => ({
+      matched: true,
+      command: { title: 'Show Session Cost', source: 'chat-action' },
+    })
 
     const actions = useChatSessionActions(input, deps)
     await actions.sendPrompt()
@@ -293,7 +348,8 @@ describe('useChatSessionActions', () => {
     const { input, refreshCalls, syncCalls } = createInput()
     input.composer.value = '/review src/app.ts'
     input.runSlashCommand = async () => ({ matched: true, command: { title: 'review', source: 'runtime-skill' } })
-    input.localCommandNotice.value = 'Runtime skill /review is available in the runtime catalog, but direct execution is not wired in Agena Web yet.'
+    input.localCommandNotice.value =
+      'Runtime skill /review is available in the runtime catalog, but direct execution is not wired in Agena Web yet.'
 
     const actions = useChatSessionActions(input, deps)
     await actions.sendPrompt()
@@ -305,6 +361,59 @@ describe('useChatSessionActions', () => {
     expect(refreshCalls).toEqual([])
     expect(syncCalls).toEqual([])
     expect(deps.calls.some((item) => item.startsWith('submitTurn:'))).toBe(false)
+  })
+
+  test('sendPrompt allows local slash commands before a session is selected', async () => {
+    const deps = createDeps()
+    const { input, refreshCalls, syncCalls } = createInput()
+    const slashCalls: string[] = []
+    input.selectedSessionId.value = null
+    input.composer.value = '/new Scratchpad'
+    input.runSlashCommand = async (inputText) => {
+      slashCalls.push(inputText)
+      return { matched: true, command: { title: 'New Session', source: 'chat-action' } }
+    }
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.sendPrompt()
+
+    expect(slashCalls).toEqual(['/new Scratchpad'])
+    expect(input.composer.value).toBe('')
+    expect(input.localCommandNotice.value).toBe('Executed New Session')
+    expect(refreshCalls).toEqual([])
+    expect(syncCalls).toEqual([])
+    expect(deps.calls.some((item) => item.startsWith('submitTurn:'))).toBe(false)
+  })
+
+  test('sendPrompt preserves detailed local slash command notices', async () => {
+    const deps = createDeps()
+    const { input } = createInput()
+    input.composer.value = '/goal'
+    input.runSlashCommand = async () => {
+      input.localCommandNotice.value = 'Goal #5 active: ship refactor · tokens=0 · time=0s'
+      return { matched: true, command: { title: 'Session Goal', source: 'chat-action' } }
+    }
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.sendPrompt()
+
+    expect(input.composer.value).toBe('')
+    expect(input.localCommandNotice.value).toBe('Goal #5 active: ship refactor · tokens=0 · time=0s')
+  })
+
+  test('setSessionGoalAction persists goal state and refreshes runtime state', async () => {
+    const deps = createDeps()
+    const { input, refreshCalls, syncCalls } = createInput()
+
+    const actions = useChatSessionActions(input, deps)
+    await actions.setSessionGoalAction('finish slash commands', 2048)
+
+    expect(deps.calls.includes('setSessionGoal:3:finish slash commands:2048')).toBe(true)
+    expect(input.sessionState.value?.goal?.objective).toBe('finish slash commands')
+    expect(input.sessionState.value?.session.goal?.token_budget).toBe(2048)
+    expect(input.localCommandNotice.value.includes('finish slash commands')).toBe(true)
+    expect(syncCalls).toEqual(['sync'])
+    expect(refreshCalls).toEqual([false])
   })
 
   test('inspectMessage reuses summary message data and only loads part detail on demand', async () => {
@@ -351,7 +460,7 @@ describe('useChatSessionActions', () => {
           message_id: messageId,
           part_index: 0,
           status: 'complete',
-          kind: 'permission_request',
+          kind: 'request',
           summary: 'Permission decision pending',
           has_detail: false,
           created_at: '2026-05-10T00:00:00Z',
@@ -368,7 +477,7 @@ describe('useChatSessionActions', () => {
       message_id: 21,
       part_index: 0,
       status: 'complete',
-      kind: 'permission_request',
+      kind: 'request',
       summary: 'Permission decision pending',
       has_detail: false,
       created_at: '2026-05-10T00:00:00Z',

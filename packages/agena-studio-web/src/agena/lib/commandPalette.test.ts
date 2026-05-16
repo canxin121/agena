@@ -88,6 +88,31 @@ describe('commandPalette', () => {
     expect(ids.includes('nav.plugins.marketplace')).toBe(true)
   })
 
+  test('filters slash queries by prefix before exact args are present', () => {
+    const { router } = createRouterStub()
+    const palette = createCommandPalette({
+      router: router as never,
+      runtimeSkills: computed(() => []),
+      runtimeCommands: computed(() => []),
+      localCommands: computed(() => [
+        {
+          id: 'chat.new-session',
+          title: 'New Session',
+          description: 'Create a new session.',
+          category: 'Chat Actions',
+          source: 'chat-action',
+          slash: '/new',
+          usage: '/new [title]',
+          run: () => {},
+        },
+      ]),
+    })
+
+    palette.query.value = '/ne'
+
+    expect(palette.filteredItems.value.some((item) => item.id === 'chat.new-session')).toBe(true)
+  })
+
   test('passes parsed slash args to local commands', async () => {
     const { router } = createRouterStub()
     const calls: string[] = []

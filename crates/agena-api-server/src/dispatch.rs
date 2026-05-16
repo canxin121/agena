@@ -21,8 +21,8 @@ use agena::event::{EventStore, StoreRange};
 use agena::{
     event::EventKind,
     session::{
-        ProjectedMessageHeader, SessionContinueRequest, SessionPermissionReplyRequest,
-        SessionUserInputReplyRequest, SessionUserTurnRequest,
+        SessionContinueRequest, SessionPermissionReplyRequest, SessionUserInputReplyRequest,
+        SessionUserTurnRequest,
     },
 };
 use agena_api::{
@@ -161,64 +161,6 @@ fn part_load_mode_to_http(mode: agena_api::resource::PartLoadMode) -> HttpPartLo
         agena_api::resource::PartLoadMode::None => HttpPartLoadMode::None,
         agena_api::resource::PartLoadMode::Summary => HttpPartLoadMode::Summary,
         agena_api::resource::PartLoadMode::Full => HttpPartLoadMode::Full,
-    }
-}
-
-fn message_resource_from_projected_message(
-    session_id: i64,
-    message: &agena::message::Message,
-    parts_mode: agena_api::resource::PartLoadMode,
-) -> agena_api::resource::MessageResource {
-    let parts = match parts_mode {
-        agena_api::resource::PartLoadMode::None => None,
-        agena_api::resource::PartLoadMode::Summary | agena_api::resource::PartLoadMode::Full => {
-            Some(
-                message
-                    .parts
-                    .iter()
-                    .cloned()
-                    .map(|mut part| {
-                        if parts_mode == agena_api::resource::PartLoadMode::Summary {
-                            part.content = None;
-                        }
-                        part
-                    })
-                    .collect(),
-            )
-        }
-    };
-
-    agena_api::resource::MessageResource {
-        id: message.id,
-        session_id,
-        role: message.role,
-        state: message.state,
-        created_at: message.created_at,
-        updated_at: message.created_at,
-        metadata: message.metadata.clone(),
-        usage: message.usage.clone(),
-        finish: message.finish.clone(),
-        part_count: message.parts.len() as u64,
-        parts,
-    }
-}
-
-fn message_resource_from_projected_header(
-    session_id: i64,
-    message: &ProjectedMessageHeader,
-) -> agena_api::resource::MessageResource {
-    agena_api::resource::MessageResource {
-        id: message.id,
-        session_id,
-        role: message.role,
-        state: message.state,
-        created_at: message.created_at,
-        updated_at: message.created_at,
-        metadata: message.metadata.clone(),
-        usage: message.usage.clone(),
-        finish: message.finish.clone(),
-        part_count: message.part_count,
-        parts: None,
     }
 }
 
@@ -1215,28 +1157,13 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             )))
         }
         Query::GetMessage(GetMessageParams { message_id, parts }) => {
-            let session_id = manager
-                .find_session_id_for_message(message_id)
-                .await?
+            let message = state
+                .service()
+                .get_message(manager.as_ref(), message_id, part_load_mode_to_http(parts))
+                .await
+                .map_err(server_error_from_http)?
+                .map(message_resource_from_http)
                 .ok_or_else(|| ServerError::NotFound(format!("message {message_id} not found")))?;
-            let message = match parts {
-                agena_api::resource::PartLoadMode::None => {
-                    let m = manager
-                        .find_projected_message_header(session_id, message_id)
-                        .await?
-                        .ok_or_else(|| ServerError::NotFound(format!("message {message_id}")))?;
-                    message_resource_from_projected_header(session_id, &m)
-                }
-                agena_api::resource::PartLoadMode::Summary
-                | agena_api::resource::PartLoadMode::Full => {
-                    let include_full_parts = parts == agena_api::resource::PartLoadMode::Full;
-                    let m = manager
-                        .find_projected_message(session_id, message_id, include_full_parts)
-                        .await?
-                        .ok_or_else(|| ServerError::NotFound(format!("message {message_id}")))?;
-                    message_resource_from_projected_message(session_id, &m, parts)
-                }
-            };
             Ok(QueryResult::Message(message))
         }
         Query::ListEvents(ListEventsParams {

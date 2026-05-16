@@ -6,8 +6,8 @@ use agena::{
         TodoPriority, TodoStatus,
     },
     permission::PermissionReplyKind,
-    role::Role,
 };
+use agena_api::resource::MessageRole;
 use chrono::{DateTime, Local, Utc};
 
 use crate::{fl_args, i18n::I18n};
@@ -77,12 +77,11 @@ pub fn format_relative_time(i18n: &I18n, timestamp: DateTime<Utc>) -> String {
     }
 }
 
-pub fn role_label(i18n: &I18n, role: Role) -> String {
+pub fn role_label(i18n: &I18n, role: MessageRole) -> String {
     match role {
-        Role::User => t(i18n, "message-role-user"),
-        Role::Assistant => t(i18n, "message-role-assistant"),
-        Role::System => t(i18n, "message-role-system"),
-        Role::Tool => t(i18n, "message-role-tool"),
+        MessageRole::User => t(i18n, "message-role-user"),
+        MessageRole::Assistant => t(i18n, "message-role-assistant"),
+        MessageRole::System => t(i18n, "message-role-system"),
     }
 }
 

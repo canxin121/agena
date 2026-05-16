@@ -21,13 +21,12 @@ use agena::{
         PermissionRequest, PermissionRiskLevel, PermissionScope, PolicySourceKind,
     },
     provider::ProviderModel,
-    role::Role,
 };
 use agena_api::{
     commands::UpsertPermissionRuleParams,
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, PermissionRuleResource, ProviderSummaryResource, RunOptions,
+        MessageResource, MessageRole, PermissionRuleResource, ProviderSummaryResource, RunOptions,
         SessionExecutionResource, SessionResource, SessionRunState,
     },
 };
@@ -7879,12 +7878,11 @@ struct ToolOutputPreview {
     omitted_lines: usize,
 }
 
-fn style_for_role(role: Role) -> Style {
+fn style_for_role(role: MessageRole) -> Style {
     match role {
-        Role::User => Style::default().fg(Color::Green),
-        Role::Assistant => Style::default().fg(Color::Cyan),
-        Role::System => Style::default().fg(Color::Magenta),
-        Role::Tool => Style::default().fg(Color::Magenta),
+        MessageRole::User => Style::default().fg(Color::Green),
+        MessageRole::Assistant => Style::default().fg(Color::Cyan),
+        MessageRole::System => Style::default().fg(Color::Magenta),
     }
 }
 
@@ -8156,6 +8154,7 @@ fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
         | AgenaSessionEvent::PermissionRuleCreated(_)
         | AgenaSessionEvent::PermissionRuleUpdated(_)
         | AgenaSessionEvent::PermissionRuleRevoked(_)
+        | AgenaSessionEvent::SessionGoalUpdated(_)
         | AgenaSessionEvent::TurnStarted(_)
         | AgenaSessionEvent::TurnCompleted(_)
         | AgenaSessionEvent::TurnAborted(_)
@@ -8246,6 +8245,15 @@ fn timeline_event_summary(record: &DomainEvent) -> String {
         }
         AgenaSessionEvent::PermissionRuleRevoked(event) => {
             format!("permission rule #{} revoked", event.rule_id)
+        }
+        AgenaSessionEvent::SessionGoalUpdated(event) => {
+            let objective = event
+                .objective
+                .as_deref()
+                .map(|value| detail_excerpt(value, 56))
+                .unwrap_or_else(|| "<none>".to_string());
+            let status = event.status.as_deref().unwrap_or("unknown");
+            format!("goal updated: {status} · {objective}")
         }
         AgenaSessionEvent::TurnStarted(p) => format!("turn {}", p.turn_id),
         AgenaSessionEvent::TurnCompleted(p) => {
@@ -8374,6 +8382,48 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
             format!("mode: {}", event.mode),
             format!("scope: {}", event.scope),
             format!("source: {}", event.source),
+        ],
+        AgenaSessionEvent::SessionGoalUpdated(event) => vec![
+            format!("session_id: {}", event.session_id),
+            format!(
+                "goal_id: {}",
+                event
+                    .goal_id
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
+            format!(
+                "objective: {}",
+                event
+                    .objective
+                    .clone()
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
+            format!(
+                "status: {}",
+                event.status.clone().unwrap_or_else(|| "<none>".to_string())
+            ),
+            format!(
+                "token_budget: {}",
+                event
+                    .token_budget
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
+            format!(
+                "tokens_used: {}",
+                event
+                    .tokens_used
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
+            format!(
+                "time_used_seconds: {}",
+                event
+                    .time_used_seconds
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
         ],
         AgenaSessionEvent::TurnStarted(p) => vec![
             format!("turn_id: {}", p.turn_id),
@@ -10170,7 +10220,7 @@ mod tests {
             &MessageResource {
                 id: 10,
                 session_id: 42,
-                role: Role::Assistant,
+                role: MessageRole::Assistant,
                 state: MessageStatus::Completed,
                 created_at: now,
                 updated_at: now,
@@ -10434,7 +10484,7 @@ api_key = "test"
             &MessageResource {
                 id: 10,
                 session_id: 42,
-                role: Role::Assistant,
+                role: MessageRole::Assistant,
                 state: MessageStatus::Completed,
                 created_at: now,
                 updated_at: now,
@@ -10841,7 +10891,7 @@ api_key = "test"
             &[MessageResource {
                 id: 10,
                 session_id: 42,
-                role: Role::User,
+                role: MessageRole::User,
                 state: MessageStatus::Completed,
                 created_at: now,
                 updated_at: now,

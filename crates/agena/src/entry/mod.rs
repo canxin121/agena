@@ -11,6 +11,7 @@ pub(crate) mod monitor;
 pub(crate) mod monitor_tool;
 pub(crate) mod notebook_edit;
 pub(crate) mod orchestrator;
+pub(crate) mod payload;
 pub(crate) mod plan;
 pub(crate) mod powershell;
 pub(crate) mod read;
@@ -35,9 +36,8 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, CustomToolOutput, FilesystemEffect, Message, PartContent, PluginInvocation,
-    StructuredObject, ToolExecutionPart, ToolInvocation, ToolOutput, ToolPayloadInput,
-    ToolPayloadOutput,
+    AskUserToolInput, FilesystemEffect, Message, PartContent, PluginInvocation, StructuredObject,
+    ToolExecutionPart, ToolInvocation, ToolOutput,
 };
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
@@ -67,6 +67,7 @@ pub use monitor::{
     MonitorError, MonitorRead, MonitorRegistry, MonitorService, MonitorStart, MonitorStopOutcome,
     ReadParams as MonitorReadParams, StartParams as MonitorStartParams,
 };
+pub use payload::{CronJobSummary, ToolPayloadInput, ToolPayloadOutput, WebSearchHit};
 pub use plan::{PlanRegistry, registry_for_executor as plan_registry_for_executor};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use shell::{ShellError, ShellOutput, ShellRequest};
@@ -891,11 +892,12 @@ impl ToolExecutor {
             call_id,
             context.prepared_shell_command,
         )?;
-        let output = execution.output.as_tool_payload().ok_or_else(|| {
-            ToolError::Plugin(format!(
-                "decode {tool_name} output: payload did not match tool payload schema"
-            ))
-        })?;
+        let output =
+            ToolPayloadOutput::from_tool_output(tool_name, &execution.output).ok_or_else(|| {
+                ToolError::Plugin(format!(
+                    "decode {tool_name} output: payload did not match tool payload schema"
+                ))
+            })?;
         Ok(scoped_executor.truncator.apply(ToolPayloadExecution {
             output,
             view: execution.view,
@@ -1069,7 +1071,6 @@ impl ToolExecutor {
         let end = stream.end;
         let executor = self.clone();
         let invocation = invocation.clone();
-        let tool_name = resolution.original_name.clone();
         let (end_tx, end_rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let result = match end.await {
@@ -1080,18 +1081,8 @@ impl ToolExecutor {
                         metadata: end.metadata.into_iter().collect(),
                         attachments: end.attachments,
                     };
-                    let payload = end
-                        .payload
-                        .as_ref()
-                        .map(|value| parse_custom_payload(&value.to_string()))
-                        .transpose()?
-                        .unwrap_or_default();
-                    let output = ToolOutput::Custom {
-                        output: CustomToolOutput {
-                            name: tool_name.clone(),
-                            payload,
-                        },
-                    };
+                    let output = ToolOutput::from_json_payload(end.payload.as_ref())
+                        .map_err(ToolError::InvalidInput)?;
                     let mut execution = ToolInvocationExecution::new(output.clone(), view)
                         .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
                     executor.apply_after_hooks(&invocation, session_id, call_id, &mut execution)?;
@@ -1180,18 +1171,8 @@ impl ToolExecutor {
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
         };
-        let payload = response
-            .payload
-            .as_ref()
-            .map(|v| parse_custom_payload(&v.to_string()))
-            .transpose()?
-            .unwrap_or_default();
-        let output = ToolOutput::Custom {
-            output: CustomToolOutput {
-                name: resolution.original_name.clone(),
-                payload,
-            },
-        };
+        let output = ToolOutput::from_json_payload(response.payload.as_ref())
+            .map_err(ToolError::InvalidInput)?;
         let mut execution = ToolInvocationExecution::new(output.clone(), view)
             .with_apply_patch_option(apply_patch_execution_from_tool_output(&output));
         self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
@@ -1260,11 +1241,6 @@ impl ToolExecutor {
     ) -> Result<(), ToolError> {
         let tool_name = invocation_name(invocation).to_owned();
         let plugin_name = self.invocation_plugin_name_for(invocation);
-        let payload_value: Option<serde_json::Value> = match &execution.output {
-            ToolOutput::Custom { output } => Some(serde_json::Value::from(output.payload.clone())),
-            _ => None,
-        };
-
         let after_in = PluginToolAfterInput {
             tool_name,
             plugin_name: plugin_name.clone(),
@@ -1273,7 +1249,7 @@ impl ToolExecutor {
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
             title: execution.view.title.clone(),
             output_text: execution.view.output_text.clone(),
-            payload: payload_value,
+            payload: execution.output.to_json_payload(),
             metadata: execution.view.metadata.clone().into_iter().collect(),
         };
 
@@ -1288,10 +1264,9 @@ impl ToolExecutor {
             execution.view.metadata.insert(k, v);
         }
 
-        if let (Some(payload_value), ToolOutput::Custom { output }) =
-            (hooked.payload, &mut execution.output)
-        {
-            output.payload = parse_custom_payload(&payload_value.to_string()).unwrap_or_default();
+        if let Some(payload_value) = hooked.payload {
+            execution.output = ToolOutput::from_json_payload(Some(&payload_value))
+                .map_err(ToolError::InvalidInput)?;
         }
 
         Ok(())
@@ -1593,13 +1568,7 @@ fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
 }
 
 fn apply_patch_execution_from_tool_output(output: &ToolOutput) -> Option<ApplyPatchExecution> {
-    let ToolOutput::Custom { output } = output else {
-        return None;
-    };
-    if output.name.rsplit('/').next() != Some("apply_patch") {
-        return None;
-    }
-    let payload = serde_json::Value::from(output.payload.clone());
+    let payload = output.to_json_payload()?;
     let operation_id = payload.get("operation_id")?.as_str()?.to_string();
     let changes: Vec<crate::message::FileChangeEntry> =
         serde_json::from_value(payload.get("changes")?.clone()).ok()?;
@@ -1713,21 +1682,8 @@ fn collect_loaded_tool_names(
 }
 
 fn loaded_tools_from_tool_output(details: &ToolOutput) -> Option<Vec<String>> {
-    let ToolOutput::Custom { output } = details else {
-        return None;
-    };
-    let payload = serde_json::Value::from(output.payload.clone());
+    let payload = details.to_json_payload()?;
     serde_json::from_value(payload.get("loaded_tools")?.clone()).ok()
-}
-
-fn parse_custom_payload(payload_json: &str) -> Result<StructuredObject, ToolError> {
-    let value = if payload_json.trim().is_empty() {
-        serde_json::json!({})
-    } else {
-        serde_json::from_str(payload_json)
-            .map_err(|err| ToolError::InvalidInput(err.to_string()))?
-    };
-    StructuredObject::try_from(value).map_err(|err| ToolError::InvalidInput(err.to_string()))
 }
 
 fn sdk_path_kind_to_access_kind(kind: SdkPathKind) -> AccessKind {
@@ -1896,8 +1852,7 @@ mod tests {
         FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, Message,
         PartContent, ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TimeRange,
         TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolExecutionPart, ToolInvocation,
-        ToolOutput, ToolPayloadInput, ToolPayloadOutput, ToolSearchToolInput, ViewFileToolInput,
-        WebFetchToolInput,
+        ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -1910,7 +1865,7 @@ mod tests {
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
-    use super::{ToolError, ToolExecutor};
+    use super::{ToolError, ToolExecutor, ToolPayloadInput, ToolPayloadOutput};
     use crate::plugins::provided::router as in_process_router;
 
     #[derive(Debug)]
@@ -2331,16 +2286,11 @@ mod tests {
                     output_text: "loaded deferred tools".to_string(),
                     blocks: Vec::new(),
                     attachments: Vec::new(),
-                    details: ToolOutput::Custom {
-                        output: ToolPayloadOutput::ToolSearch {
-                            results: Vec::new(),
-                            loaded_tools: loaded_tools
-                                .iter()
-                                .map(|name| name.to_string())
-                                .collect(),
-                        }
-                        .into_custom_output(),
-                    },
+                    details: (ToolPayloadOutput::ToolSearch {
+                        results: Vec::new(),
+                        loaded_tools: loaded_tools.iter().map(|name| name.to_string()).collect(),
+                    })
+                    .into_tool_output(),
                     lifecycle: TimeRange::default(),
                 }),
             )],
@@ -2652,19 +2602,13 @@ mod tests {
             Some(TaskSubagentType::Explore.guidance())
         );
 
-        match result.output {
-            ToolOutput::Custom { output } => {
-                assert_eq!(output.name, "task");
-                let payload = ToolPayloadOutput::from_custom(&output)
-                    .expect("task output should decode as tool payload");
-                match payload {
-                    ToolPayloadOutput::Task { session_id, .. } => {
-                        assert!(session_id.is_some());
-                    }
-                    other => panic!("expected task payload, got {other:?}"),
-                }
+        let payload = ToolPayloadOutput::from_tool_output("task", &result.output)
+            .expect("task output should decode as tool payload");
+        match payload {
+            ToolPayloadOutput::Task { session_id, .. } => {
+                assert!(session_id.is_some());
             }
-            other => panic!("expected custom task output, got {other:?}"),
+            other => panic!("expected task payload, got {other:?}"),
         }
     }
 
@@ -3048,15 +2992,9 @@ mod tests {
             .execute_invocation_detailed(&prepared.invocation, 7, 9)
             .expect("plugin execution should succeed");
 
-        match execution.output {
-            ToolOutput::Custom { output } => {
-                let payload = serde_json::Value::from(output.payload);
-                assert_eq!(output.name, "plugin_echo");
-                assert_eq!(payload["echoed"], "hello prepared");
-                assert_eq!(payload["after"], true);
-            }
-            other => panic!("expected custom output, got {other:?}"),
-        }
+        let payload = serde_json::Value::from(execution.output.payload.clone());
+        assert_eq!(payload["echoed"], "hello prepared");
+        assert_eq!(payload["after"], true);
 
         assert_eq!(execution.view.title, "Plugin echo after");
         assert_eq!(execution.view.output_text, "hello prepared after");
@@ -3588,7 +3526,7 @@ mod tests {
             )
             .expect("bash invocation should succeed");
 
-        match execution.output.as_tool_payload() {
+        match ToolPayloadOutput::from_tool_output("bash", &execution.output) {
             Some(ToolPayloadOutput::Bash {
                 output,
                 description: _,

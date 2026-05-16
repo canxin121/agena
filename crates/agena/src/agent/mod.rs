@@ -742,9 +742,10 @@ impl PermissionDecisionExt for PermissionDecision {
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
-    use crate::message::{BashToolInput, ReadToolInput, ToolPayloadInput};
+    use crate::message::{BashToolInput, ReadToolInput};
     use crate::permission::{AccessKind, PermissionDecision, PermissionMode, PermissionPolicy};
     use crate::plugin::sdk::ToolTag;
+    use crate::tool::ToolPayloadInput;
     use indexmap::IndexMap;
 
     use super::{

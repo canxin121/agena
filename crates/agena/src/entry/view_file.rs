@@ -4,11 +4,9 @@ use std::path::Path;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use mime_guess::MimeGuess;
 
-use crate::message::{
-    AttachmentKind, AttachmentSource, ToolAttachment, ToolPayloadOutput, ViewFileToolInput,
-};
+use crate::message::{AttachmentKind, AttachmentSource, ToolAttachment, ViewFileToolInput};
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 const MAX_FILE_BYTES: usize = 50 * 1024 * 1024;
 

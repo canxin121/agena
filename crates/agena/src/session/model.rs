@@ -1092,10 +1092,11 @@ mod tests {
 
     use crate::message::{
         ExecutionStatus, MessageMetadata, MessagePart, MessageStatus, PartContent, TimeRange,
-        TodoWriteToolInput, ToolExecutionPart, ToolPayloadInput, UserInputQuestion,
+        TodoWriteToolInput, ToolExecutionPart, UserInputQuestion,
     };
     use crate::permission::{PermissionAction, PermissionRequest};
     use crate::role::Role;
+    use crate::tool::ToolPayloadInput;
 
     use super::*;
 

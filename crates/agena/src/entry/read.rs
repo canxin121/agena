@@ -1,9 +1,9 @@
 use std::cmp::min;
 use std::fs;
 
-use crate::message::{ReadToolInput, ToolPayloadOutput};
+use crate::message::ReadToolInput;
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 const DEFAULT_OFFSET: usize = 1;
 const DEFAULT_LIMIT: usize = 2000;

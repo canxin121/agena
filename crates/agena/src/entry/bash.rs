@@ -3,12 +3,12 @@ use std::collections::HashMap;
 
 use super::shell::ShellRequest;
 
-use crate::message::{BashToolInput, ToolPayloadOutput};
+use crate::message::BashToolInput;
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
 use super::{
     PreparedShellCommand, ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution,
-    ToolRuntimeContext,
+    ToolPayloadOutput, ToolRuntimeContext,
 };
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;

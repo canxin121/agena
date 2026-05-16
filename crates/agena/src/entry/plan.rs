@@ -25,10 +25,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::message::{EnterPlanModeToolInput, ExitPlanModeToolInput, ToolPayloadOutput};
+use crate::message::{EnterPlanModeToolInput, ExitPlanModeToolInput};
 use crate::session::PlanState;
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 /// Process-wide plan state — keyed by session id.  Conceptually this
 /// belongs in `SessionRuntimeState`, but plan-mode checks happen inside

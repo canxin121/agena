@@ -826,10 +826,10 @@ fn strip_terminal_ansi_sequences(text: &str) -> String {
 }
 
 fn apply_patch_diff(details: &agena::message::ToolOutput) -> Option<String> {
-    let payload = custom_tool_payload(details)?;
-    payload
+    details
+        .payload
         .get("diff")
-        .and_then(serde_json::Value::as_str)
+        .and_then(agena::message::StructuredValue::as_text)
         .map(str::trim)
         .filter(|diff| !diff.is_empty())
         .map(str::to_string)
@@ -857,13 +857,4 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
         }
     }
     invocation.name.clone()
-}
-
-fn custom_tool_payload(details: &agena::message::ToolOutput) -> Option<serde_json::Value> {
-    match details {
-        agena::message::ToolOutput::Custom { output } => {
-            Some(serde_json::Value::from(output.payload.clone()))
-        }
-        _ => None,
-    }
 }

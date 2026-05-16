@@ -1,8 +1,8 @@
-use crate::message::{ToolPayloadOutput, ToolSearchToolInput};
+use crate::message::ToolSearchToolInput;
 use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
 use crate::plugin::sdk::ToolTag;
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution};
+use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
 const DEFAULT_LIMIT: usize = 8;
 const MAX_LIMIT: usize = 25;

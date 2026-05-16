@@ -1154,13 +1154,14 @@ mod tests {
 
     use super::*;
     use crate::event::DomainEvent;
-    use crate::message::{GlobToolInput, GrepToolInput, ReadToolInput, ToolPayloadInput};
+    use crate::message::{GlobToolInput, GrepToolInput, ReadToolInput};
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::plugin::PluginToolDecl;
     use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
     use crate::provider::{
         CompletionFinishReason, CompletionResponse, ModelProvider, ProviderModel,
     };
+    use crate::tool::ToolPayloadInput;
 
     /// Construct an in-memory `EventPublisher` whose `MemEventStore` collects
     /// every event the publisher routes to it — including non-persistent
@@ -1372,7 +1373,7 @@ mod tests {
         )
         .expect("valid JSON prefix should parse for tool arguments");
 
-        match invocation.as_tool_payload() {
+        match ToolPayloadInput::from_invocation(&invocation) {
             Some(ToolPayloadInput::Grep(payload)) => {
                 assert_eq!(payload.pattern, "cache marker");
                 assert_eq!(payload.path, None);

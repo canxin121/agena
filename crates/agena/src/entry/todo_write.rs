@@ -1,6 +1,6 @@
-use crate::message::{TodoWriteToolInput, ToolPayloadOutput};
+use crate::message::TodoWriteToolInput;
 
-use super::{ToolExecutionView, ToolPayloadExecution};
+use super::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput};
 
 pub(super) fn execute(input: &TodoWriteToolInput) -> ToolPayloadExecution {
     let output = ToolPayloadOutput::TodoWrite {

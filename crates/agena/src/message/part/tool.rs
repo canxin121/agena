@@ -1,12 +1,10 @@
-use std::collections::BTreeMap;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
 use super::{
-    AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, FileChangeEntry,
-    StructuredObject, TimeRange, TodoItem, UserInputQuestion,
+    AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, StructuredObject,
+    StructuredValue, TimeRange, TodoItem, UserInputQuestion,
 };
 
 pub type ToolAttachment = AttachmentItem;
@@ -484,108 +482,6 @@ pub struct PowerShellToolInput {
     pub filesystem_effects: Vec<FilesystemEffect>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
-#[serde(tag = "tool", rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum ToolPayloadInput {
-    Bash(BashToolInput),
-    Read(ReadToolInput),
-    ViewFile(ViewFileToolInput),
-    ApplyPatch(ApplyPatchToolInput),
-    Glob(GlobToolInput),
-    Grep(GrepToolInput),
-    Task(TaskToolInput),
-    ToolSearch(ToolSearchToolInput),
-    TodoWrite(TodoWriteToolInput),
-    #[serde(rename = "ask_user")]
-    AskUser(AskUserToolInput),
-    Monitor(MonitorToolInput),
-    WebFetch(WebFetchToolInput),
-    WebSearch(WebSearchToolInput),
-    EnterPlanMode(EnterPlanModeToolInput),
-    ExitPlanMode(ExitPlanModeToolInput),
-    EnterWorktree(EnterWorktreeToolInput),
-    ExitWorktree(ExitWorktreeToolInput),
-    CronCreate(CronCreateToolInput),
-    CronList(CronListToolInput),
-    CronDelete(CronDeleteToolInput),
-    ScheduleWakeup(ScheduleWakeupToolInput),
-    LspDefinition(LspDefinitionToolInput),
-    LspReferences(LspReferencesToolInput),
-    LspHover(LspHoverToolInput),
-    LspDiagnostics(LspDiagnosticsToolInput),
-    NotebookEdit(NotebookEditToolInput),
-    PowerShell(PowerShellToolInput),
-}
-
-impl ToolPayloadInput {
-    /// Stable tool name as serialized in the wire format.
-    pub fn tool_name(&self) -> &'static str {
-        match self {
-            Self::Bash(_) => "bash",
-            Self::Read(_) => "read",
-            Self::ViewFile(_) => "view_file",
-            Self::ApplyPatch(_) => "apply_patch",
-            Self::Glob(_) => "glob",
-            Self::Grep(_) => "grep",
-            Self::Task(_) => "task",
-            Self::ToolSearch(_) => "tool_search",
-            Self::TodoWrite(_) => "todo_write",
-            Self::AskUser(_) => "ask_user",
-            Self::Monitor(_) => "monitor",
-            Self::WebFetch(_) => "web_fetch",
-            Self::WebSearch(_) => "web_search",
-            Self::EnterPlanMode(_) => "enter_plan_mode",
-            Self::ExitPlanMode(_) => "exit_plan_mode",
-            Self::EnterWorktree(_) => "enter_worktree",
-            Self::ExitWorktree(_) => "exit_worktree",
-            Self::CronCreate(_) => "cron_create",
-            Self::CronList(_) => "cron_list",
-            Self::CronDelete(_) => "cron_delete",
-            Self::ScheduleWakeup(_) => "schedule_wakeup",
-            Self::LspDefinition(_) => "lsp_definition",
-            Self::LspReferences(_) => "lsp_references",
-            Self::LspHover(_) => "lsp_hover",
-            Self::LspDiagnostics(_) => "lsp_diagnostics",
-            Self::NotebookEdit(_) => "notebook_edit",
-            Self::PowerShell(_) => "powershell",
-        }
-    }
-
-    /// Convert into a generic [`ToolInvocation`] carrying this tool's name
-    /// and a `StructuredObject` payload.
-    pub fn into_invocation(self) -> ToolInvocation {
-        let name = self.tool_name().to_string();
-        let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
-        let mut object = match value {
-            serde_json::Value::Object(map) => map,
-            _ => serde_json::Map::new(),
-        };
-        object.remove("tool");
-        let payload =
-            StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
-        ToolInvocation::new(name, payload)
-    }
-
-    /// Reconstruct a `ToolPayloadInput` from a [`ToolInvocation`], or `None`
-    /// if the invocation does not use one of the typed payload tool names.
-    /// Namespaced forms like `plugin/tool` are matched by their terminal
-    /// segment so user-installed replacements inherit the same semantics.
-    pub fn from_invocation(invocation: &ToolInvocation) -> Option<Self> {
-        let value: serde_json::Value = invocation.input.clone().into();
-        let mut object = match value {
-            serde_json::Value::Object(map) => map,
-            serde_json::Value::Null => serde_json::Map::new(),
-            _ => return None,
-        };
-        object.insert(
-            "tool".to_string(),
-            serde_json::Value::String(canonical_tool_payload_name(invocation.name.as_str()).into()),
-        );
-        serde_json::from_value(serde_json::Value::Object(object)).ok()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInvocation {
     pub entry_name: String,
@@ -602,8 +498,7 @@ impl PluginInvocation {
 }
 
 /// A dynamic tool invocation: stable name + structured payload. Shipped tools
-/// and user/plugin-supplied tools share this shape; tool-payload payload helpers
-/// can be recovered on demand via [`Self::as_tool_payload`].
+/// and user/plugin-supplied tools share this shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolInvocation {
     pub name: String,
@@ -617,283 +512,6 @@ impl ToolInvocation {
             name: name.into(),
             input,
         }
-    }
-
-    /// If this invocation uses one of the typed payload tool names, decode its
-    /// input into a strongly-typed [`ToolPayloadInput`].
-    pub fn as_tool_payload(&self) -> Option<ToolPayloadInput> {
-        ToolPayloadInput::from_invocation(self)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "tool", rename_all = "snake_case")]
-pub enum ToolPayloadOutput {
-    Bash {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-    Read {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        preview: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        truncated: Option<bool>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        loaded_paths: Vec<String>,
-    },
-    ViewFile {
-        path: String,
-        kind: AttachmentKind,
-        mime: String,
-        size_bytes: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        filename: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        width: Option<u32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        height: Option<u32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        duration_ms: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        page_count: Option<u32>,
-    },
-    ApplyPatch {
-        operation_id: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        changes: Vec<FileChangeEntry>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        before_hash: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        after_hash: Option<String>,
-        inverse_patch: String,
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        diff: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        progress: Vec<String>,
-    },
-    Glob {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        count: Option<u32>,
-    },
-    Grep {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        matches: Option<u32>,
-    },
-    Task {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model_provider_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        model_id: Option<String>,
-    },
-    ToolSearch {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        results: Vec<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        loaded_tools: Vec<String>,
-    },
-    TodoWrite {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        items: Vec<TodoItem>,
-    },
-    #[serde(rename = "ask_user")]
-    AskUser {
-        #[serde(
-            default,
-            deserialize_with = "crate::message::part::activity::deserialize_user_input_answers",
-            skip_serializing_if = "crate::message::part::activity::user_input_answers_is_empty"
-        )]
-        answers: BTreeMap<String, Vec<String>>,
-    },
-    Monitor {
-        action: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        monitor_id: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        status: Option<MonitorStatus>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        events: Vec<MonitorEvent>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        monitors: Vec<MonitorSummary>,
-        /// Highest seq returned in `events` (or current `last_seq` for `start`/`list`/`stop`).
-        #[serde(default)]
-        last_seq: u64,
-        /// True when the monitor still has buffered or future events past `last_seq`.
-        #[serde(default)]
-        has_more: bool,
-        /// Total lines dropped due to ring-buffer eviction (cumulative).
-        #[serde(default)]
-        dropped_lines: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exit_code: Option<i32>,
-    },
-    WebFetch {
-        url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        markdown: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        summary: Option<String>,
-        #[serde(default)]
-        truncated: bool,
-        #[serde(default)]
-        cached: bool,
-        status: u16,
-    },
-    WebSearch {
-        query: String,
-        backend: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        results: Vec<WebSearchHit>,
-    },
-    EnterPlanMode {
-        plan_path: String,
-        slug: String,
-    },
-    ExitPlanMode {
-        approved: bool,
-        plan_path: String,
-    },
-    EnterWorktree {
-        path: String,
-        branch: String,
-    },
-    ExitWorktree {
-        action: String,
-        path: String,
-    },
-    CronCreate {
-        id: String,
-        next_fire_at: Option<String>,
-    },
-    CronList {
-        jobs: Vec<CronJobSummary>,
-    },
-    CronDelete {
-        id: String,
-        removed: bool,
-    },
-    ScheduleWakeup {
-        id: String,
-        next_fire_at: String,
-    },
-    LspDefinition {
-        /// Pretty-printed `path:line:col` locations the symbol resolves
-        /// to (1-based line/col so the LLM can paste them straight to
-        /// the user).
-        locations: Vec<String>,
-    },
-    LspReferences {
-        locations: Vec<String>,
-    },
-    LspHover {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        contents: Option<String>,
-    },
-    LspDiagnostics {
-        /// Each entry: `path:line:col [severity] message`.
-        entries: Vec<String>,
-    },
-    NotebookEdit {
-        path: String,
-        edit_mode: String,
-        cell_index: u32,
-        cell_count: u32,
-    },
-    PowerShell {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        description: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CronJobSummary {
-    pub id: String,
-    pub kind: String,
-    pub expression: Option<String>,
-    pub at: Option<String>,
-    pub prompt: String,
-    pub next_fire_at: Option<String>,
-    pub last_fired_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WebSearchHit {
-    pub title: String,
-    pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub snippet: Option<String>,
-}
-
-impl ToolPayloadOutput {
-    /// Stable tool name as serialized in the wire format.
-    pub fn tool_name(&self) -> &'static str {
-        match self {
-            Self::Bash { .. } => "bash",
-            Self::Read { .. } => "read",
-            Self::ViewFile { .. } => "view_file",
-            Self::ApplyPatch { .. } => "apply_patch",
-            Self::Glob { .. } => "glob",
-            Self::Grep { .. } => "grep",
-            Self::Task { .. } => "task",
-            Self::ToolSearch { .. } => "tool_search",
-            Self::TodoWrite { .. } => "todo_write",
-            Self::AskUser { .. } => "ask_user",
-            Self::Monitor { .. } => "monitor",
-            Self::WebFetch { .. } => "web_fetch",
-            Self::WebSearch { .. } => "web_search",
-            Self::EnterPlanMode { .. } => "enter_plan_mode",
-            Self::ExitPlanMode { .. } => "exit_plan_mode",
-            Self::EnterWorktree { .. } => "enter_worktree",
-            Self::ExitWorktree { .. } => "exit_worktree",
-            Self::CronCreate { .. } => "cron_create",
-            Self::CronList { .. } => "cron_list",
-            Self::CronDelete { .. } => "cron_delete",
-            Self::ScheduleWakeup { .. } => "schedule_wakeup",
-            Self::LspDefinition { .. } => "lsp_definition",
-            Self::LspReferences { .. } => "lsp_references",
-            Self::LspHover { .. } => "lsp_hover",
-            Self::LspDiagnostics { .. } => "lsp_diagnostics",
-            Self::NotebookEdit { .. } => "notebook_edit",
-            Self::PowerShell { .. } => "powershell",
-        }
-    }
-
-    /// Convert into a [`CustomToolOutput`] carrying the tool name and a
-    /// `StructuredObject` payload (the inner fields, without the `tool` tag).
-    pub fn into_custom_output(self) -> CustomToolOutput {
-        let name = self.tool_name().to_string();
-        let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
-        let mut object = match value {
-            serde_json::Value::Object(map) => map,
-            _ => serde_json::Map::new(),
-        };
-        object.remove("tool");
-        let payload =
-            StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
-        CustomToolOutput { name, payload }
-    }
-
-    /// Reverse of [`into_custom_output`]: try to decode a `CustomToolOutput`
-    /// emitted by a tool-payload tool back into the strongly-typed enum.
-    /// Namespaced forms like `plugin/tool` are matched by their terminal
-    /// segment so user-installed replacements inherit the same semantics.
-    pub fn from_custom(output: &CustomToolOutput) -> Option<Self> {
-        let value: serde_json::Value = output.payload.clone().into();
-        let mut object = match value {
-            serde_json::Value::Object(map) => map,
-            serde_json::Value::Null => serde_json::Map::new(),
-            _ => return None,
-        };
-        object.insert(
-            "tool".to_string(),
-            serde_json::Value::String(canonical_tool_payload_name(output.name.as_str()).into()),
-        );
-        serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
 }
 
@@ -1007,50 +625,48 @@ impl ToolResultBlock {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct McpToolOutput {
-    pub server: String,
-    pub tool: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content_blocks: Vec<ToolResultBlock>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub structured_content: Option<StructuredObject>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CustomToolOutput {
-    pub name: String,
-    #[serde(default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ToolOutput {
+    #[serde(default, skip_serializing_if = "StructuredObject::is_empty")]
     pub payload: StructuredObject,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "source", rename_all = "snake_case")]
-#[derive(Default)]
-pub enum ToolOutput {
-    #[default]
-    None,
-    Mcp {
-        output: McpToolOutput,
-    },
-    Custom {
-        output: CustomToolOutput,
-    },
-}
-
 impl ToolOutput {
-    /// If this output is a `Custom` carrying a tool-payload tool payload,
-    /// decode it into a strongly-typed [`ToolPayloadOutput`].
-    pub fn as_tool_payload(&self) -> Option<ToolPayloadOutput> {
-        match self {
-            Self::Custom { output } => ToolPayloadOutput::from_custom(output),
-            _ => None,
+    pub fn is_empty(&self) -> bool {
+        self.payload.is_empty()
+    }
+
+    pub fn from_json_payload(payload: Option<&serde_json::Value>) -> Result<Self, String> {
+        match payload {
+            None | Some(serde_json::Value::Null) => Ok(Self::default()),
+            Some(value) => Ok(Self {
+                payload: StructuredObject::try_from(value.clone())?,
+            }),
         }
     }
-}
 
-fn canonical_tool_payload_name(name: &str) -> &str {
-    name.rsplit('/').next().unwrap_or(name)
+    pub fn to_json_payload(&self) -> Option<serde_json::Value> {
+        (!self.payload.is_empty()).then(|| serde_json::Value::from(self.payload.clone()))
+    }
+
+    pub fn content_blocks(&self) -> Vec<ToolResultBlock> {
+        let Some(blocks) = self
+            .payload
+            .get("content_blocks")
+            .and_then(StructuredValue::as_array)
+        else {
+            return Vec::new();
+        };
+
+        blocks
+            .iter()
+            .filter_map(|block| {
+                let value = serde_json::Value::from(block.clone());
+                serde_json::from_value(value).ok()
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1083,7 +699,7 @@ pub enum ToolExecutionPart {
         blocks: Vec<ToolResultBlock>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<ToolAttachment>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
         details: ToolOutput,
         #[serde(default)]
         lifecycle: TimeRange,
@@ -1098,7 +714,7 @@ pub enum ToolExecutionPart {
         blocks: Vec<ToolResultBlock>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         attachments: Vec<ToolAttachment>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
         details: ToolOutput,
         #[serde(default)]
         lifecycle: TimeRange,
@@ -1261,6 +877,7 @@ fn attachment_source_from_location(value: &str) -> Option<AttachmentSource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn task_subagent_type_guidance_wraps_prompt() {
@@ -1319,5 +936,81 @@ mod tests {
         assert_eq!(attachment.filename.as_deref(), Some("image.png"));
         assert_eq!(attachment.width, Some(2));
         assert_eq!(attachment.height, Some(3));
+    }
+
+    #[test]
+    fn empty_tool_output_serializes_without_details() {
+        assert_eq!(
+            serde_json::to_value(ToolOutput::default()).expect("tool output should serialize"),
+            json!({})
+        );
+
+        let part = ToolExecutionPart::Completed {
+            call_id: 7,
+            invocation: ToolInvocation::new("plugin.example", StructuredObject::default()),
+            output_text: String::new(),
+            blocks: Vec::new(),
+            attachments: Vec::new(),
+            details: ToolOutput::default(),
+            lifecycle: TimeRange::default(),
+        };
+        let serialized = serde_json::to_value(part).expect("tool execution part should serialize");
+
+        assert_eq!(serialized["state"], "completed");
+        assert!(serialized.get("details").is_none());
+    }
+
+    #[test]
+    fn tool_output_round_trips_generic_payload_and_blocks() {
+        let payload = json!({
+            "content_blocks": [
+                {
+                    "type": "text",
+                    "text": "done"
+                },
+                {
+                    "type": "resource_link",
+                    "uri": "https://example.com/report.pdf",
+                    "title": "report"
+                }
+            ],
+            "metadata": {
+                "plugin": "example"
+            },
+            "count": 2
+        });
+
+        let output = ToolOutput::from_json_payload(Some(&payload))
+            .expect("generic object payload should decode");
+
+        assert_eq!(output.to_json_payload(), Some(payload));
+        assert_eq!(
+            output.content_blocks(),
+            vec![
+                ToolResultBlock::Text {
+                    text: "done".to_string()
+                },
+                ToolResultBlock::ResourceLink {
+                    uri: "https://example.com/report.pdf".to_string(),
+                    title: Some("report".to_string())
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_output_rejects_source_tagged_shapes() {
+        let err = serde_json::from_value::<ToolOutput>(json!({
+            "source": "custom",
+            "output": {
+                "name": "plugin.example",
+                "payload": {
+                    "text": "hello"
+                }
+            }
+        }))
+        .expect_err("source-tagged output should not deserialize as the neutral model");
+
+        assert!(err.to_string().contains("unknown field"));
     }
 }

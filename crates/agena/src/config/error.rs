@@ -11,6 +11,11 @@ pub enum ConfigError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("failed to write config file {path}: {source}")]
+    WriteFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("failed to parse config file {path}: {source}")]
     ParseFile {
         path: PathBuf,

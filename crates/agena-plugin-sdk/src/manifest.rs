@@ -295,6 +295,7 @@ pub enum HostCapability {
     GoalRegistry,
     MonitorRegistry,
     ReadConfig,
+    ReloadConfig,
     InvokeTool,
     PublishEvent,
     SubscribeEvents,

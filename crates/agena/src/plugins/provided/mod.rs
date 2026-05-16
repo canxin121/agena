@@ -3,6 +3,7 @@ pub mod fs;
 pub mod lsp;
 pub mod mcp;
 pub mod router;
+pub mod settings;
 pub mod shell;
 pub mod skills;
 pub mod web;

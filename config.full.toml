@@ -115,8 +115,8 @@ enabled = true
 #
 # First-party static plugins such as agena.fs, agena.shell, agena.web,
 # agena.workflow, agena.skills, agena.lsp, agena.cron, agena.memory,
-# agena.hooks, and agena.mcp are registered by the runtime. Model-visible
-# built-ins are plugin tools.
+# agena.hooks, agena.mcp, and agena.settings are registered by the runtime.
+# Model-visible built-ins are plugin tools.
 #
 # Plugins that call host callbacks must declare matching host_capabilities in
 # their manifest tools. For example, host/config.read requires ReadConfig,

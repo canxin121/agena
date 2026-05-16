@@ -24,10 +24,10 @@ use crate::host_api::{
     AskUserRequest, AskUserResponse, EventSubscription, HostAgentGetRequest, HostAgentGetResponse,
     HostAgentListResponse, HostAgentRegisterRequest, HostAgentRemoveRequest,
     HostAgentRemoveResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
-    HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostEnterPlanModeRequest,
-    HostEnterWorktreeRequest, HostEntryListResponse, HostEntryMutationResponse,
-    HostEntryRegisterRequest, HostEntryRemoveRequest, HostEntryUpdateRequest,
-    HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookListResponse,
+    HostAgentSwitchRequest, HostAgentSwitchResponse, HostClient, HostConfigReloadResponse,
+    HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostEntryListResponse,
+    HostEntryMutationResponse, HostEntryRegisterRequest, HostEntryRemoveRequest,
+    HostEntryUpdateRequest, HostExitPlanModeRequest, HostExitWorktreeRequest, HostHookListResponse,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
@@ -411,6 +411,16 @@ impl HostClient for StdioHostClient {
         self.call(
             method::HOST_CONFIG_READ,
             serde_json::json!({ "path": path }),
+        )
+        .await
+    }
+
+    async fn reload_config(&self) -> crate::error::Result<HostConfigReloadResponse> {
+        self.call(
+            method::HOST_CONFIG_RELOAD,
+            serde_json::json!({
+                "context": crate::host_api::current_host_callback_context(),
+            }),
         )
         .await
     }

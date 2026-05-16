@@ -57,6 +57,20 @@ impl RawConfigFile {
     }
 }
 
+pub(crate) fn validate_config_text(
+    path: &Path,
+    text: &str,
+    env: &dyn ConfigEnvironment,
+) -> Result<(), ConfigError> {
+    reject_unsupported_fields(path, text)?;
+    let config = toml::from_str::<RawConfig>(text).map_err(|source| ConfigError::ParseFile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    config.resolve_with_env(env)?;
+    Ok(())
+}
+
 fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
     let value = toml::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
         path: path.to_path_buf(),

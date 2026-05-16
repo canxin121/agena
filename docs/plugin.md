@@ -93,6 +93,7 @@ Runtime build 注册：
 | `agena.memory` | memory 配置和项目记忆相关能力 |
 | `agena.hooks` | 用户配置的 shell/HTTP hooks |
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
+| `agena.settings` | 读取、列出、校验和编辑当前 `config.toml` 的 settings tools |
 
 `agena.mcp` 读取 MCP server snapshot，并把每个 MCP capability 包装成 plugin tools，例如：
 
@@ -105,6 +106,19 @@ mcp:<server>:prompts:get
 ```
 
 因此，MCP 对模型的可见面统一进入 plugin host 和 plugin tool registry。
+
+`agena.settings` 暴露给模型的工具包括：
+
+| Tool | 作用 |
+| --- | --- |
+| `settings_get` | 读取一个 setting，支持 `source=effective` 或 `source=file` |
+| `settings_list` | 列出 table/object/array 下的 entries，可递归 |
+| `settings_set` | 设置一个 TOML path 的值 |
+| `settings_delete` | 删除一个 TOML path |
+| `settings_patch` | 深度合并一个 JSON object 到目标 table，`null` 删除 key |
+| `settings_validate` | 校验当前 `config.toml` 是否能被 runtime 加载 |
+
+这些工具使用当前 runtime 的 active config path。写入工具默认先校验再写入，并在有实际变更时通过 `host/config.reload` reload runtime；`dry_run=true` 会返回差异但不落盘、不 reload。
 
 ## Transport
 

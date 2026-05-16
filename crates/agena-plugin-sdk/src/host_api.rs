@@ -64,6 +64,11 @@ pub trait HostClient: Send + Sync + 'static {
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value>;
 
+    /// Reload the runtime after persisted configuration has changed.
+    async fn reload_config(&self) -> Result<HostConfigReloadResponse> {
+        Err(unavailable())
+    }
+
     async fn invoke_tool(&self, tool: String, input: serde_json::Value)
     -> Result<ToolInvokeOutput>;
 
@@ -1510,6 +1515,13 @@ pub struct HostStatuslineRemoveResponse {
 pub struct HostStatuslineListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub segments: Vec<HostStatuslineSegment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostConfigReloadResponse {
+    pub previous_generation: u64,
+    pub generation: u64,
+    pub loaded_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

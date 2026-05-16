@@ -157,6 +157,10 @@ impl super::ConfigResolution {
             )
             .register_static(crate::tool::fs_plugin_id(), crate::tool::new_fs_plugin())
             .register_static(
+                crate::tool::settings_plugin_id(),
+                crate::tool::new_settings_plugin(),
+            )
+            .register_static(
                 crate::tool::shell_plugin_id(),
                 crate::tool::new_shell_plugin(),
             )

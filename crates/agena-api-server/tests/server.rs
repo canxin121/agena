@@ -374,6 +374,130 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
 }
 
 #[tokio::test]
+async fn settings_endpoints_read_write_validate_and_reload_config() {
+    let (state, _, _) = build_state().await;
+    let app = router(state);
+
+    let effective_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/settings?source=effective&path=runtime.reload.enabled")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(effective_response.status(), StatusCode::OK);
+    let effective_body = effective_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let effective_value: serde_json::Value = serde_json::from_slice(&effective_body).unwrap();
+    assert_eq!(
+        effective_value.pointer("/value"),
+        Some(&serde_json::json!(true))
+    );
+
+    let update_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v1/settings")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "path": "ui.locale",
+                        "value": "fr-FR",
+                        "validate": true,
+                        "reload": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(update_response.status(), StatusCode::OK);
+    let update_body = update_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let update_value: serde_json::Value = serde_json::from_slice(&update_body).unwrap();
+    assert_eq!(
+        update_value.pointer("/operation"),
+        Some(&serde_json::json!("set"))
+    );
+    assert_eq!(
+        update_value.pointer("/changed"),
+        Some(&serde_json::json!(true))
+    );
+    assert_eq!(
+        update_value.pointer("/current"),
+        Some(&serde_json::json!("fr-FR"))
+    );
+    assert_eq!(
+        update_value.pointer("/reload/previous_generation"),
+        Some(&serde_json::json!(1))
+    );
+    assert_eq!(
+        update_value.pointer("/reload/generation"),
+        Some(&serde_json::json!(2))
+    );
+
+    let file_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/settings?source=file&path=ui.locale")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(file_response.status(), StatusCode::OK);
+    let file_body = file_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let file_value: serde_json::Value = serde_json::from_slice(&file_body).unwrap();
+    assert_eq!(
+        file_value.pointer("/value"),
+        Some(&serde_json::json!("fr-FR"))
+    );
+
+    let validate_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/settings/validate")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(validate_response.status(), StatusCode::OK);
+    let validate_body = validate_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let validate_value: serde_json::Value = serde_json::from_slice(&validate_body).unwrap();
+    assert_eq!(
+        validate_value.pointer("/valid"),
+        Some(&serde_json::json!(true))
+    );
+}
+
+#[tokio::test]
 async fn model_catalog_delete_accepts_visible_model_ids_with_slashes() {
     let (state, _, _) = build_state().await;
     state

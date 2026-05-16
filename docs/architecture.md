@@ -331,6 +331,7 @@ Core registers runtime-provided static plugins during runtime build, including:
 - memory.
 - shell/HTTP hooks.
 - MCP, when configured.
+- settings config editor.
 
 Plugin host can invoke hooks for:
 
@@ -347,7 +348,7 @@ Plugin host can invoke hooks for:
 - pre_turn/post_turn.
 - notification.
 
-Host callbacks allow plugins to ask user input, spawn subagents, list/invoke entries, read config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register entries/agents/hooks/themes/statusline segments, and more.
+Host callbacks allow plugins to ask user input, spawn subagents, list/invoke entries, read and reload config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register entries/agents/hooks/themes/statusline segments, and more.
 
 ## Permission architecture
 

@@ -16,11 +16,10 @@ use crate::event::{
     RunStartedEvent, SessionGoalEvent,
 };
 use crate::message::{
-    AttachmentItem, ExecutionStatus, FileChangePart, BundledToolOutput, Message,
-    MessageMetadata, MessagePart, MessageSource, MessageStatus, PartContent, PermissionRequestPart,
-    TaskSubagentType, TimeRange, TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation,
-    ToolOutput, ToolResultBlock, UserInputReply, UserInputReplyKind, UserInputRequest,
-    UserInputRequestPart,
+    AttachmentItem, ExecutionStatus, FileChangePart, Message, MessageMetadata, MessagePart,
+    MessageSource, MessageStatus, PartContent, PermissionRequestPart, TaskSubagentType, TimeRange,
+    TodoListPart, ToolAttachment, ToolExecutionPart, ToolInvocation, ToolOutput, ToolResultBlock,
+    UserInputReply, UserInputReplyKind, UserInputRequest, UserInputRequestPart,
 };
 use crate::model::ModelRef;
 use crate::permission::{
@@ -31,8 +30,8 @@ use crate::permission::{
 use crate::provider::ThinkingRequest;
 use crate::role::Role;
 use crate::tool::{
-    PreparedShellCommand, StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution,
-    ToolPermissionCheck,
+    BundledToolOutput, PreparedShellCommand, StreamingToolExecution, ToolError, ToolExecutor,
+    ToolInvocationExecution, ToolPermissionCheck,
 };
 use std::path::PathBuf;
 
@@ -3381,16 +3380,17 @@ impl SessionManager {
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let blocks = text_result_blocks(output_text.as_str());
         let extra_part_contents = tool_message_extra_part_contents(
+            &resolved.invocation,
             &tool_output,
             execution.view.attachments.as_slice(),
             blocks.as_slice(),
         );
         if let Some(BundledToolOutput::ToolSearch { loaded_tools, .. }) =
-            tool_output.as_bundled()
+            BundledToolOutput::from_tool_output(resolved.invocation.name.as_str(), &tool_output)
         {
             session.runtime.record_loaded_deferred_tools(&loaded_tools);
         }
-        self.apply_tool_success_execution_context(&mut session, &execution);
+        self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
         {
             let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
@@ -3428,13 +3428,8 @@ impl SessionManager {
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
         let tool_call_id = tool_call_id_for(&resolved);
-        let tool_output_event = match &execution.output {
-            ToolOutput::None => TranscriptToolOutput::Text {
-                text: execution.view.output_text.clone(),
-            },
-            _ => TranscriptToolOutput::Text {
-                text: execution.view.output_text.clone(),
-            },
+        let tool_output_event = TranscriptToolOutput::Text {
+            text: execution.view.output_text.clone(),
         };
         let tool_message_id = tool_message.id;
         let session = self
@@ -3495,7 +3490,7 @@ impl SessionManager {
                 output_text: reason.clone(),
                 blocks: blocks.clone(),
                 attachments: Vec::new(),
-                details: ToolOutput::None,
+                details: ToolOutput::default(),
                 lifecycle: lifecycle.clone(),
             }));
             tool_part.status = ExecutionStatus::Failed;
@@ -3507,7 +3502,7 @@ impl SessionManager {
             Vec::new(),
             reason.clone(),
             blocks,
-            ToolOutput::None,
+            ToolOutput::default(),
             lifecycle,
             Some(reason.clone()),
             Vec::new(),
@@ -4022,9 +4017,12 @@ impl SessionManager {
     fn apply_tool_success_execution_context(
         &self,
         session: &mut Session,
+        invocation: &ToolInvocation,
         execution: &ToolInvocationExecution,
     ) {
-        let Some(output) = execution.output.as_bundled() else {
+        let Some(output) =
+            BundledToolOutput::from_tool_output(invocation.name.as_str(), &execution.output)
+        else {
             return;
         };
         match output {
@@ -4550,17 +4548,18 @@ fn build_extra_message_parts(
 }
 
 fn tool_message_extra_part_contents(
+    invocation: &ToolInvocation,
     details: &ToolOutput,
     attachments: &[ToolAttachment],
     blocks: &[ToolResultBlock],
 ) -> Vec<PartContent> {
     let mut contents = Vec::new();
 
-    if let Some(file_change) = file_change_part_from_tool_output(details) {
+    if let Some(file_change) = file_change_part_from_tool_output(invocation, details) {
         contents.push(PartContent::FileChange(file_change));
     }
 
-    if let Some(todo) = todo_part_from_tool_output(details) {
+    if let Some(todo) = todo_part_from_tool_output(invocation, details) {
         contents.push(PartContent::TodoList(todo));
     }
 
@@ -4572,8 +4571,11 @@ fn tool_message_extra_part_contents(
     contents
 }
 
-fn file_change_part_from_tool_output(details: &ToolOutput) -> Option<FileChangePart> {
-    match details.as_bundled() {
+fn file_change_part_from_tool_output(
+    invocation: &ToolInvocation,
+    details: &ToolOutput,
+) -> Option<FileChangePart> {
+    match BundledToolOutput::from_tool_output(invocation.name.as_str(), details) {
         Some(BundledToolOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
             Some(FileChangePart { changes })
         }
@@ -4581,8 +4583,11 @@ fn file_change_part_from_tool_output(details: &ToolOutput) -> Option<FileChangeP
     }
 }
 
-fn todo_part_from_tool_output(details: &ToolOutput) -> Option<TodoListPart> {
-    match details.as_bundled() {
+fn todo_part_from_tool_output(
+    invocation: &ToolInvocation,
+    details: &ToolOutput,
+) -> Option<TodoListPart> {
+    match BundledToolOutput::from_tool_output(invocation.name.as_str(), details) {
         Some(BundledToolOutput::TodoWrite { items }) => Some(TodoListPart { items }),
         _ => None,
     }
@@ -4599,9 +4604,11 @@ fn attachment_items_from_tool_output(
         push_unique_attachment_item(&mut items, attachment.clone());
     }
 
-    let block_source = match details {
-        ToolOutput::Mcp { output } => output.content_blocks.as_slice(),
-        _ => blocks,
+    let payload_blocks = details.content_blocks();
+    let block_source = if payload_blocks.is_empty() {
+        blocks
+    } else {
+        payload_blocks.as_slice()
     };
 
     for block in block_source {
@@ -4855,9 +4862,7 @@ fn user_input_execution(
     );
 
     Ok(ToolInvocationExecution::new(
-        ToolOutput::Custom {
-            output: BundledToolOutput::AskUser { answers }.into_custom_output(),
-        },
+        BundledToolOutput::AskUser { answers }.into_tool_output(),
         view,
     ))
 }
@@ -4992,10 +4997,10 @@ mod tests {
     use crate::entry::BundledExecution;
     use crate::event::EventKind;
     use crate::message::{
-        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, BundledToolOutput,
-        McpToolOutput, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment,
-        ToolExecutionPart, ToolOutput, ToolResultBlock, ToolSearchToolInput, UserInputOption,
-        UserInputQuestion, UserInputReply, UserInputReplyKind,
+        ApplyPatchToolInput, AskUserToolInput, AttachmentSource, TodoItem, TodoPriority,
+        TodoStatus, TodoWriteToolInput, ToolAttachment, ToolExecutionPart, ToolOutput,
+        ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
+        UserInputReplyKind,
     };
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
@@ -5004,6 +5009,7 @@ mod tests {
         CompletionUsage, ModelProvider, ProviderModel, ProviderRegistry,
     };
     use crate::session::{ContextGovernor, ContextPolicy};
+    use crate::tool::BundledToolOutput;
 
     use super::*;
     use crate::session::cache::{SessionCache, SessionCachePolicy};
@@ -5380,10 +5386,14 @@ mod tests {
                     }
                     match part.content.as_ref() {
                         Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                            invocation,
                             details,
                             ..
                         })) => {
-                            let answers = match details.as_bundled() {
+                            let answers = match BundledToolOutput::from_tool_output(
+                                invocation.name.as_str(),
+                                details,
+                            ) {
                                 Some(BundledToolOutput::AskUser { answers }) => answers,
                                 _ => return None,
                             };
@@ -5445,13 +5455,14 @@ mod tests {
                 message.parts.iter().any(|part| {
                     let details = match part.content.as_ref() {
                         Some(PartContent::ToolExecution(ToolExecutionPart::Completed {
+                            invocation,
                             details,
                             ..
-                        })) => details,
+                        })) => (invocation, details),
                         _ => return false,
                     };
                     matches!(
-                        details.as_bundled(),
+                        BundledToolOutput::from_tool_output(details.0.name.as_str(), details.1),
                         Some(BundledToolOutput::ToolSearch { ref loaded_tools, .. })
                             if loaded_tools.iter().any(|name| name == "apply_patch")
                     )
@@ -5890,15 +5901,10 @@ mod tests {
     fn host_invoke_execution_output(
         execution: ToolInvocationExecution,
     ) -> crate::plugin::sdk::ToolInvokeOutput {
-        let payload = match execution.output {
-            ToolOutput::Custom { output } => Some(serde_json::Value::from(output.payload)),
-            ToolOutput::Mcp { output } => serde_json::to_value(output).ok(),
-            ToolOutput::None => None,
-        };
         crate::plugin::sdk::ToolInvokeOutput {
             title: execution.view.title,
             output_text: execution.view.output_text,
-            payload,
+            payload: execution.output.to_json_payload(),
             metadata: execution.view.metadata.into_iter().collect(),
             attachments: execution.view.attachments,
         }
@@ -6862,24 +6868,26 @@ mod tests {
 
     #[test]
     fn tool_message_extra_part_contents_materialize_mcp_resources_as_attachments() {
+        let invocation = ToolInvocation::new("resource_tool", Default::default());
         let contents = tool_message_extra_part_contents(
-            &ToolOutput::Mcp {
-                output: McpToolOutput {
-                    server: "fixtures".to_string(),
-                    tool: "resource_tool".to_string(),
-                    content_blocks: vec![
-                        ToolResultBlock::Image {
-                            mime: "image/png".to_string(),
-                            url: "https://example.com/chart.png".to_string(),
-                        },
-                        ToolResultBlock::ResourceLink {
-                            uri: "https://example.com/report.pdf".to_string(),
-                            title: Some("report".to_string()),
-                        },
-                    ],
-                    structured_content: None,
-                },
-            },
+            &invocation,
+            &ToolOutput::from_json_payload(Some(&serde_json::json!({
+                "server": "fixtures",
+                "tool": "resource_tool",
+                "content_blocks": [
+                    {
+                        "type": "image",
+                        "mime": "image/png",
+                        "url": "https://example.com/chart.png"
+                    },
+                    {
+                        "type": "resource_link",
+                        "uri": "https://example.com/report.pdf",
+                        "title": "report"
+                    }
+                ]
+            })))
+            .expect("payload should parse"),
             &[ToolAttachment {
                 kind: crate::message::AttachmentKind::Audio,
                 mime: "audio/mpeg".to_string(),
@@ -7637,7 +7645,8 @@ mod tests {
             crate::entry::ToolExecutionView::simple("enter_worktree", "entered"),
         )
         .into();
-        service.apply_tool_success_execution_context(&mut session, &entered);
+        let entered_invocation = ToolInvocation::new("enter_worktree", Default::default());
+        service.apply_tool_success_execution_context(&mut session, &entered_invocation, &entered);
         assert_eq!(
             session
                 .runtime
@@ -7654,7 +7663,8 @@ mod tests {
             crate::entry::ToolExecutionView::simple("exit_worktree", "exited"),
         )
         .into();
-        service.apply_tool_success_execution_context(&mut session, &exited);
+        let exited_invocation = ToolInvocation::new("exit_worktree", Default::default());
+        service.apply_tool_success_execution_context(&mut session, &exited_invocation, &exited);
         assert!(session.runtime.effective_workspace_root().is_none());
     }
 

@@ -1517,9 +1517,7 @@ mod tests {
     use chrono::Utc;
 
     use crate::{
-        plugin::PluginToolDecl,
-        plugin::registry::PluginEntry as RegistryPluginEntry,
-        role::Role,
+        plugin::PluginToolDecl, plugin::registry::PluginEntry as RegistryPluginEntry, role::Role,
     };
 
     use super::*;
@@ -1532,10 +1530,13 @@ mod tests {
     ) -> RegistryPluginEntry {
         RegistryPluginEntry::new(
             "fixture",
-            PluginToolDecl::new(name, crate::entry::definition::json_schema_for::<serde_json::Value>())
-                .description(description)
-                .tags(tags)
-                .concurrency_safe(true),
+            PluginToolDecl::new(
+                name,
+                crate::entry::definition::json_schema_for::<serde_json::Value>(),
+            )
+            .description(description)
+            .tags(tags)
+            .concurrency_safe(true),
         )
     }
 
@@ -2000,7 +2001,7 @@ mod tests {
                 output_text: "patched".to_string(),
                 blocks: Vec::new(),
                 attachments: Vec::new(),
-                details: crate::message::ToolOutput::None,
+                details: crate::message::ToolOutput::default(),
                 lifecycle: crate::message::TimeRange::default(),
             })],
         );
@@ -2041,7 +2042,7 @@ mod tests {
                     output_text: "patched main".to_string(),
                     blocks: Vec::new(),
                     attachments: Vec::new(),
-                    details: crate::message::ToolOutput::None,
+                    details: crate::message::ToolOutput::default(),
                     lifecycle: crate::message::TimeRange::default(),
                 }),
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
@@ -2050,7 +2051,7 @@ mod tests {
                     output_text: "patched lib".to_string(),
                     blocks: Vec::new(),
                     attachments: Vec::new(),
-                    details: crate::message::ToolOutput::None,
+                    details: crate::message::ToolOutput::default(),
                     lifecycle: crate::message::TimeRange::default(),
                 }),
             ],
@@ -2068,7 +2069,7 @@ mod tests {
                     output_text: "patched main".to_string(),
                     blocks: Vec::new(),
                     attachments: Vec::new(),
-                    details: crate::message::ToolOutput::None,
+                    details: crate::message::ToolOutput::default(),
                     lifecycle: crate::message::TimeRange::default(),
                 }),
                 PartContent::ToolExecution(ToolExecutionPart::Completed {
@@ -2077,7 +2078,7 @@ mod tests {
                     output_text: "patched lib".to_string(),
                     blocks: Vec::new(),
                     attachments: Vec::new(),
-                    details: crate::message::ToolOutput::None,
+                    details: crate::message::ToolOutput::default(),
                     lifecycle: crate::message::TimeRange::default(),
                 }),
             ],

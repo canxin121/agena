@@ -3,11 +3,11 @@ use std::collections::HashMap;
 
 use super::shell::ShellRequest;
 
-use crate::message::{BashToolInput, BundledToolOutput};
+use crate::message::BashToolInput;
 use crate::plugin::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
 use super::{
-    BundledExecution, BundledExecutionContext, PreparedShellCommand, ToolError,
+    BundledExecution, BundledExecutionContext, BundledToolOutput, PreparedShellCommand, ToolError,
     ToolExecutionView, ToolExecutor,
 };
 

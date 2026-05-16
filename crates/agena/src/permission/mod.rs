@@ -10,8 +10,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use crate::message::BundledToolInput;
 use crate::plugin::sdk::{ToolTag, normalize_tool_tag_name};
+use crate::tool::BundledToolInput;
 
 pub use request::{
     DecisionTrace, DecisionTraceStep, PendingPermission, PermissionAction, PermissionReply,
@@ -1481,7 +1481,8 @@ fn normalize_path_string(path: &Path) -> String {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use crate::message::{ApplyPatchToolInput, BundledToolInput, ReadToolInput};
+    use crate::message::{ApplyPatchToolInput, ReadToolInput};
+    use crate::tool::BundledToolInput;
 
     use super::{
         AccessKind, AccessSelector, NetworkPermissionPolicy, NetworkTarget, PermissionDecision,
@@ -1774,7 +1775,10 @@ mod tests {
         let policy = ToolPermissionPolicy::allow_all()
             .with_tag_mode(crate::plugin::sdk::ToolTag::ReadOnly, PermissionMode::Allow)
             .with_tag_mode(crate::plugin::sdk::ToolTag::Network, PermissionMode::Ask)
-            .with_tag_mode(crate::plugin::sdk::ToolTag::PrivateNetwork, PermissionMode::Deny);
+            .with_tag_mode(
+                crate::plugin::sdk::ToolTag::PrivateNetwork,
+                PermissionMode::Deny,
+            );
 
         assert_eq!(
             policy.check_tool(

@@ -4,14 +4,13 @@
 use std::collections::HashMap;
 
 use crate::message::{
-    BundledToolOutput, MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary,
-    MonitorToolInput,
+    MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
 };
 
 use super::monitor::{
     MonitorError, MonitorRead, MonitorStart, MonitorStopOutcome, ReadParams, StartParams,
 };
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, BundledToolOutput, ToolError, ToolExecutionView, ToolExecutor};
 
 pub(crate) fn execute(
     executor: &ToolExecutor,

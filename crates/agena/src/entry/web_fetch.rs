@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use lru::LruCache;
 
-use crate::message::{BundledToolOutput, ToolAttachment, WebFetchToolInput};
+use crate::message::{ToolAttachment, WebFetchToolInput};
 
-use super::{BundledExecution, ToolError, ToolExecutionView, ToolExecutor};
+use super::{BundledExecution, BundledToolOutput, ToolError, ToolExecutionView, ToolExecutor};
 
 const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

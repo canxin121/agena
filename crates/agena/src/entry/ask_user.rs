@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
 
-use crate::message::{AskUserToolInput, BundledToolOutput};
+use crate::message::AskUserToolInput;
 
-use super::{BundledExecution, ToolError, ToolExecutionView};
+use super::{BundledExecution, BundledToolOutput, ToolError, ToolExecutionView};
 
 const MAX_QUESTIONS: usize = 3;
 const MAX_OPTIONS: usize = 8;

@@ -1,6 +1,6 @@
-use crate::message::{BundledToolOutput, TodoWriteToolInput};
+use crate::message::TodoWriteToolInput;
 
-use super::{BundledExecution, ToolExecutionView};
+use super::{BundledExecution, BundledToolOutput, ToolExecutionView};
 
 pub(super) fn execute(input: &TodoWriteToolInput) -> BundledExecution {
     let output = BundledToolOutput::TodoWrite {

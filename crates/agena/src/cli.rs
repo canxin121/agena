@@ -38,9 +38,7 @@ use crate::{
     },
     error::AppError,
     memory::{MemoryStore, MemoryType},
-    message::{
-        ApplyPatchToolInput, BundledToolInput, PartContent, StructuredObject, ToolInvocation,
-    },
+    message::{ApplyPatchToolInput, PartContent, StructuredObject, ToolInvocation},
     model::ModelRef,
     permission::{
         PermissionAction, PermissionMode, PermissionPolicy, PermissionReply, PermissionReplyKind,
@@ -58,7 +56,7 @@ use crate::{
         SessionSummary, SessionUserTurnRequest,
     },
     storage::StorageConfig,
-    tool::{ApplyPatchExecution, ToolExecutor},
+    tool::{ApplyPatchExecution, BundledToolInput, ToolExecutor},
     tracing as tracing_config,
 };
 
@@ -1881,14 +1879,10 @@ impl AgenaCli {
         )
         .with_plugin_manager(plugins);
         let execution = executor
-            .execute_bundled_detailed(&BundledToolInput::ApplyPatch(ApplyPatchToolInput {
-                patch,
-            }))
+            .execute_bundled_detailed(&BundledToolInput::ApplyPatch(ApplyPatchToolInput { patch }))
             .map_err(|err| AppError::Config(err.to_string()))?;
         let patch = execution.apply_patch.ok_or_else(|| {
-            AppError::Internal(
-                "apply_patch bundled tool did not return patch metadata".to_owned(),
-            )
+            AppError::Internal("apply_patch bundled tool did not return patch metadata".to_owned())
         })?;
         if args.json {
             render_serialized(

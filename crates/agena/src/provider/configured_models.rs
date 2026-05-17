@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
-    ModelLifecycle, ModelMetadata, ModelSpeedMode, ModelSpeedModeRequestOverride,
+    ModelLifecycle, ModelMetadata, ModelPricing, ModelSpeedMode, ModelSpeedModeRequestOverride,
     ModelThinkingMode,
 };
 
@@ -562,6 +562,10 @@ pub struct ConfiguredModelDefinition {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -585,6 +589,8 @@ impl ConfiguredModelDefinition {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.output_modalities.is_empty()
+            && self.pricing.is_none()
             && self.thinking_modes.is_empty()
             && self.speed_modes.is_empty()
             && self.capabilities.is_empty()
@@ -627,6 +633,12 @@ impl ConfiguredModelDefinition {
         }
         if let Some(default_verbosity) = self.default_verbosity.clone() {
             metadata = metadata.with_default_verbosity(default_verbosity);
+        }
+        if !self.output_modalities.is_empty() {
+            metadata = metadata.with_output_modalities(self.output_modalities.clone());
+        }
+        if let Some(pricing) = self.pricing.clone() {
+            metadata = metadata.with_pricing(pricing);
         }
         metadata
     }

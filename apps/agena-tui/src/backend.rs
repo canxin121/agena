@@ -2513,6 +2513,15 @@ fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> J
             JsonValue::String(default_verbosity.to_owned()),
         );
     }
+    if !entry.output_modalities.is_empty() {
+        value.insert(
+            "output_modalities".to_owned(),
+            json!(entry.output_modalities),
+        );
+    }
+    if let Some(pricing) = entry.pricing.as_ref() {
+        value.insert("pricing".to_owned(), json!(pricing));
+    }
     if !entry.thinking_modes.is_empty() {
         value.insert("thinking_modes".to_owned(), json!(entry.thinking_modes));
     }
@@ -2604,6 +2613,15 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
             "default_verbosity".to_owned(),
             JsonValue::String(default_verbosity.to_owned()),
         );
+    }
+    if !model.metadata.output_modalities.is_empty() {
+        value.insert(
+            "output_modalities".to_owned(),
+            json!(model.metadata.output_modalities),
+        );
+    }
+    if let Some(pricing) = model.metadata.pricing.as_ref() {
+        value.insert("pricing".to_owned(), json!(pricing));
     }
     if !model.thinking_modes.is_empty() {
         let thinking_modes = model

@@ -261,6 +261,10 @@ pub struct ModelCatalogEntryResource {
     pub supports_verbosity: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<agena::model::ModelPricing>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub thinking_modes:
         std::collections::BTreeMap<String, agena::provider::ConfiguredModelThinkingMode>,

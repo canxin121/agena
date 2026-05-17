@@ -465,7 +465,7 @@ default_model = "gpt-4.1-mini"
 mode = "api"
 base_url = "https://api.cxits.cn/api/provider/openai/v1"
 endpoint_layout = "provider_routed"
-api_key_env = "AGENA_PROVIDER_GATEWAY_API_KEY"
+api_key_env = "CX-API-KEY"
 
 [providers.provider_gateway.adapters.openai]
 enabled = true

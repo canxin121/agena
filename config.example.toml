@@ -97,9 +97,9 @@ enabled = true
 #
 # [providers.shared.auth]
 # mode = "api"
-# base_url = "https://api.cxits.cn"
+# base_url = "https://api.cxits.cn/"
 # endpoint_layout = "protocol_root"
-# api_key_env = "SHARED_GATEWAY_API_KEY"
+# api_key_env = "CX-API-KEY"
 #
 # [providers.shared.adapters.openai]
 # enabled = true

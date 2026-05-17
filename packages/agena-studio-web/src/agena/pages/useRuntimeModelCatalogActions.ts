@@ -4,8 +4,9 @@ import type {
   ModelCatalogEntry,
   ModelCatalogEntryWriteRequest,
   ProviderModel,
-  ProviderModelVariant,
-  ProviderModelVariantRequestOverride,
+  ProviderModelSpeedMode,
+  ProviderModelSpeedModeRequestOverride,
+  ProviderModelThinkingMode,
 } from '../lib/agenaApi'
 import { deleteModelCatalogEntry, refreshModelCatalog, upsertModelCatalogEntry } from '../lib/agenaApi'
 
@@ -42,15 +43,23 @@ export type ModelCatalogEditableDraft = {
   reasoning: boolean
   structured_output: boolean
   temperature_supported: boolean
-  variants: ModelCatalogVariantEditableDraft[]
+  thinking_modes: ModelCatalogThinkingModeEditableDraft[]
+  speed_modes: ModelCatalogSpeedModeEditableDraft[]
 }
 
-export type ModelCatalogVariantEditableDraft = {
+export type ModelCatalogThinkingModeEditableDraft = {
   name: string
   display_name: string
   description: string
   disabled: boolean
   thinking_json: string
+}
+
+export type ModelCatalogSpeedModeEditableDraft = {
+  name: string
+  display_name: string
+  description: string
+  disabled: boolean
   request_override_json: string
   adapter_overrides_json: string
 }
@@ -112,26 +121,34 @@ function readCapabilityFlag(
   return false
 }
 
-type ProviderModelVariantWithDisabled = ProviderModelVariant & {
+type ProviderModelThinkingModeWithDisabled = ProviderModelThinkingMode & {
   disabled?: boolean
 }
 
-type ProviderModelVariantWriteValue = ProviderModelVariant & {
+type ProviderModelSpeedModeWithDisabled = ProviderModelSpeedMode & {
   disabled?: boolean
 }
 
-function normalizeOptionalVariantRequestOverride(
-  value: string,
-  fieldLabel: string,
-): ProviderModelVariantRequestOverride | null {
-  return normalizeOptionalJsonObject(value, fieldLabel) as ProviderModelVariantRequestOverride | null
+type ProviderModelThinkingModeWriteValue = ProviderModelThinkingMode & {
+  disabled?: boolean
 }
 
-function normalizeOptionalVariantRequestOverrideMap(
+type ProviderModelSpeedModeWriteValue = ProviderModelSpeedMode & {
+  disabled?: boolean
+}
+
+function normalizeOptionalSpeedModeRequestOverride(
   value: string,
   fieldLabel: string,
-): Record<string, ProviderModelVariantRequestOverride> | null {
-  return normalizeOptionalJsonObject(value, fieldLabel) as Record<string, ProviderModelVariantRequestOverride> | null
+): ProviderModelSpeedModeRequestOverride | null {
+  return normalizeOptionalJsonObject(value, fieldLabel) as ProviderModelSpeedModeRequestOverride | null
+}
+
+function normalizeOptionalSpeedModeRequestOverrideMap(
+  value: string,
+  fieldLabel: string,
+): Record<string, ProviderModelSpeedModeRequestOverride> | null {
+  return normalizeOptionalJsonObject(value, fieldLabel) as Record<string, ProviderModelSpeedModeRequestOverride> | null
 }
 
 export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): ModelCatalogEditableDraft {
@@ -149,45 +166,73 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
     reasoning: false,
     structured_output: false,
     temperature_supported: false,
-    variants: [],
+    thinking_modes: [],
+    speed_modes: [],
   }
 }
 
-export function createEmptyModelCatalogVariantDraft(name = ''): ModelCatalogVariantEditableDraft {
+export function createEmptyModelCatalogThinkingModeDraft(name = ''): ModelCatalogThinkingModeEditableDraft {
   return {
     name,
     display_name: '',
     description: '',
     disabled: false,
     thinking_json: '',
+  }
+}
+
+export function createEmptyModelCatalogSpeedModeDraft(name = ''): ModelCatalogSpeedModeEditableDraft {
+  return {
+    name,
+    display_name: '',
+    description: '',
+    disabled: false,
     request_override_json: '',
     adapter_overrides_json: '',
   }
 }
 
-function createModelCatalogVariantDraftFromEntry(
+function createThinkingModeDraftFromEntry(
   name: string,
-  variant: ProviderModelVariantWithDisabled,
-): ModelCatalogVariantEditableDraft {
+  mode: ProviderModelThinkingModeWithDisabled,
+): ModelCatalogThinkingModeEditableDraft {
   return {
     name,
-    display_name: String(variant.display_name || ''),
-    description: String(variant.description || ''),
-    disabled: Boolean(variant.disabled),
-    thinking_json: stringifyJson(variant.thinking || null),
-    request_override_json: stringifyJson(variant.request_override || null),
-    adapter_overrides_json: stringifyJson(variant.adapter_overrides || null),
+    display_name: String(mode.display_name || ''),
+    description: String(mode.description || ''),
+    disabled: Boolean(mode.disabled),
+    thinking_json: stringifyJson(mode.thinking || null),
   }
 }
 
-function createModelCatalogVariantDrafts(
-  variants: Record<string, ProviderModelVariant> | null | undefined,
-): ModelCatalogVariantEditableDraft[] {
-  return Object.entries(variants || {})
+function createSpeedModeDraftFromEntry(
+  name: string,
+  mode: ProviderModelSpeedModeWithDisabled,
+): ModelCatalogSpeedModeEditableDraft {
+  return {
+    name,
+    display_name: String(mode.display_name || ''),
+    description: String(mode.description || ''),
+    disabled: Boolean(mode.disabled),
+    request_override_json: stringifyJson(mode.request_override || null),
+    adapter_overrides_json: stringifyJson(mode.adapter_overrides || null),
+  }
+}
+
+function createThinkingModeDrafts(
+  modes: Record<string, ProviderModelThinkingMode> | null | undefined,
+): ModelCatalogThinkingModeEditableDraft[] {
+  return Object.entries(modes || {})
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, variant]) =>
-      createModelCatalogVariantDraftFromEntry(name, variant as ProviderModelVariantWithDisabled),
-    )
+    .map(([name, mode]) => createThinkingModeDraftFromEntry(name, mode as ProviderModelThinkingModeWithDisabled))
+}
+
+function createSpeedModeDrafts(
+  modes: Record<string, ProviderModelSpeedMode> | null | undefined,
+): ModelCatalogSpeedModeEditableDraft[] {
+  return Object.entries(modes || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, mode]) => createSpeedModeDraftFromEntry(name, mode as ProviderModelSpeedModeWithDisabled))
 }
 
 export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): ModelCatalogEditableDraft {
@@ -205,7 +250,8 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     reasoning: readCapabilityFlag(entry, 'reasoning'),
     structured_output: readCapabilityFlag(entry, 'structured_output'),
     temperature_supported: readCapabilityFlag(entry, 'temperature_supported'),
-    variants: createModelCatalogVariantDrafts(entry.variants),
+    thinking_modes: createThinkingModeDrafts(entry.thinking_modes),
+    speed_modes: createSpeedModeDrafts(entry.speed_modes),
   }
 }
 
@@ -227,7 +273,8 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
     reasoning: readCapabilityFlag(model, 'reasoning'),
     structured_output: readCapabilityFlag(model, 'structured_output'),
     temperature_supported: readCapabilityFlag(model, 'temperature_supported'),
-    variants: createModelCatalogVariantDrafts(model.variants),
+    thinking_modes: createThinkingModeDrafts(model.thinking_modes),
+    speed_modes: createSpeedModeDrafts(model.speed_modes),
   }
 }
 
@@ -255,49 +302,80 @@ export function createModelCatalogDraftFromProviderSelection(
     : createModelCatalogDraftFromProviderModel(model)
 }
 
-function buildModelCatalogVariants(
-  variants: ModelCatalogVariantEditableDraft[],
-): Record<string, ProviderModelVariant> | undefined {
-  const normalized: Record<string, ProviderModelVariantWriteValue> = {}
+function buildModelCatalogThinkingModes(
+  modes: ModelCatalogThinkingModeEditableDraft[],
+): Record<string, ProviderModelThinkingMode> | undefined {
+  const normalized: Record<string, ProviderModelThinkingModeWriteValue> = {}
   const seenNames = new Set<string>()
 
-  for (const variant of variants) {
-    const name = String(variant.name || '').trim()
-    const displayName = normalizeOptionalText(variant.display_name)
-    const description = normalizeOptionalText(variant.description)
-    const thinking = normalizeOptionalJsonObject(variant.thinking_json, `Variant ${name || '(unnamed)'} thinking`)
-    const requestOverride = normalizeOptionalVariantRequestOverride(
-      variant.request_override_json,
-      `Variant ${name || '(unnamed)'} request override`,
-    )
-    const adapterOverrides = normalizeOptionalVariantRequestOverrideMap(
-      variant.adapter_overrides_json,
-      `Variant ${name || '(unnamed)'} adapter overrides`,
-    )
-    const disabled = Boolean(variant.disabled)
-    const hasDetails = Boolean(displayName || description || thinking || requestOverride || adapterOverrides || disabled)
+  for (const mode of modes) {
+    const name = String(mode.name || '').trim()
+    const displayName = normalizeOptionalText(mode.display_name)
+    const description = normalizeOptionalText(mode.description)
+    const thinking = normalizeOptionalJsonObject(mode.thinking_json, `Thinking mode ${name || '(unnamed)'}`)
+    const disabled = Boolean(mode.disabled)
+    const hasDetails = Boolean(displayName || description || thinking || disabled)
 
     if (!name) {
       if (!hasDetails) continue
-      throw new Error('Variant name is required when variant details are provided.')
+      throw new Error('Thinking mode name is required when thinking mode details are provided.')
     }
-
     if (seenNames.has(name)) {
-      throw new Error(`Variant ${name} is listed more than once.`)
+      throw new Error(`Thinking mode ${name} is listed more than once.`)
     }
     seenNames.add(name)
 
-    const nextVariant: ProviderModelVariantWriteValue = {}
-    if (displayName) nextVariant.display_name = displayName
-    if (description) nextVariant.description = description
-    if (thinking) nextVariant.thinking = thinking
-    if (requestOverride) nextVariant.request_override = requestOverride
-    if (adapterOverrides) nextVariant.adapter_overrides = adapterOverrides
-    if (disabled) nextVariant.disabled = true
-    normalized[name] = nextVariant
+    const nextMode: ProviderModelThinkingModeWriteValue = {}
+    if (displayName) nextMode.display_name = displayName
+    if (description) nextMode.description = description
+    if (thinking) nextMode.thinking = thinking
+    if (disabled) nextMode.disabled = true
+    normalized[name] = nextMode
   }
 
-  return Object.keys(normalized).length ? (normalized as Record<string, ProviderModelVariant>) : undefined
+  return Object.keys(normalized).length ? (normalized as Record<string, ProviderModelThinkingMode>) : undefined
+}
+
+function buildModelCatalogSpeedModes(
+  modes: ModelCatalogSpeedModeEditableDraft[],
+): Record<string, ProviderModelSpeedMode> | undefined {
+  const normalized: Record<string, ProviderModelSpeedModeWriteValue> = {}
+  const seenNames = new Set<string>()
+
+  for (const mode of modes) {
+    const name = String(mode.name || '').trim()
+    const displayName = normalizeOptionalText(mode.display_name)
+    const description = normalizeOptionalText(mode.description)
+    const requestOverride = normalizeOptionalSpeedModeRequestOverride(
+      mode.request_override_json,
+      `Speed mode ${name || '(unnamed)'} request override`,
+    )
+    const adapterOverrides = normalizeOptionalSpeedModeRequestOverrideMap(
+      mode.adapter_overrides_json,
+      `Speed mode ${name || '(unnamed)'} adapter overrides`,
+    )
+    const disabled = Boolean(mode.disabled)
+    const hasDetails = Boolean(displayName || description || requestOverride || adapterOverrides || disabled)
+
+    if (!name) {
+      if (!hasDetails) continue
+      throw new Error('Speed mode name is required when speed mode details are provided.')
+    }
+    if (seenNames.has(name)) {
+      throw new Error(`Speed mode ${name} is listed more than once.`)
+    }
+    seenNames.add(name)
+
+    const nextMode: ProviderModelSpeedModeWriteValue = {}
+    if (displayName) nextMode.display_name = displayName
+    if (description) nextMode.description = description
+    if (requestOverride) nextMode.request_override = requestOverride
+    if (adapterOverrides) nextMode.adapter_overrides = adapterOverrides
+    if (disabled) nextMode.disabled = true
+    normalized[name] = nextMode
+  }
+
+  return Object.keys(normalized).length ? (normalized as Record<string, ProviderModelSpeedMode>) : undefined
 }
 
 export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft): ModelCatalogEntryWriteRequest {
@@ -316,7 +394,8 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
     display_name: normalizeOptionalText(draft.display_name),
     origin: normalizeOptionalText(draft.origin),
     description: normalizeOptionalText(draft.description),
-    variants: buildModelCatalogVariants(draft.variants),
+    thinking_modes: buildModelCatalogThinkingModes(draft.thinking_modes),
+    speed_modes: buildModelCatalogSpeedModes(draft.speed_modes),
     features: supportedFeatures.length ? { supported: supportedFeatures } : undefined,
   }
 }

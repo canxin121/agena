@@ -2061,7 +2061,8 @@ impl Backend {
     ) -> Result<agena::session::SessionRunOptions> {
         let RunOptions {
             model,
-            variant,
+            thinking_mode,
+            speed_mode,
             agent_profile,
             system,
             temperature,
@@ -2078,19 +2079,38 @@ impl Backend {
         if let Some(model) = model {
             options.model = model;
         }
-        if let Some(variant) = variant
+        if let Some(thinking_mode) = thinking_mode
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
             let snapshot = self.runtime.current_snapshot();
             let provider_registry = snapshot.provider_registry();
-            let variants = provider_registry
-                .model_variants(&options.model)
-                .context("failed to resolve selected model variants")?;
-            let definition = variants
-                .get(variant)
-                .ok_or_else(|| anyhow!("model {} has no variant {variant}", options.model))?;
+            let thinking_modes = provider_registry
+                .model_thinking_modes(&options.model)
+                .context("failed to resolve selected model thinking modes")?;
+            let definition = thinking_modes.get(thinking_mode).ok_or_else(|| {
+                anyhow!(
+                    "model {} has no thinking mode {thinking_mode}",
+                    options.model
+                )
+            })?;
+            options.thinking_mode = Some(thinking_mode.to_string());
+            options.thinking = definition.thinking.clone();
+        }
+        if let Some(speed_mode) = speed_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let snapshot = self.runtime.current_snapshot();
+            let provider_registry = snapshot.provider_registry();
+            let speed_modes = provider_registry
+                .model_speed_modes(&options.model)
+                .context("failed to resolve selected model speed modes")?;
+            let definition = speed_modes
+                .get(speed_mode)
+                .ok_or_else(|| anyhow!("model {} has no speed mode {speed_mode}", options.model))?;
             let adapter_id = options
                 .model
                 .adapter_id
@@ -2109,8 +2129,7 @@ impl Backend {
             {
                 request_override = request_override.merged_with(adapter_override);
             }
-            options.variant = Some(variant.to_string());
-            options.thinking = definition.thinking.clone();
+            options.speed_mode = Some(speed_mode.to_string());
             options.request_override = request_override;
         }
 
@@ -2274,21 +2293,32 @@ fn local_model_catalog_entry_resources(
 }
 
 fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> String {
-    let variant_text = entry
-        .variants
+    let thinking_mode_text = entry
+        .thinking_modes
         .iter()
-        .flat_map(|(name, variant)| {
+        .flat_map(|(name, mode)| {
             [
                 name.clone(),
-                variant.display_name.clone().unwrap_or_default(),
-                variant.description.clone().unwrap_or_default(),
-                variant
-                    .thinking
+                mode.display_name.clone().unwrap_or_default(),
+                mode.description.clone().unwrap_or_default(),
+                mode.thinking
                     .as_ref()
                     .and_then(|value| serde_json::to_string(value).ok())
                     .unwrap_or_default(),
-                serde_json::to_string(&variant.request_override).unwrap_or_default(),
-                serde_json::to_string(&variant.adapter_overrides).unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let speed_mode_text = entry
+        .speed_modes
+        .iter()
+        .flat_map(|(name, mode)| {
+            [
+                name.clone(),
+                mode.display_name.clone().unwrap_or_default(),
+                mode.description.clone().unwrap_or_default(),
+                serde_json::to_string(&mode.request_override).unwrap_or_default(),
+                serde_json::to_string(&mode.adapter_overrides).unwrap_or_default(),
             ]
         })
         .collect::<Vec<_>>()
@@ -2321,7 +2351,8 @@ fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> S
             })
             .unwrap_or_default()
             .to_owned(),
-        variant_text,
+        thinking_mode_text,
+        speed_mode_text,
     ]
     .into_iter()
     .filter(|value| !value.trim().is_empty())
@@ -2437,8 +2468,11 @@ fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> J
             JsonValue::String(description.to_owned()),
         );
     }
-    if !entry.variants.is_empty() {
-        value.insert("variants".to_owned(), json!(entry.variants));
+    if !entry.thinking_modes.is_empty() {
+        value.insert("thinking_modes".to_owned(), json!(entry.thinking_modes));
+    }
+    if !entry.speed_modes.is_empty() {
+        value.insert("speed_modes".to_owned(), json!(entry.speed_modes));
     }
     if let Ok(JsonValue::Object(capabilities)) = serde_json::to_value(&entry.capabilities) {
         for (key, part) in capabilities {
@@ -2480,24 +2514,43 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
             JsonValue::String(description.to_owned()),
         );
     }
-    if !model.variants.is_empty() {
-        let variants = model
-            .variants
+    if !model.thinking_modes.is_empty() {
+        let thinking_modes = model
+            .thinking_modes
             .iter()
-            .map(|(name, variant)| {
+            .map(|(name, mode)| {
                 (
                     name.clone(),
                     json!({
-                        "display_name": variant.display_name,
-                        "description": variant.description,
-                        "thinking": variant.thinking,
-                        "request_override": variant.request_override,
-                        "adapter_overrides": variant.adapter_overrides,
+                        "display_name": mode.display_name,
+                        "description": mode.description,
+                        "thinking": mode.thinking,
                     }),
                 )
             })
             .collect::<JsonMap<String, JsonValue>>();
-        value.insert("variants".to_owned(), JsonValue::Object(variants));
+        value.insert(
+            "thinking_modes".to_owned(),
+            JsonValue::Object(thinking_modes),
+        );
+    }
+    if !model.speed_modes.is_empty() {
+        let speed_modes = model
+            .speed_modes
+            .iter()
+            .map(|(name, mode)| {
+                (
+                    name.clone(),
+                    json!({
+                        "display_name": mode.display_name,
+                        "description": mode.description,
+                        "request_override": mode.request_override,
+                        "adapter_overrides": mode.adapter_overrides,
+                    }),
+                )
+            })
+            .collect::<JsonMap<String, JsonValue>>();
+        value.insert("speed_modes".to_owned(), JsonValue::Object(speed_modes));
     }
 
     let mut supported_features = Vec::new();

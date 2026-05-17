@@ -15,7 +15,8 @@ default
 
 provider
 ├── enabled
-├── default_model = "<adapter>/<model>"  # optional provider-local route default
+├── default_adapter
+├── default_model
 ├── auth
 └── adapters
     └── <adapter>
@@ -24,7 +25,7 @@ provider
         └── models
             └── <real-upstream-model-id>
                 ├── enabled
-                └── metadata / capabilities / variants
+                └── metadata / capabilities / thinking_modes / speed_modes
 ```
 
 对应 TOML：
@@ -122,7 +123,8 @@ CLI、HTTP API、Studio、session 持久化、model ref 都围绕 `provider_id` 
 - 开关控制：`enabled`
 - metadata patch
 - capability patch
-- variants
+- thinking mode patch
+- speed mode patch
 
 这里的 key 就是真实上游 model id，例如：
 
@@ -135,23 +137,13 @@ CLI、HTTP API、Studio、session 持久化、model ref 都围绕 `provider_id` 
 
 ## 命名与路由
 
-provider 内部可见模型名统一是：
-
-```text
-<adapter>/<model>
-```
-
-例如：
-
-- `openai/gpt-5`
-- `anthropic/claude-sonnet-4`
-- `gemini/google/gemini-2.5-flash`
-
 运行时选择模型时始终拆成三个字段：
 
 - 全局默认字段：`[default] provider = "openai"`, `adapter = "openai"`, `model = "gpt-5"`
 - provider-local 默认选择：`default_adapter = "openai"`, `default_model = "gpt-5"`
 - 真实包含 `/` 的模型名保留在 `model`/`model_id` 字段里，例如 `model = "google/gemini-2.5-flash"`
+
+内部不再把 visible model id 编码成 `"<adapter>/<model>"` 或 `"<provider>/<adapter>/<model>"` 这样的特殊字符串；`model_id` 里的 `/` 只是模型名本身的一部分。
 
 ## enabled 语义
 
@@ -438,7 +430,7 @@ enabled = true
 [providers.shared.adapters.openai.models."gpt-4.1-mini"]
 enabled = true
 
-[providers.shared.adapters.openai.models."gpt-4.1-mini".variants.deep]
+[providers.shared.adapters.openai.models."gpt-4.1-mini".thinking_modes.deep]
 thinking = { type = "effort", effort = "high" }
 
 [providers.shared.adapters.anthropic]

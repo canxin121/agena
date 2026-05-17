@@ -741,7 +741,8 @@ struct TranscriptState {
 #[derive(Debug, Clone, Default)]
 struct RunOptionsState {
     model: Option<ModelRef>,
-    variant: Option<String>,
+    thinking_mode: Option<String>,
+    speed_mode: Option<String>,
     system: Option<String>,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
@@ -5216,7 +5217,8 @@ impl App {
             ),
             None => ModelRef::new(provider.provider_id.clone(), provider.default_model.clone()),
         });
-        self.run_options.variant = None;
+        self.run_options.thinking_mode = None;
+        self.run_options.speed_mode = None;
         self.focus = Focus::Composer;
         self.flash_success(self.i18n.text_args(
             "flash-provider-selected",
@@ -5229,7 +5231,8 @@ impl App {
 
     fn apply_model_override(&mut self, model: ModelRef) {
         self.run_options.model = Some(model.clone());
-        self.run_options.variant = None;
+        self.run_options.thinking_mode = None;
+        self.run_options.speed_mode = None;
         self.focus = Focus::Composer;
         self.flash_success(self.i18n.text_args(
             "flash-model-selected",
@@ -5462,7 +5465,8 @@ impl App {
             }
             CommandId::Models => self.handle_models_command(args),
             CommandId::Model => self.handle_model_command(args),
-            CommandId::Variant => self.handle_variant_command(args),
+            CommandId::ThinkingMode => self.handle_thinking_mode_command(args),
+            CommandId::SpeedMode => self.handle_speed_mode_command(args),
             CommandId::Temperature => self.handle_temperature_command(spec, args),
             CommandId::MaxOutput => self.handle_max_output_command(spec, args),
             CommandId::System => self.handle_system_command(spec, args),
@@ -6037,7 +6041,8 @@ impl App {
         }
         if trimmed.eq_ignore_ascii_case("clear") {
             self.run_options.model = None;
-            self.run_options.variant = None;
+            self.run_options.thinking_mode = None;
+            self.run_options.speed_mode = None;
             self.flash_success(ui_text::t(&self.i18n, "flash-provider-cleared"));
             return;
         }
@@ -6077,7 +6082,8 @@ impl App {
         }
         if trimmed.eq_ignore_ascii_case("clear") {
             self.run_options.model = None;
-            self.run_options.variant = None;
+            self.run_options.thinking_mode = None;
+            self.run_options.speed_mode = None;
             self.flash_success(ui_text::t(&self.i18n, "flash-model-cleared"));
             return;
         }
@@ -6087,21 +6093,39 @@ impl App {
         }
     }
 
-    fn handle_variant_command(&mut self, args: &str) {
+    fn handle_thinking_mode_command(&mut self, args: &str) {
         let trimmed = args.trim();
         if trimmed.is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-variant-required"));
+            self.flash_warning(ui_text::t(&self.i18n, "flash-thinking-mode-required"));
             return;
         }
         if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.variant = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-variant-cleared"));
+            self.run_options.thinking_mode = None;
+            self.flash_success(ui_text::t(&self.i18n, "flash-thinking-mode-cleared"));
             return;
         }
-        self.run_options.variant = Some(trimmed.to_string());
+        self.run_options.thinking_mode = Some(trimmed.to_string());
+        self.flash_success(self.i18n.text_args(
+            "flash-thinking-mode-set",
+            &crate::fl_args!("mode" => trimmed),
+        ));
+    }
+
+    fn handle_speed_mode_command(&mut self, args: &str) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-speed-mode-required"));
+            return;
+        }
+        if trimmed.eq_ignore_ascii_case("clear") {
+            self.run_options.speed_mode = None;
+            self.flash_success(ui_text::t(&self.i18n, "flash-speed-mode-cleared"));
+            return;
+        }
+        self.run_options.speed_mode = Some(trimmed.to_string());
         self.flash_success(
             self.i18n
-                .text_args("flash-variant-set", &crate::fl_args!("variant" => trimmed)),
+                .text_args("flash-speed-mode-set", &crate::fl_args!("mode" => trimmed)),
         );
     }
 
@@ -6295,10 +6319,15 @@ impl App {
             let model = execution.execution.model_id.as_deref().unwrap_or("default");
             parts.push(format!("model={provider}/{model}"));
         }
-        if let Some(variant) = execution.execution.model_variant.as_deref()
-            && !variant.trim().is_empty()
+        if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
+            && !thinking_mode.trim().is_empty()
         {
-            parts.push(format!("variant={variant}"));
+            parts.push(format!("thinking={thinking_mode}"));
+        }
+        if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
+            && !speed_mode.trim().is_empty()
+        {
+            parts.push(format!("speed={speed_mode}"));
         }
         if let Some(workspace_root) = execution.execution.effective_workspace_root.as_deref()
             && !workspace_root.trim().is_empty()
@@ -10354,7 +10383,8 @@ impl RunOptionsState {
     fn to_request(&self) -> RunOptions {
         RunOptions {
             model: self.model.clone(),
-            variant: self.variant.clone(),
+            thinking_mode: self.thinking_mode.clone(),
+            speed_mode: self.speed_mode.clone(),
             agent_profile: None,
             system: self.system.clone(),
             temperature: self.temperature,
@@ -10368,8 +10398,11 @@ impl RunOptionsState {
         if let Some(model) = self.model.as_ref() {
             parts.push(format!("{}/{}", model.provider_id, model.model_id));
         }
-        if let Some(variant) = self.variant.as_ref() {
-            parts.push(format!("variant {}", variant));
+        if let Some(thinking_mode) = self.thinking_mode.as_ref() {
+            parts.push(format!("thinking {}", thinking_mode));
+        }
+        if let Some(speed_mode) = self.speed_mode.as_ref() {
+            parts.push(format!("speed {}", speed_mode));
         }
         if let Some(temperature) = self.temperature {
             parts.push(format!("temp {:.2}", temperature));

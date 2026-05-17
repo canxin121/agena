@@ -452,21 +452,32 @@ fn model_catalog_entry_resources(
 }
 
 fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryResource) -> String {
-    let variant_text = entry
-        .variants
+    let thinking_mode_text = entry
+        .thinking_modes
         .iter()
-        .flat_map(|(name, variant)| {
+        .flat_map(|(name, mode)| {
             [
                 name.clone(),
-                variant.display_name.clone().unwrap_or_default(),
-                variant.description.clone().unwrap_or_default(),
-                variant
-                    .thinking
+                mode.display_name.clone().unwrap_or_default(),
+                mode.description.clone().unwrap_or_default(),
+                mode.thinking
                     .as_ref()
                     .and_then(|value| serde_json::to_string(value).ok())
                     .unwrap_or_default(),
-                serde_json::to_string(&variant.request_override).unwrap_or_default(),
-                serde_json::to_string(&variant.adapter_overrides).unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let speed_mode_text = entry
+        .speed_modes
+        .iter()
+        .flat_map(|(name, mode)| {
+            [
+                name.clone(),
+                mode.display_name.clone().unwrap_or_default(),
+                mode.description.clone().unwrap_or_default(),
+                serde_json::to_string(&mode.request_override).unwrap_or_default(),
+                serde_json::to_string(&mode.adapter_overrides).unwrap_or_default(),
             ]
         })
         .collect::<Vec<_>>()
@@ -499,7 +510,8 @@ fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryRe
             })
             .unwrap_or_default()
             .to_owned(),
-        variant_text,
+        thinking_mode_text,
+        speed_mode_text,
     ]
     .into_iter()
     .filter(|value| !value.trim().is_empty())

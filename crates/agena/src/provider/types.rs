@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{Message, MessageUsage},
-    model::{ModelId, ModelVariantRequestOverride, ProviderId},
+    model::{ModelId, ModelSpeedModeRequestOverride, ProviderId},
     plugin::registry::PluginEntry as RegistryPluginEntry,
 };
 
@@ -49,7 +49,7 @@ impl ReasoningEffort {
 
 /// Instructs the provider to produce output in a specific format.
 ///
-/// Not all providers support all variants; unsupported variants are silently ignored.
+/// Not all providers support all thinking/speed modes; unsupported settings are silently ignored.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseFormat {
@@ -93,8 +93,11 @@ pub struct CompletionRequest {
     pub thinking: Option<ThinkingRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
-    #[serde(default, skip_serializing_if = "ModelVariantRequestOverride::is_empty")]
-    pub request_override: ModelVariantRequestOverride,
+    #[serde(
+        default,
+        skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
+    )]
+    pub request_override: ModelSpeedModeRequestOverride,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

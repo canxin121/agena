@@ -203,7 +203,8 @@ function createChatPageContentState() {
     selectedProviderId: ref('openai'),
     selectedAdapterId: ref('openai'),
     selectedModelId: ref('gpt-5'),
-    selectedVariant: ref('high'),
+    selectedThinkingMode: ref('high'),
+    selectedSpeedMode: ref('fast'),
     providers: ref([
       {
         provider_id: 'openai',
@@ -223,7 +224,8 @@ function createChatPageContentState() {
       },
     ],
     providerModelLabel: (model: { display_name?: string; id: string }) => model.display_name || model.id,
-    modelVariantOptions: () => [{ id: 'high', label: 'High', description: 'More reasoning' }],
+    modelThinkingModeOptions: () => [{ id: 'high', label: 'High', description: 'More reasoning' }],
+    modelSpeedModeOptions: () => [{ id: 'fast', label: 'Fast', description: 'Priority route' }],
     sessionImportJsonl: ref('{"schema":1}'),
     importSessionFromJsonl: () => {},
     messages: ref([message]),

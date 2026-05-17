@@ -28,7 +28,7 @@ use agena::{
         ExecutionStatus, Message, MessagePart, PartContent, PermissionRequestPart,
         UserInputRequest, UserInputRequestPart,
     },
-    model::{ModelRef, ModelVariantRequestOverride},
+    model::{ModelRef, ModelSpeedModeRequestOverride},
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,
     session::{Session, SessionGoal, SessionManager},
@@ -1125,33 +1125,55 @@ impl ApiService {
                 "max_output_tokens must be greater than zero",
             ));
         }
-        let variant = non_empty(request.variant.as_deref()).map(ToOwned::to_owned);
-        let (thinking, request_override) = if let Some(variant_name) = variant.as_deref() {
-            let variants = provider_registry
-                .model_variants(&model)
+        let thinking_mode = non_empty(request.thinking_mode.as_deref()).map(ToOwned::to_owned);
+        let speed_mode = non_empty(request.speed_mode.as_deref()).map(ToOwned::to_owned);
+
+        let thinking = if let Some(thinking_mode_name) = thinking_mode.as_deref() {
+            let thinking_modes = provider_registry
+                .model_thinking_modes(&model)
                 .map_err(api_error_from_app)?;
-            let variant = variants.get(variant_name).ok_or_else(|| {
-                ApiError::bad_request(format!("model `{}` has no variant `{variant_name}`", model))
+            let thinking_mode = thinking_modes.get(thinking_mode_name).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "model `{}` has no thinking mode `{thinking_mode_name}`",
+                    model
+                ))
+            })?;
+            thinking_mode.thinking.clone()
+        } else {
+            None
+        };
+
+        let request_override = if let Some(speed_mode_name) = speed_mode.as_deref() {
+            let speed_modes = provider_registry
+                .model_speed_modes(&model)
+                .map_err(api_error_from_app)?;
+            let speed_mode = speed_modes.get(speed_mode_name).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "model `{}` has no speed mode `{speed_mode_name}`",
+                    model
+                ))
             })?;
             let resolved_adapter_id = model.adapter_id.clone().or_else(|| {
                 provider_registry
                     .get(model.provider_id.as_str())
                     .and_then(|provider| provider.default_adapter().cloned())
             });
-            let mut request_override = variant.request_override.clone();
+            let mut request_override = speed_mode.request_override.clone();
             if let Some(adapter_id) = resolved_adapter_id.as_ref()
-                && let Some(adapter_override) = variant.adapter_overrides.get(adapter_id.as_str())
+                && let Some(adapter_override) =
+                    speed_mode.adapter_overrides.get(adapter_id.as_str())
             {
                 request_override = request_override.merged_with(adapter_override);
             }
-            (variant.thinking.clone(), request_override)
+            request_override
         } else {
-            (None, ModelVariantRequestOverride::default())
+            ModelSpeedModeRequestOverride::default()
         };
 
         Ok(agena::session::SessionRunOptions {
             model,
-            variant,
+            thinking_mode,
+            speed_mode,
             thinking,
             request_override,
             system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
@@ -1191,7 +1213,8 @@ impl ApiService {
                 model_provider_id: session.runtime().execution.model_provider_id.clone(),
                 model_adapter_id: session.runtime().execution.model_adapter_id.clone(),
                 model_id: session.runtime().execution.model_id.clone(),
-                model_variant: session.runtime().execution.model_variant.clone(),
+                model_thinking_mode: session.runtime().execution.model_thinking_mode.clone(),
+                model_speed_mode: session.runtime().execution.model_speed_mode.clone(),
                 agent_run: session.runtime().execution.agent_run.clone(),
                 effective_workspace_root: session
                     .runtime()

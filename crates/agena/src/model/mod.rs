@@ -605,14 +605,14 @@ impl ModelCapabilities {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ModelVariantRequestOverride {
+pub struct ModelSpeedModeRequestOverride {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub body_patch: BTreeMap<String, serde_json::Value>,
 }
 
-impl ModelVariantRequestOverride {
+impl ModelSpeedModeRequestOverride {
     pub fn is_empty(&self) -> bool {
         self.headers.is_empty() && self.body_patch.is_empty()
     }
@@ -627,7 +627,7 @@ impl ModelVariantRequestOverride {
     }
 }
 
-impl Default for ModelVariantRequestOverride {
+impl Default for ModelSpeedModeRequestOverride {
     fn default() -> Self {
         Self {
             headers: BTreeMap::new(),
@@ -637,26 +637,20 @@ impl Default for ModelVariantRequestOverride {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ModelVariant {
+pub struct ModelThinkingMode {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingRequest>,
-    #[serde(default, skip_serializing_if = "ModelVariantRequestOverride::is_empty")]
-    pub request_override: ModelVariantRequestOverride,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapter_overrides: BTreeMap<String, ModelVariantRequestOverride>,
 }
 
-impl ModelVariant {
+impl ModelThinkingMode {
     pub fn new() -> Self {
         Self {
             display_name: None,
             description: None,
             thinking: None,
-            request_override: ModelVariantRequestOverride::default(),
-            adapter_overrides: BTreeMap::new(),
         }
     }
 
@@ -674,8 +668,52 @@ impl ModelVariant {
         self.thinking = Some(thinking);
         self
     }
+}
 
-    pub fn with_request_override(mut self, request_override: ModelVariantRequestOverride) -> Self {
+impl Default for ModelThinkingMode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelSpeedMode {
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
+    )]
+    pub request_override: ModelSpeedModeRequestOverride,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
+}
+
+impl ModelSpeedMode {
+    pub fn new() -> Self {
+        Self {
+            display_name: None,
+            description: None,
+            request_override: ModelSpeedModeRequestOverride::default(),
+            adapter_overrides: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+        self.display_name = Some(display_name.into());
+        self
+    }
+
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_request_override(
+        mut self,
+        request_override: ModelSpeedModeRequestOverride,
+    ) -> Self {
         self.request_override = request_override;
         self
     }
@@ -683,7 +721,7 @@ impl ModelVariant {
     pub fn with_adapter_override(
         mut self,
         adapter_id: impl Into<String>,
-        request_override: ModelVariantRequestOverride,
+        request_override: ModelSpeedModeRequestOverride,
     ) -> Self {
         self.adapter_overrides
             .insert(adapter_id.into(), request_override);
@@ -691,7 +729,7 @@ impl ModelVariant {
     }
 }
 
-impl Default for ModelVariant {
+impl Default for ModelSpeedMode {
     fn default() -> Self {
         Self::new()
     }
@@ -741,7 +779,9 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "ModelMetadata::is_empty")]
     pub metadata: ModelMetadata,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub variants: BTreeMap<String, ModelVariant>,
+    pub thinking_modes: BTreeMap<String, ModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speed_modes: BTreeMap<String, ModelSpeedMode>,
 }
 
 impl Model {
@@ -754,7 +794,8 @@ impl Model {
             display_name: None,
             capabilities: ModelCapabilities::default(),
             metadata: ModelMetadata::default(),
-            variants: BTreeMap::new(),
+            thinking_modes: BTreeMap::new(),
+            speed_modes: BTreeMap::new(),
         }
     }
 
@@ -796,13 +837,30 @@ impl Model {
         self
     }
 
-    pub fn with_variants(mut self, variants: BTreeMap<String, ModelVariant>) -> Self {
-        self.variants = variants;
+    pub fn with_thinking_modes(
+        mut self,
+        thinking_modes: BTreeMap<String, ModelThinkingMode>,
+    ) -> Self {
+        self.thinking_modes = thinking_modes;
         self
     }
 
-    pub fn with_variant(mut self, name: impl Into<String>, variant: ModelVariant) -> Self {
-        self.variants.insert(name.into(), variant);
+    pub fn with_thinking_mode(
+        mut self,
+        name: impl Into<String>,
+        thinking_mode: ModelThinkingMode,
+    ) -> Self {
+        self.thinking_modes.insert(name.into(), thinking_mode);
+        self
+    }
+
+    pub fn with_speed_modes(mut self, speed_modes: BTreeMap<String, ModelSpeedMode>) -> Self {
+        self.speed_modes = speed_modes;
+        self
+    }
+
+    pub fn with_speed_mode(mut self, name: impl Into<String>, speed_mode: ModelSpeedMode) -> Self {
+        self.speed_modes.insert(name.into(), speed_mode);
         self
     }
 

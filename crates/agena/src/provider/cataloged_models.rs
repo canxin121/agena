@@ -5,7 +5,7 @@ use futures_core::Stream;
 
 use crate::{
     error::AppError,
-    model::{AdapterId, Model, ModelId, ModelMetadata, ModelVariant},
+    model::{AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode},
     model_catalog::{
         ModelCatalogProviderRecord, canonical_model_catalog_id,
         catalog_definition_to_provider_definition,
@@ -138,31 +138,63 @@ impl ModelProvider for CatalogedModelsProvider {
             .unwrap_or(metadata)
     }
 
-    fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
-        self.model_variants_for_adapter(None, model)
+    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+        self.model_thinking_modes_for_adapter(None, model)
     }
 
-    fn model_variants_for_adapter(
+    fn model_thinking_modes_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelVariant> {
+    ) -> BTreeMap<String, ModelThinkingMode> {
         self.configured_definition(model)
             .map(|configured| {
-                let mut variants = self.target.model_variants_for_adapter(adapter_id, model);
-                for (name, configured_variant) in &configured.variants {
-                    match configured_variant.apply_to_variant(variants.get(name)) {
-                        Some(variant) => {
-                            variants.insert(name.clone(), variant);
+                let mut modes = self
+                    .target
+                    .model_thinking_modes_for_adapter(adapter_id, model);
+                for (name, configured_mode) in &configured.thinking_modes {
+                    match configured_mode.apply_to_mode(modes.get(name)) {
+                        Some(mode) => {
+                            modes.insert(name.clone(), mode);
                         }
                         None => {
-                            variants.remove(name);
+                            modes.remove(name);
                         }
                     }
                 }
-                variants
+                modes
             })
-            .unwrap_or_else(|| self.target.model_variants_for_adapter(adapter_id, model))
+            .unwrap_or_else(|| {
+                self.target
+                    .model_thinking_modes_for_adapter(adapter_id, model)
+            })
+    }
+
+    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
+        self.model_speed_modes_for_adapter(None, model)
+    }
+
+    fn model_speed_modes_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelSpeedMode> {
+        self.configured_definition(model)
+            .map(|configured| {
+                let mut modes = self.target.model_speed_modes_for_adapter(adapter_id, model);
+                for (name, configured_mode) in &configured.speed_modes {
+                    match configured_mode.apply_to_mode(modes.get(name)) {
+                        Some(mode) => {
+                            modes.insert(name.clone(), mode);
+                        }
+                        None => {
+                            modes.remove(name);
+                        }
+                    }
+                }
+                modes
+            })
+            .unwrap_or_else(|| self.target.model_speed_modes_for_adapter(adapter_id, model))
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -224,7 +256,8 @@ impl ModelProvider for CatalogedModelsProvider {
                 .with_catalog_model_id(model_id.as_str())
                 .with_capabilities(self.model_capabilities(&model_id))
                 .with_metadata(self.model_metadata(&model_id))
-                .with_variants(self.model_variants(&model_id));
+                .with_thinking_modes(self.model_thinking_modes(&model_id))
+                .with_speed_modes(self.model_speed_modes(&model_id));
             models.push(self.apply_to_model(&model_id, base));
         }
         Ok(models)
@@ -278,8 +311,8 @@ mod tests {
     use crate::{
         model::ModelLifecycle,
         provider::{
-            CapabilitySupport, CompletionFinishReason, CompletionResponse, ConfiguredModelVariant,
-            ThinkingRequest,
+            CapabilitySupport, CompletionFinishReason, CompletionResponse,
+            ConfiguredModelThinkingMode, ThinkingRequest,
         },
     };
 
@@ -342,16 +375,14 @@ mod tests {
                     crate::model_catalog::CatalogModelDefinition {
                         display_name: Some("GPT 5".to_owned()),
                         lifecycle: Some(ModelLifecycle::Preview),
-                        variants: BTreeMap::from([(
+                        thinking_modes: BTreeMap::from([(
                             "deep".to_owned(),
-                            ConfiguredModelVariant {
+                            ConfiguredModelThinkingMode {
                                 display_name: Some("Deep".to_owned()),
                                 description: None,
                                 thinking: Some(ThinkingRequest::Budget {
                                     budget_tokens: 20_000,
                                 }),
-                                request_override: Default::default(),
-                                adapter_overrides: BTreeMap::new(),
                                 disabled: false,
                             },
                         )]),
@@ -374,6 +405,6 @@ mod tests {
             .expect("gpt-5 should be present");
         assert_eq!(gpt5.display_name.as_deref(), Some("GPT 5"));
         assert_eq!(gpt5.metadata.lifecycle, Some(ModelLifecycle::Preview));
-        assert!(gpt5.variants.contains_key("deep"));
+        assert!(gpt5.thinking_modes.contains_key("deep"));
     }
 }

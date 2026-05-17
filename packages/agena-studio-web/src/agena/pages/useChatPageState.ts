@@ -38,7 +38,8 @@ export function useChatPageState() {
   const selectedProviderId = ref('')
   const selectedAdapterId = ref('')
   const selectedModelId = ref('')
-  const selectedVariant = ref('')
+  const selectedThinkingMode = ref('')
+  const selectedSpeedMode = ref('')
   const loading = ref(false)
   const sending = ref(false)
   const continuing = ref(false)
@@ -66,7 +67,8 @@ export function useChatPageState() {
     selectedAdapterId,
     selectedModelId,
     selectedProviderId,
-    selectedVariant,
+    selectedThinkingMode,
+    selectedSpeedMode,
     selectedSessionId,
     selectedWorkspaceId,
     sending,

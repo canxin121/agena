@@ -537,7 +537,9 @@ Provider models:
   "models": [
     {
       "provider_id": "openai",
-      "id": "openai/gpt-5",
+      "adapter_id": "openai",
+      "id": "gpt-5",
+      "catalog_model_id": "gpt-5",
       "display_name": "GPT-5",
       "capabilities": {
         "tool_calling": "supported",
@@ -554,10 +556,25 @@ Provider models:
           "max_output_tokens": 16384
         }
       },
-      "variants": {
+      "thinking_modes": {
         "high": {
           "display_name": "High",
-          "description": "Higher reasoning effort"
+          "description": "Higher reasoning effort",
+          "thinking": {
+            "type": "effort",
+            "effort": "high"
+          }
+        }
+      },
+      "speed_modes": {
+        "fast": {
+          "display_name": "Fast",
+          "description": "Priority tier",
+          "request_override": {
+            "body_patch": {
+              "service_tier": "priority"
+            }
+          }
         }
       }
     }
@@ -612,14 +629,20 @@ Model catalog list response:
         ],
         "unsupported": ["temperature"]
       },
-      "variants": {
+      "thinking_modes": {
         "high": {
           "display_name": "High",
           "description": "Higher reasoning effort",
           "thinking": {
             "type": "effort",
             "effort": "high"
-          },
+          }
+        }
+      },
+      "speed_modes": {
+        "fast": {
+          "display_name": "Fast",
+          "description": "Priority tier",
           "request_override": {
             "headers": {
               "openai-beta": "fast-mode-2026-02-01"
@@ -649,7 +672,7 @@ Model catalog list response:
 }
 ```
 
-`items` 同时包含官方条目和本地 override，按 `model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。官方 catalog 主要来自公开 online sources，再叠加 live provider discovery；catalog variant 不会展开成新的模型 id，而是保留在同一个 model entry 下。
+`items` 同时包含官方条目和本地 override，按 `model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。官方 catalog 主要来自公开 online sources，再叠加 live provider discovery；catalog 会把 thinking 和 speed modes 保留在同一个 model entry 下，不会展开成新的模型 id。
 
 Create/update local override:
 
@@ -665,10 +688,24 @@ Create/update local override:
     "supported": ["tool_calling", "streaming", "reasoning"],
     "unsupported": ["temperature"]
   },
-  "variants": {
+  "thinking_modes": {
     "high": {
       "display_name": "High",
-      "description": "Higher reasoning effort"
+      "description": "Higher reasoning effort",
+      "thinking": {
+        "type": "effort",
+        "effort": "high"
+      }
+    }
+  },
+  "speed_modes": {
+    "fast": {
+      "display_name": "Fast",
+      "request_override": {
+        "body_patch": {
+          "service_tier": "priority"
+        }
+      }
     }
   }
 }
@@ -788,9 +825,11 @@ Run options shared by turn/continue/replies:
 {
   "model": {
     "provider_id": "anthropic",
+    "adapter_id": "anthropic",
     "model_id": "claude-sonnet-4-6"
   },
-  "variant": "deep",
+  "thinking_mode": "deep",
+  "speed_mode": "fast",
   "agent_profile": "build",
   "system": "optional system prompt override",
   "temperature": 0.2,
@@ -805,8 +844,10 @@ Submit turn:
 {
   "model": {
     "provider_id": "anthropic",
+    "adapter_id": "anthropic",
     "model_id": "claude-sonnet-4-6"
   },
+  "thinking_mode": "deep",
   "agent_profile": "build",
   "parts": [
     {

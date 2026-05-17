@@ -19,9 +19,10 @@ use crate::{
         CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality, ModelLifecycle,
     },
     provider::{
-        ConfiguredModelDefinition, ConfiguredModelVariant, FeatureCapabilityPatch,
-        FeatureCapabilityPatchBody, InputCapabilityPatch, InputCapabilityPatchBody,
-        ModelCapabilityFeature, ModelCapabilityPatch, ModelProvider, ProviderRegistry,
+        ConfiguredModelDefinition, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
+        FeatureCapabilityPatch, FeatureCapabilityPatchBody, InputCapabilityPatch,
+        InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch, ModelProvider,
+        ProviderRegistry,
     },
 };
 
@@ -53,7 +54,9 @@ pub struct CatalogModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub variants: BTreeMap<String, ConfiguredModelVariant>,
+    pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
 }
@@ -66,7 +69,8 @@ impl CatalogModelDefinition {
             && self.description.is_none()
             && self.display_name.is_none()
             && self.origin.is_none()
-            && self.variants.is_empty()
+            && self.thinking_modes.is_empty()
+            && self.speed_modes.is_empty()
             && self.capabilities.is_empty()
     }
 
@@ -77,7 +81,8 @@ impl CatalogModelDefinition {
             max_output_tokens: self.max_output_tokens,
             display_name: self.display_name,
             description: self.description,
-            variants: self.variants,
+            thinking_modes: self.thinking_modes,
+            speed_modes: self.speed_modes,
             capabilities: self.capabilities,
         }
     }
@@ -116,7 +121,9 @@ pub struct ModelCatalogEntryRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub variants: BTreeMap<String, ConfiguredModelVariant>,
+    pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
 }
@@ -130,7 +137,8 @@ impl ModelCatalogEntryRecord {
             description: self.description.clone(),
             display_name: self.display_name.clone(),
             origin: self.origin.clone(),
-            variants: self.variants.clone(),
+            thinking_modes: self.thinking_modes.clone(),
+            speed_modes: self.speed_modes.clone(),
             capabilities: self.capabilities.clone(),
         }
     }
@@ -221,7 +229,8 @@ impl ModelCatalogSnapshot {
             context_window_tokens: definition.context_window_tokens,
             max_output_tokens: definition.max_output_tokens,
             description: definition.description.clone(),
-            variants: definition.variants.clone(),
+            thinking_modes: definition.thinking_modes.clone(),
+            speed_modes: definition.speed_modes.clone(),
             capabilities: definition.capabilities.clone(),
         }
     }
@@ -517,7 +526,7 @@ impl ModelCatalogService {
 
         let mut document = curate::curate_catalog_document(merged)
             .map_err(|err| AppError::Config(format!("curate generated model catalog: {err}")))?;
-        sources::enrich_catalog_document_variants(&mut document);
+        sources::enrich_catalog_document_thinking_modes(&mut document);
         let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
         Ok((document, warning))
     }
@@ -682,18 +691,32 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         description: model.metadata.description.clone(),
         display_name: model.display_name.clone(),
         origin: None,
-        variants: model
-            .variants
+        thinking_modes: model
+            .thinking_modes
             .iter()
-            .map(|(name, variant)| {
+            .map(|(name, mode)| {
                 (
                     name.clone(),
-                    ConfiguredModelVariant {
-                        display_name: variant.display_name.clone(),
-                        description: variant.description.clone(),
-                        thinking: variant.thinking.clone(),
-                        request_override: variant.request_override.clone(),
-                        adapter_overrides: variant.adapter_overrides.clone(),
+                    ConfiguredModelThinkingMode {
+                        display_name: mode.display_name.clone(),
+                        description: mode.description.clone(),
+                        thinking: mode.thinking.clone(),
+                        disabled: false,
+                    },
+                )
+            })
+            .collect(),
+        speed_modes: model
+            .speed_modes
+            .iter()
+            .map(|(name, mode)| {
+                (
+                    name.clone(),
+                    ConfiguredModelSpeedMode {
+                        display_name: mode.display_name.clone(),
+                        description: mode.description.clone(),
+                        request_override: mode.request_override.clone(),
+                        adapter_overrides: mode.adapter_overrides.clone(),
                         disabled: false,
                     },
                 )
@@ -788,17 +811,27 @@ fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &Catalog
     if current.origin.is_none() {
         current.origin = next.origin.clone();
     }
-    for (name, variant) in &next.variants {
+    for (name, mode) in &next.thinking_modes {
         current
-            .variants
+            .thinking_modes
             .entry(name.clone())
-            .and_modify(|existing| merge_catalog_variant(existing, variant))
-            .or_insert_with(|| variant.clone());
+            .and_modify(|existing| merge_catalog_thinking_mode(existing, mode))
+            .or_insert_with(|| mode.clone());
+    }
+    for (name, mode) in &next.speed_modes {
+        current
+            .speed_modes
+            .entry(name.clone())
+            .and_modify(|existing| merge_catalog_speed_mode(existing, mode))
+            .or_insert_with(|| mode.clone());
     }
     merge_capability_patch(&mut current.capabilities, &next.capabilities);
 }
 
-fn merge_catalog_variant(current: &mut ConfiguredModelVariant, next: &ConfiguredModelVariant) {
+fn merge_catalog_thinking_mode(
+    current: &mut ConfiguredModelThinkingMode,
+    next: &ConfiguredModelThinkingMode,
+) {
     if current.display_name.is_none() {
         current.display_name = next.display_name.clone();
     }
@@ -807,6 +840,19 @@ fn merge_catalog_variant(current: &mut ConfiguredModelVariant, next: &Configured
     }
     if current.thinking.is_none() {
         current.thinking = next.thinking.clone();
+    }
+    current.disabled |= next.disabled;
+}
+
+fn merge_catalog_speed_mode(
+    current: &mut ConfiguredModelSpeedMode,
+    next: &ConfiguredModelSpeedMode,
+) {
+    if current.display_name.is_none() {
+        current.display_name = next.display_name.clone();
+    }
+    if current.description.is_none() {
+        current.description = next.description.clone();
     }
     current.request_override = current.request_override.merged_with(&next.request_override);
     for (adapter_id, override_patch) in &next.adapter_overrides {
@@ -982,7 +1028,13 @@ pub fn decorate_provider_models(
             .with_catalog_model_id(model_id.as_str())
             .with_capabilities(provider.model_capabilities_for_adapter(None, &model_id))
             .with_metadata(provider_model_metadata(provider, None, &model_id))
-            .with_variants(provider_model_variants(
+            .with_thinking_modes(provider_model_thinking_modes(
+                provider,
+                provider_record,
+                None,
+                &model_id,
+            ))
+            .with_speed_modes(provider_model_speed_modes(
                 provider,
                 provider_record,
                 None,
@@ -1039,29 +1091,54 @@ fn provider_model_metadata(
     provider.model_metadata_for_adapter(adapter_id, model)
 }
 
-fn provider_model_variants(
+fn provider_model_thinking_modes(
     provider: &dyn ModelProvider,
     provider_record: &ModelCatalogProviderRecord,
     adapter_id: Option<&crate::model::AdapterId>,
     model: &ModelId,
-) -> BTreeMap<String, crate::model::ModelVariant> {
-    let mut variants = provider.model_variants_for_adapter(adapter_id, model);
+) -> BTreeMap<String, crate::model::ModelThinkingMode> {
+    let mut modes = provider.model_thinking_modes_for_adapter(adapter_id, model);
     if let Some(configured) = catalog_definition_for_model_id(provider_record, model.as_str())
         .cloned()
         .map(|definition| catalog_definition_to_provider_definition(&definition))
     {
-        for (name, configured_variant) in &configured.variants {
-            match configured_variant.apply_to_variant(variants.get(name)) {
-                Some(variant) => {
-                    variants.insert(name.clone(), variant);
+        for (name, configured_mode) in &configured.thinking_modes {
+            match configured_mode.apply_to_mode(modes.get(name)) {
+                Some(mode) => {
+                    modes.insert(name.clone(), mode);
                 }
                 None => {
-                    variants.remove(name);
+                    modes.remove(name);
                 }
             }
         }
     }
-    variants
+    modes
+}
+
+fn provider_model_speed_modes(
+    provider: &dyn ModelProvider,
+    provider_record: &ModelCatalogProviderRecord,
+    adapter_id: Option<&crate::model::AdapterId>,
+    model: &ModelId,
+) -> BTreeMap<String, crate::model::ModelSpeedMode> {
+    let mut modes = provider.model_speed_modes_for_adapter(adapter_id, model);
+    if let Some(configured) = catalog_definition_for_model_id(provider_record, model.as_str())
+        .cloned()
+        .map(|definition| catalog_definition_to_provider_definition(&definition))
+    {
+        for (name, configured_mode) in &configured.speed_modes {
+            match configured_mode.apply_to_mode(modes.get(name)) {
+                Some(mode) => {
+                    modes.insert(name.clone(), mode);
+                }
+                None => {
+                    modes.remove(name);
+                }
+            }
+        }
+    }
+    modes
 }
 
 fn catalog_definition_for_model_id<'a>(
@@ -1085,9 +1162,10 @@ fn catalog_match_model_id_for_raw(raw_model_id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{
-        model::{CapabilitySupport, ModelId, ModelMetadata, ModelVariantRequestOverride},
+        model::{CapabilitySupport, ModelId, ModelMetadata, ModelSpeedModeRequestOverride},
         provider::{
-            ConfiguredModelVariant, ModelCapabilityFeature, ReasoningEffort, ThinkingRequest,
+            ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ModelCapabilityFeature,
+            ThinkingRequest,
         },
     };
     use tempfile::tempdir;
@@ -1185,14 +1263,12 @@ mod tests {
                     "claude-sonnet".to_owned(),
                     CatalogModelDefinition {
                         display_name: Some("Claude Sonnet Local".to_owned()),
-                        variants: BTreeMap::from([(
+                        thinking_modes: BTreeMap::from([(
                             "deep".to_owned(),
-                            ConfiguredModelVariant {
+                            ConfiguredModelThinkingMode {
                                 display_name: Some("Deep".to_owned()),
                                 description: None,
                                 thinking: None,
-                                request_override: Default::default(),
-                                adapter_overrides: BTreeMap::new(),
                                 disabled: false,
                             },
                         )]),
@@ -1214,7 +1290,7 @@ mod tests {
             Some("Claude Sonnet Local")
         );
         assert!(entries[1].has_local_override);
-        assert!(entries[1].variants.contains_key("deep"));
+        assert!(entries[1].thinking_modes.contains_key("deep"));
     }
 
     #[test]
@@ -1557,12 +1633,12 @@ mod tests {
                 .feature_support(ModelCapabilityFeature::Temperature),
             Some(CapabilitySupport::Unsupported)
         );
-        assert!(gpt5.variants.contains_key("fast"));
+        assert!(gpt5.speed_modes.contains_key("fast"));
         assert_eq!(
-            gpt5.variants
+            gpt5.speed_modes
                 .get("fast")
-                .and_then(|variant| variant.adapter_overrides.get("openai")),
-            Some(&ModelVariantRequestOverride {
+                .and_then(|mode| mode.adapter_overrides.get("openai")),
+            Some(&ModelSpeedModeRequestOverride {
                 headers: BTreeMap::from([(
                     "openai-beta".to_owned(),
                     "fast-mode-2026-02-01".to_owned(),
@@ -1589,10 +1665,10 @@ mod tests {
                 .feature_support(ModelCapabilityFeature::Reasoning),
             Some(CapabilitySupport::Supported)
         );
-        assert!(claude.variants.contains_key("no-thinking"));
-        assert!(claude.variants.contains_key("thinking-low"));
-        assert!(claude.variants.contains_key("thinking-high"));
-        assert!(claude.variants.contains_key("thinking-max"));
+        assert!(claude.thinking_modes.contains_key("no-thinking"));
+        assert!(claude.thinking_modes.contains_key("thinking-low"));
+        assert!(claude.thinking_modes.contains_key("thinking-high"));
+        assert!(claude.thinking_modes.contains_key("thinking-max"));
 
         let gemini = snapshot
             .official
@@ -1610,18 +1686,18 @@ mod tests {
         );
         assert_eq!(
             gemini
-                .variants
+                .thinking_modes
                 .get("thinking-high")
-                .and_then(|variant| variant.thinking.as_ref()),
+                .and_then(|mode| mode.thinking.as_ref()),
             Some(&ThinkingRequest::Budget {
                 budget_tokens: 16_384,
             })
         );
         assert_eq!(
             gemini
-                .variants
+                .thinking_modes
                 .get("thinking-max")
-                .and_then(|variant| variant.thinking.as_ref()),
+                .and_then(|mode| mode.thinking.as_ref()),
             Some(&ThinkingRequest::Budget {
                 budget_tokens: 32_768,
             })
@@ -1635,14 +1711,11 @@ mod tests {
     }
 
     #[test]
-    fn merge_catalog_variant_merges_request_overrides_and_adapter_overrides() {
-        let mut current = ConfiguredModelVariant {
+    fn merge_catalog_speed_mode_merges_request_overrides_and_adapter_overrides() {
+        let mut current = ConfiguredModelSpeedMode {
             display_name: Some("Fast".to_owned()),
             description: None,
-            thinking: Some(ThinkingRequest::Effort {
-                effort: ReasoningEffort::Medium,
-            }),
-            request_override: ModelVariantRequestOverride {
+            request_override: ModelSpeedModeRequestOverride {
                 headers: BTreeMap::from([("x-base".to_owned(), "one".to_owned())]),
                 body_patch: BTreeMap::from([(
                     "response_format".to_owned(),
@@ -1653,7 +1726,7 @@ mod tests {
             },
             adapter_overrides: BTreeMap::from([(
                 "openai".to_owned(),
-                ModelVariantRequestOverride {
+                ModelSpeedModeRequestOverride {
                     headers: BTreeMap::new(),
                     body_patch: BTreeMap::from([(
                         "service_tier".to_owned(),
@@ -1663,11 +1736,10 @@ mod tests {
             )]),
             disabled: false,
         };
-        let next = ConfiguredModelVariant {
+        let next = ConfiguredModelSpeedMode {
             display_name: None,
             description: Some("Priority route".to_owned()),
-            thinking: None,
-            request_override: ModelVariantRequestOverride {
+            request_override: ModelSpeedModeRequestOverride {
                 headers: BTreeMap::from([("x-extra".to_owned(), "two".to_owned())]),
                 body_patch: BTreeMap::from([(
                     "response_format".to_owned(),
@@ -1678,7 +1750,7 @@ mod tests {
             },
             adapter_overrides: BTreeMap::from([(
                 "openai".to_owned(),
-                ModelVariantRequestOverride {
+                ModelSpeedModeRequestOverride {
                     headers: BTreeMap::from([("openai-beta".to_owned(), "fast".to_owned())]),
                     body_patch: BTreeMap::from([(
                         "service_tier".to_owned(),
@@ -1689,16 +1761,10 @@ mod tests {
             disabled: false,
         };
 
-        merge_catalog_variant(&mut current, &next);
+        merge_catalog_speed_mode(&mut current, &next);
 
         assert_eq!(current.display_name.as_deref(), Some("Fast"));
         assert_eq!(current.description.as_deref(), Some("Priority route"));
-        assert_eq!(
-            current.thinking,
-            Some(ThinkingRequest::Effort {
-                effort: ReasoningEffort::Medium,
-            })
-        );
         assert_eq!(
             current
                 .request_override

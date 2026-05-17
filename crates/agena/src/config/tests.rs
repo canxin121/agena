@@ -268,7 +268,7 @@ default_write = "ask"
 }
 
 #[test]
-fn loader_rejects_provider_level_variants() {
+fn loader_rejects_provider_level_modes() {
     let path = write_temp_config(
         r#"
 [providers.openai]
@@ -281,7 +281,7 @@ base_url = "https://api.openai.com/v1"
 [providers.openai.adapters.openai]
 enabled = true
 
-[providers.openai.variants.deep]
+[providers.openai.thinking_modes.deep]
 thinking = { type = "effort", effort = "high" }
 "#,
     );
@@ -292,9 +292,9 @@ thinking = { type = "effort", effort = "high" }
             config_path: Some(path),
             ..LoadConfigRequest::default()
         })
-        .expect_err("provider-level variants should fail validation");
+        .expect_err("provider-level modes should fail validation");
     assert!(
-        matches!(err, ConfigError::Validation(message) if message.contains("provider-level variants are not supported"))
+        matches!(err, ConfigError::Validation(message) if message.contains("provider-level modes are not supported"))
     );
 }
 
@@ -704,7 +704,7 @@ api_key_env = "SHARED_GATEWAY_API_KEY"
 [providers.shared.adapters.openai]
 enabled = true
 
-[providers.shared.adapters.openai.models."gpt-4.1-mini".variants.deep]
+[providers.shared.adapters.openai.models."gpt-4.1-mini".thinking_modes.deep]
 thinking = { type = "effort", effort = "high" }
 
 [providers.shared.adapters.anthropic]
@@ -749,7 +749,7 @@ enabled = true
         provider
             .models
             .get("openai/gpt-4.1-mini")
-            .and_then(|model| model.definition.variants.get("deep"))
+            .and_then(|model| model.definition.thinking_modes.get("deep"))
             .is_some()
     );
     assert!(provider.models.contains_key("anthropic/claude-sonnet-4"));

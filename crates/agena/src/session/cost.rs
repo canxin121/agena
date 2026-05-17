@@ -168,7 +168,8 @@ mod tests {
             model_provider_id: provider.to_string(),
             model_adapter_id: None,
             model_id: model.to_string(),
-            model_variant: None,
+            model_thinking_mode: None,
+            model_speed_mode: None,
             provider_metadata: None,
             tags: Vec::new(),
         };

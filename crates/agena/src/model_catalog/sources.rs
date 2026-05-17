@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use crate::{
     AppError,
-    model::{CapabilitySupport, ModelInputModality, ModelLifecycle, ModelVariantRequestOverride},
+    model::{CapabilitySupport, ModelInputModality, ModelLifecycle, ModelSpeedModeRequestOverride},
     provider::{
-        ConfiguredModelVariant, FeatureCapabilityPatch, FeatureCapabilityPatchBody,
-        InputCapabilityPatch, InputCapabilityPatchBody, ModelCapabilityFeature,
-        ModelCapabilityPatch, ReasoningEffort, ThinkingRequest,
+        ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, FeatureCapabilityPatch,
+        FeatureCapabilityPatchBody, InputCapabilityPatch, InputCapabilityPatchBody,
+        ModelCapabilityFeature, ModelCapabilityPatch, ReasoningEffort, ThinkingRequest,
     },
 };
 use serde::Deserialize;
@@ -149,7 +149,11 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                 description: None,
                 display_name: normalize_optional_string(model.name),
                 origin: origin.clone(),
-                variants: models_dev_variants(model.experimental.as_ref(), adapter_id.as_deref()),
+                thinking_modes: BTreeMap::new(),
+                speed_modes: models_dev_speed_modes(
+                    model.experimental.as_ref(),
+                    adapter_id.as_deref(),
+                ),
                 capabilities: model_capability_patch(
                     modalities_to_support(model.modalities.as_ref()),
                     features_from_bool_flags(&[
@@ -213,7 +217,8 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                 description: normalize_optional_string(model.description),
                 display_name: normalize_optional_string(model.display_name),
                 origin,
-                variants: router_variants(model.thinking.as_ref()),
+                speed_modes: BTreeMap::new(),
+                thinking_modes: router_thinking_modes(model.thinking.as_ref()),
                 capabilities: model_capability_patch(
                     input_support,
                     (supported_features, unsupported_features),
@@ -314,13 +319,13 @@ fn parse_models_dev_lifecycle(status: Option<&str>) -> Option<ModelLifecycle> {
     }
 }
 
-fn models_dev_variants(
+fn models_dev_speed_modes(
     experimental: Option<&ModelsDevExperimental>,
     adapter_id: Option<&str>,
-) -> BTreeMap<String, ConfiguredModelVariant> {
-    let mut variants = BTreeMap::new();
+) -> BTreeMap<String, ConfiguredModelSpeedMode> {
+    let mut modes = BTreeMap::new();
     let Some(experimental) = experimental else {
-        return variants;
+        return modes;
     };
     for (name, mode) in &experimental.modes {
         let normalized = name.trim();
@@ -333,33 +338,31 @@ fn models_dev_variants(
             .map(models_dev_request_override)
             .unwrap_or_default();
         let mut adapter_overrides = BTreeMap::new();
-        let mut default_request_override = ModelVariantRequestOverride::default();
+        let mut default_request_override = ModelSpeedModeRequestOverride::default();
         if request_override.is_empty() {
         } else if let Some(adapter_id) = adapter_id {
             adapter_overrides.insert(adapter_id.to_owned(), request_override);
         } else {
             default_request_override = request_override;
         }
-        variants.insert(
+        modes.insert(
             normalized.to_owned(),
-            ConfiguredModelVariant {
+            ConfiguredModelSpeedMode {
                 display_name: Some(title_case_tokenized(normalized)),
                 description: None,
-                thinking: effort_for_variant_name(normalized)
-                    .map(|effort| ThinkingRequest::Effort { effort }),
                 request_override: default_request_override,
                 adapter_overrides,
                 disabled: false,
             },
         );
     }
-    variants
+    modes
 }
 
-fn models_dev_request_override(provider: &ModelsDevModeProvider) -> ModelVariantRequestOverride {
+fn models_dev_request_override(provider: &ModelsDevModeProvider) -> ModelSpeedModeRequestOverride {
     let headers = provider.headers.clone().unwrap_or_default();
     let body_patch = provider.body.clone().unwrap_or_default();
-    ModelVariantRequestOverride {
+    ModelSpeedModeRequestOverride {
         headers,
         body_patch,
     }
@@ -405,21 +408,21 @@ fn router_input_support(model: &RouterModel) -> (Vec<ModelInputModality>, Vec<Mo
     (supported, unsupported)
 }
 
-fn router_variants(thinking: Option<&RouterThinking>) -> BTreeMap<String, ConfiguredModelVariant> {
-    let mut variants = BTreeMap::new();
+fn router_thinking_modes(
+    thinking: Option<&RouterThinking>,
+) -> BTreeMap<String, ConfiguredModelThinkingMode> {
+    let mut modes = BTreeMap::new();
     let Some(thinking) = thinking else {
-        return variants;
+        return modes;
     };
 
     if thinking.zero_allowed.unwrap_or(false) {
-        variants.insert(
+        modes.insert(
             "no-thinking".to_owned(),
-            ConfiguredModelVariant {
+            ConfiguredModelThinkingMode {
                 display_name: Some("No Thinking".to_owned()),
                 description: None,
                 thinking: Some(ThinkingRequest::Disabled),
-                request_override: ModelVariantRequestOverride::default(),
-                adapter_overrides: BTreeMap::new(),
                 disabled: false,
             },
         );
@@ -433,14 +436,12 @@ fn router_variants(thinking: Option<&RouterThinking>) -> BTreeMap<String, Config
             } else {
                 format!("thinking-{normalized}")
             };
-            variants
+            modes
                 .entry(variant_name)
-                .or_insert_with(|| ConfiguredModelVariant {
+                .or_insert_with(|| ConfiguredModelThinkingMode {
                     display_name: Some(format!("Thinking {}", title_case_tokenized(level))),
                     description: None,
                     thinking: Some(ThinkingRequest::Effort { effort }),
-                    request_override: ModelVariantRequestOverride::default(),
-                    adapter_overrides: BTreeMap::new(),
                     disabled: false,
                 });
         }
@@ -448,39 +449,35 @@ fn router_variants(thinking: Option<&RouterThinking>) -> BTreeMap<String, Config
 
     if thinking.levels.is_empty() {
         if let Some(high_budget) = router_high_budget(thinking) {
-            variants.insert(
+            modes.insert(
                 "thinking-high".to_owned(),
-                ConfiguredModelVariant {
+                ConfiguredModelThinkingMode {
                     display_name: Some("Thinking High".to_owned()),
                     description: None,
                     thinking: Some(ThinkingRequest::Budget {
                         budget_tokens: high_budget,
                     }),
-                    request_override: ModelVariantRequestOverride::default(),
-                    adapter_overrides: BTreeMap::new(),
                     disabled: false,
                 },
             );
         }
 
         if let Some(max_budget) = thinking.max.map(clamp_u64_to_u32) {
-            variants.insert(
+            modes.insert(
                 "thinking-max".to_owned(),
-                ConfiguredModelVariant {
+                ConfiguredModelThinkingMode {
                     display_name: Some("Thinking Max".to_owned()),
                     description: None,
                     thinking: Some(ThinkingRequest::Budget {
                         budget_tokens: max_budget,
                     }),
-                    request_override: ModelVariantRequestOverride::default(),
-                    adapter_overrides: BTreeMap::new(),
                     disabled: false,
                 },
             );
         }
     }
 
-    variants
+    modes
 }
 
 fn router_high_budget(thinking: &RouterThinking) -> Option<u32> {
@@ -571,27 +568,27 @@ fn effort_for_variant_name(name: &str) -> Option<ReasoningEffort> {
     }
 }
 
-pub fn enrich_catalog_document_variants(document: &mut ModelCatalogDocument) {
+pub fn enrich_catalog_document_thinking_modes(document: &mut ModelCatalogDocument) {
     for (model_id, definition) in &mut document.models {
-        let inferred = inferred_variants(model_id.as_str(), definition);
-        for (name, variant) in inferred {
-            definition.variants.entry(name).or_insert(variant);
+        let inferred = inferred_thinking_modes(model_id.as_str(), definition);
+        for (name, mode) in inferred {
+            definition.thinking_modes.entry(name).or_insert(mode);
         }
     }
 }
 
-fn inferred_variants(
+fn inferred_thinking_modes(
     model_id: &str,
     definition: &CatalogModelDefinition,
-) -> BTreeMap<String, ConfiguredModelVariant> {
-    let mut variants = BTreeMap::new();
+) -> BTreeMap<String, ConfiguredModelThinkingMode> {
+    let mut modes = BTreeMap::new();
     if !matches!(
         definition
             .capabilities
             .feature_support(ModelCapabilityFeature::Reasoning),
         Some(CapabilitySupport::Supported)
     ) {
-        return variants;
+        return modes;
     }
 
     let normalized = model_id.trim().to_ascii_lowercase();
@@ -601,29 +598,29 @@ fn inferred_variants(
         || normalized.starts_with("o4")
     {
         for effort in openai_reasoning_efforts(normalized.as_str()) {
-            insert_effort_variant(&mut variants, effort);
+            insert_effort_mode(&mut modes, effort);
         }
-        return variants;
+        return modes;
     }
 
     if normalized.contains("gemini-3") {
-        insert_effort_variant(&mut variants, ReasoningEffort::Low);
-        insert_effort_variant(&mut variants, ReasoningEffort::High);
-        return variants;
+        insert_effort_mode(&mut modes, ReasoningEffort::Low);
+        insert_effort_mode(&mut modes, ReasoningEffort::High);
+        return modes;
     }
 
     if normalized.contains("gemini-2.5") {
-        insert_effort_variant(&mut variants, ReasoningEffort::High);
-        insert_effort_variant(&mut variants, ReasoningEffort::Max);
-        return variants;
+        insert_effort_mode(&mut modes, ReasoningEffort::High);
+        insert_effort_mode(&mut modes, ReasoningEffort::Max);
+        return modes;
     }
 
-    if normalized.contains("claude") && definition.variants.is_empty() {
-        insert_effort_variant(&mut variants, ReasoningEffort::High);
-        insert_effort_variant(&mut variants, ReasoningEffort::Max);
+    if normalized.contains("claude") && definition.thinking_modes.is_empty() {
+        insert_effort_mode(&mut modes, ReasoningEffort::High);
+        insert_effort_mode(&mut modes, ReasoningEffort::Max);
     }
 
-    variants
+    modes
 }
 
 fn openai_reasoning_efforts(model_id: &str) -> Vec<ReasoningEffort> {
@@ -642,19 +639,17 @@ fn openai_reasoning_efforts(model_id: &str) -> Vec<ReasoningEffort> {
     efforts
 }
 
-fn insert_effort_variant(
-    variants: &mut BTreeMap<String, ConfiguredModelVariant>,
+fn insert_effort_mode(
+    modes: &mut BTreeMap<String, ConfiguredModelThinkingMode>,
     effort: ReasoningEffort,
 ) {
     let effort_name = effort.as_str();
-    variants
+    modes
         .entry(format!("thinking-{effort_name}"))
-        .or_insert_with(|| ConfiguredModelVariant {
+        .or_insert_with(|| ConfiguredModelThinkingMode {
             display_name: Some(format!("Thinking {}", title_case_tokenized(effort_name))),
             description: None,
             thinking: Some(ThinkingRequest::Effort { effort }),
-            request_override: ModelVariantRequestOverride::default(),
-            adapter_overrides: BTreeMap::new(),
             disabled: false,
         });
 }

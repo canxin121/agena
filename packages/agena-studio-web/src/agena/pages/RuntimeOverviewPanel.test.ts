@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { renderVueSsr } from './test/renderVueSsr'
 
 describe('RuntimeOverviewPanel', () => {
-  test('renders catalog entry variant summaries and variant editor controls', async () => {
+  test('renders catalog entry mode summaries and mode editor controls', async () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
       catalogEntries: [
         {
@@ -11,11 +11,16 @@ describe('RuntimeOverviewPanel', () => {
           display_name: 'Claude Sonnet 4.6',
           origin: 'Anthropic',
           description: 'Balanced model',
-          variants: {
+          thinking_modes: {
             deep: {
               display_name: 'Deep',
               description: 'More reasoning',
               thinking: { type: 'budget', budget_tokens: 20000 },
+            },
+          },
+          speed_modes: {
+            fast: {
+              display_name: 'Fast',
               request_override: {
                 headers: {
                   'anthropic-beta': 'fast-mode-2026-02-01',
@@ -42,9 +47,12 @@ describe('RuntimeOverviewPanel', () => {
       load: async () => {},
     })
 
-    expect(html.includes('Variants')).toBe(true)
-    expect(html.includes('Add Variant')).toBe(true)
+    expect(html.includes('Thinking Modes')).toBe(true)
+    expect(html.includes('Speed Modes')).toBe(true)
+    expect(html.includes('Add Thinking Mode')).toBe(true)
+    expect(html.includes('Add Speed Mode')).toBe(true)
     expect(html.includes('deep')).toBe(true)
+    expect(html.includes('fast')).toBe(true)
     expect(html.includes('More reasoning')).toBe(true)
     expect(html.includes('thinking')).toBe(true)
     expect(html.includes('request')).toBe(true)

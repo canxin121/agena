@@ -697,8 +697,12 @@ pub async fn probe_provider_adapters(
                         .metadata
                         .clone()
                         .with_fallbacks_from(&metadata_fallback);
-                    if model.variants.is_empty() {
-                        model.variants = provider.model_variants_for_adapter(None, &model.id);
+                    if model.thinking_modes.is_empty() {
+                        model.thinking_modes =
+                            provider.model_thinking_modes_for_adapter(None, &model.id);
+                    }
+                    if model.speed_modes.is_empty() {
+                        model.speed_modes = provider.model_speed_modes_for_adapter(None, &model.id);
                     }
                 }
                 results.push(ProviderAdapterProbeResult {

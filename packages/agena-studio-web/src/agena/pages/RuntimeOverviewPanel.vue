@@ -6,7 +6,6 @@ import type {
   ModelCatalogEntryKind,
   ModelCatalogSummary,
   ProviderModel,
-  ProviderModelVariant,
   ProviderSummary,
   RuntimeStatus,
 } from '@/agena/lib/agenaApi'
@@ -16,7 +15,8 @@ import {
   MODEL_LIFECYCLE_OPTIONS,
   catalogLookupIdForProviderModel,
   createEmptyModelCatalogDraft,
-  createEmptyModelCatalogVariantDraft,
+  createEmptyModelCatalogThinkingModeDraft,
+  createEmptyModelCatalogSpeedModeDraft,
   createModelCatalogDraftFromEntry,
   createModelCatalogDraftFromProviderModel,
   findCatalogEntryForProviderModel,
@@ -85,14 +85,22 @@ const hasCatalogFilters = computed(
 )
 
 function catalogEntrySearchText(entry: ModelCatalogEntry) {
-  const variantText = Object.entries(entry.variants || {})
-    .flatMap(([name, variant]) => [
+  const thinkingModeText = Object.entries(entry.thinking_modes || {})
+    .flatMap(([name, mode]) => [
       name,
-      variant.display_name,
-      variant.description,
-      variant.thinking ? JSON.stringify(variant.thinking) : '',
-      variant.request_override ? JSON.stringify(variant.request_override) : '',
-      variant.adapter_overrides ? JSON.stringify(variant.adapter_overrides) : '',
+      mode.display_name,
+      mode.description,
+      mode.thinking ? JSON.stringify(mode.thinking) : '',
+    ])
+    .filter(Boolean)
+    .join('\n')
+  const speedModeText = Object.entries(entry.speed_modes || {})
+    .flatMap(([name, mode]) => [
+      name,
+      mode.display_name,
+      mode.description,
+      mode.request_override ? JSON.stringify(mode.request_override) : '',
+      mode.adapter_overrides ? JSON.stringify(mode.adapter_overrides) : '',
     ])
     .filter(Boolean)
     .join('\n')
@@ -106,7 +114,8 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
     entry.source,
     entry.source_label,
     entry.lifecycle,
-    variantText,
+    thinkingModeText,
+    speedModeText,
   ]
     .filter(Boolean)
     .join('\n')
@@ -142,25 +151,43 @@ function clearCatalogFilters() {
   void loadCatalogPage(0)
 }
 
-type ProviderModelVariantWithDisabled = ProviderModelVariant & {
+type ProviderModelThinkingModeWithDisabled = NonNullable<ModelCatalogEntry['thinking_modes']>[string] & {
   disabled?: boolean
 }
 
-function addVariantDraft() {
-  draft.value.variants.push(createEmptyModelCatalogVariantDraft())
+type ProviderModelSpeedModeWithDisabled = NonNullable<ModelCatalogEntry['speed_modes']>[string] & {
+  disabled?: boolean
 }
 
-function removeVariantDraft(index: number) {
-  draft.value.variants.splice(index, 1)
+function addThinkingModeDraft() {
+  draft.value.thinking_modes.push(createEmptyModelCatalogThinkingModeDraft())
 }
 
-function entryVariantItems(entry: ModelCatalogEntry): Array<[string, ProviderModelVariantWithDisabled]> {
-  return Object.entries(entry.variants || {})
+function removeThinkingModeDraft(index: number) {
+  draft.value.thinking_modes.splice(index, 1)
+}
+
+function addSpeedModeDraft() {
+  draft.value.speed_modes.push(createEmptyModelCatalogSpeedModeDraft())
+}
+
+function removeSpeedModeDraft(index: number) {
+  draft.value.speed_modes.splice(index, 1)
+}
+
+function entryThinkingModeItems(entry: ModelCatalogEntry): Array<[string, ProviderModelThinkingModeWithDisabled]> {
+  return Object.entries(entry.thinking_modes || {})
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, variant]) => [name, variant as ProviderModelVariantWithDisabled])
+    .map(([name, mode]) => [name, mode as ProviderModelThinkingModeWithDisabled])
 }
 
-function formatVariantJson(value: Record<string, unknown> | null | undefined) {
+function entrySpeedModeItems(entry: ModelCatalogEntry): Array<[string, ProviderModelSpeedModeWithDisabled]> {
+  return Object.entries(entry.speed_modes || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, mode]) => [name, mode as ProviderModelSpeedModeWithDisabled])
+}
+
+function formatModeJson(value: Record<string, unknown> | null | undefined) {
   if (!value) return ''
   const text = JSON.stringify(value)
   return text.length > 96 ? `${text.slice(0, 93)}...` : text
@@ -499,42 +526,42 @@ onMounted(() => {
 
         <div class="page-header" style="margin-top: 16px; align-items: flex-start">
           <div>
-            <h4 style="margin: 0">Variants</h4>
+            <h4 style="margin: 0">Thinking Modes</h4>
             <p class="muted" style="margin: 4px 0 0">
-              Add provider/model variants with optional labels, descriptions, disabled state, thinking, and raw
-              request overrides. Variants stay attached to the same model id.
+              Add per-model thinking presets with optional labels, descriptions, disabled state, and raw thinking
+              payloads.
             </p>
           </div>
-          <button class="button" :disabled="submitting" @click="addVariantDraft">Add Variant</button>
+          <button class="button" :disabled="submitting" @click="addThinkingModeDraft">Add Thinking Mode</button>
         </div>
 
-        <div v-if="draft.variants.length" class="stack" style="margin-top: 12px">
+        <div v-if="draft.thinking_modes.length" class="stack" style="margin-top: 12px">
           <div
-            v-for="(variant, index) in draft.variants"
-            :key="`${variant.name || 'variant'}-${index}`"
+            v-for="(mode, index) in draft.thinking_modes"
+            :key="`${mode.name || 'thinking-mode'}-${index}`"
             class="list-item"
             style="padding: 12px"
           >
             <div class="page-header" style="align-items: flex-start">
-              <strong>{{ variant.name.trim() || `Variant ${index + 1}` }}</strong>
-              <button class="button danger" :disabled="submitting" @click="removeVariantDraft(index)">Remove</button>
+              <strong>{{ mode.name.trim() || `Thinking Mode ${index + 1}` }}</strong>
+              <button class="button danger" :disabled="submitting" @click="removeThinkingModeDraft(index)">Remove</button>
             </div>
 
             <div class="grid two" style="margin-top: 12px">
               <div class="field">
-                <label class="label" :for="`catalog-variant-name-${index}`">Variant Name</label>
+                <label class="label" :for="`catalog-thinking-mode-name-${index}`">Mode Name</label>
                 <input
-                  :id="`catalog-variant-name-${index}`"
-                  v-model="variant.name"
+                  :id="`catalog-thinking-mode-name-${index}`"
+                  v-model="mode.name"
                   class="input mono"
                   placeholder="deep"
                 />
               </div>
               <div class="field">
-                <label class="label" :for="`catalog-variant-display-name-${index}`">Display Name</label>
+                <label class="label" :for="`catalog-thinking-mode-display-name-${index}`">Display Name</label>
                 <input
-                  :id="`catalog-variant-display-name-${index}`"
-                  v-model="variant.display_name"
+                  :id="`catalog-thinking-mode-display-name-${index}`"
+                  v-model="mode.display_name"
                   class="input"
                   placeholder="Deep Thinking"
                 />
@@ -542,79 +569,126 @@ onMounted(() => {
             </div>
 
             <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-variant-description-${index}`">Description</label>
+              <label class="label" :for="`catalog-thinking-mode-description-${index}`">Description</label>
               <textarea
-                :id="`catalog-variant-description-${index}`"
-                v-model="variant.description"
+                :id="`catalog-thinking-mode-description-${index}`"
+                v-model="mode.description"
                 class="input"
                 rows="2"
-                placeholder="Optional behavior notes for this variant."
+                placeholder="Optional behavior notes for this thinking mode."
               />
             </div>
 
             <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-variant-thinking-${index}`">Thinking JSON</label>
+              <label class="label" :for="`catalog-thinking-mode-thinking-${index}`">Thinking JSON</label>
               <textarea
-                :id="`catalog-variant-thinking-${index}`"
-                v-model="variant.thinking_json"
+                :id="`catalog-thinking-mode-thinking-${index}`"
+                v-model="mode.thinking_json"
                 class="input mono"
                 rows="4"
                 placeholder='{"type":"budget","budget_tokens":20000}'
               />
-              <div class="muted" style="margin-top: 6px">
-                Accepts the backend thinking payload, for example
-                <span class="mono">{"type":"budget","budget_tokens":20000}</span>
-                or
-                <span class="mono">{"type":"effort","effort":"medium"}</span>.
-              </div>
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-variant-request-override-${index}`">Request Override JSON</label>
-              <textarea
-                :id="`catalog-variant-request-override-${index}`"
-                v-model="variant.request_override_json"
-                class="input mono"
-                rows="5"
-                placeholder='{"headers":{"anthropic-beta":"fast-mode-2026-02-01"},"body_patch":{"service_tier":"priority"}}'
-              />
-              <div class="muted" style="margin-top: 6px">
-                Optional generic override payload with
-                <span class="mono">headers</span>
-                and
-                <span class="mono">body_patch</span>.
-              </div>
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-variant-adapter-overrides-${index}`">Adapter Overrides JSON</label>
-              <textarea
-                :id="`catalog-variant-adapter-overrides-${index}`"
-                v-model="variant.adapter_overrides_json"
-                class="input mono"
-                rows="5"
-                placeholder='{"openai":{"body_patch":{"service_tier":"priority"}},"anthropic":{"headers":{"anthropic-beta":"fast-mode-2026-02-01"}}}'
-              />
-              <div class="muted" style="margin-top: 6px">
-                Optional per-adapter overrides keyed by adapter id, for example
-                <span class="mono">openai</span>,
-                <span class="mono">anthropic</span>,
-                or
-                <span class="mono">gemini</span>.
-              </div>
             </div>
 
             <label
               class="muted"
-              :for="`catalog-variant-disabled-${index}`"
+              :for="`catalog-thinking-mode-disabled-${index}`"
               style="display: flex; gap: 8px; align-items: center; margin-top: 12px"
             >
-              <input :id="`catalog-variant-disabled-${index}`" v-model="variant.disabled" type="checkbox" />
-              Disable this variant
+              <input :id="`catalog-thinking-mode-disabled-${index}`" v-model="mode.disabled" type="checkbox" />
+              Disable this thinking mode
             </label>
           </div>
         </div>
-        <p v-else class="muted" style="margin-top: 12px">No variants configured for this draft.</p>
+        <p v-else class="muted" style="margin-top: 12px">No thinking modes configured for this draft.</p>
+
+        <div class="page-header" style="margin-top: 16px; align-items: flex-start">
+          <div>
+            <h4 style="margin: 0">Speed Modes</h4>
+            <p class="muted" style="margin: 4px 0 0">
+              Add request overrides for low-latency or priority routes without multiplying model ids.
+            </p>
+          </div>
+          <button class="button" :disabled="submitting" @click="addSpeedModeDraft">Add Speed Mode</button>
+        </div>
+
+        <div v-if="draft.speed_modes.length" class="stack" style="margin-top: 12px">
+          <div
+            v-for="(mode, index) in draft.speed_modes"
+            :key="`${mode.name || 'speed-mode'}-${index}`"
+            class="list-item"
+            style="padding: 12px"
+          >
+            <div class="page-header" style="align-items: flex-start">
+              <strong>{{ mode.name.trim() || `Speed Mode ${index + 1}` }}</strong>
+              <button class="button danger" :disabled="submitting" @click="removeSpeedModeDraft(index)">Remove</button>
+            </div>
+
+            <div class="grid two" style="margin-top: 12px">
+              <div class="field">
+                <label class="label" :for="`catalog-speed-mode-name-${index}`">Mode Name</label>
+                <input
+                  :id="`catalog-speed-mode-name-${index}`"
+                  v-model="mode.name"
+                  class="input mono"
+                  placeholder="fast"
+                />
+              </div>
+              <div class="field">
+                <label class="label" :for="`catalog-speed-mode-display-name-${index}`">Display Name</label>
+                <input
+                  :id="`catalog-speed-mode-display-name-${index}`"
+                  v-model="mode.display_name"
+                  class="input"
+                  placeholder="Fast"
+                />
+              </div>
+            </div>
+
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-speed-mode-description-${index}`">Description</label>
+              <textarea
+                :id="`catalog-speed-mode-description-${index}`"
+                v-model="mode.description"
+                class="input"
+                rows="2"
+                placeholder="Optional behavior notes for this speed mode."
+              />
+            </div>
+
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-speed-mode-request-override-${index}`">Request Override JSON</label>
+              <textarea
+                :id="`catalog-speed-mode-request-override-${index}`"
+                v-model="mode.request_override_json"
+                class="input mono"
+                rows="5"
+                placeholder='{"headers":{"anthropic-beta":"fast-mode-2026-02-01"},"body_patch":{"service_tier":"priority"}}'
+              />
+            </div>
+
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-speed-mode-adapter-overrides-${index}`">Adapter Overrides JSON</label>
+              <textarea
+                :id="`catalog-speed-mode-adapter-overrides-${index}`"
+                v-model="mode.adapter_overrides_json"
+                class="input mono"
+                rows="5"
+                placeholder='{"openai":{"body_patch":{"service_tier":"priority"}}}'
+              />
+            </div>
+
+            <label
+              class="muted"
+              :for="`catalog-speed-mode-disabled-${index}`"
+              style="display: flex; gap: 8px; align-items: center; margin-top: 12px"
+            >
+              <input :id="`catalog-speed-mode-disabled-${index}`" v-model="mode.disabled" type="checkbox" />
+              Disable this speed mode
+            </label>
+          </div>
+        </div>
+        <p v-else class="muted" style="margin-top: 12px">No speed modes configured for this draft.</p>
 
         <div class="button-row" style="margin-top: 16px; flex-wrap: wrap">
           <button class="button primary" :disabled="submitting" @click="saveDraft">
@@ -662,7 +736,7 @@ onMounted(() => {
               id="catalog-entry-search"
               v-model="catalogQuery"
               class="input mono"
-              placeholder="model, origin, variant, description"
+              placeholder="model, origin, mode, description"
             />
           </div>
           <div class="field">
@@ -727,28 +801,44 @@ onMounted(() => {
                 <div v-if="entry.context_window_tokens || entry.max_output_tokens" class="muted mono">
                   ctx={{ entry.context_window_tokens ?? 'n/a' }} · max_out={{ entry.max_output_tokens ?? 'n/a' }}
                 </div>
-                <div v-if="entryVariantItems(entry).length" class="stack" style="margin-top: 8px">
-                  <div class="muted">Variants:</div>
+                <div v-if="entryThinkingModeItems(entry).length" class="stack" style="margin-top: 8px">
+                  <div class="muted">Thinking modes:</div>
                   <div
-                    v-for="[variantName, variant] in entryVariantItems(entry)"
-                    :key="variantName"
+                    v-for="[modeName, mode] in entryThinkingModeItems(entry)"
+                    :key="modeName"
                     class="list-item"
                     style="padding: 8px 10px"
                   >
                     <div>
-                      <strong>{{ variantName }}</strong>
-                      <span v-if="variant.display_name" class="muted"> · {{ variant.display_name }}</span>
-                      <span v-if="variant.disabled" class="badge" style="margin-left: 8px">disabled</span>
+                      <strong>{{ modeName }}</strong>
+                      <span v-if="mode.display_name" class="muted"> · {{ mode.display_name }}</span>
+                      <span v-if="mode.disabled" class="badge" style="margin-left: 8px">disabled</span>
                     </div>
-                    <div v-if="variant.description" class="muted">{{ variant.description }}</div>
-                    <div v-if="variant.thinking" class="muted mono">
-                      thinking {{ formatVariantJson(variant.thinking) }}
+                    <div v-if="mode.description" class="muted">{{ mode.description }}</div>
+                    <div v-if="mode.thinking" class="muted mono">
+                      thinking {{ formatModeJson(mode.thinking) }}
                     </div>
-                    <div v-if="variant.request_override" class="muted mono">
-                      request {{ formatVariantJson(variant.request_override) }}
+                  </div>
+                </div>
+                <div v-if="entrySpeedModeItems(entry).length" class="stack" style="margin-top: 8px">
+                  <div class="muted">Speed modes:</div>
+                  <div
+                    v-for="[modeName, mode] in entrySpeedModeItems(entry)"
+                    :key="modeName"
+                    class="list-item"
+                    style="padding: 8px 10px"
+                  >
+                    <div>
+                      <strong>{{ modeName }}</strong>
+                      <span v-if="mode.display_name" class="muted"> · {{ mode.display_name }}</span>
+                      <span v-if="mode.disabled" class="badge" style="margin-left: 8px">disabled</span>
                     </div>
-                    <div v-if="variant.adapter_overrides" class="muted mono">
-                      adapters {{ formatVariantJson(variant.adapter_overrides) }}
+                    <div v-if="mode.description" class="muted">{{ mode.description }}</div>
+                    <div v-if="mode.request_override" class="muted mono">
+                      request {{ formatModeJson(mode.request_override) }}
+                    </div>
+                    <div v-if="mode.adapter_overrides" class="muted mono">
+                      adapters {{ formatModeJson(mode.adapter_overrides) }}
                     </div>
                   </div>
                 </div>

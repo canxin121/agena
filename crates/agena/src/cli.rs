@@ -2153,7 +2153,8 @@ impl AgenaCli {
                     session_id,
                     options: SessionRunOptions {
                         model: default_model(&runtime)?,
-                        variant: None,
+                        thinking_mode: None,
+                        speed_mode: None,
                         thinking: None,
                         request_override: Default::default(),
                         system: None,
@@ -3829,7 +3830,8 @@ fn resolve_continue_options(
 
     Ok(SessionRunOptions {
         model,
-        variant: None,
+        thinking_mode: None,
+        speed_mode: None,
         thinking: None,
         request_override: Default::default(),
         system: None,
@@ -3862,7 +3864,8 @@ fn resolve_run_options(
 
     Ok(SessionRunOptions {
         model,
-        variant: None,
+        thinking_mode: None,
+        speed_mode: None,
         thinking: None,
         request_override: Default::default(),
         system: None,

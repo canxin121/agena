@@ -544,7 +544,8 @@ fn assert_session_has_nonempty_assistant_reply(context: &str, session: &agena::s
 fn run_options(case: LiveProviderCase, system: &str, max_output_tokens: u32) -> SessionRunOptions {
     SessionRunOptions {
         model: case.model_ref(),
-        variant: None,
+        thinking_mode: None,
+        speed_mode: None,
         thinking: None,
         request_override: Default::default(),
         system: Some(system.to_owned()),

@@ -12,9 +12,12 @@ function createInput() {
       {
         provider_id: 'anthropic',
         id: 'claude-sonnet-4-6',
-        variants: {
+        thinking_modes: {
           light: { display_name: 'Light', description: 'Quick thinking' },
           deep: { display_name: 'Deep', description: 'More thinking' },
+        },
+        speed_modes: {
+          fast: { display_name: 'Fast', description: 'Priority route' },
         },
       },
     ],
@@ -38,7 +41,8 @@ function createInput() {
     selectedAdapterId: ref(''),
     selectedModelId: ref(''),
     selectedProviderId: ref(''),
-    selectedVariant: ref(''),
+    selectedThinkingMode: ref(''),
+    selectedSpeedMode: ref(''),
     selectedWorkspaceId: ref<number | null>(null),
     userInputDrafts: reactive<Record<string, Record<string, string>>>({}),
     workspaces,
@@ -72,20 +76,24 @@ describe('useChatPageUiState', () => {
     expect(ui.providerModelLabel({ provider_id: 'anthropic', id: 'claude-sonnet-4-6' })).toBe('claude-sonnet-4-6')
   })
 
-  test('variant options follow the selected model', async () => {
+  test('mode options follow the selected model', async () => {
     const { input, ui } = createInput()
 
     input.selectedProviderId.value = 'anthropic'
     input.selectedModelId.value = 'claude-sonnet-4-6'
 
-    expect(ui.modelVariantOptions().map((item) => item.id)).toEqual(['light', 'deep'])
+    expect(ui.modelThinkingModeOptions().map((item) => item.id)).toEqual(['light', 'deep'])
+    expect(ui.modelSpeedModeOptions().map((item) => item.id)).toEqual(['fast'])
 
-    input.selectedVariant.value = 'deep'
+    input.selectedThinkingMode.value = 'deep'
+    input.selectedSpeedMode.value = 'fast'
     input.selectedModelId.value = 'claude-opus-4-7'
     await nextTick()
 
-    expect(input.selectedVariant.value).toBe('')
-    expect(ui.modelVariantOptions()).toEqual([])
+    expect(input.selectedThinkingMode.value).toBe('')
+    expect(input.selectedSpeedMode.value).toBe('')
+    expect(ui.modelThinkingModeOptions()).toEqual([])
+    expect(ui.modelSpeedModeOptions()).toEqual([])
   })
 
   test('watch selects provider default model when model is empty', async () => {

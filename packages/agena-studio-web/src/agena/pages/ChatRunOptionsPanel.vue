@@ -5,21 +5,24 @@ const props = defineProps<{
   selectedProviderId: string
   selectedAdapterId: string
   selectedModelId: string
-  selectedVariant: string
+  selectedThinkingMode: string
+  selectedSpeedMode: string
   providers: ProviderSummary[]
   providerDefaultAdapter: (providerId: string) => string
   providerDefaultModel: (providerId: string) => string
   providerAdapterOptions: (providerId: string) => string[]
   providerModelOptions: (providerId: string, adapterId?: string) => ProviderModel[]
   providerModelLabel: (model: ProviderModel) => string
-  modelVariantOptions: () => Array<{ id: string; label: string; description: string }>
+  modelThinkingModeOptions: () => Array<{ id: string; label: string; description: string }>
+  modelSpeedModeOptions: () => Array<{ id: string; label: string; description: string }>
 }>()
 
 const emit = defineEmits<{
   'update:selectedProviderId': [value: string]
   'update:selectedAdapterId': [value: string]
   'update:selectedModelId': [value: string]
-  'update:selectedVariant': [value: string]
+  'update:selectedThinkingMode': [value: string]
+  'update:selectedSpeedMode': [value: string]
 }>()
 </script>
 
@@ -37,7 +40,8 @@ const emit = defineEmits<{
             (emit('update:selectedProviderId', ($event.target as HTMLSelectElement).value),
             emit('update:selectedAdapterId', props.providerDefaultAdapter(($event.target as HTMLSelectElement).value)),
             emit('update:selectedModelId', props.providerDefaultModel(($event.target as HTMLSelectElement).value)),
-            emit('update:selectedVariant', ''))
+            emit('update:selectedThinkingMode', ''),
+            emit('update:selectedSpeedMode', ''))
           "
         >
           <option value="">Auto</option>
@@ -54,7 +58,8 @@ const emit = defineEmits<{
           class="select"
           @change="
             (emit('update:selectedAdapterId', ($event.target as HTMLSelectElement).value),
-            emit('update:selectedVariant', ''))
+            emit('update:selectedThinkingMode', ''),
+            emit('update:selectedSpeedMode', ''))
           "
         >
           <option value="">Auto</option>
@@ -75,7 +80,8 @@ const emit = defineEmits<{
           class="select"
           @change="
             (emit('update:selectedModelId', ($event.target as HTMLSelectElement).value),
-            emit('update:selectedVariant', ''))
+            emit('update:selectedThinkingMode', ''),
+            emit('update:selectedSpeedMode', ''))
           "
         >
           <option value="">Auto</option>
@@ -89,17 +95,36 @@ const emit = defineEmits<{
         </select>
       </div>
       <div class="field">
-        <label class="label" for="variant-id">Variant</label>
+        <label class="label" for="thinking-mode-id">Thinking</label>
         <select
-          id="variant-id"
-          :value="props.selectedVariant"
+          id="thinking-mode-id"
+          :value="props.selectedThinkingMode"
           class="select"
-          :disabled="props.modelVariantOptions().length === 0"
-          @change="emit('update:selectedVariant', ($event.target as HTMLSelectElement).value)"
+          :disabled="props.modelThinkingModeOptions().length === 0"
+          @change="emit('update:selectedThinkingMode', ($event.target as HTMLSelectElement).value)"
         >
           <option value="">Default</option>
-          <option v-for="variant in props.modelVariantOptions()" :key="variant.id" :value="variant.id">
-            {{ variant.label }}
+          <option
+            v-for="thinkingMode in props.modelThinkingModeOptions()"
+            :key="thinkingMode.id"
+            :value="thinkingMode.id"
+          >
+            {{ thinkingMode.label }}
+          </option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="label" for="speed-mode-id">Speed</label>
+        <select
+          id="speed-mode-id"
+          :value="props.selectedSpeedMode"
+          class="select"
+          :disabled="props.modelSpeedModeOptions().length === 0"
+          @change="emit('update:selectedSpeedMode', ($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">Default</option>
+          <option v-for="speedMode in props.modelSpeedModeOptions()" :key="speedMode.id" :value="speedMode.id">
+            {{ speedMode.label }}
           </option>
         </select>
       </div>

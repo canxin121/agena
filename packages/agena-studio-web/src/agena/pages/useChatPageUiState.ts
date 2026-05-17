@@ -11,7 +11,8 @@ export type ChatPageUiStateInput = {
   selectedAdapterId: Ref<string>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
-  selectedVariant: Ref<string>
+  selectedThinkingMode: Ref<string>
+  selectedSpeedMode: Ref<string>
   selectedWorkspaceId: Ref<number | null>
   userInputDrafts: Record<string, Record<string, string>>
   workspaces: Ref<WorkspaceResource[]>
@@ -78,12 +79,21 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     )
   }
 
-  function modelVariantOptions(): Array<{ id: string; label: string; description: string }> {
-    const variants = selectedProviderModel()?.variants || {}
-    return Object.entries(variants).map(([id, variant]) => ({
+  function modelThinkingModeOptions(): Array<{ id: string; label: string; description: string }> {
+    const modes = selectedProviderModel()?.thinking_modes || {}
+    return Object.entries(modes).map(([id, mode]) => ({
       id,
-      label: variant.display_name?.trim() || id,
-      description: variant.description?.trim() || id,
+      label: mode.display_name?.trim() || id,
+      description: mode.description?.trim() || id,
+    }))
+  }
+
+  function modelSpeedModeOptions(): Array<{ id: string; label: string; description: string }> {
+    const modes = selectedProviderModel()?.speed_modes || {}
+    return Object.entries(modes).map(([id, mode]) => ({
+      id,
+      label: mode.display_name?.trim() || id,
+      description: mode.description?.trim() || id,
     }))
   }
 
@@ -121,7 +131,8 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
 
   watch(input.selectedProviderId, (providerId) => {
     if (!providerId) return
-    input.selectedVariant.value = ''
+    input.selectedThinkingMode.value = ''
+    input.selectedSpeedMode.value = ''
     if (!input.selectedAdapterId.value) {
       input.selectedAdapterId.value = providerDefaultAdapter(providerId)
     }
@@ -131,11 +142,13 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   })
 
   watch(input.selectedAdapterId, () => {
-    input.selectedVariant.value = ''
+    input.selectedThinkingMode.value = ''
+    input.selectedSpeedMode.value = ''
   })
 
   watch(input.selectedModelId, () => {
-    input.selectedVariant.value = ''
+    input.selectedThinkingMode.value = ''
+    input.selectedSpeedMode.value = ''
   })
 
   return {
@@ -149,7 +162,8 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     providerDefaultModel,
     providerModelLabel,
     providerModelOptions,
-    modelVariantOptions,
+    modelThinkingModeOptions,
+    modelSpeedModeOptions,
     readUserAnswer,
     scrollToMessage,
     updateUserAnswer,

@@ -44,7 +44,8 @@ pub enum CommandId {
     ProviderConfig,
     Models,
     Model,
-    Variant,
+    ThinkingMode,
+    SpeedMode,
     Temperature,
     MaxOutput,
     System,
@@ -392,11 +393,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-model-summary",
     },
     CommandSpec {
-        id: CommandId::Variant,
-        name: "variant",
+        id: CommandId::ThinkingMode,
+        name: "thinking",
         aliases: &["reasoning"],
         arguments: "<name|clear>",
-        summary_key: "command-variant-summary",
+        summary_key: "command-thinking-mode-summary",
+    },
+    CommandSpec {
+        id: CommandId::SpeedMode,
+        name: "speed",
+        aliases: &[],
+        arguments: "<name|clear>",
+        summary_key: "command-speed-mode-summary",
     },
     CommandSpec {
         id: CommandId::Temperature,
@@ -555,7 +563,7 @@ mod tests {
         assert_eq!(parsed.args, "0.2");
 
         let parsed = parse_command("/reasoning high").expect("command should parse");
-        assert_eq!(parsed.spec.id, CommandId::Variant);
+        assert_eq!(parsed.spec.id, CommandId::ThinkingMode);
         assert_eq!(parsed.args, "high");
     }
 

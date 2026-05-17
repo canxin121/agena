@@ -8,6 +8,7 @@ export type ChatPageUiStateInput = {
   localCommandNotice: Ref<string>
   providerModels: Record<string, ProviderModel[]>
   providers: Ref<ProviderSummary[]>
+  selectedAdapterId: Ref<string>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
   selectedVariant: Ref<string>
@@ -23,6 +24,11 @@ export type ChatPageUiStateDeps = {
 export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUiStateDeps) {
   function providerDefaultModel(providerId: string): string {
     return input.providers.value.find((provider) => provider.provider_id === providerId)?.default_model || ''
+  }
+
+  function providerDefaultAdapter(providerId: string): string {
+    const provider = input.providers.value.find((provider) => provider.provider_id === providerId)
+    return provider?.default_adapter || provider?.adapters?.find((adapter) => adapter.enabled)?.adapter_id || ''
   }
 
   function openWorkspaceBrowser(relativePath = '') {
@@ -42,8 +48,24 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     void deps.router.push(buildRuntimeSectionPath(section, tab))
   }
 
-  function providerModelOptions(providerId: string): ProviderModel[] {
-    return providerId ? input.providerModels[providerId] || [] : []
+  function providerAdapterOptions(providerId: string): string[] {
+    const provider = input.providers.value.find((provider) => provider.provider_id === providerId)
+    const adapterIds = new Set<string>()
+    for (const adapter of provider?.adapters || []) {
+      if (adapter.enabled) adapterIds.add(adapter.adapter_id)
+    }
+    for (const model of providerId ? input.providerModels[providerId] || [] : []) {
+      if (model.adapter_id) adapterIds.add(model.adapter_id)
+    }
+    return [...adapterIds].sort((left, right) => left.localeCompare(right))
+  }
+
+  function providerModelOptions(providerId: string, adapterId = ''): ProviderModel[] {
+    const models = providerId ? input.providerModels[providerId] || [] : []
+    const selectedAdapter = adapterId.trim()
+    return selectedAdapter
+      ? models.filter((model) => !model.adapter_id || model.adapter_id === selectedAdapter)
+      : models
   }
 
   function providerModelLabel(model: ProviderModel): string {
@@ -51,7 +73,9 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   }
 
   function selectedProviderModel(): ProviderModel | undefined {
-    return providerModelOptions(input.selectedProviderId.value).find((model) => model.id === input.selectedModelId.value)
+    return providerModelOptions(input.selectedProviderId.value, input.selectedAdapterId.value).find(
+      (model) => model.id === input.selectedModelId.value,
+    )
   }
 
   function modelVariantOptions(): Array<{ id: string; label: string; description: string }> {
@@ -98,9 +122,16 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   watch(input.selectedProviderId, (providerId) => {
     if (!providerId) return
     input.selectedVariant.value = ''
+    if (!input.selectedAdapterId.value) {
+      input.selectedAdapterId.value = providerDefaultAdapter(providerId)
+    }
     if (!input.selectedModelId.value) {
       input.selectedModelId.value = providerDefaultModel(providerId)
     }
+  })
+
+  watch(input.selectedAdapterId, () => {
+    input.selectedVariant.value = ''
   })
 
   watch(input.selectedModelId, () => {
@@ -113,6 +144,8 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     formatMessageTime,
     openRuntimeSection,
     openWorkspaceBrowser,
+    providerAdapterOptions,
+    providerDefaultAdapter,
     providerDefaultModel,
     providerModelLabel,
     providerModelOptions,

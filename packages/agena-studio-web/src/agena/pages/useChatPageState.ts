@@ -36,6 +36,7 @@ export function useChatPageState() {
   const newSessionTitle = ref('')
   const composer = ref('')
   const selectedProviderId = ref('')
+  const selectedAdapterId = ref('')
   const selectedModelId = ref('')
   const selectedVariant = ref('')
   const loading = ref(false)
@@ -62,6 +63,7 @@ export function useChatPageState() {
     providers,
     rewindCheckpoints,
     runtime,
+    selectedAdapterId,
     selectedModelId,
     selectedProviderId,
     selectedVariant,

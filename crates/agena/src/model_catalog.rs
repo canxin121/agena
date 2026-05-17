@@ -66,7 +66,6 @@ impl CatalogModelDefinition {
 
     pub fn into_configured_definition(self) -> ConfiguredModelDefinition {
         ConfiguredModelDefinition {
-            family: None,
             lifecycle: self.lifecycle,
             context_window_tokens: self.context_window_tokens,
             max_output_tokens: self.max_output_tokens,
@@ -178,24 +177,6 @@ impl ModelCatalogSnapshot {
             merged.models.insert(model_id, definition);
         }
         merged
-    }
-
-    pub fn merged_provider_for_adapters(
-        &self,
-        adapter_ids: &[String],
-    ) -> Option<ModelCatalogProviderRecord> {
-        let mut merged = ModelCatalogProviderRecord::default();
-        let global_models = self.merged_models().models;
-
-        for adapter_id in adapter_ids {
-            for (model_id, definition) in &global_models {
-                merged
-                    .models
-                    .insert(format!("{adapter_id}/{model_id}"), definition.clone());
-            }
-        }
-
-        (!merged.models.is_empty()).then_some(merged)
     }
 
     pub fn entries(&self) -> Vec<ModelCatalogEntryRecord> {
@@ -396,9 +377,10 @@ impl ModelCatalogService {
 
     pub fn effective_provider_record(
         &self,
-        adapter_ids: &[String],
+        _adapter_ids: &[String],
     ) -> Option<ModelCatalogProviderRecord> {
-        self.snapshot().merged_provider_for_adapters(adapter_ids)
+        let record = self.snapshot().merged_models();
+        (!record.models.is_empty()).then_some(record)
     }
 
     pub async fn refresh_if_stale_on_startup(&self) -> Result<ModelCatalogSnapshot, AppError> {
@@ -592,11 +574,12 @@ pub fn decorate_provider_models(
 
         let model_id = ModelId::new(model_id.clone());
         let base = Model::new(provider.id(), model_id.as_str())
-            .with_capabilities(provider.model_capabilities(&model_id))
-            .with_metadata(provider_model_metadata(provider, &model_id))
+            .with_capabilities(provider.model_capabilities_for_adapter(None, &model_id))
+            .with_metadata(provider_model_metadata(provider, None, &model_id))
             .with_variants(provider_model_variants(
                 provider,
                 provider_record,
+                None,
                 &model_id,
             ));
         models.push(decorate_provider_model(
@@ -629,10 +612,11 @@ fn decorate_provider_model(
         .get(model_id.as_str())
         .map(catalog_definition_to_provider_definition)
     {
+        let adapter_id = model.adapter_id.clone();
         configured.apply_to_model(
             model,
-            &provider.model_capabilities(&model_id),
-            &provider_model_metadata(provider, &model_id),
+            &provider.model_capabilities_for_adapter(adapter_id.as_ref(), &model_id),
+            &provider_model_metadata(provider, adapter_id.as_ref(), &model_id),
         )
     } else {
         model
@@ -641,17 +625,19 @@ fn decorate_provider_model(
 
 fn provider_model_metadata(
     provider: &dyn ModelProvider,
+    adapter_id: Option<&crate::model::AdapterId>,
     model: &ModelId,
 ) -> crate::model::ModelMetadata {
-    provider.model_metadata(model)
+    provider.model_metadata_for_adapter(adapter_id, model)
 }
 
 fn provider_model_variants(
     provider: &dyn ModelProvider,
     provider_record: &ModelCatalogProviderRecord,
+    adapter_id: Option<&crate::model::AdapterId>,
     model: &ModelId,
 ) -> BTreeMap<String, crate::model::ModelVariant> {
-    let mut variants = provider.model_variants(model);
+    let mut variants = provider.model_variants_for_adapter(adapter_id, model);
     if let Some(configured) = provider_record
         .models
         .get(model.as_str())

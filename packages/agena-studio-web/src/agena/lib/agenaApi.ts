@@ -225,8 +225,8 @@ export type RuntimeReloadResponse = {
 
 export type ProviderSummary = {
   provider_id: string
+  default_adapter?: string | null
   default_model: string
-  default_model_ref: string
   adapters?: ProviderAdapterSummary[]
 }
 
@@ -319,7 +319,6 @@ export type ProviderModelCapabilities = {
 }
 
 export type ProviderModelMetadata = {
-  family?: string | null
   lifecycle?: string | null
   description?: string | null
   limits?: {
@@ -330,6 +329,7 @@ export type ProviderModelMetadata = {
 
 export type ProviderModel = {
   provider_id: string
+  adapter_id?: string | null
   id: string
   display_name?: string | null
   capabilities?: ProviderModelCapabilities | null
@@ -626,6 +626,7 @@ export type SessionExecutionContextResource = {
   allowed_tools: string[]
   agent_permission?: PermissionConfig
   model_provider_id?: string | null
+  model_adapter_id?: string | null
   model_id?: string | null
   model_variant?: string | null
   agent_run?: {
@@ -1653,6 +1654,7 @@ export async function forkSession(input: {
 export async function continueSession(input: {
   sessionId: number
   providerId?: string
+  adapterId?: string
   modelId?: string
   variant?: string
   agentProfile?: string
@@ -1662,6 +1664,7 @@ export async function continueSession(input: {
   if (input.providerId && input.modelId) {
     body.model = {
       provider_id: input.providerId,
+      ...(input.adapterId?.trim() ? { adapter_id: input.adapterId.trim() } : {}),
       model_id: input.modelId,
     }
   }
@@ -1697,6 +1700,7 @@ export async function submitTurn(input: {
   sessionId: number
   text: string
   providerId?: string
+  adapterId?: string
   modelId?: string
   variant?: string
   agentProfile?: string
@@ -1713,6 +1717,7 @@ export async function submitTurn(input: {
   if (input.providerId && input.modelId) {
     body.model = {
       provider_id: input.providerId,
+      ...(input.adapterId?.trim() ? { adapter_id: input.adapterId.trim() } : {}),
       model_id: input.modelId,
     }
   }

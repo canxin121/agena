@@ -83,6 +83,8 @@ pub struct TurnRuntimeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_adapter_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_variant: Option<String>,
@@ -118,6 +120,7 @@ impl TurnRuntimeState {
             && self.pending_operations.is_empty()
             && self.pending_tool_calls.is_empty()
             && self.model_provider_id.is_none()
+            && self.model_adapter_id.is_none()
             && self.model_id.is_none()
             && self.model_variant.is_none()
             && self.prompt_cache_key.is_none()
@@ -127,6 +130,7 @@ impl TurnRuntimeState {
 
     pub fn clear_active_request(&mut self) {
         self.model_provider_id = None;
+        self.model_adapter_id = None;
         self.model_id = None;
         self.model_variant = None;
         self.prompt_cache_key = None;
@@ -136,6 +140,7 @@ impl TurnRuntimeState {
     pub fn record_model_request(
         &mut self,
         provider_id: String,
+        adapter_id: Option<String>,
         model_id: String,
         model_variant: Option<String>,
         prompt_cache_key: String,
@@ -143,6 +148,7 @@ impl TurnRuntimeState {
     ) {
         self.status = SessionRuntimeStatus::AwaitingModel;
         self.model_provider_id = Some(provider_id);
+        self.model_adapter_id = adapter_id.filter(|value| !value.trim().is_empty());
         self.model_id = Some(model_id);
         self.model_variant = model_variant.filter(|value| !value.trim().is_empty());
         self.prompt_cache_key = Some(prompt_cache_key);
@@ -425,6 +431,8 @@ pub struct SessionExecutionContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_adapter_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_variant: Option<String>,
@@ -451,6 +459,7 @@ impl SessionExecutionContext {
             && self.allowed_tools.is_empty()
             && self.agent_permission.is_empty()
             && self.model_provider_id.is_none()
+            && self.model_adapter_id.is_none()
             && self.model_id.is_none()
             && self.model_variant.is_none()
             && self.agent_run.is_empty()
@@ -497,9 +506,10 @@ impl SessionRuntimeState {
         self.execution.allowed_tools = deduped;
     }
 
-    pub fn model_override(&self) -> Option<(&str, &str)> {
+    pub fn model_override(&self) -> Option<(&str, Option<&str>, &str)> {
         Some((
             self.execution.model_provider_id.as_deref()?,
+            self.execution.model_adapter_id.as_deref(),
             self.execution.model_id.as_deref()?,
         ))
     }
@@ -508,8 +518,14 @@ impl SessionRuntimeState {
         self.execution.model_variant.as_deref()
     }
 
-    pub fn set_model_override(&mut self, provider_id: Option<String>, model_id: Option<String>) {
+    pub fn set_model_override(
+        &mut self,
+        provider_id: Option<String>,
+        adapter_id: Option<String>,
+        model_id: Option<String>,
+    ) {
         self.execution.model_provider_id = provider_id.filter(|value| !value.trim().is_empty());
+        self.execution.model_adapter_id = adapter_id.filter(|value| !value.trim().is_empty());
         self.execution.model_id = model_id.filter(|value| !value.trim().is_empty());
     }
 
@@ -721,6 +737,7 @@ impl Session {
 
         if status == SessionRuntimeStatus::AwaitingModel {
             snapshot.model_provider_id = previous.model_provider_id;
+            snapshot.model_adapter_id = previous.model_adapter_id;
             snapshot.model_id = previous.model_id;
             snapshot.model_variant = previous.model_variant;
             snapshot.prompt_cache_key = previous.prompt_cache_key;
@@ -1215,6 +1232,7 @@ mod tests {
             .with_messages(vec![Message::prompt_text(Role::User, "hello")]);
         session.runtime.turn.record_model_request(
             "openai".to_owned(),
+            Some("openai".to_owned()),
             "gpt-5".to_owned(),
             Some("high".to_owned()),
             "cache-key".to_owned(),

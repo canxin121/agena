@@ -241,8 +241,9 @@ fn build_provider(
                 .unwrap_or(false)
         })
         .map(|(model_id, config)| {
+            let (adapter_id, target_model_id) = parse_adapter_model_ref(provider_id, model_id)?;
             Ok((
-                model_id.clone(),
+                (adapter_id, target_model_id),
                 ProviderModelRoute {
                     enabled: config.enabled,
                     definition: config.definition.clone(),
@@ -253,21 +254,13 @@ fn build_provider(
 
     let provider: Arc<dyn ModelProvider> = Arc::new(MultiAdapterProvider::new(
         provider_id,
+        resolved.default_adapter.clone(),
         resolved.default_model.clone(),
         adapters,
         routes,
     ));
 
-    let catalog_adapter_ids = resolved
-        .adapters
-        .iter()
-        .filter(|(_, adapter)| adapter.enabled)
-        .map(|(adapter_id, _)| adapter_id.clone())
-        .collect::<Vec<_>>();
-
-    if let Some(provider_record) =
-        catalog.and_then(|snapshot| snapshot.merged_provider_for_adapters(&catalog_adapter_ids))
-    {
+    if let Some(provider_record) = catalog.map(|snapshot| snapshot.merged_models()) {
         Ok(CatalogedModelsProvider::new(provider, provider_record))
     } else {
         Ok(provider)
@@ -627,9 +620,6 @@ fn resolve_adapter_default_models(
     provider_id: &str,
     resolved: &ResolvedProviderConfig,
 ) -> Result<std::collections::BTreeMap<String, String>, ConfigError> {
-    let (default_adapter_id, default_model_id) =
-        parse_adapter_model_ref(provider_id, resolved.default_model.as_str())?;
-
     let mut defaults = std::collections::BTreeMap::new();
     for adapter_id in resolved
         .adapters
@@ -637,30 +627,13 @@ fn resolve_adapter_default_models(
         .filter(|(_, adapter)| adapter.enabled)
         .map(|(adapter_id, _)| adapter_id)
     {
-        let default_for_adapter = if adapter_id == &default_adapter_id {
-            Some(default_model_id.clone())
-        } else {
-            resolved
-                .models
-                .iter()
-                .find_map(|(visible_model_id, model)| {
-                    if !model.enabled {
-                        return None;
-                    }
-                    let (route_adapter_id, route_model_id) =
-                        parse_adapter_model_ref(provider_id, visible_model_id).ok()?;
-                    (route_adapter_id == *adapter_id).then_some(route_model_id)
-                })
-        };
-
-        let default_for_adapter =
-            default_for_adapter.ok_or_else(|| ConfigError::InvalidProviderConfig {
+        if resolved.default_model.trim().is_empty() {
+            return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.to_owned(),
-                message: format!(
-                    "provider must set `default_model` or declare at least one enabled model for adapter `{adapter_id}`"
-                ),
-            })?;
-        defaults.insert(adapter_id.clone(), default_for_adapter);
+                message: format!("provider default_model is empty for adapter `{adapter_id}`"),
+            });
+        }
+        defaults.insert(adapter_id.clone(), resolved.default_model.clone());
     }
 
     Ok(defaults)
@@ -1293,7 +1266,8 @@ mod tests {
         let path = write_temp_file(
             r#"
 [providers.openai]
-default_model = "openai/gpt-4.1-mini"
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
@@ -1360,9 +1334,10 @@ input = { unsupported = ["image"] }
             .expect("registry should build");
 
         let capabilities = registry
-            .model_capabilities(&crate::model::ModelRef::new(
+            .model_capabilities(&crate::model::ModelRef::new_with_adapter(
                 "openai",
-                "openai/gpt-4.1-mini",
+                "openai",
+                "gpt-4.1-mini",
             ))
             .expect("provider capabilities should resolve");
         assert_eq!(capabilities.image_input, CapabilitySupport::Unsupported);

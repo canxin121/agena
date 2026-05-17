@@ -3,17 +3,21 @@ import type { ProviderModel, ProviderSummary } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
   selectedProviderId: string
+  selectedAdapterId: string
   selectedModelId: string
   selectedVariant: string
   providers: ProviderSummary[]
+  providerDefaultAdapter: (providerId: string) => string
   providerDefaultModel: (providerId: string) => string
-  providerModelOptions: (providerId: string) => ProviderModel[]
+  providerAdapterOptions: (providerId: string) => string[]
+  providerModelOptions: (providerId: string, adapterId?: string) => ProviderModel[]
   providerModelLabel: (model: ProviderModel) => string
   modelVariantOptions: () => Array<{ id: string; label: string; description: string }>
 }>()
 
 const emit = defineEmits<{
   'update:selectedProviderId': [value: string]
+  'update:selectedAdapterId': [value: string]
   'update:selectedModelId': [value: string]
   'update:selectedVariant': [value: string]
 }>()
@@ -30,14 +34,36 @@ const emit = defineEmits<{
           :value="props.selectedProviderId"
           class="select"
           @change="
-            emit('update:selectedProviderId', ($event.target as HTMLSelectElement).value),
+            (emit('update:selectedProviderId', ($event.target as HTMLSelectElement).value),
+            emit('update:selectedAdapterId', props.providerDefaultAdapter(($event.target as HTMLSelectElement).value)),
             emit('update:selectedModelId', props.providerDefaultModel(($event.target as HTMLSelectElement).value)),
-            emit('update:selectedVariant', '')
+            emit('update:selectedVariant', ''))
           "
         >
           <option value="">Auto</option>
           <option v-for="provider in props.providers" :key="provider.provider_id" :value="provider.provider_id">
             {{ provider.provider_id }}
+          </option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="label" for="adapter-id">Adapter</label>
+        <select
+          id="adapter-id"
+          :value="props.selectedAdapterId"
+          class="select"
+          @change="
+            (emit('update:selectedAdapterId', ($event.target as HTMLSelectElement).value),
+            emit('update:selectedVariant', ''))
+          "
+        >
+          <option value="">Auto</option>
+          <option
+            v-for="adapterId in props.providerAdapterOptions(props.selectedProviderId)"
+            :key="adapterId"
+            :value="adapterId"
+          >
+            {{ adapterId }}
           </option>
         </select>
       </div>
@@ -48,14 +74,14 @@ const emit = defineEmits<{
           :value="props.selectedModelId"
           class="select"
           @change="
-            emit('update:selectedModelId', ($event.target as HTMLSelectElement).value),
-            emit('update:selectedVariant', '')
+            (emit('update:selectedModelId', ($event.target as HTMLSelectElement).value),
+            emit('update:selectedVariant', ''))
           "
         >
           <option value="">Auto</option>
           <option
-            v-for="model in props.providerModelOptions(props.selectedProviderId)"
-            :key="`${model.provider_id}-${model.id}`"
+            v-for="model in props.providerModelOptions(props.selectedProviderId, props.selectedAdapterId)"
+            :key="`${model.provider_id}-${model.adapter_id || 'default'}-${model.id}`"
             :value="model.id"
           >
             {{ props.providerModelLabel(model) }}

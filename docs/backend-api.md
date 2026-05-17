@@ -517,8 +517,8 @@ Provider summary:
 ```json
 {
   "provider_id": "anthropic",
-  "default_model": "anthropic/claude-sonnet-4-6",
-  "default_model_ref": "anthropic/anthropic/claude-sonnet-4-6",
+  "default_adapter": "anthropic",
+  "default_model": "claude-sonnet-4-6",
   "adapters": [
     {
       "adapter_id": "anthropic",
@@ -547,7 +547,6 @@ Provider models:
         "temperature_supported": "unsupported"
       },
       "metadata": {
-        "family": "gpt",
         "lifecycle": "active",
         "description": "Latest flagship model",
         "limits": {

@@ -47,7 +47,6 @@ describe('listProviderModels', () => {
               id: 'gpt-5',
               display_name: 'GPT-5',
               metadata: {
-                family: 'gpt',
                 lifecycle: 'active',
                 limits: {
                   context_window_tokens: 400000,
@@ -77,7 +76,6 @@ describe('listProviderModels', () => {
         id: 'gpt-5',
         display_name: 'GPT-5',
         metadata: {
-          family: 'gpt',
           lifecycle: 'active',
           limits: {
             context_window_tokens: 400000,

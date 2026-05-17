@@ -134,7 +134,6 @@ const sharedPanels = {
       {
         provider_id: 'openai',
         default_model: 'openai/gpt-5',
-        default_model_ref: 'openai/openai/gpt-5',
         adapters: [{ adapter_id: 'openai', enabled: true, configured_model_count: 1 }],
       },
     ],

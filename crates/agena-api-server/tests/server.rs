@@ -547,7 +547,8 @@ async fn provider_models_endpoint_decorates_listed_models_from_effective_catalog
     let config = format!(
         r#"
 [providers.gateway]
-default_model = "openai/gpt-upstream"
+default_adapter = "openai"
+default_model = "gpt-upstream"
 
 [providers.gateway.auth]
 mode = "api"
@@ -599,7 +600,8 @@ enabled = true
     let model = models
         .iter()
         .find(|model| {
-            model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-upstream")
+            model.get("id").and_then(|value| value.as_str()) == Some("gpt-upstream")
+                && model.get("adapter_id").and_then(|value| value.as_str()) == Some("openai")
         })
         .expect("decorated upstream model should be present");
 
@@ -653,7 +655,8 @@ async fn provider_models_endpoint_appends_catalog_only_models_missing_upstream()
     let config = format!(
         r#"
 [providers.gateway]
-default_model = "openai/gpt-upstream"
+default_adapter = "openai"
+default_model = "gpt-upstream"
 
 [providers.gateway.auth]
 mode = "api"
@@ -704,16 +707,15 @@ enabled = true
         .expect("provider models response should include models");
     assert!(
         models.iter().any(|model| {
-            model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-upstream")
+            model.get("id").and_then(|value| value.as_str()) == Some("gpt-upstream")
+                && model.get("adapter_id").and_then(|value| value.as_str()) == Some("openai")
         }),
         "upstream listed model should remain present: {value:?}"
     );
 
     let catalog_only = models
         .iter()
-        .find(|model| {
-            model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-catalog-only")
-        })
+        .find(|model| model.get("id").and_then(|value| value.as_str()) == Some("gpt-catalog-only"))
         .expect("catalog-only model should be appended");
 
     assert_eq!(

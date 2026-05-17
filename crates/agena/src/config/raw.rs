@@ -713,17 +713,28 @@ impl RawDefaultConfig {
         }
     }
 
-    fn provider_model_route(&self, provider_id: &str) -> Option<String> {
+    fn provider_default_adapter(&self, provider_id: &str) -> Option<String> {
         let provider = self.provider.as_deref()?.trim();
         if provider != provider_id {
             return None;
         }
         let adapter = self.adapter.as_deref()?.trim();
-        let model = self.model.as_deref()?.trim();
-        if adapter.is_empty() || model.is_empty() {
+        if adapter.is_empty() {
             return None;
         }
-        Some(format!("{adapter}/{model}"))
+        Some(adapter.to_owned())
+    }
+
+    fn provider_default_model(&self, provider_id: &str) -> Option<String> {
+        let provider = self.provider.as_deref()?.trim();
+        if provider != provider_id {
+            return None;
+        }
+        let model = self.model.as_deref()?.trim();
+        if model.is_empty() {
+            return None;
+        }
+        Some(model.to_owned())
     }
 }
 
@@ -1131,6 +1142,7 @@ impl Merge for RawProviderAdapterConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawProviderConfig {
     pub(crate) enabled: Option<bool>,
+    pub(crate) default_adapter: Option<String>,
     pub(crate) default_model: Option<String>,
     pub(crate) auth: Option<RawProviderAuthConfig>,
     pub(crate) adapters: BTreeMap<String, RawProviderAdapterConfig>,
@@ -1139,6 +1151,7 @@ pub(crate) struct RawProviderConfig {
 impl Merge for RawProviderConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.enabled, overlay.enabled);
+        merge_option(&mut self.default_adapter, overlay.default_adapter);
         merge_option(&mut self.default_model, overlay.default_model);
         merge_option_struct(&mut self.auth, overlay.auth);
         self.adapters.extend(overlay.adapters);
@@ -1191,10 +1204,33 @@ impl RawProviderConfig {
 
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
+        let default_adapter = match self.default_adapter {
+            Some(default_adapter) => default_adapter,
+            None => defaults
+                .provider_default_adapter(provider_id.as_str())
+                .or_else(|| {
+                    let enabled_adapters = adapters
+                        .iter()
+                        .filter(|(_, adapter)| adapter.enabled)
+                        .map(|(adapter_id, _)| adapter_id.clone())
+                        .collect::<Vec<_>>();
+                    (enabled_adapters.len() == 1).then(|| enabled_adapters[0].clone())
+                })
+                .ok_or_else(|| ConfigError::MissingProviderField {
+                    provider_id: provider_id.clone(),
+                    field: "default_adapter",
+                })?,
+        };
+        if default_adapter.trim().is_empty() {
+            return Err(ConfigError::MissingProviderField {
+                provider_id: provider_id.clone(),
+                field: "default_adapter",
+            });
+        }
         let default_model = match self.default_model {
             Some(default_model) => default_model,
             None => defaults
-                .provider_model_route(provider_id.as_str())
+                .provider_default_model(provider_id.as_str())
                 .ok_or_else(|| ConfigError::MissingProviderField {
                     provider_id: provider_id.clone(),
                     field: "default_model",
@@ -1206,13 +1242,12 @@ impl RawProviderConfig {
                 field: "default_model",
             });
         }
-        let (default_adapter_id, _default_model_id) =
-            parse_adapter_model_ref(provider_id.as_str(), default_model.as_str())?;
+        let default_adapter_id = default_adapter.trim().to_owned();
         let default_adapter = adapters.get(default_adapter_id.as_str()).ok_or_else(|| {
             ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.clone(),
                 message: format!(
-                    "provider default_model `{default_model}` references unknown adapter `{default_adapter_id}`"
+                    "provider default_adapter `{default_adapter_id}` references unknown adapter"
                 ),
             }
         })?;
@@ -1220,15 +1255,16 @@ impl RawProviderConfig {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.clone(),
                 message: format!(
-                    "provider default_model `{default_model}` references disabled adapter `{default_adapter_id}`"
+                    "provider default_adapter `{default_adapter_id}` references disabled adapter"
                 ),
             });
         }
-        if matches!(models.get(default_model.as_str()), Some(configured) if !configured.enabled) {
+        let default_route = format!("{default_adapter_id}/{default_model}");
+        if matches!(models.get(default_route.as_str()), Some(configured) if !configured.enabled) {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.clone(),
                 message: format!(
-                    "provider default_model `{default_model}` references disabled model route"
+                    "provider default_model `{default_model}` references disabled model route `{default_route}`"
                 ),
             });
         }
@@ -1237,6 +1273,7 @@ impl RawProviderConfig {
             provider_id,
             ResolvedProviderConfig {
                 enabled,
+                default_adapter: default_adapter_id,
                 default_model,
                 auth,
                 adapters,

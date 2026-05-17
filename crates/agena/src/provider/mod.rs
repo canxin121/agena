@@ -26,7 +26,7 @@ mod utils;
 mod wire_message;
 
 pub use crate::model::{
-    CapabilitySupport, Model, ModelCapabilities, ModelFamily, ModelId, ModelInputModality,
+    AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
     ModelLifecycle, ModelMetadata, ModelRef, ModelTokenLimits, ModelVariant, ProviderId,
 };
 pub use amazon_bedrock::AmazonBedrockProvider;
@@ -45,7 +45,7 @@ pub use credential::{
 pub use gemini::GeminiProvider;
 pub use gitlab::{GitlabProvider, GitlabProviderConfig};
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
-pub use multi_adapter::{MultiAdapterProvider, ProviderModelRoute};
+pub use multi_adapter::{MultiAdapterProvider, ProviderModelRoute, ProviderModelRouteKey};
 pub use ollama::OllamaProvider;
 pub use openai::{OpenAiApiMode, OpenAiBackend, OpenAiProfile, OpenAiProvider, OpenAiStreamMode};
 pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};

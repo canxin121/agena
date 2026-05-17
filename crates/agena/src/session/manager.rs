@@ -231,6 +231,7 @@ pub struct SessionSubtaskResponse {
     pub session: Session,
     pub profile_name: Option<String>,
     pub model_provider_id: Option<String>,
+    pub model_adapter_id: Option<String>,
     pub model_id: Option<String>,
 }
 
@@ -554,6 +555,7 @@ impl SessionManager {
                         .map(|message| message.id),
                     generated_by_call_id: None,
                     model_provider_id: String::new(),
+                    model_adapter_id: None,
                     model_id: String::new(),
                     model_variant: None,
                     provider_metadata: None,
@@ -577,6 +579,7 @@ impl SessionManager {
                         .map(|message| message.id),
                     generated_by_call_id: None,
                     model_provider_id: String::new(),
+                    model_adapter_id: None,
                     model_id: String::new(),
                     model_variant: None,
                     provider_metadata: None,
@@ -1168,6 +1171,12 @@ impl SessionManager {
                     .map(|message| message.id),
                 generated_by_call_id: None,
                 model_provider_id: request.options.model.provider_id.to_string(),
+                model_adapter_id: request
+                    .options
+                    .model
+                    .adapter_id
+                    .as_ref()
+                    .map(ToString::to_string),
                 model_id: request.options.model.model_id.to_string(),
                 model_variant: request.options.variant.clone(),
                 provider_metadata: None,
@@ -1396,6 +1405,7 @@ impl SessionManager {
             return Ok(SessionSubtaskResponse {
                 profile_name: Some(effective_profile_name),
                 model_provider_id: Some(options.model.provider_id.to_string()),
+                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                 model_id: Some(options.model.model_id.to_string()),
                 session,
             });
@@ -1445,6 +1455,7 @@ impl SessionManager {
         Ok(SessionSubtaskResponse {
             profile_name: Some(effective_profile_name),
             model_provider_id: Some(options.model.provider_id.to_string()),
+            model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
             model_id: Some(options.model.model_id.to_string()),
             session,
         })
@@ -2037,6 +2048,11 @@ impl SessionManager {
                                             .model
                                             .provider_id
                                             .to_string(),
+                                        model_adapter_id: current_options
+                                            .model
+                                            .adapter_id
+                                            .as_ref()
+                                            .map(ToString::to_string),
                                         model_id: current_options.model.model_id.to_string(),
                                         model_variant: current_options.variant.clone(),
                                         provider_metadata: None,
@@ -2285,6 +2301,7 @@ impl SessionManager {
 
             session.runtime.turn.record_model_request(
                 options.model.provider_id.to_string(),
+                options.model.adapter_id.as_ref().map(ToString::to_string),
                 options.model.model_id.to_string(),
                 options.variant.clone(),
                 prepared.prompt_cache_key.clone(),
@@ -2739,6 +2756,7 @@ impl SessionManager {
                 parent_message_id: active_messages.last().map(|message| message.id),
                 generated_by_call_id: None,
                 model_provider_id: options.model.provider_id.to_string(),
+                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                 model_id: options.model.model_id.to_string(),
                 model_variant: None,
                 provider_metadata: None,
@@ -3941,8 +3959,14 @@ impl SessionManager {
         session: &Session,
         mut options: SessionRunOptions,
     ) -> Result<SessionRunOptions, AppError> {
-        if let Some((provider_id, model_id)) = session.runtime.model_override() {
-            options.model = ModelRef::try_new(provider_id, model_id).map_err(|error| {
+        if let Some((provider_id, adapter_id, model_id)) = session.runtime.model_override() {
+            options.model = match adapter_id {
+                Some(adapter_id) => {
+                    ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
+                }
+                None => ModelRef::try_new(provider_id, model_id),
+            }
+            .map_err(|error| {
                 AppError::Internal(format!(
                     "session {} contains invalid execution model override: {error}",
                     session.id
@@ -3986,8 +4010,14 @@ impl SessionManager {
         let model = session
             .runtime
             .model_override()
-            .map(|(provider_id, model_id)| {
-                ModelRef::try_new(provider_id, model_id).map_err(|error| {
+            .map(|(provider_id, adapter_id, model_id)| {
+                let model = match adapter_id {
+                    Some(adapter_id) => {
+                        ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
+                    }
+                    None => ModelRef::try_new(provider_id, model_id),
+                };
+                model.map_err(|error| {
                     AppError::Internal(format!(
                         "session {} contains invalid execution model override: {error}",
                         session.id
@@ -4004,10 +4034,9 @@ impl SessionManager {
                 }
                 let provider_id = provider_ids.into_iter().next()?;
                 let provider = provider_registry.get(provider_id.as_str())?;
-                Some(ModelRef::new(
-                    provider_id,
-                    provider.default_model().to_string(),
-                ))
+                let mut model = ModelRef::new(provider_id, provider.default_model().to_string());
+                model.adapter_id = provider.default_adapter().cloned();
+                Some(model)
             })
             .ok_or_else(|| {
                 AppError::Internal(format!(
@@ -4044,7 +4073,7 @@ impl SessionManager {
         session.runtime.set_allowed_tools(Vec::new());
         session.runtime.execution.agent_permission = state.config.permission.clone();
         session.runtime.execution.agent_run = crate::agent::AgentRunConfig::default();
-        session.runtime.set_model_override(None, None);
+        session.runtime.set_model_override(None, None, None);
         session.runtime.set_model_variant_override(None);
         Ok(session)
     }
@@ -4121,6 +4150,7 @@ impl SessionManager {
         let next_model =
             self.resolve_root_agent_model(&session, options, profile.frontmatter.model.as_deref())?;
         let next_model_provider_id = next_model.provider_id.to_string();
+        let next_model_adapter_id = next_model.adapter_id.as_ref().map(ToString::to_string);
         let next_model_id = next_model.model_id.to_string();
         let next_variant = options.variant.clone();
         let next_run = crate::agent::AgentRunConfig {
@@ -4139,6 +4169,8 @@ impl SessionManager {
             || session.runtime.execution.agent_permission != next_permission
             || session.runtime.execution.model_provider_id.as_deref()
                 != Some(next_model_provider_id.as_str())
+            || session.runtime.execution.model_adapter_id.as_deref()
+                != next_model_adapter_id.as_deref()
             || session.runtime.execution.model_id.as_deref() != Some(next_model_id.as_str())
             || session.runtime.execution.model_variant != next_variant
             || session.runtime.execution.agent_run != next_run;
@@ -4152,6 +4184,7 @@ impl SessionManager {
         session.runtime.execution.agent_run = next_run.clone();
         session.runtime.set_model_override(
             Some(next_model_provider_id.clone()),
+            next_model_adapter_id.clone(),
             Some(next_model_id.clone()),
         );
         session
@@ -4185,20 +4218,17 @@ impl SessionManager {
         let requested_model = requested_model
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        if let Some(target) = requested_model
-            && target.contains('/')
-        {
-            return self
-                .execution_state()
-                .processor
-                .provider_registry()
-                .resolve_model_target(target, None);
-        }
         let base_model = session
             .runtime
             .model_override()
-            .map(|(provider_id, model_id)| {
-                ModelRef::try_new(provider_id, model_id).map_err(|error| {
+            .map(|(provider_id, adapter_id, model_id)| {
+                let model = match adapter_id {
+                    Some(adapter_id) => {
+                        ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
+                    }
+                    None => ModelRef::try_new(provider_id, model_id),
+                };
+                model.map_err(|error| {
                     AppError::Internal(format!(
                         "session {} contains invalid execution model override: {error}",
                         session.id
@@ -4210,7 +4240,10 @@ impl SessionManager {
             .unwrap_or_else(|| options.model.clone());
         Ok(match requested_model {
             Some(model_id) => {
-                ModelRef::new(base_model.provider_id.to_string(), model_id.to_string())
+                let mut model =
+                    ModelRef::new(base_model.provider_id.to_string(), model_id.to_string());
+                model.adapter_id = base_model.adapter_id.clone();
+                model
             }
             None => base_model,
         })
@@ -4379,35 +4412,17 @@ impl SessionManager {
         let requested_model = requested_model
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        if let Some(target) = requested_model
-            && target.contains('/')
-        {
-            let model = self
-                .execution_state()
-                .processor
-                .provider_registry()
-                .resolve_model_target(target, None)?;
-            return Ok(SessionRunOptions {
-                model,
-                variant: None,
-                thinking: None,
-                system: child.runtime.execution.system_prompt_override.clone(),
-                temperature: child
-                    .runtime
-                    .execution
-                    .agent_run
-                    .temperature
-                    .map(|value| value.0),
-                max_output_tokens: child.runtime.execution.agent_run.max_output_tokens,
-                agent_profile: child.runtime.execution.agent_profile.clone(),
-                max_turn_loops: child.runtime.execution.agent_run.steps,
-            });
-        }
         let inherited = child
             .runtime
             .model_override()
-            .map(|(provider_id, model_id)| {
-                ModelRef::try_new(provider_id, model_id).map_err(|error| {
+            .map(|(provider_id, adapter_id, model_id)| {
+                let model = match adapter_id {
+                    Some(adapter_id) => {
+                        ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
+                    }
+                    None => ModelRef::try_new(provider_id, model_id),
+                };
+                model.map_err(|error| {
                     AppError::Internal(format!(
                         "child session {} contains invalid model override: {error}",
                         child.id
@@ -4424,7 +4439,10 @@ impl SessionManager {
         })?;
         let model = match requested_model {
             Some(model_id) => {
-                ModelRef::new(base_model.provider_id.to_string(), model_id.to_string())
+                let mut model =
+                    ModelRef::new(base_model.provider_id.to_string(), model_id.to_string());
+                model.adapter_id = base_model.adapter_id.clone();
+                model
             }
             None => base_model,
         };
@@ -4473,6 +4491,7 @@ impl SessionManager {
                     parent_message_id: session.last_conversation_message().map(|m| m.id),
                     generated_by_call_id: None,
                     model_provider_id: options.model.provider_id.to_string(),
+                    model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                     model_id: options.model.model_id.to_string(),
                     model_variant: options.variant.clone(),
                     provider_metadata: None,
@@ -4565,18 +4584,21 @@ fn infer_session_model(session: &Session) -> Result<Option<ModelRef>, AppError> 
     });
     for message in sorted {
         let provider_id = message.metadata.model_provider_id.trim();
+        let adapter_id = message.metadata.model_adapter_id.as_deref().map(str::trim);
         let model_id = message.metadata.model_id.trim();
         if provider_id.is_empty() || model_id.is_empty() {
             continue;
         }
-        return ModelRef::try_new(provider_id, model_id)
-            .map(Some)
-            .map_err(|error| {
-                AppError::Internal(format!(
-                    "session {} contains invalid persisted model metadata: {error}",
-                    session.id
-                ))
-            });
+        let model = match adapter_id.filter(|value| !value.is_empty()) {
+            Some(adapter_id) => ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id),
+            None => ModelRef::try_new(provider_id, model_id),
+        };
+        return model.map(Some).map_err(|error| {
+            AppError::Internal(format!(
+                "session {} contains invalid persisted model metadata: {error}",
+                session.id
+            ))
+        });
     }
     Ok(None)
 }
@@ -7351,7 +7373,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("reviewer.md"),
-            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - fs\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted/scripted-model/audit\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
+            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - fs\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted-model/audit\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
         )
         .expect("write reviewer profile");
         let service = build_manager(
@@ -7446,7 +7468,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("planner.md"),
-            "---\ndescription: planner\nallowed_entries:\n  - fs\n  - shell\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      shell: ask\n    rules:\n      shell:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted/scripted-model/plan\naliases: [\"plan\"]\n---\nYou are a precise planner.",
+            "---\ndescription: planner\nallowed_entries:\n  - fs\n  - shell\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      shell: ask\n    rules:\n      shell:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted-model/plan\naliases: [\"plan\"]\n---\nYou are a precise planner.",
         )
         .expect("write planner profile");
         let service = build_manager(
@@ -7881,6 +7903,7 @@ mod tests {
             .expect("create session");
         session.runtime.set_model_override(
             Some("scripted".to_string()),
+            None,
             Some("claude-sonnet-4-6".to_string()),
         );
 
@@ -9222,6 +9245,7 @@ mod tests {
                 parent_message_id: None,
                 generated_by_call_id: None,
                 model_provider_id: options.model.provider_id.to_string(),
+                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                 model_id: options.model.model_id.to_string(),
                 model_variant: options.variant.clone(),
                 provider_metadata: None,

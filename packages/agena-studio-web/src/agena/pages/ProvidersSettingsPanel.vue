@@ -8,7 +8,6 @@ import {
   createEmptyModelCatalogDraft,
   createModelCatalogDraftFromEntry,
   createModelCatalogDraftFromProviderModel,
-  splitProviderModelRoute,
   type ModelCatalogEditableDraft,
 } from './useRuntimeModelCatalogActions'
 import type {
@@ -125,10 +124,6 @@ function optionalText(value: string) {
   return normalized || undefined
 }
 
-function providerRoute(adapterId: string, modelId: string) {
-  return `${adapterId.trim()}/${modelId.trim()}`
-}
-
 function setConfigMessage(message: string) {
   props.actionError.value = ''
   props.actionMessage.value = message
@@ -168,7 +163,10 @@ async function patchProviderAdapterModel(input: {
       },
     },
   }
-  if (input.setDefault) providerPatch.default_model = providerRoute(adapterId, modelId)
+  if (input.setDefault) {
+    providerPatch.default_adapter = adapterId
+    providerPatch.default_model = modelId
+  }
 
   submittingConfig.value = true
   try {
@@ -221,7 +219,8 @@ async function createProvider() {
       changes: {
         [providerId]: {
           enabled: true,
-          default_model: providerRoute(adapterId, modelId),
+          default_adapter: adapterId,
+          default_model: modelId,
           auth,
           adapters: {
             [adapterId]: {
@@ -257,9 +256,8 @@ function loadLiveModelIntoProviderDraft(model: ProviderModel) {
   providerModelProviderId.value = model.provider_id
   providerModelDraft.value = createModelCatalogDraftFromProviderModel(model)
   providerModelSetDefault.value = false
-  const route = splitProviderModelRoute(model.id)
   setConfigMessage(
-    `Loaded ${model.provider_id}/${route.adapterId || 'adapter'}/${route.modelId} into provider model draft.`,
+    `Loaded ${model.provider_id}/${model.adapter_id || 'adapter'}/${model.id} into provider model draft.`,
   )
 }
 
@@ -391,7 +389,9 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
           <div>
             <p class="settings-panel-kicker">{{ provider.provider_id }}</p>
             <h3 class="record-title">{{ provider.provider_id }}</h3>
-            <div class="record-subtitle mono">{{ provider.default_model || 'default unset' }}</div>
+            <div class="record-subtitle mono">
+              {{ provider.default_adapter || 'auto' }} · {{ provider.default_model || 'default unset' }}
+            </div>
           </div>
           <div class="record-meta">
             <span
@@ -469,10 +469,6 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
             class="input"
             placeholder="GPT-4.1 Mini"
           />
-        </div>
-        <div class="field">
-          <label class="label" for="provider-model-family">Family</label>
-          <input id="provider-model-family" v-model="providerModelDraft.family" class="input mono" placeholder="gpt" />
         </div>
         <div class="field">
           <label class="label" for="provider-model-lifecycle">Lifecycle</label>
@@ -568,11 +564,7 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
       </div>
 
       <div v-if="sortedCatalogEntries.length" class="record-list">
-        <article
-          v-for="entry in sortedCatalogEntries"
-          :key="`${entry.model_id}/${entry.kind}`"
-          class="record-card"
-        >
+        <article v-for="entry in sortedCatalogEntries" :key="`${entry.model_id}/${entry.kind}`" class="record-card">
           <div class="record-header">
             <div>
               <p class="settings-panel-kicker">{{ entry.source_label || entry.source || entry.kind }}</p>
@@ -581,7 +573,6 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
             </div>
             <div class="record-meta">
               <span class="badge neutral">{{ entry.kind }}</span>
-              <span v-if="entry.family" class="badge neutral">{{ entry.family }}</span>
             </div>
           </div>
           <p v-if="entry.description" class="muted">{{ entry.description }}</p>

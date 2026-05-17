@@ -339,6 +339,7 @@ impl SessionProcessor {
             parent_message_id: run.completion.messages.last().map(|message| message.id),
             generated_by_call_id: None,
             model_provider_id: run.model.provider_id.to_string(),
+            model_adapter_id: run.model.adapter_id.as_ref().map(ToString::to_string),
             model_id: run.completion.model.to_string(),
             model_variant: run.model_variant.clone(),
             provider_metadata: None,

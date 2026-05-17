@@ -297,30 +297,24 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
         runtime_value.get("model_catalog").is_some(),
         "runtime payload should include model_catalog: {runtime_value:?}"
     );
-    let runtime_entries = runtime_value
-        .pointer("/model_catalog/entries")
-        .and_then(|value| value.as_array())
-        .expect("runtime payload should include model_catalog entries");
-    assert!(runtime_entries.iter().any(|entry| {
-        entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5")
-            && entry.get("kind").and_then(|value| value.as_str()) == Some("official")
-            && entry.get("source").and_then(|value| value.as_str()) == Some("cache")
-            && entry.get("source_label").and_then(|value| value.as_str()) == Some("cached catalog")
-            && entry.get("origin").and_then(|value| value.as_str()) == Some("OpenAI")
-    }));
-    assert!(runtime_entries.iter().any(|entry| {
-        entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
-            && entry.get("kind").and_then(|value| value.as_str()) == Some("custom")
-            && entry.get("source").and_then(|value| value.as_str()) == Some("custom")
-            && entry.get("source_label").and_then(|value| value.as_str())
-                == Some("workspace override")
-            && entry.get("origin").and_then(|value| value.as_str()) == Some("OpenAI")
-    }));
+    assert_eq!(
+        runtime_value.pointer("/model_catalog/entry_count"),
+        Some(&serde_json::json!(2))
+    );
+    assert_eq!(
+        runtime_value.pointer("/model_catalog/official_entry_count"),
+        Some(&serde_json::json!(1))
+    );
+    assert_eq!(
+        runtime_value.pointer("/model_catalog/custom_entry_count"),
+        Some(&serde_json::json!(1))
+    );
 
     let catalog_response = app
+        .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/model-catalog")
+                .uri("/api/v1/model-catalog?limit=2&offset=0")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -336,15 +330,24 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
     let catalog_value: serde_json::Value = serde_json::from_slice(&catalog_body).unwrap();
     assert!(
         catalog_value
-            .get("entries")
+            .get("items")
             .and_then(|value| value.as_array())
             .is_some(),
-        "catalog payload should include entries array: {catalog_value:?}"
+        "catalog payload should include items array: {catalog_value:?}"
+    );
+    assert_eq!(
+        catalog_value.pointer("/summary/entry_count"),
+        Some(&serde_json::json!(2))
+    );
+    assert_eq!(catalog_value.pointer("/limit"), Some(&serde_json::json!(2)));
+    assert_eq!(
+        catalog_value.pointer("/offset"),
+        Some(&serde_json::json!(0))
     );
     let catalog_entries = catalog_value
-        .get("entries")
+        .get("items")
         .and_then(|value| value.as_array())
-        .expect("catalog payload should include entries");
+        .expect("catalog payload should include items");
     assert!(catalog_entries.iter().any(|entry| {
         entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5")
             && entry.get("kind").and_then(|value| value.as_str()) == Some("official")
@@ -352,7 +355,35 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             && entry.get("source_label").and_then(|value| value.as_str()) == Some("cached catalog")
             && entry.get("origin").and_then(|value| value.as_str()) == Some("OpenAI")
     }));
-    assert!(catalog_entries.iter().any(|entry| {
+    let lookup_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/model-catalog/lookup")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "model_ids": ["gpt-5-mini"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(lookup_response.status(), StatusCode::OK);
+    let lookup_body = lookup_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let lookup_value: serde_json::Value = serde_json::from_slice(&lookup_body).unwrap();
+    let lookup_entries = lookup_value
+        .get("items")
+        .and_then(|value| value.as_array())
+        .expect("lookup payload should include items");
+    assert!(lookup_entries.iter().any(|entry| {
         entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
             && entry.get("kind").and_then(|value| value.as_str()) == Some("custom")
             && entry.get("source").and_then(|value| value.as_str()) == Some("custom")
@@ -514,16 +545,12 @@ async fn model_catalog_delete_accepts_visible_model_ids_with_slashes() {
 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    let entries = value
-        .get("entries")
-        .and_then(|entries| entries.as_array())
-        .expect("catalog response should include entries");
     assert!(
-        !entries.iter().any(|entry| {
-            entry.get("model_id").and_then(|value| value.as_str())
-                == Some("openai/google/gemini-2.5-pro")
-        }),
-        "deleted entry should not remain in catalog payload: {value:?}"
+        value
+            .get("entry_count")
+            .and_then(|count| count.as_u64())
+            .is_some(),
+        "catalog delete response should include summary counts: {value:?}"
     );
 }
 

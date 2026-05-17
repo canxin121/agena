@@ -33,7 +33,11 @@ function sampleRuntimeStatus(overrides: Partial<RuntimeStatus> = {}): RuntimeSta
     watch_paths: [],
     reload: { enabled: true, interval_secs: 1 },
     janitor: { enabled: true, interval_secs: 1 },
-    model_catalog: { entries: [] },
+    model_catalog: {
+      entry_count: 0,
+      official_entry_count: 0,
+      custom_entry_count: 0,
+    },
     automation: { enabled: false, job_count: 0, recent_jobs: [] },
     operator: {
       mcp: { server_count: 0, tool_count: 0, servers: [] },
@@ -230,13 +234,9 @@ describe('useRuntimeSectionLoadActions', () => {
             authProviders: [{ provider_id: 'anthropic', configured: true, credential_present: true }],
             runtime: sampleRuntimeStatus({
               model_catalog: {
-                entries: [
-                  {
-                    model_id: 'claude-opus-4-7',
-                    kind: 'official',
-                    source: 'generated',
-                  },
-                ],
+                entry_count: 1,
+                official_entry_count: 1,
+                custom_entry_count: 0,
               },
             }),
             providers: [
@@ -269,7 +269,7 @@ describe('useRuntimeSectionLoadActions', () => {
 
     expect(calls).toEqual(['loadSettingsSectionData:bash', 'replaceProviderModels:anthropic', 'loadDesktopPanel'])
     expect(state.authProviders.value.map((provider) => provider.provider_id)).toEqual(['anthropic'])
-    expect(state.catalogEntries.value.map((entry) => entry.model_id)).toEqual(['claude-opus-4-7'])
+    expect(state.catalogEntries.value).toEqual([])
     expect(state.permissionRules.value.map((rule) => rule.id)).toEqual([1])
   })
 

@@ -204,7 +204,9 @@ pub struct ModelCatalogResponse {
     pub last_successful_source: Option<ModelCatalogEntrySourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    pub entries: Vec<ModelCatalogEntryResource>,
+    pub entry_count: usize,
+    pub official_entry_count: usize,
+    pub custom_entry_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

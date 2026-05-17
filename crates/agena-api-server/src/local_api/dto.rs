@@ -123,7 +123,25 @@ pub struct ModelCatalogResponse {
     pub last_successful_source: Option<ModelCatalogEntrySourceKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
-    pub entries: Vec<ModelCatalogEntryResource>,
+    pub entry_count: usize,
+    pub official_entry_count: usize,
+    pub custom_entry_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelCatalogListResponse {
+    pub summary: ModelCatalogResponse,
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub available_origins: Vec<String>,
+    pub items: Vec<ModelCatalogEntryResource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelCatalogLookupResponse {
+    pub items: Vec<ModelCatalogEntryResource>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -222,6 +240,12 @@ pub struct ModelCatalogEntryWriteRequest {
     pub model_id: String,
     #[serde(flatten)]
     pub definition: CatalogModelDefinition,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelCatalogLookupRequest {
+    #[serde(default)]
+    pub model_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

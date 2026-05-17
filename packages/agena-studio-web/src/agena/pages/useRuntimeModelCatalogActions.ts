@@ -11,8 +11,8 @@ import { deleteModelCatalogEntry, refreshModelCatalog, upsertModelCatalogEntry }
 export type RuntimeModelCatalogActionsInput = {
   actionError: Ref<string>
   actionMessage: Ref<string>
-  catalogEntries: Ref<ModelCatalogEntry[]>
   load: () => Promise<void>
+  reloadCatalogEntries?: () => Promise<void>
 }
 
 export type RuntimeModelCatalogActionsDeps = {
@@ -307,16 +307,14 @@ export function useRuntimeModelCatalogActions(
   input: RuntimeModelCatalogActionsInput,
   deps: RuntimeModelCatalogActionsDeps = defaultDeps,
 ) {
-  function replaceEntries(nextEntries: ModelCatalogEntry[]) {
-    input.catalogEntries.value = nextEntries
-  }
-
   async function refreshCatalogAction() {
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      const response = await deps.refreshModelCatalog()
-      replaceEntries(response.entries ?? [])
+      await deps.refreshModelCatalog()
+      if (input.reloadCatalogEntries) {
+        await input.reloadCatalogEntries()
+      }
       input.actionMessage.value = 'Refreshed model catalog.'
       await input.load()
     } catch (err) {
@@ -334,8 +332,10 @@ export function useRuntimeModelCatalogActions(
         return
       }
 
-      const response = await deps.upsertModelCatalogEntry(request)
-      replaceEntries(response.entries ?? [])
+      await deps.upsertModelCatalogEntry(request)
+      if (input.reloadCatalogEntries) {
+        await input.reloadCatalogEntries()
+      }
       input.actionMessage.value = `Saved catalog entry ${request.model_id}.`
       await input.load()
     } catch (err) {
@@ -347,8 +347,10 @@ export function useRuntimeModelCatalogActions(
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      const response = await deps.deleteModelCatalogEntry(modelId)
-      replaceEntries(response.entries ?? [])
+      await deps.deleteModelCatalogEntry(modelId)
+      if (input.reloadCatalogEntries) {
+        await input.reloadCatalogEntries()
+      }
       input.actionMessage.value = `Deleted local catalog override ${modelId}.`
       await input.load()
     } catch (err) {

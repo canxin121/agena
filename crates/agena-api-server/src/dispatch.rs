@@ -6,10 +6,10 @@ use std::collections::HashMap;
 
 use crate::local_api::dto::MessageResource as HttpMessageResource;
 use crate::local_api::{
-    MessageListQuery, ModelCatalogEntryResource as HttpModelCatalogEntryResource,
-    ModelCatalogResponse as HttpModelCatalogResponse, PartLoadMode as HttpPartLoadMode,
-    PermissionRuleListQuery, PermissionRuleResource as HttpPermissionRuleResource,
-    PermissionRuleWriteRequest, SessionAutomationResource as HttpSessionAutomationResource,
+    MessageListQuery, ModelCatalogResponse as HttpModelCatalogResponse,
+    PartLoadMode as HttpPartLoadMode, PermissionRuleListQuery,
+    PermissionRuleResource as HttpPermissionRuleResource, PermissionRuleWriteRequest,
+    SessionAutomationResource as HttpSessionAutomationResource,
     SessionCreateRequest as HttpSessionCreateRequest,
     SessionExecutionContextResource as HttpSessionExecutionContextResource,
     SessionExecutionResource as HttpSessionExecutionResource,
@@ -44,14 +44,14 @@ use agena_api::{
         ListSessionsParams, ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        ModelCatalogEntryResource, ModelCatalogResponse, ProviderAdapterSummaryResource,
-        ProviderModelsResponse, ProviderSummaryResource, RunOptions, RuntimeAgentResource,
-        RuntimeAgentsResource, RuntimeAutomationResource, RuntimeLspResource,
-        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
-        RuntimeOperatorResource, RuntimeSessionCacheResource, RuntimeSkillResource,
-        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
-        SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
-        SessionGoalResource, SessionResource, SessionRunState, WorkspaceResource,
+        ModelCatalogResponse, ProviderAdapterSummaryResource, ProviderModelsResponse,
+        ProviderSummaryResource, RunOptions, RuntimeAgentResource, RuntimeAgentsResource,
+        RuntimeAutomationResource, RuntimeLspResource, RuntimeLspServerResource,
+        RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
+        RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
+        RuntimeStatusResponse, RuntimeTaskResource, SessionAutomationResource,
+        SessionExecutionContextResource, SessionExecutionResource, SessionGoalResource,
+        SessionResource, SessionRunState, WorkspaceResource,
     },
 };
 
@@ -219,53 +219,14 @@ fn scheduled_job_run_from_http(
     }
 }
 
-fn model_catalog_entry_from_http(
-    value: HttpModelCatalogEntryResource,
-) -> ModelCatalogEntryResource {
-    ModelCatalogEntryResource {
-        model_id: value.model_id,
-        kind: match value.kind {
-            crate::local_api::dto::ModelCatalogEntryKind::Official => {
-                agena_api::resource::ModelCatalogEntryKind::Official
-            }
-            crate::local_api::dto::ModelCatalogEntryKind::Custom => {
-                agena_api::resource::ModelCatalogEntryKind::Custom
-            }
-        },
-        source: match value.source {
-            crate::local_api::dto::ModelCatalogSourceKind::Generated => {
-                agena_api::resource::ModelCatalogSourceKind::Generated
-            }
-            crate::local_api::dto::ModelCatalogSourceKind::Cache => {
-                agena_api::resource::ModelCatalogSourceKind::Cache
-            }
-            crate::local_api::dto::ModelCatalogSourceKind::Custom => {
-                agena_api::resource::ModelCatalogSourceKind::Custom
-            }
-        },
-        source_label: value.source_label,
-        has_local_override: value.has_local_override,
-        display_name: value.display_name,
-        origin: value.origin,
-        lifecycle: value.lifecycle,
-        context_window_tokens: value.context_window_tokens,
-        max_output_tokens: value.max_output_tokens,
-        description: value.description,
-        variants: value.variants,
-        capabilities: value.capabilities,
-    }
-}
-
 fn model_catalog_from_http(value: HttpModelCatalogResponse) -> ModelCatalogResponse {
     ModelCatalogResponse {
         last_refresh_at: value.last_refresh_at,
         last_successful_source: value.last_successful_source,
         last_error: value.last_error,
-        entries: value
-            .entries
-            .into_iter()
-            .map(model_catalog_entry_from_http)
-            .collect(),
+        entry_count: value.entry_count,
+        official_entry_count: value.official_entry_count,
+        custom_entry_count: value.custom_entry_count,
     }
 }
 
@@ -362,16 +323,17 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error,
-        entries: catalog
+        entry_count: catalog.entries.len(),
+        official_entry_count: catalog
             .entries
-            .into_iter()
-            .map(|entry| {
-                crate::local_api::ModelCatalogEntryResource::from_record(
-                    entry,
-                    catalog.last_successful_source,
-                )
-            })
-            .collect(),
+            .iter()
+            .filter(|entry| !entry.has_local_override)
+            .count(),
+        custom_entry_count: catalog
+            .entries
+            .iter()
+            .filter(|entry| entry.has_local_override)
+            .count(),
     });
     let session_cache = snapshot.session_manager().map(|manager| {
         let stats = manager.cache_stats();

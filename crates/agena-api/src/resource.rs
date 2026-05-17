@@ -237,6 +237,8 @@ pub struct ModelCatalogEntryResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<agena::model::ModelLifecycle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,

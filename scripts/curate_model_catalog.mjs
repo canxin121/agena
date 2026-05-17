@@ -210,6 +210,184 @@ const DUO_MODEL_MAP = new Map([
   ['duo-chat-gpt-5-4-nano', 'gpt-5.4-nano'],
 ]);
 
+const ROOT_ORIGINS = new Map([
+  ['aion', 'AionLabs'],
+  ['all', 'Sentence Transformers'],
+  ['allam', 'SDAIA'],
+  ['aura', 'Deepgram'],
+  ['autoglm', 'Zhipu AI'],
+  ['bge', 'BAAI'],
+  ['brave', 'Brave'],
+  ['c4ai', 'Cohere'],
+  ['chatgpt', 'OpenAI'],
+  ['claude', 'Anthropic'],
+  ['codegemma', 'Google'],
+  ['codestral', 'Mistral AI'],
+  ['codex', 'OpenAI'],
+  ['codellama', 'Meta'],
+  ['command', 'Cohere'],
+  ['deepseek', 'DeepSeek'],
+  ['devstral', 'Mistral AI'],
+  ['doubao', 'ByteDance'],
+  ['e5', 'Microsoft'],
+  ['elevenlabs', 'ElevenLabs'],
+  ['embed', 'Cohere'],
+  ['ernie', 'Baidu'],
+  ['exa', 'Exa'],
+  ['flux', 'Black Forest Labs'],
+  ['gemini', 'Google'],
+  ['gemma', 'Google'],
+  ['glm', 'Zhipu AI'],
+  ['gpt', 'OpenAI'],
+  ['granite', 'IBM'],
+  ['grok', 'xAI'],
+  ['gte', 'Alibaba'],
+  ['hunyuan', 'Tencent'],
+  ['ideogram', 'Ideogram'],
+  ['imagen', 'Google'],
+  ['inflection', 'Inflection AI'],
+  ['internvl', 'OpenGVLab'],
+  ['jais', 'G42'],
+  ['jamba', 'AI21 Labs'],
+  ['kimi', 'Moonshot AI'],
+  ['kling', 'Kuaishou'],
+  ['learnlm', 'Google'],
+  ['lfm', 'Liquid AI'],
+  ['ling', 'Inclusion AI'],
+  ['llama', 'Meta'],
+  ['llama3', 'Meta'],
+  ['luma', 'Luma AI'],
+  ['lyria', 'Google'],
+  ['magistral', 'Mistral AI'],
+  ['minimax', 'MiniMax'],
+  ['ministral', 'Mistral AI'],
+  ['mistral', 'Mistral AI'],
+  ['mixtral', 'Mistral AI'],
+  ['moonshot', 'Moonshot AI'],
+  ['mimo', 'Xiaomi'],
+  ['o1', 'OpenAI'],
+  ['o3', 'OpenAI'],
+  ['o4', 'OpenAI'],
+  ['olmo', 'Allen AI'],
+  ['open', 'Mistral AI'],
+  ['palmyra', 'Writer'],
+  ['phi', 'Microsoft'],
+  ['pixtral', 'Mistral AI'],
+  ['qianfan', 'Baidu'],
+  ['qvq', 'Alibaba'],
+  ['qwen', 'Alibaba'],
+  ['qwen2', 'Alibaba'],
+  ['qwen3', 'Alibaba'],
+  ['qwq', 'Alibaba'],
+  ['recraft', 'Recraft'],
+  ['rerank', 'Cohere'],
+  ['runway', 'Runway'],
+  ['seed', 'ByteDance'],
+  ['solar', 'Upstage'],
+  ['sonar', 'Perplexity'],
+  ['step', 'StepFun'],
+  ['veo', 'Google'],
+  ['v0', 'Vercel'],
+  ['venice', 'Venice'],
+  ['voxtral', 'Mistral AI'],
+  ['voyage', 'Voyage AI'],
+  ['whisper', 'OpenAI'],
+  ['yi', '01.AI'],
+]);
+
+const DISPLAY_ORIGIN_RULES = [
+  [/\bopenai\b/i, 'OpenAI'],
+  [/\banthropic\b/i, 'Anthropic'],
+  [/\bgoogle\b/i, 'Google'],
+  [/\bamazon\b/i, 'Amazon'],
+  [/\bdeepgram\b/i, 'Deepgram'],
+  [/\bdeepseek\b/i, 'DeepSeek'],
+  [/\bcohere\b/i, 'Cohere'],
+  [/\bmistral\b/i, 'Mistral AI'],
+  [/\bmoonshot\b/i, 'Moonshot AI'],
+  [/\bz(?:\.?ai|hipu)\b/i, 'Zhipu AI'],
+  [/\bbaidu\b/i, 'Baidu'],
+  [/\btencent\b/i, 'Tencent'],
+  [/\bwriter\b/i, 'Writer'],
+  [/\bperplexity\b/i, 'Perplexity'],
+  [/\bblack forest\b/i, 'Black Forest Labs'],
+  [/\bvoyage\b/i, 'Voyage AI'],
+  [/\bliquid ?ai\b/i, 'Liquid AI'],
+  [/\bai21\b/i, 'AI21 Labs'],
+  [/\bxiaomi\b/i, 'Xiaomi'],
+  [/\bupstage\b/i, 'Upstage'],
+  [/\bsdaia\b/i, 'SDAIA'],
+  [/\bg42\b/i, 'G42'],
+  [/\binclusionai\b/i, 'Inclusion AI'],
+  [/\bibm\b/i, 'IBM'],
+  [/\ballenai\b/i, 'Allen AI'],
+  [/\bdeepgram\b/i, 'Deepgram'],
+];
+
+function normalizeOptionalText(value) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized || null;
+}
+
+function titleCaseOrigin(value) {
+  return value
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .map((part) => {
+      if (/^\d/.test(part)) {
+        return part.toUpperCase();
+      }
+      return part.slice(0, 1).toUpperCase() + part.slice(1);
+    })
+    .join(' ');
+}
+
+function originForModel(modelId, definition) {
+  const root = (modelId.match(/^[a-z0-9]+/) || [''])[0];
+  const displayName = normalizeOptionalText(definition?.display_name)?.toLowerCase() || '';
+
+  if (modelId.startsWith('text-embedding-005')) {
+    return 'Google';
+  }
+  if (modelId.startsWith('text-embedding-')) {
+    return 'OpenAI';
+  }
+  if (modelId.startsWith('gpt-image-') || modelId.startsWith('dall-e-')) {
+    return 'OpenAI';
+  }
+  if (modelId.startsWith('omni-moderation-') || modelId.startsWith('tts-')) {
+    return 'OpenAI';
+  }
+  if (modelId.startsWith('nova-3') || modelId.startsWith('nova-2-')) {
+    return 'Deepgram';
+  }
+  if (
+    modelId.startsWith('nova-lite')
+    || modelId.startsWith('nova-micro')
+    || modelId.startsWith('nova-pro')
+    || modelId.startsWith('nova-premier')
+    || displayName.includes('amazon')
+  ) {
+    return 'Amazon';
+  }
+
+  const rootOrigin = ROOT_ORIGINS.get(root);
+  if (rootOrigin) {
+    return rootOrigin;
+  }
+
+  for (const [pattern, origin] of DISPLAY_ORIGIN_RULES) {
+    if (pattern.test(displayName)) {
+      return origin;
+    }
+  }
+
+  if (root) {
+    return titleCaseOrigin(root);
+  }
+  return null;
+}
+
 function canonicalModelId(rawId) {
   let id = rawId.trim().toLowerCase();
   id = id.replace(/@default$/, '').replace(/-maas$/, '').replace(/:free$/, '');
@@ -441,7 +619,16 @@ const output = {
   models: Object.fromEntries(
     [...curatedModels.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([modelId, { definition }]) => [modelId, definition]),
+      .map(([modelId, { definition }]) => {
+        const nextDefinition = structuredClone(definition);
+        const origin = normalizeOptionalText(nextDefinition.origin) || originForModel(modelId, nextDefinition);
+        if (origin) {
+          nextDefinition.origin = origin;
+        } else {
+          delete nextDefinition.origin;
+        }
+        return [modelId, nextDefinition];
+      }),
   ),
 };
 

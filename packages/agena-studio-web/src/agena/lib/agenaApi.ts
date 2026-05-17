@@ -245,6 +245,7 @@ export type ModelCatalogEntry = {
   source: ModelCatalogSourceKind
   source_label?: string | null
   display_name?: string | null
+  origin?: string | null
   lifecycle?: string | null
   context_window_tokens?: number | null
   max_output_tokens?: number | null
@@ -271,6 +272,7 @@ export type ModelCatalogEntryWriteRequest = {
   max_output_tokens?: number | null
   description?: string | null
   display_name?: string | null
+  origin?: string | null
   variants?: Record<string, ProviderModelVariant>
   input?: unknown
   features?: unknown

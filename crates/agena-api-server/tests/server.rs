@@ -175,7 +175,8 @@ fn seed_cached_official_catalog(workspace_root: &str) {
         "document": {
             "models": {
                 "gpt-5": {
-                    "display_name": "GPT-5 Official"
+                    "display_name": "GPT-5 Official",
+                    "origin": "OpenAI"
                 }
             }
         }
@@ -269,6 +270,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             "gpt-5-mini",
             CatalogModelDefinition {
                 display_name: Some("GPT-5 Mini Workspace".to_owned()),
+                origin: Some("OpenAI".to_owned()),
                 ..CatalogModelDefinition::default()
             },
         )
@@ -306,6 +308,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             && entry.get("kind").and_then(|value| value.as_str()) == Some("official")
             && entry.get("source").and_then(|value| value.as_str()) == Some("cache")
             && entry.get("source_label").and_then(|value| value.as_str()) == Some("cached catalog")
+            && entry.get("origin").and_then(|value| value.as_str()) == Some("OpenAI")
     }));
     assert!(runtime_entries.iter().any(|entry| {
         entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
@@ -313,6 +316,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             && entry.get("source").and_then(|value| value.as_str()) == Some("custom")
             && entry.get("source_label").and_then(|value| value.as_str())
                 == Some("workspace override")
+            && entry.get("origin").and_then(|value| value.as_str()) == Some("OpenAI")
     }));
 
     let catalog_response = app
@@ -352,6 +356,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             && entry.get("kind").and_then(|value| value.as_str()) == Some("official")
             && entry.get("source").and_then(|value| value.as_str()) == Some("cache")
             && entry.get("source_label").and_then(|value| value.as_str()) == Some("cached catalog")
+            && entry.get("origin").and_then(|value| value.as_str()) == Some("OpenAI")
     }));
     assert!(catalog_entries.iter().any(|entry| {
         entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
@@ -359,6 +364,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             && entry.get("source").and_then(|value| value.as_str()) == Some("custom")
             && entry.get("source_label").and_then(|value| value.as_str())
                 == Some("workspace override")
+            && entry.get("origin").and_then(|value| value.as_str()) == Some("OpenAI")
     }));
 }
 
@@ -570,6 +576,7 @@ enabled = true
             "gpt-upstream",
             CatalogModelDefinition {
                 display_name: Some("Decorated GPT".to_owned()),
+                origin: Some("OpenAI".to_owned()),
                 description: Some("Catalog description".to_owned()),
                 lifecycle: Some(ModelLifecycle::Preview),
                 context_window_tokens: Some(123_456),
@@ -632,6 +639,10 @@ enabled = true
             .pointer("/metadata/limits/max_output_tokens")
             .and_then(|value| value.as_u64()),
         Some(7_890)
+    );
+    assert!(
+        model.get("origin").is_none(),
+        "provider model payload should not expose catalog-only origin metadata: {model:?}"
     );
 }
 

@@ -69,8 +69,14 @@ pub trait ModelProvider: Send + Sync {
     }
 
     fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
-        let _ = model;
-        BTreeMap::new()
+        match self.capability_family() {
+            Some(family) => super::default_model_mode_registry().thinking_modes_for_family(
+                family,
+                None,
+                model.as_str(),
+            ),
+            None => BTreeMap::new(),
+        }
     }
 
     fn model_thinking_modes_for_adapter(
@@ -78,8 +84,14 @@ pub trait ModelProvider: Send + Sync {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelThinkingMode> {
-        let _ = adapter_id;
-        self.model_thinking_modes(model)
+        match self.capability_family() {
+            Some(family) => super::default_model_mode_registry().thinking_modes_for_family(
+                family,
+                adapter_id,
+                model.as_str(),
+            ),
+            None => self.model_thinking_modes(model),
+        }
     }
 
     fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {

@@ -12,6 +12,10 @@ function createInput() {
       {
         provider_id: 'anthropic',
         id: 'claude-sonnet-4-6',
+        metadata: {
+          supports_verbosity: true,
+          default_verbosity: 'low',
+        },
         thinking_modes: {
           light: { display_name: 'Light', description: 'Quick thinking' },
           deep: { display_name: 'Deep', description: 'More thinking' },
@@ -43,6 +47,7 @@ function createInput() {
     selectedProviderId: ref(''),
     selectedThinkingMode: ref(''),
     selectedSpeedMode: ref(''),
+    selectedVerbosity: ref(''),
     selectedWorkspaceId: ref<number | null>(null),
     userInputDrafts: reactive<Record<string, Record<string, string>>>({}),
     workspaces,
@@ -84,16 +89,20 @@ describe('useChatPageUiState', () => {
 
     expect(ui.modelThinkingModeOptions().map((item) => item.id)).toEqual(['light', 'deep'])
     expect(ui.modelSpeedModeOptions().map((item) => item.id)).toEqual(['fast'])
+    expect(ui.modelVerbosityOptions().map((item) => item.id)).toEqual(['low', 'medium', 'high'])
 
     input.selectedThinkingMode.value = 'deep'
     input.selectedSpeedMode.value = 'fast'
+    input.selectedVerbosity.value = 'high'
     input.selectedModelId.value = 'claude-opus-4-7'
     await nextTick()
 
     expect(input.selectedThinkingMode.value).toBe('')
     expect(input.selectedSpeedMode.value).toBe('')
+    expect(input.selectedVerbosity.value).toBe('')
     expect(ui.modelThinkingModeOptions()).toEqual([])
     expect(ui.modelSpeedModeOptions()).toEqual([])
+    expect(ui.modelVerbosityOptions()).toEqual([])
   })
 
   test('watch selects provider default model when model is empty', async () => {

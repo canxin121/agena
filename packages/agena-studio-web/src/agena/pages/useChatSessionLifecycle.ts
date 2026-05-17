@@ -42,6 +42,9 @@ export type ChatSessionLifecycleInput = {
   selectedAdapterId: Ref<string>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
+  selectedThinkingMode: Ref<string>
+  selectedSpeedMode: Ref<string>
+  selectedVerbosity: Ref<string>
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sessionSearch: Ref<string>

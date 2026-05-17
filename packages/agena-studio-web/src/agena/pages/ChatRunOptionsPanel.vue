@@ -7,6 +7,7 @@ const props = defineProps<{
   selectedModelId: string
   selectedThinkingMode: string
   selectedSpeedMode: string
+  selectedVerbosity: string
   providers: ProviderSummary[]
   providerDefaultAdapter: (providerId: string) => string
   providerDefaultModel: (providerId: string) => string
@@ -15,6 +16,7 @@ const props = defineProps<{
   providerModelLabel: (model: ProviderModel) => string
   modelThinkingModeOptions: () => Array<{ id: string; label: string; description: string }>
   modelSpeedModeOptions: () => Array<{ id: string; label: string; description: string }>
+  modelVerbosityOptions: () => Array<{ id: string; label: string; description: string }>
 }>()
 
 const emit = defineEmits<{
@@ -23,6 +25,7 @@ const emit = defineEmits<{
   'update:selectedModelId': [value: string]
   'update:selectedThinkingMode': [value: string]
   'update:selectedSpeedMode': [value: string]
+  'update:selectedVerbosity': [value: string]
 }>()
 </script>
 
@@ -41,7 +44,8 @@ const emit = defineEmits<{
             emit('update:selectedAdapterId', props.providerDefaultAdapter(($event.target as HTMLSelectElement).value)),
             emit('update:selectedModelId', props.providerDefaultModel(($event.target as HTMLSelectElement).value)),
             emit('update:selectedThinkingMode', ''),
-            emit('update:selectedSpeedMode', ''))
+            emit('update:selectedSpeedMode', ''),
+            emit('update:selectedVerbosity', ''))
           "
         >
           <option value="">Auto</option>
@@ -59,7 +63,8 @@ const emit = defineEmits<{
           @change="
             (emit('update:selectedAdapterId', ($event.target as HTMLSelectElement).value),
             emit('update:selectedThinkingMode', ''),
-            emit('update:selectedSpeedMode', ''))
+            emit('update:selectedSpeedMode', ''),
+            emit('update:selectedVerbosity', ''))
           "
         >
           <option value="">Auto</option>
@@ -81,7 +86,8 @@ const emit = defineEmits<{
           @change="
             (emit('update:selectedModelId', ($event.target as HTMLSelectElement).value),
             emit('update:selectedThinkingMode', ''),
-            emit('update:selectedSpeedMode', ''))
+            emit('update:selectedSpeedMode', ''),
+            emit('update:selectedVerbosity', ''))
           "
         >
           <option value="">Auto</option>
@@ -125,6 +131,21 @@ const emit = defineEmits<{
           <option value="">Default</option>
           <option v-for="speedMode in props.modelSpeedModeOptions()" :key="speedMode.id" :value="speedMode.id">
             {{ speedMode.label }}
+          </option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="label" for="verbosity-id">Verbosity</label>
+        <select
+          id="verbosity-id"
+          :value="props.selectedVerbosity"
+          class="select"
+          :disabled="props.modelVerbosityOptions().length === 0"
+          @change="emit('update:selectedVerbosity', ($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">Default</option>
+          <option v-for="verbosity in props.modelVerbosityOptions()" :key="verbosity.id" :value="verbosity.id">
+            {{ verbosity.label }}
           </option>
         </select>
       </div>

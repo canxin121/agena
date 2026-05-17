@@ -55,6 +55,7 @@ export type ChatSessionActionsInput = {
   selectedProviderId: Ref<string>
   selectedThinkingMode: Ref<string>
   selectedSpeedMode: Ref<string>
+  selectedVerbosity: Ref<string>
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sending: Ref<boolean>
@@ -418,6 +419,10 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
           input.selectedProviderId.value && input.selectedModelId.value && input.selectedSpeedMode.value
             ? input.selectedSpeedMode.value
             : undefined,
+        verbosity:
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedVerbosity.value
+            ? input.selectedVerbosity.value
+            : undefined,
       })
       input.sessionState.value = state
       input.composer.value = ''
@@ -451,6 +456,10 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         speedMode:
           input.selectedProviderId.value && input.selectedModelId.value && input.selectedSpeedMode.value
             ? input.selectedSpeedMode.value
+            : undefined,
+        verbosity:
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedVerbosity.value
+            ? input.selectedVerbosity.value
             : undefined,
       })
       input.syncEventStream()

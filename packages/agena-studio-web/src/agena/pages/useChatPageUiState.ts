@@ -13,6 +13,7 @@ export type ChatPageUiStateInput = {
   selectedProviderId: Ref<string>
   selectedThinkingMode: Ref<string>
   selectedSpeedMode: Ref<string>
+  selectedVerbosity: Ref<string>
   selectedWorkspaceId: Ref<number | null>
   userInputDrafts: Record<string, Record<string, string>>
   workspaces: Ref<WorkspaceResource[]>
@@ -97,6 +98,19 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     }))
   }
 
+  function modelVerbosityOptions(): Array<{ id: string; label: string; description: string }> {
+    const model = selectedProviderModel()
+    const metadata = model?.metadata
+    if (!metadata?.supports_verbosity && !metadata?.default_verbosity) return []
+    const optionIds = new Set(['low', 'medium', 'high'])
+    if (metadata.default_verbosity?.trim()) optionIds.add(metadata.default_verbosity.trim().toLowerCase())
+    return [...optionIds].map((id) => ({
+      id,
+      label: id,
+      description: id,
+    }))
+  }
+
   function formatMessageTime(value: string): string {
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return value
@@ -133,6 +147,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     if (!providerId) return
     input.selectedThinkingMode.value = ''
     input.selectedSpeedMode.value = ''
+    input.selectedVerbosity.value = ''
     if (!input.selectedAdapterId.value) {
       input.selectedAdapterId.value = providerDefaultAdapter(providerId)
     }
@@ -144,11 +159,13 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   watch(input.selectedAdapterId, () => {
     input.selectedThinkingMode.value = ''
     input.selectedSpeedMode.value = ''
+    input.selectedVerbosity.value = ''
   })
 
   watch(input.selectedModelId, () => {
     input.selectedThinkingMode.value = ''
     input.selectedSpeedMode.value = ''
+    input.selectedVerbosity.value = ''
   })
 
   return {
@@ -164,6 +181,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     providerModelOptions,
     modelThinkingModeOptions,
     modelSpeedModeOptions,
+    modelVerbosityOptions,
     readUserAnswer,
     scrollToMessage,
     updateUserAnswer,

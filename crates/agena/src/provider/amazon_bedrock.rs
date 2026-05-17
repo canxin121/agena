@@ -2742,6 +2742,7 @@ mod tests {
             top_k: None,
             seed: None,
             thinking: None,
+            verbosity: None,
             request_override: Default::default(),
             response_format: None,
         });
@@ -2783,6 +2784,7 @@ mod tests {
             thinking: Some(crate::provider::ThinkingRequest::Budget {
                 budget_tokens: 4_096,
             }),
+            verbosity: None,
             request_override: Default::default(),
             response_format: None,
         });
@@ -2815,6 +2817,7 @@ mod tests {
                 effort: Some(crate::provider::ReasoningEffort::Low),
                 display: None,
             }),
+            verbosity: None,
             request_override: Default::default(),
             response_format: None,
         });
@@ -2848,6 +2851,7 @@ mod tests {
             thinking: Some(crate::provider::ThinkingRequest::Budget {
                 budget_tokens: 31_999,
             }),
+            verbosity: None,
             request_override: Default::default(),
             response_format: None,
         });
@@ -2878,6 +2882,7 @@ mod tests {
             top_k: None,
             seed: None,
             thinking: None,
+            verbosity: None,
             request_override: Default::default(),
             response_format: None,
         });
@@ -3695,6 +3700,8 @@ data: [DONE]\n\n";
             seed: None,
 
             thinking: None,
+
+            verbosity: None,
 
             request_override: Default::default(),
 

@@ -463,6 +463,7 @@ impl OpenAiProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
+            verbosity: None,
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -516,6 +517,7 @@ impl OpenAiProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
+            verbosity: None,
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -1658,6 +1660,9 @@ impl ModelProvider for OpenAiProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
+            text: request.verbosity.as_ref().map(|verbosity| OpenAiResponsesTextConfig {
+                verbosity: verbosity.clone(),
+            }),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -1752,6 +1757,9 @@ impl ModelProvider for OpenAiProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
+            text: request.verbosity.as_ref().map(|verbosity| OpenAiResponsesTextConfig {
+                verbosity: verbosity.clone(),
+            }),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -2011,6 +2019,13 @@ struct OpenAiResponsesRequest {
     response_format: Option<chat_wire::ChatResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<OpenAiResponsesTextConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiResponsesTextConfig {
+    verbosity: String,
 }
 
 impl OpenAiResponsesRequest {
@@ -2548,6 +2563,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2605,6 +2621,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2658,6 +2675,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2727,6 +2745,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2766,12 +2785,39 @@ mod tests {
             seed: None,
             response_format: None,
             reasoning_effort: None,
+            text: None,
         };
 
         let json = serde_json::to_value(&request).expect("request should serialize");
         assert_eq!(json["prompt_cache_key"], "session-42");
         assert_eq!(json["previous_response_id"], "resp_prev");
         assert_eq!(request.window_id_header().as_deref(), Some("session-42:4"));
+    }
+
+    #[test]
+    fn responses_request_serializes_text_verbosity() {
+        let request = OpenAiResponsesRequest {
+            model: "gpt-5.4".to_owned(),
+            input: Vec::new(),
+            tools: Vec::new(),
+            max_output_tokens: Some(128),
+            temperature: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stream: false,
+            stop: None,
+            top_p: None,
+            seed: None,
+            response_format: None,
+            reasoning_effort: None,
+            text: Some(OpenAiResponsesTextConfig {
+                verbosity: "low".to_owned(),
+            }),
+        };
+
+        let json = serde_json::to_value(&request).expect("request should serialize");
+        assert_eq!(json["text"]["verbosity"], "low");
     }
 
     #[test]
@@ -2889,6 +2935,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2965,6 +3012,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3032,6 +3080,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3087,6 +3136,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3133,6 +3183,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3192,6 +3243,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3260,6 +3312,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3345,6 +3398,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3376,6 +3430,8 @@ mod tests {
             seed: None,
 
             thinking: None,
+
+            verbosity: None,
 
             request_override: Default::default(),
 
@@ -3420,6 +3476,8 @@ mod tests {
             seed: None,
 
             thinking: None,
+
+            verbosity: None,
 
             request_override: Default::default(),
 
@@ -3496,6 +3554,8 @@ mod tests {
             seed: None,
 
             thinking: None,
+
+            verbosity: None,
 
             request_override: Default::default(),
 
@@ -3579,6 +3639,8 @@ mod tests {
 
             thinking: None,
 
+            verbosity: None,
+
             request_override: Default::default(),
 
             response_format: None,
@@ -3623,6 +3685,8 @@ mod tests {
             seed: None,
 
             thinking: None,
+
+            verbosity: None,
 
             request_override: Default::default(),
 
@@ -3787,6 +3851,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3873,6 +3938,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -3951,6 +4017,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -4146,6 +4213,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })

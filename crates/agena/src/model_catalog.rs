@@ -662,7 +662,104 @@ mod tests {
     use super::*;
     use crate::{model::CapabilitySupport, provider::ConfiguredModelVariant};
     use mockito::Server;
+    use regex::Regex;
+    use std::sync::OnceLock;
     use tempfile::tempdir;
+
+    fn normalized_catalog_model_id(model_id: &str) -> String {
+        static RULES: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
+
+        let mut normalized = model_id.trim().to_ascii_lowercase();
+        if let Some(stripped) = normalized.strip_suffix("@default") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_suffix("-maas") {
+            normalized = stripped.to_owned();
+        }
+        normalized = normalized.replace('_', ".");
+
+        if let Some((prefix, tail)) = normalized.split_once('.')
+            && prefix.chars().all(|ch| ch.is_ascii_alphanumeric())
+            && tail
+                .chars()
+                .next()
+                .map(|ch| ch.is_ascii_alphabetic())
+                .unwrap_or(false)
+        {
+            normalized = format!("{prefix}-{tail}");
+        }
+
+        for (pattern, replacement) in RULES.get_or_init(|| {
+            vec![
+                (
+                    Regex::new(r"^(aion)-(\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1-$2.$3$4",
+                ),
+                (
+                    Regex::new(r"^(claude-(?:haiku|opus|sonnet)-)(\d)(\d)(.*)$").unwrap(),
+                    "$1$2-$3$4",
+                ),
+                (
+                    Regex::new(r"^(deepseek-v)(\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1$2.$3$4",
+                ),
+                (
+                    Regex::new(r"^(gemini)-(\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1-$2.$3$4",
+                ),
+                (
+                    Regex::new(r"^(gpt)-(\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1-$2.$3$4",
+                ),
+                (
+                    Regex::new(r"^(grok)-(\d+)(\d)(.*)$").unwrap(),
+                    "$1-$2.$3$4",
+                ),
+                (
+                    Regex::new(r"^(grok)-(\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1-$2.$3$4",
+                ),
+                (
+                    Regex::new(r"^(kimi-k\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1.$2$3",
+                ),
+                (
+                    Regex::new(r"^(llama)-(\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1-$2.$3$4",
+                ),
+                (
+                    Regex::new(r"^(minimax-m\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1.$2$3",
+                ),
+                (
+                    Regex::new(r"^(mistral-small)-(\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1-$2.$3$4",
+                ),
+                (Regex::new(r"^(nvidia)\.(.*)$").unwrap(), "$1-$2"),
+                (
+                    Regex::new(r"^(qwen\d+)[-.](\d+)(.*)$").unwrap(),
+                    "$1.$2$3",
+                ),
+            ]
+        }) {
+            normalized = pattern
+                .replace(normalized.as_str(), *replacement)
+                .into_owned();
+        }
+
+        normalized = normalized.replace("v1_5", "v1.5");
+        normalized = normalized.replace("v2_5", "v2.5");
+        normalized = normalized.replace("v3_5", "v3.5");
+        normalized = normalized.replace("v4_5", "v4.5");
+        normalized = normalized.replace("v5_5", "v5.5");
+        normalized = normalized.replace(".v", "-v");
+
+        while normalized.contains("--") {
+            normalized = normalized.replace("--", "-");
+        }
+
+        normalized
+    }
 
     #[test]
     fn merged_models_prefers_custom_models() {
@@ -759,14 +856,28 @@ mod tests {
         assert!(catalog.models.contains_key("duo-chat-sonnet-4-5"));
 
         let mut lowered = BTreeSet::new();
+        let mut normalized = BTreeSet::new();
         for model_id in catalog.models.keys() {
             assert!(
                 !model_id.contains('/'),
                 "bundled catalog model id should not contain '/': {model_id}"
             );
             assert!(
+                !model_id.contains("@default"),
+                "bundled catalog model id should not contain '@default': {model_id}"
+            );
+            assert!(
+                !model_id.ends_with("-maas"),
+                "bundled catalog model id should not contain provider route suffix '-maas': {model_id}"
+            );
+            assert!(
                 lowered.insert(model_id.to_ascii_lowercase()),
                 "bundled catalog should not contain case-insensitive duplicate model ids: {model_id}"
+            );
+            let normalized_model_id = normalized_catalog_model_id(model_id);
+            assert!(
+                normalized.insert(normalized_model_id.clone()),
+                "bundled catalog should not contain normalized duplicate model ids: {model_id} -> {normalized_model_id}"
             );
         }
     }

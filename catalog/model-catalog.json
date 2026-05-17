@@ -104,19 +104,6 @@
         ]
       }
     },
-    "aion-2-0": {
-      "lifecycle": "active",
-      "display_name": "Aion 2.0",
-      "context_window_tokens": 128000,
-      "max_output_tokens": 32768,
-      "features": {
-        "supported": [
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
     "aion-2.0": {
       "lifecycle": "active",
       "display_name": "AionLabs: Aion-2.0",
@@ -1841,25 +1828,6 @@
         ]
       }
     },
-    "claude-opus-4-6@default": {
-      "lifecycle": "active",
-      "display_name": "Claude Opus 4.6",
-      "context_window_tokens": 1000000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
     "claude-opus-4-7": {
       "lifecycle": "active",
       "display_name": "Claude Opus 4.7",
@@ -1895,24 +1863,6 @@
           "streaming",
           "reasoning",
           "structured_output"
-        ]
-      }
-    },
-    "claude-opus-4-7@default": {
-      "lifecycle": "active",
-      "display_name": "Claude Opus 4.7",
-      "context_window_tokens": 1000000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning"
         ]
       }
     },
@@ -2025,24 +1975,6 @@
       "features": {
         "supported": [
           "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "claude-opus-41": {
-      "lifecycle": "deprecated",
-      "display_name": "Claude Opus 4.1",
-      "context_window_tokens": 80000,
-      "max_output_tokens": 16000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
           "streaming",
           "reasoning",
           "temperature"
@@ -2642,25 +2574,6 @@
           "streaming",
           "reasoning",
           "structured_output"
-        ]
-      }
-    },
-    "claude-sonnet-4-6@default": {
-      "lifecycle": "active",
-      "display_name": "Claude Sonnet 4.6",
-      "context_window_tokens": 200000,
-      "max_output_tokens": 64000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
         ]
       }
     },
@@ -3941,33 +3854,6 @@
         ]
       }
     },
-    "deepseek-v3-1": {
-      "lifecycle": "active",
-      "display_name": "DeepSeek V3.1",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 131072,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "deepseek-v3-2-exp": {
-      "lifecycle": "active",
-      "display_name": "DeepSeek V3.2 Exp",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 65536,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
     "deepseek-v3-turbo": {
       "lifecycle": "active",
       "display_name": "DeepSeek V3 (Turbo)",
@@ -3991,21 +3877,6 @@
           "tool_calling",
           "streaming",
           "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "deepseek-v3.1-maas": {
-      "lifecycle": "active",
-      "display_name": "DeepSeek V3.1",
-      "context_window_tokens": 163840,
-      "max_output_tokens": 32768,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
           "temperature"
         ]
       }
@@ -4204,21 +4075,6 @@
         ]
       }
     },
-    "deepseek-v3.2-maas": {
-      "lifecycle": "active",
-      "display_name": "DeepSeek V3.2",
-      "context_window_tokens": 163840,
-      "max_output_tokens": 65536,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
     "deepseek-v3.2-speciale": {
       "lifecycle": "active",
       "display_name": "DeepSeek-V3.2-Speciale",
@@ -4404,20 +4260,6 @@
           "streaming",
           "reasoning",
           "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "deepseek.v3.2": {
-      "lifecycle": "active",
-      "display_name": "DeepSeek-V3.2",
-      "context_window_tokens": 163840,
-      "max_output_tokens": 81920,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
           "temperature"
         ]
       }
@@ -6787,28 +6629,6 @@
       "context_window_tokens": 8000,
       "max_output_tokens": 16000
     },
-    "gemini-3-1-pro-preview": {
-      "lifecycle": "preview",
-      "display_name": "Gemini 3.1 Pro Preview",
-      "context_window_tokens": 1000000,
-      "max_output_tokens": 64000,
-      "input": {
-        "supported": [
-          "image",
-          "audio",
-          "video"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
     "gemini-3-flash": {
       "lifecycle": "active",
       "display_name": "Gemini 3 Flash",
@@ -8591,21 +8411,6 @@
         ]
       }
     },
-    "glm-4.7-maas": {
-      "lifecycle": "active",
-      "display_name": "GLM-4.7",
-      "context_window_tokens": 200000,
-      "max_output_tokens": 128000,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
     "glm-4.7-n": {
       "lifecycle": "active",
       "display_name": "glm-4.7-n",
@@ -8680,20 +8485,6 @@
       "lifecycle": "deprecated",
       "display_name": "GLM-5 Free",
       "context_window_tokens": 204800,
-      "max_output_tokens": 131072,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "glm-5-maas": {
-      "lifecycle": "active",
-      "display_name": "GLM-5",
-      "context_window_tokens": 202752,
       "max_output_tokens": 131072,
       "features": {
         "supported": [
@@ -9691,80 +9482,6 @@
         ]
       }
     },
-    "gpt-5-3-codex": {
-      "lifecycle": "active",
-      "display_name": "GPT-5.3 Codex",
-      "context_window_tokens": 400000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning"
-        ]
-      }
-    },
-    "gpt-5-4-mini": {
-      "lifecycle": "active",
-      "display_name": "GPT-5.4 Mini",
-      "context_window_tokens": 400000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output"
-        ]
-      }
-    },
-    "gpt-5-4-nano": {
-      "lifecycle": "active",
-      "display_name": "GPT-5.4 Nano",
-      "context_window_tokens": 400000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output"
-        ]
-      }
-    },
-    "gpt-5-5": {
-      "lifecycle": "active",
-      "display_name": "GPT-5.5",
-      "context_window_tokens": 272000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning"
-        ]
-      }
-    },
     "gpt-5-chat": {
       "lifecycle": "active",
       "display_name": "GPT-5 Chat (latest)",
@@ -10702,20 +10419,6 @@
         ]
       }
     },
-    "gpt-oss-120b-maas": {
-      "lifecycle": "active",
-      "display_name": "GPT OSS 120B",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 32768,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
     "gpt-oss-120b-medium": {
       "lifecycle": "active",
       "display_name": "GPT-OSS 120B (Medium)",
@@ -10783,20 +10486,6 @@
           "streaming",
           "reasoning",
           "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "gpt-oss-20b-maas": {
-      "lifecycle": "active",
-      "display_name": "GPT OSS 20B",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 32768,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
           "temperature"
         ]
       }
@@ -11188,187 +10877,6 @@
       "input": {
         "supported": [
           "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-1-fast": {
-      "lifecycle": "active",
-      "display_name": "Grok 4.1 Fast",
-      "context_window_tokens": 2000000,
-      "max_output_tokens": 30000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-1-fast-non-reasoning": {
-      "lifecycle": "active",
-      "display_name": "Grok 4.1 Fast (Non-Reasoning)",
-      "context_window_tokens": 2000000,
-      "max_output_tokens": 30000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-1-fast-reasoning": {
-      "lifecycle": "active",
-      "display_name": "Grok 4.1 Fast (Reasoning)",
-      "context_window_tokens": 2000000,
-      "max_output_tokens": 2000000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-20": {
-      "lifecycle": "active",
-      "display_name": "Grok 4.20",
-      "context_window_tokens": 2000000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-20-beta-0309-non-reasoning": {
-      "lifecycle": "beta",
-      "display_name": "Grok 4.20 (Non-Reasoning)",
-      "context_window_tokens": 2000000,
-      "max_output_tokens": 30000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-20-beta-0309-reasoning": {
-      "lifecycle": "beta",
-      "display_name": "Grok 4.20 (Reasoning)",
-      "context_window_tokens": 2000000,
-      "max_output_tokens": 30000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-20-multi-agent": {
-      "lifecycle": "active",
-      "display_name": "Grok 4.20 Multi-Agent",
-      "context_window_tokens": 2000000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-20-non-reasoning": {
-      "lifecycle": "beta",
-      "display_name": "Grok 4.20 (Non-Reasoning)",
-      "context_window_tokens": 262000,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-20-reasoning": {
-      "lifecycle": "beta",
-      "display_name": "Grok 4.20 (Reasoning)",
-      "context_window_tokens": 262000,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "grok-4-3": {
-      "lifecycle": "active",
-      "display_name": "Grok 4.3",
-      "context_window_tokens": 1000000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image",
-          "video"
         ]
       },
       "features": {
@@ -11851,26 +11359,6 @@
       "display_name": "Grok 4.3",
       "context_window_tokens": 1000000,
       "max_output_tokens": 1000000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "grok-41-fast": {
-      "lifecycle": "active",
-      "display_name": "Grok 4.1 Fast",
-      "context_window_tokens": 1000000,
-      "max_output_tokens": 30000,
       "input": {
         "supported": [
           "image"
@@ -12816,26 +12304,6 @@
         ]
       }
     },
-    "Kimi-K2_6": {
-      "lifecycle": "active",
-      "display_name": "Kimi K2.6",
-      "context_window_tokens": 262144,
-      "max_output_tokens": 262144,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
     "kimi-k2-0711": {
       "lifecycle": "active",
       "display_name": "kimi k2 0711",
@@ -12898,46 +12366,6 @@
         "supported": [
           "tool_calling",
           "streaming",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "kimi-k2-5": {
-      "lifecycle": "active",
-      "display_name": "Kimi K2.5",
-      "context_window_tokens": 256000,
-      "max_output_tokens": 65536,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "kimi-k2-6": {
-      "lifecycle": "active",
-      "display_name": "Kimi K2.6",
-      "context_window_tokens": 256000,
-      "max_output_tokens": 128000,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
           "structured_output",
           "temperature"
         ]
@@ -13008,21 +12436,6 @@
       }
     },
     "kimi-k2-thinking": {
-      "lifecycle": "active",
-      "display_name": "Kimi K2 Thinking",
-      "context_window_tokens": 262144,
-      "max_output_tokens": 262144,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "kimi-k2-thinking-maas": {
       "lifecycle": "active",
       "display_name": "Kimi K2 Thinking",
       "context_window_tokens": 262144,
@@ -13881,17 +13294,6 @@
         ]
       }
     },
-    "Llama-3-1-8B-Instruct-FP8": {
-      "lifecycle": "active",
-      "display_name": "Llama 3.1 8B (decentralized)",
-      "context_window_tokens": 128000,
-      "max_output_tokens": 16384,
-      "features": {
-        "supported": [
-          "streaming"
-        ]
-      }
-    },
     "llama-3-70b-instruct": {
       "lifecycle": "active",
       "display_name": "Meta-Llama-3-70B-Instruct",
@@ -14682,20 +14084,6 @@
         ]
       }
     },
-    "llama-3.3-70b-instruct-maas": {
-      "lifecycle": "active",
-      "display_name": "Llama 3.3 70B Instruct",
-      "context_window_tokens": 128000,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
     "Llama-3.3-70B-Instruct-Turbo": {
       "lifecycle": "active",
       "display_name": "Llama 3.3 70B",
@@ -14970,17 +14358,6 @@
         ]
       }
     },
-    "llama-3.3-Nemotron-Super-49B-v1_5": {
-      "lifecycle": "active",
-      "display_name": "Nvidia Nemotron Super 49B v1.5",
-      "context_window_tokens": 128000,
-      "max_output_tokens": 16384,
-      "features": {
-        "supported": [
-          "streaming"
-        ]
-      }
-    },
     "llama-3.3-nemotron-super-49b-v1.5": {
       "lifecycle": "active",
       "display_name": "Llama 3.3 Nemotron Super 49b V1.5",
@@ -15081,25 +14458,6 @@
           "tool_calling",
           "streaming",
           "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "llama-4-maverick-17b-128e-instruct-maas": {
-      "lifecycle": "active",
-      "display_name": "Llama 4 Maverick 17B 128E Instruct",
-      "context_window_tokens": 524288,
-      "max_output_tokens": 8192,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "structured_output",
           "temperature"
         ]
       }
@@ -16125,32 +15483,6 @@
           "tool_calling",
           "streaming",
           "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "minimax-m2-5": {
-      "lifecycle": "active",
-      "display_name": "MiniMax-M2.5",
-      "context_window_tokens": 192000,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "minimax-m2-7": {
-      "lifecycle": "active",
-      "display_name": "MiniMax-M2.7",
-      "context_window_tokens": 192000,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
           "temperature"
         ]
       }
@@ -17283,20 +16615,6 @@
           "tool_calling",
           "streaming",
           "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "mistral-small-3-2-24b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Mistral Small 3.2 24B Instruct",
-      "context_window_tokens": 256000,
-      "max_output_tokens": 16384,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "structured_output",
           "temperature"
         ]
       }
@@ -18547,20 +17865,6 @@
           "tool_calling",
           "streaming",
           "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "nvidia.nemotron-nano-9b-v2": {
-      "lifecycle": "active",
-      "display_name": "NVIDIA Nemotron Nano 9B v2",
-      "context_window_tokens": 128000,
-      "max_output_tokens": 4096,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "structured_output",
           "temperature"
         ]
       }
@@ -20113,84 +19417,6 @@
         ]
       }
     },
-    "qwen2-5-14b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5 14B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "qwen2-5-32b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5 32B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "qwen2-5-72b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5 72B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "qwen2-5-7b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5 7B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "qwen2-5-coder-32b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5-Coder 32B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "qwen2-5-coder-7b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5-Coder 7B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
     "qwen2-5-math-72b-instruct": {
       "lifecycle": "active",
       "display_name": "Qwen2.5-Math 72B Instruct",
@@ -20237,61 +19463,6 @@
         ]
       }
     },
-    "qwen2-5-vl-32b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5 VL 32B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "qwen2-5-vl-72b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5-VL 72B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "qwen2-5-vl-7b-instruct": {
-      "lifecycle": "active",
-      "display_name": "Qwen2.5-VL 7B Instruct",
-      "context_window_tokens": 131072,
-      "max_output_tokens": 8192,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "temperature"
-        ]
-      }
-    },
     "qwen2.5-14b-instruct": {
       "lifecycle": "active",
       "display_name": "Qwen 2.5 14B Instruct",
@@ -20317,7 +19488,7 @@
         ]
       }
     },
-    "Qwen2.5-32B-Instruct": {
+    "qwen2.5-32b-instruct": {
       "lifecycle": "active",
       "display_name": "Qwen2.5 32B Instruct",
       "context_window_tokens": 33000,
@@ -20455,7 +19626,7 @@
         ]
       }
     },
-    "Qwen2.5-VL-32B-Instruct": {
+    "qwen2.5-vl-32b-instruct": {
       "lifecycle": "active",
       "display_name": "Qwen2.5 VL 32B Instruct",
       "context_window_tokens": 131000,
@@ -20675,36 +19846,6 @@
         "supported": [
           "tool_calling",
           "streaming",
-          "temperature"
-        ]
-      }
-    },
-    "qwen3-235b-a22b-instruct-2507": {
-      "lifecycle": "active",
-      "display_name": "Qwen3 235B A22B Instruct 2507",
-      "context_window_tokens": 262144,
-      "max_output_tokens": 262144,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "qwen3-235b-a22b-instruct-2507-maas": {
-      "lifecycle": "active",
-      "display_name": "Qwen3 235B A22B Instruct",
-      "context_window_tokens": 262144,
-      "max_output_tokens": 16384,
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
           "temperature"
         ]
       }
@@ -20930,110 +20071,6 @@
         "supported": [
           "streaming",
           "reasoning",
-          "temperature"
-        ]
-      }
-    },
-    "qwen3-5-35b-a3b": {
-      "lifecycle": "active",
-      "display_name": "Qwen 3.5 35B A3B",
-      "context_window_tokens": 256000,
-      "max_output_tokens": 65536,
-      "input": {
-        "supported": [
-          "image",
-          "video"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "qwen3-5-397b-a17b": {
-      "lifecycle": "active",
-      "display_name": "Qwen 3.5 397B",
-      "context_window_tokens": 128000,
-      "max_output_tokens": 32768,
-      "input": {
-        "supported": [
-          "image",
-          "video"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "qwen3-5-9b": {
-      "lifecycle": "active",
-      "display_name": "Qwen 3.5 9B",
-      "context_window_tokens": 256000,
-      "max_output_tokens": 32768,
-      "input": {
-        "supported": [
-          "image"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "qwen3-6-27b": {
-      "lifecycle": "active",
-      "display_name": "Qwen 3.6 27B",
-      "context_window_tokens": 256000,
-      "max_output_tokens": 65536,
-      "input": {
-        "supported": [
-          "image",
-          "video"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
-          "temperature"
-        ]
-      }
-    },
-    "qwen3-6-plus": {
-      "lifecycle": "active",
-      "display_name": "Qwen 3.6 Plus Uncensored",
-      "context_window_tokens": 1000000,
-      "max_output_tokens": 65536,
-      "input": {
-        "supported": [
-          "image",
-          "video"
-        ]
-      },
-      "features": {
-        "supported": [
-          "tool_calling",
-          "streaming",
-          "reasoning",
-          "structured_output",
           "temperature"
         ]
       }
@@ -21957,6 +20994,21 @@
         "supported": [
           "tool_calling",
           "streaming"
+        ]
+      }
+    },
+    "qwen3.235b-a22b-instruct-2507": {
+      "lifecycle": "active",
+      "display_name": "Qwen3 235B A22B Instruct 2507",
+      "context_window_tokens": 262144,
+      "max_output_tokens": 262144,
+      "features": {
+        "supported": [
+          "tool_calling",
+          "streaming",
+          "reasoning",
+          "structured_output",
+          "temperature"
         ]
       }
     },

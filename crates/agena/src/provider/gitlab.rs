@@ -13,8 +13,8 @@ use crate::{
     model::{ModelId, ProviderId},
     model_catalog::{
         DEFAULT_GITHUB_FALLBACK_URL, DEFAULT_REMOTE_URL, ModelCatalogDocument,
-        ModelCatalogProviderRecord, bundled_catalog_document,
-        catalog_definition_to_provider_definition,
+        ModelCatalogProviderRecord, catalog_definition_to_provider_definition,
+        curate_catalog_document,
     },
     provider::{
         AnthropicProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
@@ -260,9 +260,15 @@ impl GitlabProvider {
             )));
         }
         let text = response.text().await?;
-        serde_json::from_str(&text).map_err(|err| {
-            AppError::Config(format!("parse gitlab model catalog from {url}: {err}"))
-        })
+        serde_json::from_str(&text)
+            .map_err(|err| {
+                AppError::Config(format!("parse gitlab model catalog from {url}: {err}"))
+            })
+            .and_then(|document| {
+                curate_catalog_document(document).map_err(|err| {
+                    AppError::Config(format!("curate gitlab model catalog from {url}: {err}"))
+                })
+            })
     }
 
     async fn catalog_record(&self) -> Result<ModelCatalogProviderRecord, AppError> {
@@ -274,11 +280,11 @@ impl GitlabProvider {
             Ok(document) => document,
             Err(remote_error) => match self.fetch_catalog_document(fallback_url.as_str()).await {
                 Ok(document) => document,
-                Err(fallback_error) => bundled_catalog_document().map_err(|bundled_error| {
-                    AppError::Config(format!(
-                        "gitlab model catalog unavailable: remote: {remote_error}; fallback: {fallback_error}; bundled: {bundled_error}"
-                    ))
-                })?,
+                Err(fallback_error) => {
+                    return Err(AppError::Config(format!(
+                        "gitlab model catalog unavailable: remote: {remote_error}; fallback: {fallback_error}"
+                    )));
+                }
             },
         };
 
@@ -831,12 +837,12 @@ mod tests {
             assert!(
                 models
                     .iter()
-                    .any(|model| model.id.as_str() == "duo-chat-sonnet-4-5")
+                    .any(|model| model.id.as_str() == "claude-sonnet-4-5")
             );
             assert!(
                 models
                     .iter()
-                    .any(|model| model.id.as_str() == "duo-chat-gpt-5-codex")
+                    .any(|model| model.id.as_str() == "gpt-5-codex")
             );
         }
 
@@ -854,12 +860,12 @@ mod tests {
         assert!(
             models
                 .iter()
-                .any(|model| model.id.as_str() == "duo-chat-sonnet-4-5")
+                .any(|model| model.id.as_str() == "claude-sonnet-4-5")
         );
         assert!(
             models
                 .iter()
-                .any(|model| model.id.as_str() == "duo-chat-gpt-5-codex")
+                .any(|model| model.id.as_str() == "gpt-5-codex")
         );
     }
 

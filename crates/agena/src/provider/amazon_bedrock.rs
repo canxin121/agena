@@ -2992,7 +2992,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bedrock_list_models_falls_back_to_bundled_catalog_when_live_fetch_fails() {
+    async fn bedrock_list_models_errors_when_live_fetch_and_catalog_fallback_fail() {
         let _env_lock = env_lock().lock().expect("env lock should succeed");
         let dir = tempfile::tempdir().expect("tempdir should create");
         let _cache_dir =
@@ -3032,22 +3032,11 @@ mod tests {
             .await;
 
         let provider = test_sigv4_provider(server.url(), "amazon.nova-pro-v1:0");
-        let models = provider
+        let error = provider
             .list_models()
             .await
-            .expect("bundled catalog fallback should succeed");
-
-        assert!(
-            models
-                .iter()
-                .any(|model| model.id.as_str() == "amazon.nova-pro-v1:0"
-                    && model.display_name.as_deref() == Some("Amazon Nova Pro"))
-        );
-        assert!(
-            models
-                .iter()
-                .any(|model| model.id.as_str() == "anthropic.claude-sonnet-4-5")
-        );
+            .expect_err("list_models should fail without cache or fallback catalog");
+        assert!(error.to_string().contains("bedrock unavailable"));
     }
 
     #[tokio::test]

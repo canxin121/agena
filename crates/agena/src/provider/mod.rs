@@ -11,6 +11,7 @@ mod core;
 mod gemini;
 mod gitlab;
 mod model_metadata;
+mod model_modes;
 mod multi_adapter;
 mod ollama;
 mod openai;
@@ -47,6 +48,7 @@ pub use credential::{
 pub use gemini::GeminiProvider;
 pub use gitlab::{GitlabProvider, GitlabProviderConfig};
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
+pub use model_modes::{ModelModeRegistry, default_model_mode_registry};
 pub use multi_adapter::{MultiAdapterProvider, ProviderModelRoute, ProviderModelRouteKey};
 pub use ollama::OllamaProvider;
 pub use openai::{OpenAiApiMode, OpenAiBackend, OpenAiProfile, OpenAiProvider, OpenAiStreamMode};

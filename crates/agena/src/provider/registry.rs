@@ -1246,8 +1246,8 @@ mod tests {
     use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent};
     use crate::model::{ModelId, ModelRef, ProviderId};
     use crate::provider::{
-        CapabilitySupport, CompletionFinishReason, CompletionRequest, CompletionResponse,
-        ModelCapabilities, ProviderModel,
+        CapabilityFamily, CapabilitySupport, CompletionFinishReason, CompletionRequest,
+        CompletionResponse, ModelCapabilities, ProviderModel,
     };
     use futures_util::{StreamExt, stream};
     use std::sync::{
@@ -1282,6 +1282,12 @@ mod tests {
         provider_id: &'static str,
         stream_starts: Arc<AtomicUsize>,
         fail_attempts: usize,
+    }
+
+    struct ModeSynthProvider {
+        provider_id: &'static str,
+        family: CapabilityFamily,
+        models: Vec<Model>,
     }
 
     fn retryable_api_error(provider_id: &str, message: &str) -> AppError {
@@ -1330,6 +1336,34 @@ mod tests {
             request_override: Default::default(),
 
             response_format: None,
+        }
+    }
+
+    #[async_trait]
+    impl ModelProvider for ModeSynthProvider {
+        fn id(&self) -> &str {
+            self.provider_id
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.models[0].id
+        }
+
+        fn capability_family(&self) -> Option<CapabilityFamily> {
+            Some(self.family)
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, AppError> {
+            Ok(self.models.clone())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            Err(AppError::Internal(
+                "unused in mode synth provider".to_owned(),
+            ))
         }
     }
 
@@ -1839,6 +1873,32 @@ mod tests {
             CapabilitySupport::Supported
         );
         assert_eq!(model.capabilities.streaming, CapabilitySupport::Supported);
+    }
+
+    #[tokio::test]
+    async fn provider_registry_list_models_applies_default_thinking_mode_synthesis() {
+        let provider = ModeSynthProvider {
+            provider_id: "mode-synth",
+            family: CapabilityFamily::OpenAi,
+            models: vec![Model::new("mode-synth", "gpt-5.2")],
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+
+        let listed = registry
+            .list_models("mode-synth")
+            .await
+            .expect("provider models should list");
+        let model = listed
+            .into_iter()
+            .find(|model| model.id.as_str() == "gpt-5.2")
+            .expect("gpt-5.2 should be listed");
+
+        assert!(model.thinking_modes.contains_key("no-thinking"));
+        assert!(model.thinking_modes.contains_key("thinking-low"));
+        assert!(model.thinking_modes.contains_key("thinking-medium"));
+        assert!(model.thinking_modes.contains_key("thinking-high"));
+        assert!(model.thinking_modes.contains_key("thinking-xhigh"));
     }
 
     #[tokio::test]

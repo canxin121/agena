@@ -6,6 +6,7 @@ import type {
   ModelCatalogEntryKind,
   ModelCatalogSummary,
   ProviderModel,
+  ProviderModelPricing,
   ProviderSummary,
   RuntimeStatus,
 } from '@/agena/lib/agenaApi'
@@ -189,6 +190,22 @@ function formatModeJson(value: Record<string, unknown> | null | undefined) {
   if (!value) return ''
   const text = JSON.stringify(value)
   return text.length > 96 ? `${text.slice(0, 93)}...` : text
+}
+
+function formatOutputModalities(value: string[] | null | undefined) {
+  return Array.isArray(value) && value.length ? value.join(', ') : ''
+}
+
+function formatPricingSummary(pricing: ProviderModelPricing | null | undefined) {
+  if (!pricing) return ''
+  const parts: string[] = []
+  if (pricing.input_usd_per_million_tokens) parts.push(`in ${pricing.input_usd_per_million_tokens}`)
+  if (pricing.output_usd_per_million_tokens) parts.push(`out ${pricing.output_usd_per_million_tokens}`)
+  if (pricing.cache_read_usd_per_million_tokens) parts.push(`cache read ${pricing.cache_read_usd_per_million_tokens}`)
+  if (pricing.cache_write_usd_per_million_tokens)
+    parts.push(`cache write ${pricing.cache_write_usd_per_million_tokens}`)
+  if (Array.isArray(pricing.tiers) && pricing.tiers.length) parts.push(`${pricing.tiers.length} tier`)
+  return parts.join(' · ')
 }
 
 async function loadCatalogPage(offset = 0) {
@@ -491,6 +508,29 @@ onMounted(() => {
         </div>
 
         <div class="grid two" style="margin-top: 12px">
+          <div class="field">
+            <label class="label" for="catalog-output-modalities">Output Modalities JSON</label>
+            <textarea
+              id="catalog-output-modalities"
+              v-model="draft.output_modalities_json"
+              class="input mono"
+              rows="3"
+              placeholder='["text","image"]'
+            />
+          </div>
+          <div class="field">
+            <label class="label" for="catalog-pricing">Pricing JSON</label>
+            <textarea
+              id="catalog-pricing"
+              v-model="draft.pricing_json"
+              class="input mono"
+              rows="3"
+              placeholder='{"input_usd_per_million_tokens":"1.25","output_usd_per_million_tokens":"10"}'
+            />
+          </div>
+        </div>
+
+        <div class="grid two" style="margin-top: 12px">
           <label class="muted" for="catalog-capability-tool" style="display: flex; gap: 8px; align-items: center">
             <input id="catalog-capability-tool" v-model="draft.tool_calling" type="checkbox" />
             Tool calling
@@ -788,6 +828,12 @@ onMounted(() => {
                 <div v-if="entry.kind === 'custom'" class="muted">Custom entry saved for this model.</div>
                 <div v-if="entry.lifecycle" class="muted">{{ entry.lifecycle }}</div>
                 <div v-if="entry.description" class="muted">{{ entry.description }}</div>
+                <div v-if="formatOutputModalities(entry.output_modalities)" class="muted">
+                  Output: {{ formatOutputModalities(entry.output_modalities) }}
+                </div>
+                <div v-if="formatPricingSummary(entry.pricing)" class="muted">
+                  Pricing: {{ formatPricingSummary(entry.pricing) }}
+                </div>
                 <div v-if="entry.context_window_tokens || entry.max_output_tokens" class="muted mono">
                   ctx={{ entry.context_window_tokens ?? 'n/a' }} · max_out={{ entry.max_output_tokens ?? 'n/a' }}
                 </div>

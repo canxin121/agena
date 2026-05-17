@@ -250,7 +250,8 @@ export type ModelCatalogEntry = {
   context_window_tokens?: number | null
   max_output_tokens?: number | null
   description?: string | null
-  variants?: Record<string, ProviderModelVariant>
+  thinking_modes?: Record<string, ProviderModelThinkingMode>
+  speed_modes?: Record<string, ProviderModelSpeedMode>
   input?: unknown
   features?: unknown
   capabilities?: Record<string, unknown>
@@ -296,7 +297,8 @@ export type ModelCatalogEntryWriteRequest = {
   description?: string | null
   display_name?: string | null
   origin?: string | null
-  variants?: Record<string, ProviderModelVariant>
+  thinking_modes?: Record<string, ProviderModelThinkingMode>
+  speed_modes?: Record<string, ProviderModelSpeedMode>
   input?: unknown
   features?: unknown
   capabilities?: Record<string, unknown>
@@ -360,7 +362,8 @@ export type ProviderModel = {
   display_name?: string | null
   capabilities?: ProviderModelCapabilities | null
   metadata?: ProviderModelMetadata | null
-  variants?: Record<string, ProviderModelVariant>
+  thinking_modes?: Record<string, ProviderModelThinkingMode>
+  speed_modes?: Record<string, ProviderModelSpeedMode>
 }
 
 export type ProviderModelsResponse = {
@@ -382,17 +385,23 @@ export type ProviderAdapterDiscoveryResponse = {
   adapters: ProviderAdapterDiscovery[]
 }
 
-export type ProviderModelVariantRequestOverride = {
+export type ProviderModelSpeedModeRequestOverride = {
   headers?: Record<string, string> | null
   body_patch?: Record<string, unknown> | null
 }
 
-export type ProviderModelVariant = {
+export type ProviderModelThinkingMode = {
   display_name?: string | null
   description?: string | null
   thinking?: Record<string, unknown> | null
-  request_override?: ProviderModelVariantRequestOverride | null
-  adapter_overrides?: Record<string, ProviderModelVariantRequestOverride> | null
+  disabled?: boolean
+}
+
+export type ProviderModelSpeedMode = {
+  display_name?: string | null
+  description?: string | null
+  request_override?: ProviderModelSpeedModeRequestOverride | null
+  adapter_overrides?: Record<string, ProviderModelSpeedModeRequestOverride> | null
   disabled?: boolean
 }
 
@@ -675,7 +684,8 @@ export type SessionExecutionContextResource = {
   model_provider_id?: string | null
   model_adapter_id?: string | null
   model_id?: string | null
-  model_variant?: string | null
+  model_thinking_mode?: string | null
+  model_speed_mode?: string | null
   agent_run?: {
     temperature?: number | null
     max_output_tokens?: number | null
@@ -1761,7 +1771,8 @@ export async function continueSession(input: {
   providerId?: string
   adapterId?: string
   modelId?: string
-  variant?: string
+  thinkingMode?: string
+  speedMode?: string
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {}
@@ -1776,8 +1787,11 @@ export async function continueSession(input: {
   if (input.agentProfile?.trim()) {
     body.agent_profile = input.agentProfile.trim()
   }
-  if (input.providerId && input.modelId && input.variant?.trim()) {
-    body.variant = input.variant.trim()
+  if (input.providerId && input.modelId && input.thinkingMode?.trim()) {
+    body.thinking_mode = input.thinkingMode.trim()
+  }
+  if (input.providerId && input.modelId && input.speedMode?.trim()) {
+    body.speed_mode = input.speedMode.trim()
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/continue`, {
@@ -1807,7 +1821,8 @@ export async function submitTurn(input: {
   providerId?: string
   adapterId?: string
   modelId?: string
-  variant?: string
+  thinkingMode?: string
+  speedMode?: string
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {
@@ -1829,8 +1844,11 @@ export async function submitTurn(input: {
   if (input.agentProfile?.trim()) {
     body.agent_profile = input.agentProfile.trim()
   }
-  if (input.providerId && input.modelId && input.variant?.trim()) {
-    body.variant = input.variant.trim()
+  if (input.providerId && input.modelId && input.thinkingMode?.trim()) {
+    body.thinking_mode = input.thinkingMode.trim()
+  }
+  if (input.providerId && input.modelId && input.speedMode?.trim()) {
+    body.speed_mode = input.speedMode.trim()
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/turns`, {

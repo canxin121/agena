@@ -4,7 +4,9 @@ use futures_util::stream;
 use std::collections::BTreeMap;
 
 use crate::error::AppError;
-use crate::model::{AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelVariant};
+use crate::model::{
+    AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode,
+};
 
 use super::{
     CapabilityFamily, CompletionRequest, CompletionResponse, CompletionStreamEvent,
@@ -66,18 +68,32 @@ pub trait ModelProvider: Send + Sync {
         self.model_metadata(model)
     }
 
-    fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
+    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
         let _ = model;
         BTreeMap::new()
     }
 
-    fn model_variants_for_adapter(
+    fn model_thinking_modes_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelVariant> {
+    ) -> BTreeMap<String, ModelThinkingMode> {
         let _ = adapter_id;
-        self.model_variants(model)
+        self.model_thinking_modes(model)
+    }
+
+    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
+        let _ = model;
+        BTreeMap::new()
+    }
+
+    fn model_speed_modes_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelSpeedMode> {
+        let _ = adapter_id;
+        self.model_speed_modes(model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {

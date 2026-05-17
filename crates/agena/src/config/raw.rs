@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use toml::Value;
 
 use crate::provider::{
-    ConfiguredModelDefinition, ConfiguredModelVariant, ProviderRequestRetryConfig,
-    ProviderStreamReplayConfig,
+    ConfiguredModelDefinition, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
+    ProviderRequestRetryConfig, ProviderStreamReplayConfig,
     auth::{AuthData, CredentialIssuer},
 };
 
@@ -97,9 +97,12 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
             let Some(provider) = provider.as_table() else {
                 continue;
             };
-            if provider.contains_key("variants") {
+            if provider.contains_key("variants")
+                || provider.contains_key("thinking_modes")
+                || provider.contains_key("speed_modes")
+            {
                 return Err(ConfigError::Validation(format!(
-                    "provider `{provider_id}` variants must be configured under `providers.{provider_id}.models.\"<model-id>\".variants`; provider-level variants are not supported"
+                    "provider `{provider_id}` model modes must be configured under `providers.{provider_id}.models.\"<model-id>\".thinking_modes` or `.speed_modes`; provider-level modes are not supported"
                 )));
             }
             if let Some(adapters) = provider.get("adapters").and_then(Value::as_table) {
@@ -1776,29 +1779,45 @@ fn validate_configured_models(
                 "provider `{provider_id}` {scope} model `{model_id}` has invalid capability patch: {message}"
             )));
         }
-        validate_configured_variants(
+        validate_configured_modes(
             provider_id,
-            format!("{scope} model `{model_id}` variants").as_str(),
-            &configured.definition.variants,
+            format!("{scope} model `{model_id}` thinking modes").as_str(),
+            &configured.definition.thinking_modes,
+            format!("{scope} model `{model_id}` speed modes").as_str(),
+            &configured.definition.speed_modes,
         )?;
     }
     Ok(())
 }
 
-fn validate_configured_variants(
+fn validate_configured_modes(
     provider_id: &str,
-    scope: &str,
-    variants: &BTreeMap<String, ConfiguredModelVariant>,
+    thinking_scope: &str,
+    thinking_modes: &BTreeMap<String, ConfiguredModelThinkingMode>,
+    speed_scope: &str,
+    speed_modes: &BTreeMap<String, ConfiguredModelSpeedMode>,
 ) -> Result<(), ConfigError> {
-    for (variant_name, variant) in variants {
-        if variant_name.trim().is_empty() {
+    for (name, mode) in thinking_modes {
+        if name.trim().is_empty() {
             return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {scope} variant name cannot be empty"
+                "provider `{provider_id}` {thinking_scope} mode name cannot be empty"
             )));
         }
-        if variant.is_empty() {
+        if mode.is_empty() {
             return Err(ConfigError::Validation(format!(
-                "provider `{provider_id}` {scope} variant `{variant_name}` must set at least one field or disabled = true"
+                "provider `{provider_id}` {thinking_scope} mode `{name}` must set at least one field or disabled = true"
+            )));
+        }
+    }
+    for (name, mode) in speed_modes {
+        if name.trim().is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "provider `{provider_id}` {speed_scope} mode name cannot be empty"
+            )));
+        }
+        if mode.is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "provider `{provider_id}` {speed_scope} mode `{name}` must set at least one field or disabled = true"
             )));
         }
     }

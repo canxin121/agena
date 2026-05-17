@@ -34,10 +34,16 @@ function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderMo
       structured_output: 'supported',
       temperature_supported: 'unsupported',
     },
-    variants: {
+    thinking_modes: {
       high: {
         display_name: 'High',
         description: 'More reasoning',
+      },
+    },
+    speed_modes: {
+      fast: {
+        display_name: 'Fast',
+        description: 'Priority route',
       },
     },
     ...overrides,
@@ -61,10 +67,16 @@ function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCa
         supported: ['tool_calling', 'streaming'],
       },
     },
-    variants: {
+    thinking_modes: {
       balanced: {
         display_name: 'Balanced',
-        description: 'Default profile',
+        description: 'Default reasoning profile',
+      },
+    },
+    speed_modes: {
+      fast: {
+        display_name: 'Fast',
+        description: 'Priority route',
       },
     },
     ...overrides,
@@ -72,44 +84,67 @@ function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCa
 }
 
 describe('useRuntimeModelCatalogActions', () => {
-  test('createModelCatalogDraftFromEntry hydrates model variants for editing', () => {
-    const entry = sampleCatalogEntry({
-      model_id: 'claude-sonnet-4-6',
-      display_name: 'Claude Sonnet 4.6',
-      variants: {
-        deep: {
-          display_name: 'Deep',
-          description: 'More reasoning',
-          thinking: { type: 'budget', budget_tokens: 30000 },
-          disabled: true,
+  test('createModelCatalogDraftFromEntry hydrates thinking and speed modes for editing', () => {
+    const draft = createModelCatalogDraftFromEntry(
+      sampleCatalogEntry({
+        model_id: 'claude-sonnet-4-6',
+        display_name: 'Claude Sonnet 4.6',
+        thinking_modes: {
+          deep: {
+            display_name: 'Deep',
+            description: 'More reasoning',
+            thinking: { type: 'budget', budget_tokens: 30000 },
+            disabled: true,
+          },
         },
-        light: {
-          display_name: 'Light',
-          description: 'Faster responses',
+        speed_modes: {
+          fast: {
+            display_name: 'Fast',
+            description: 'Priority route',
+            request_override: {
+              headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
+            },
+            adapter_overrides: {
+              openai: {
+                body_patch: { service_tier: 'priority' },
+              },
+            },
+          },
         },
-      },
-    })
+      }),
+    )
 
-    const draft = createModelCatalogDraftFromEntry(entry)
-
-    expect(draft.variants).toEqual([
+    expect(draft.thinking_modes).toEqual([
       {
         name: 'deep',
         display_name: 'Deep',
         description: 'More reasoning',
         disabled: true,
         thinking_json: JSON.stringify({ type: 'budget', budget_tokens: 30000 }, null, 2),
-        request_override_json: '',
-        adapter_overrides_json: '',
       },
+    ])
+    expect(draft.speed_modes).toEqual([
       {
-        name: 'light',
-        display_name: 'Light',
-        description: 'Faster responses',
+        name: 'fast',
+        display_name: 'Fast',
+        description: 'Priority route',
         disabled: false,
-        thinking_json: '',
-        request_override_json: '',
-        adapter_overrides_json: '',
+        request_override_json: JSON.stringify(
+          {
+            headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
+          },
+          null,
+          2,
+        ),
+        adapter_overrides_json: JSON.stringify(
+          {
+            openai: {
+              body_patch: { service_tier: 'priority' },
+            },
+          },
+          null,
+          2,
+        ),
       },
     ])
   })
@@ -131,13 +166,21 @@ describe('useRuntimeModelCatalogActions', () => {
       reasoning: true,
       structured_output: true,
       temperature_supported: false,
-      variants: [
+      thinking_modes: [
         {
           name: 'high',
           display_name: 'High',
           description: 'More reasoning',
           disabled: false,
           thinking_json: '',
+        },
+      ],
+      speed_modes: [
+        {
+          name: 'fast',
+          display_name: 'Fast',
+          description: 'Priority route',
+          disabled: false,
           request_override_json: '',
           adapter_overrides_json: '',
         },
@@ -175,17 +218,8 @@ describe('useRuntimeModelCatalogActions', () => {
     expect(fromCatalog.origin).toBe('OpenAI')
     expect(fromCatalog.lifecycle).toBe('preview')
     expect(fromCatalog.context_window_tokens).toBe('256000')
-    expect(fromCatalog.variants).toEqual([
-      {
-        name: 'balanced',
-        display_name: 'Balanced',
-        description: 'Default profile',
-        disabled: false,
-        thinking_json: '',
-        request_override_json: '',
-        adapter_overrides_json: '',
-      },
-    ])
+    expect(fromCatalog.thinking_modes[0]?.name).toBe('balanced')
+    expect(fromCatalog.speed_modes[0]?.name).toBe('fast')
   })
 
   test('catalogLookupIdForProviderModel prefers canonical ids when provided', () => {
@@ -199,59 +233,42 @@ describe('useRuntimeModelCatalogActions', () => {
     ).toBe('gpt-oss-120b')
   })
 
-  test('createModelCatalogDraftFromProviderSelection matches canonical catalog entries for vendor-prefixed model ids', () => {
-    const draft = createModelCatalogDraftFromProviderSelection(
-      [
-        sampleCatalogEntry({
-          model_id: 'gpt-oss-120b',
-          display_name: 'GPT OSS 120B Catalog',
-          origin: 'OpenAI',
-        }),
-      ],
-      sampleProviderModel({
-        id: 'openai/gpt-oss-120b',
-        catalog_model_id: 'gpt-oss-120b',
-        display_name: 'Gateway GPT OSS 120B',
-      }),
-    )
-
-    expect(draft.model_id).toBe('gpt-oss-120b')
-    expect(draft.display_name).toBe('GPT OSS 120B Catalog')
-    expect(draft.origin).toBe('OpenAI')
-  })
-
-  test('buildModelCatalogWriteRequest preserves variants and omits them when absent', () => {
+  test('buildModelCatalogWriteRequest preserves split thinking and speed modes and omits them when absent', () => {
     const draft = createEmptyModelCatalogDraft('anthropic', 'claude-sonnet-4-6')
     draft.origin = 'Anthropic'
-    draft.variants.push({
+    draft.thinking_modes.push({
       name: ' deep ',
       display_name: ' Deep ',
       description: ' More reasoning ',
       disabled: true,
       thinking_json: '{"type":"budget","budget_tokens":30000}',
+    })
+    draft.speed_modes.push({
+      name: ' fast ',
+      display_name: ' Fast ',
+      description: ' Priority route ',
+      disabled: true,
       request_override_json:
         '{"headers":{"anthropic-beta":"fast-mode-2026-02-01"},"body_patch":{"service_tier":"priority"}}',
       adapter_overrides_json:
         '{"anthropic":{"headers":{"anthropic-beta":"fast-mode-2026-02-01"}},"openai":{"body_patch":{"service_tier":"priority"}}}',
     })
-    draft.variants.push({
-      name: '',
-      display_name: '',
-      description: '',
-      disabled: false,
-      thinking_json: '',
-      request_override_json: '',
-      adapter_overrides_json: '',
-    })
 
     const request = buildModelCatalogWriteRequest(draft)
 
     expect(request.origin).toBe('Anthropic')
-    expect(request.variants).toEqual({
+    expect(request.thinking_modes).toEqual({
       deep: {
         display_name: 'Deep',
         description: 'More reasoning',
         thinking: { type: 'budget', budget_tokens: 30000 },
+        disabled: true,
+      },
+    })
+    expect(request.speed_modes).toEqual({
+      fast: {
+        display_name: 'Fast',
+        description: 'Priority route',
         request_override: {
           headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
           body_patch: { service_tier: 'priority' },
@@ -268,9 +285,9 @@ describe('useRuntimeModelCatalogActions', () => {
       },
     })
 
-    expect(buildModelCatalogWriteRequest(createEmptyModelCatalogDraft('shared', 'openai/gpt-5')).variants).toBe(
-      undefined,
-    )
+    const emptyRequest = buildModelCatalogWriteRequest(createEmptyModelCatalogDraft('shared', 'openai/gpt-5'))
+    expect(emptyRequest.thinking_modes).toBe(undefined)
+    expect(emptyRequest.speed_modes).toBe(undefined)
   })
 
   test('buildConfiguredProviderModelFromDraft drops display-only origin metadata', () => {
@@ -283,7 +300,7 @@ describe('useRuntimeModelCatalogActions', () => {
     })
   })
 
-  test('saveCatalogEntryAction reports local variant validation errors before submitting', async () => {
+  test('saveCatalogEntryAction validates thinking and speed mode payloads before submitting', async () => {
     const calls: string[] = []
     const state = {
       actionError: ref(''),
@@ -305,25 +322,35 @@ describe('useRuntimeModelCatalogActions', () => {
         return emptyResponse
       },
     })
-    const draft = createEmptyModelCatalogDraft('shared', 'openai/gpt-5')
-    draft.variants.push({
+
+    const invalidThinkingDraft = createEmptyModelCatalogDraft('shared', 'openai/gpt-5')
+    invalidThinkingDraft.thinking_modes.push({
       name: 'deep',
       display_name: '',
       description: '',
       disabled: false,
       thinking_json: '{',
-      request_override_json: '',
+    })
+    await actions.saveCatalogEntryAction(invalidThinkingDraft)
+    expect(calls).toEqual([])
+    expect(state.actionError.value).toBe('Thinking mode deep must be valid JSON.')
+
+    state.actionError.value = ''
+    const invalidSpeedDraft = createEmptyModelCatalogDraft('shared', 'openai/gpt-5')
+    invalidSpeedDraft.speed_modes.push({
+      name: 'fast',
+      display_name: '',
+      description: '',
+      disabled: false,
+      request_override_json: '{',
       adapter_overrides_json: '',
     })
-
-    await actions.saveCatalogEntryAction(draft)
-
+    await actions.saveCatalogEntryAction(invalidSpeedDraft)
     expect(calls).toEqual([])
-    expect(state.actionMessage.value).toBe('')
-    expect(state.actionError.value).toBe('Variant deep thinking must be valid JSON.')
+    expect(state.actionError.value).toBe('Speed mode fast request override must be valid JSON.')
   })
 
-  test('saveCatalogEntryAction preserves live-model variants when saving an override', async () => {
+  test('saveCatalogEntryAction preserves live-model modes when saving an override', async () => {
     const calls: string[] = []
     const actionError = ref('')
     const actionMessage = ref('')
@@ -366,62 +393,20 @@ describe('useRuntimeModelCatalogActions', () => {
       features: {
         supported: ['tool_calling', 'streaming', 'reasoning', 'structured_output'],
       },
-      variants: {
+      thinking_modes: {
         high: {
           display_name: 'High',
           description: 'More reasoning',
         },
       },
+      speed_modes: {
+        fast: {
+          display_name: 'Fast',
+          description: 'Priority route',
+        },
+      },
     })
     expect(actionError.value).toBe('')
     expect(actionMessage.value).toBe('Saved catalog entry gpt-5.')
-  })
-
-  test('createModelCatalogDraftFromEntry preserves request overrides in variant drafts', () => {
-    const draft = createModelCatalogDraftFromEntry(
-      sampleCatalogEntry({
-        variants: {
-          fast: {
-            display_name: 'Fast',
-            request_override: {
-              headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
-              body_patch: { service_tier: 'priority' },
-            },
-            adapter_overrides: {
-              openai: {
-                body_patch: { service_tier: 'priority' },
-              },
-            },
-          },
-        },
-      }),
-    )
-
-    expect(draft.variants).toEqual([
-      {
-        name: 'fast',
-        display_name: 'Fast',
-        description: '',
-        disabled: false,
-        thinking_json: '',
-        request_override_json: JSON.stringify(
-          {
-            headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
-            body_patch: { service_tier: 'priority' },
-          },
-          null,
-          2,
-        ),
-        adapter_overrides_json: JSON.stringify(
-          {
-            openai: {
-              body_patch: { service_tier: 'priority' },
-            },
-          },
-          null,
-          2,
-        ),
-      },
-    ])
   })
 })

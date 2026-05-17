@@ -94,7 +94,8 @@ impl ModelProvider for TestProvider {
 fn test_run_options() -> SessionRunOptions {
     SessionRunOptions {
         model: ModelRef::new("test", "test-model"),
-        variant: None,
+        thinking_mode: None,
+        speed_mode: None,
         thinking: None,
         request_override: Default::default(),
         system: None,

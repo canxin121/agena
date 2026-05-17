@@ -13,7 +13,8 @@ use tracing::Instrument;
 
 use crate::error::{AppError, ProviderErrorKind};
 use crate::model::{
-    AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ModelVariant, ProviderId,
+    AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ModelSpeedMode,
+    ModelThinkingMode, ProviderId,
 };
 use crate::plugin::ProviderDescriptor;
 
@@ -166,16 +167,29 @@ impl ModelProvider for NamedProvider {
         self.target.model_metadata_for_adapter(adapter_id, model)
     }
 
-    fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
-        self.target.model_variants(model)
+    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+        self.target.model_thinking_modes(model)
     }
 
-    fn model_variants_for_adapter(
+    fn model_thinking_modes_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelVariant> {
-        self.target.model_variants_for_adapter(adapter_id, model)
+    ) -> BTreeMap<String, ModelThinkingMode> {
+        self.target
+            .model_thinking_modes_for_adapter(adapter_id, model)
+    }
+
+    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
+        self.target.model_speed_modes(model)
+    }
+
+    fn model_speed_modes_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelSpeedMode> {
+        self.target.model_speed_modes_for_adapter(adapter_id, model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -223,10 +237,15 @@ impl ModelProvider for NamedProvider {
                 .metadata
                 .clone()
                 .with_fallbacks_from(&metadata_fallback);
-            if model.variants.is_empty() {
-                model.variants = self
+            if model.thinking_modes.is_empty() {
+                model.thinking_modes = self
                     .target
-                    .model_variants_for_adapter(model.adapter_id.as_ref(), &model.id);
+                    .model_thinking_modes_for_adapter(model.adapter_id.as_ref(), &model.id);
+            }
+            if model.speed_modes.is_empty() {
+                model.speed_modes = self
+                    .target
+                    .model_speed_modes_for_adapter(model.adapter_id.as_ref(), &model.id);
             }
         }
         Ok(models)
@@ -708,9 +727,17 @@ impl ProviderRegistry {
                             .metadata
                             .clone()
                             .with_fallbacks_from(&metadata_fallback);
-                        if model.variants.is_empty() {
-                            model.variants = provider
-                                .model_variants_for_adapter(model.adapter_id.as_ref(), &model.id);
+                        if model.thinking_modes.is_empty() {
+                            model.thinking_modes = provider.model_thinking_modes_for_adapter(
+                                model.adapter_id.as_ref(),
+                                &model.id,
+                            );
+                        }
+                        if model.speed_modes.is_empty() {
+                            model.speed_modes = provider.model_speed_modes_for_adapter(
+                                model.adapter_id.as_ref(),
+                                &model.id,
+                            );
                         }
                     }
                     Ok(models)
@@ -734,14 +761,24 @@ impl ProviderRegistry {
         Ok(provider.model_metadata_for_adapter(model.adapter_id.as_ref(), &model.model_id))
     }
 
-    pub fn model_variants(
+    pub fn model_thinking_modes(
         &self,
         model: &ModelRef,
-    ) -> Result<BTreeMap<String, ModelVariant>, AppError> {
+    ) -> Result<BTreeMap<String, ModelThinkingMode>, AppError> {
         let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
             AppError::Config(format!("provider not found: {}", model.provider_id))
         })?;
-        Ok(provider.model_variants_for_adapter(model.adapter_id.as_ref(), &model.model_id))
+        Ok(provider.model_thinking_modes_for_adapter(model.adapter_id.as_ref(), &model.model_id))
+    }
+
+    pub fn model_speed_modes(
+        &self,
+        model: &ModelRef,
+    ) -> Result<BTreeMap<String, ModelSpeedMode>, AppError> {
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+        Ok(provider.model_speed_modes_for_adapter(model.adapter_id.as_ref(), &model.model_id))
     }
 
     pub async fn resolve_model(&self, model: &ModelRef) -> Result<Model, AppError> {
@@ -761,12 +798,16 @@ impl ProviderRegistry {
             let adapter_id = model.adapter_id.as_ref().or(entry.adapter_id.as_ref());
             let fallback = provider.model_capabilities_for_adapter(adapter_id, &entry.id);
             let metadata_fallback = provider.model_metadata_for_adapter(adapter_id, &entry.id);
-            let variants = provider.model_variants_for_adapter(adapter_id, &entry.id);
+            let thinking_modes = provider.model_thinking_modes_for_adapter(adapter_id, &entry.id);
+            let speed_modes = provider.model_speed_modes_for_adapter(adapter_id, &entry.id);
             let mut resolved = entry
                 .with_capability_fallbacks(&fallback)
                 .with_metadata_fallbacks(&metadata_fallback);
-            if !variants.is_empty() {
-                resolved.variants = variants;
+            if !thinking_modes.is_empty() {
+                resolved.thinking_modes = thinking_modes;
+            }
+            if !speed_modes.is_empty() {
+                resolved.speed_modes = speed_modes;
             }
             return Ok(resolved);
         }
@@ -784,8 +825,11 @@ impl ProviderRegistry {
         .with_metadata(
             provider.model_metadata_for_adapter(model.adapter_id.as_ref(), &model.model_id),
         )
-        .with_variants(
-            provider.model_variants_for_adapter(model.adapter_id.as_ref(), &model.model_id),
+        .with_thinking_modes(
+            provider.model_thinking_modes_for_adapter(model.adapter_id.as_ref(), &model.model_id),
+        )
+        .with_speed_modes(
+            provider.model_speed_modes_for_adapter(model.adapter_id.as_ref(), &model.model_id),
         ))
     }
 

@@ -9,7 +9,9 @@ use futures_util::{StreamExt, stream::BoxStream};
 
 use crate::{
     error::AppError,
-    model::{AdapterId, Model, ModelId, ModelMetadata, ModelVariant, ProviderId},
+    model::{
+        AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode, ProviderId,
+    },
 };
 
 use super::{
@@ -182,31 +184,61 @@ impl ModelProvider for MultiAdapterProvider {
             .unwrap_or_default()
     }
 
-    fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
-        self.model_variants_for_adapter(None, model)
+    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+        self.model_thinking_modes_for_adapter(None, model)
     }
 
-    fn model_variants_for_adapter(
+    fn model_thinking_modes_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelVariant> {
+    ) -> BTreeMap<String, ModelThinkingMode> {
         self.resolve_route(adapter_id, model)
             .ok()
             .and_then(|(adapter_id, target_model, definition)| {
                 self.adapter(adapter_id.as_str()).ok().map(|adapter| {
-                    let mut variants = adapter.model_variants(&target_model);
-                    for (name, configured) in &definition.variants {
-                        match configured.apply_to_variant(variants.get(name)) {
-                            Some(variant) => {
-                                variants.insert(name.clone(), variant);
+                    let mut modes = adapter.model_thinking_modes(&target_model);
+                    for (name, configured) in &definition.thinking_modes {
+                        match configured.apply_to_mode(modes.get(name)) {
+                            Some(mode) => {
+                                modes.insert(name.clone(), mode);
                             }
                             None => {
-                                variants.remove(name);
+                                modes.remove(name);
                             }
                         }
                     }
-                    variants
+                    modes
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
+        self.model_speed_modes_for_adapter(None, model)
+    }
+
+    fn model_speed_modes_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelSpeedMode> {
+        self.resolve_route(adapter_id, model)
+            .ok()
+            .and_then(|(adapter_id, target_model, definition)| {
+                self.adapter(adapter_id.as_str()).ok().map(|adapter| {
+                    let mut modes = adapter.model_speed_modes(&target_model);
+                    for (name, configured) in &definition.speed_modes {
+                        match configured.apply_to_mode(modes.get(name)) {
+                            Some(mode) => {
+                                modes.insert(name.clone(), mode);
+                            }
+                            None => {
+                                modes.remove(name);
+                            }
+                        }
+                    }
+                    modes
                 })
             })
             .unwrap_or_default()

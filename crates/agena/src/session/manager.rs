@@ -22,7 +22,7 @@ use crate::message::{
     UserInputRequest, UserInputRequestPart,
 };
 use crate::model::ModelRef;
-use crate::model::ModelVariantRequestOverride;
+use crate::model::ModelSpeedModeRequestOverride;
 use crate::permission::{
     DecisionTraceStep, PermissionAction, PermissionDecision, PermissionMode, PermissionReply,
     PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PermissionScope,
@@ -100,9 +100,10 @@ pub struct SessionCreateRequest {
 #[derive(Debug, Clone)]
 pub struct SessionRunOptions {
     pub model: ModelRef,
-    pub variant: Option<String>,
+    pub thinking_mode: Option<String>,
+    pub speed_mode: Option<String>,
     pub thinking: Option<ThinkingRequest>,
-    pub request_override: ModelVariantRequestOverride,
+    pub request_override: ModelSpeedModeRequestOverride,
     pub system: Option<String>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
@@ -560,7 +561,8 @@ impl SessionManager {
                     model_provider_id: String::new(),
                     model_adapter_id: None,
                     model_id: String::new(),
-                    model_variant: None,
+                    model_thinking_mode: None,
+                    model_speed_mode: None,
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -584,7 +586,8 @@ impl SessionManager {
                     model_provider_id: String::new(),
                     model_adapter_id: None,
                     model_id: String::new(),
-                    model_variant: None,
+                    model_thinking_mode: None,
+                    model_speed_mode: None,
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -718,7 +721,8 @@ impl SessionManager {
                 &session,
                 SessionRunOptions {
                     model,
-                    variant: None,
+                    thinking_mode: None,
+                    speed_mode: None,
                     thinking: None,
                     request_override: Default::default(),
                     system: None,
@@ -750,7 +754,8 @@ impl SessionManager {
             &session,
             SessionRunOptions {
                 model: ModelRef::new(provider_id, provider.default_model().to_string()),
-                variant: None,
+                thinking_mode: None,
+                speed_mode: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,
@@ -1183,7 +1188,8 @@ impl SessionManager {
                     .as_ref()
                     .map(ToString::to_string),
                 model_id: request.options.model.model_id.to_string(),
-                model_variant: request.options.variant.clone(),
+                model_thinking_mode: request.options.thinking_mode.clone(),
+                model_speed_mode: request.options.speed_mode.clone(),
                 provider_metadata: None,
                 tags: Vec::new(),
             },
@@ -2059,7 +2065,8 @@ impl SessionManager {
                                             .as_ref()
                                             .map(ToString::to_string),
                                         model_id: current_options.model.model_id.to_string(),
-                                        model_variant: current_options.variant.clone(),
+                                        model_thinking_mode: current_options.thinking_mode.clone(),
+                                        model_speed_mode: current_options.speed_mode.clone(),
                                         provider_metadata: None,
                                         tags: Vec::new(),
                                     },
@@ -2308,7 +2315,8 @@ impl SessionManager {
                 options.model.provider_id.to_string(),
                 options.model.adapter_id.as_ref().map(ToString::to_string),
                 options.model.model_id.to_string(),
-                options.variant.clone(),
+                options.thinking_mode.clone(),
+                options.speed_mode.clone(),
                 prepared.prompt_cache_key.clone(),
                 prepared.prompt_window_generation,
             );
@@ -2320,7 +2328,8 @@ impl SessionManager {
             let run = SessionRunRequest {
                 session_id: session.id,
                 model: options.model.clone(),
-                model_variant: options.variant.clone(),
+                model_thinking_mode: options.thinking_mode.clone(),
+                model_speed_mode: options.speed_mode.clone(),
                 completion: options.completion_request(
                     prepared.system.clone(),
                     prepared.messages.clone(),
@@ -2763,7 +2772,8 @@ impl SessionManager {
                 model_provider_id: options.model.provider_id.to_string(),
                 model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                 model_id: options.model.model_id.to_string(),
-                model_variant: None,
+                model_thinking_mode: None,
+                model_speed_mode: None,
                 provider_metadata: None,
                 tags: vec![MESSAGE_TAG_PROMPT_SUMMARY.to_string()],
             },
@@ -3978,10 +3988,16 @@ impl SessionManager {
                 ))
             })?;
         }
-        if options.variant.is_none() {
-            options.variant = session
+        if options.thinking_mode.is_none() {
+            options.thinking_mode = session
                 .runtime
-                .model_variant_override()
+                .model_thinking_mode_override()
+                .map(ToOwned::to_owned);
+        }
+        if options.speed_mode.is_none() {
+            options.speed_mode = session
+                .runtime
+                .model_speed_mode_override()
                 .map(ToOwned::to_owned);
         }
         if let Some(system) = session.runtime.execution.system_prompt_override.as_ref() {
@@ -4054,7 +4070,8 @@ impl SessionManager {
             session,
             SessionRunOptions {
                 model,
-                variant: None,
+                thinking_mode: None,
+                speed_mode: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,
@@ -4080,7 +4097,7 @@ impl SessionManager {
         session.runtime.execution.agent_permission = state.config.permission.clone();
         session.runtime.execution.agent_run = crate::agent::AgentRunConfig::default();
         session.runtime.set_model_override(None, None, None);
-        session.runtime.set_model_variant_override(None);
+        session.runtime.set_model_mode_overrides(None, None);
         Ok(session)
     }
 
@@ -4158,7 +4175,8 @@ impl SessionManager {
         let next_model_provider_id = next_model.provider_id.to_string();
         let next_model_adapter_id = next_model.adapter_id.as_ref().map(ToString::to_string);
         let next_model_id = next_model.model_id.to_string();
-        let next_variant = options.variant.clone();
+        let next_thinking_mode = options.thinking_mode.clone();
+        let next_speed_mode = options.speed_mode.clone();
         let next_run = crate::agent::AgentRunConfig {
             temperature: profile.frontmatter.temperature,
             max_output_tokens: profile.frontmatter.max_output_tokens,
@@ -4178,7 +4196,8 @@ impl SessionManager {
             || session.runtime.execution.model_adapter_id.as_deref()
                 != next_model_adapter_id.as_deref()
             || session.runtime.execution.model_id.as_deref() != Some(next_model_id.as_str())
-            || session.runtime.execution.model_variant != next_variant
+            || session.runtime.execution.model_thinking_mode != next_thinking_mode
+            || session.runtime.execution.model_speed_mode != next_speed_mode
             || session.runtime.execution.agent_run != next_run;
         session.runtime.execution.agent_profile = Some(profile.name.clone());
         session.runtime.execution.agent_mode = Some(profile.frontmatter.mode);
@@ -4195,9 +4214,10 @@ impl SessionManager {
         );
         session
             .runtime
-            .set_model_variant_override(next_variant.clone());
+            .set_model_mode_overrides(next_thinking_mode.clone(), next_speed_mode.clone());
         options.model = next_model;
-        options.variant = next_variant;
+        options.thinking_mode = next_thinking_mode;
+        options.speed_mode = next_speed_mode;
         options.system = session.runtime.execution.system_prompt_override.clone();
         if options.temperature.is_none() {
             options.temperature = next_run.temperature.map(|value| value.0);
@@ -4454,7 +4474,8 @@ impl SessionManager {
         };
         Ok(SessionRunOptions {
             model,
-            variant: None,
+            thinking_mode: None,
+            speed_mode: None,
             thinking: None,
             request_override: Default::default(),
             system: child.runtime.execution.system_prompt_override.clone(),
@@ -4500,7 +4521,8 @@ impl SessionManager {
                     model_provider_id: options.model.provider_id.to_string(),
                     model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                     model_id: options.model.model_id.to_string(),
-                    model_variant: options.variant.clone(),
+                    model_thinking_mode: options.thinking_mode.clone(),
+                    model_speed_mode: options.speed_mode.clone(),
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -6420,7 +6442,8 @@ mod tests {
     fn interruptible_options() -> SessionRunOptions {
         SessionRunOptions {
             model: ModelRef::new("interruptible", "interruptible-model"),
-            variant: None,
+            thinking_mode: None,
+            speed_mode: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -6678,7 +6701,8 @@ mod tests {
     fn run_options() -> SessionRunOptions {
         SessionRunOptions {
             model: scripted_model_ref(),
-            variant: None,
+            thinking_mode: None,
+            speed_mode: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -6692,7 +6716,8 @@ mod tests {
     fn recording_run_options() -> SessionRunOptions {
         SessionRunOptions {
             model: recording_model_ref(),
-            variant: None,
+            thinking_mode: None,
+            speed_mode: None,
             thinking: None,
             request_override: Default::default(),
             system: Some("system".to_string()),
@@ -6712,7 +6737,8 @@ mod tests {
     fn interrupted_run_options() -> SessionRunOptions {
         SessionRunOptions {
             model: interrupted_model_ref(),
-            variant: None,
+            thinking_mode: None,
+            speed_mode: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -7770,7 +7796,8 @@ mod tests {
                 session_id: created.id,
                 options: SessionRunOptions {
                     model: recording_model_ref(),
-                    variant: None,
+                    thinking_mode: None,
+                    speed_mode: None,
                     thinking: None,
                     request_override: Default::default(),
                     system: None,
@@ -8615,7 +8642,8 @@ mod tests {
         fn restartable_options() -> SessionRunOptions {
             SessionRunOptions {
                 model: ModelRef::new("restartable", "restartable-model"),
-                variant: None,
+                thinking_mode: None,
+                speed_mode: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,
@@ -9260,7 +9288,8 @@ mod tests {
                 model_provider_id: options.model.provider_id.to_string(),
                 model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
                 model_id: options.model.model_id.to_string(),
-                model_variant: options.variant.clone(),
+                model_thinking_mode: options.thinking_mode.clone(),
+                model_speed_mode: options.speed_mode.clone(),
                 provider_metadata: None,
                 tags: Vec::new(),
             },
@@ -9857,7 +9886,8 @@ mod tests {
         fn slow_options() -> SessionRunOptions {
             SessionRunOptions {
                 model: ModelRef::new("slow", "slow-model"),
-                variant: None,
+                thinking_mode: None,
+                speed_mode: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,

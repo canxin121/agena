@@ -53,7 +53,8 @@ export type ChatSessionActionsInput = {
   selectedAdapterId: Ref<string>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
-  selectedVariant: Ref<string>
+  selectedThinkingMode: Ref<string>
+  selectedSpeedMode: Ref<string>
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sending: Ref<boolean>
@@ -409,9 +410,13 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
           input.selectedProviderId.value && input.selectedAdapterId.value ? input.selectedAdapterId.value : undefined,
         modelId:
           input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
-        variant:
-          input.selectedProviderId.value && input.selectedModelId.value && input.selectedVariant.value
-            ? input.selectedVariant.value
+        thinkingMode:
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedThinkingMode.value
+            ? input.selectedThinkingMode.value
+            : undefined,
+        speedMode:
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedSpeedMode.value
+            ? input.selectedSpeedMode.value
             : undefined,
       })
       input.sessionState.value = state
@@ -439,9 +444,13 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
           input.selectedProviderId.value && input.selectedAdapterId.value ? input.selectedAdapterId.value : undefined,
         modelId:
           input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
-        variant:
-          input.selectedProviderId.value && input.selectedModelId.value && input.selectedVariant.value
-            ? input.selectedVariant.value
+        thinkingMode:
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedThinkingMode.value
+            ? input.selectedThinkingMode.value
+            : undefined,
+        speedMode:
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedSpeedMode.value
+            ? input.selectedSpeedMode.value
             : undefined,
       })
       input.syncEventStream()

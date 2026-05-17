@@ -30,7 +30,8 @@ use super::{context_governor::ContextGovernor, store::ProcessorPartIdAllocator};
 pub(crate) struct SessionRunRequest {
     pub session_id: i64,
     pub model: ModelRef,
-    pub model_variant: Option<String>,
+    pub model_thinking_mode: Option<String>,
+    pub model_speed_mode: Option<String>,
     pub completion: CompletionRequest,
     pub next_message_id: i64,
     pub part_ids: ProcessorPartIdAllocator,
@@ -341,7 +342,8 @@ impl SessionProcessor {
             model_provider_id: run.model.provider_id.to_string(),
             model_adapter_id: run.model.adapter_id.as_ref().map(ToString::to_string),
             model_id: run.completion.model.to_string(),
-            model_variant: run.model_variant.clone(),
+            model_thinking_mode: run.model_thinking_mode.clone(),
+            model_speed_mode: run.model_speed_mode.clone(),
             provider_metadata: None,
             tags: Vec::new(),
         };
@@ -1475,7 +1477,8 @@ mod tests {
             .run_turn(SessionRunRequest {
                 session_id: 1,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
-                model_variant: None,
+                model_thinking_mode: None,
+                model_speed_mode: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1592,7 +1595,8 @@ mod tests {
             .run_turn(SessionRunRequest {
                 session_id: 1,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
-                model_variant: None,
+                model_thinking_mode: None,
+                model_speed_mode: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1693,7 +1697,8 @@ mod tests {
             .run_turn(SessionRunRequest {
                 session_id: 1,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
-                model_variant: None,
+                model_thinking_mode: None,
+                model_speed_mode: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1800,7 +1805,8 @@ mod tests {
             .run_turn(SessionRunRequest {
                 session_id: 7,
                 model: ModelRef::new("ordered-stream", "ordered-model"),
-                model_variant: None,
+                model_thinking_mode: None,
+                model_speed_mode: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,

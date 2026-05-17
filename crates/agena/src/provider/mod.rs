@@ -27,16 +27,17 @@ mod wire_message;
 
 pub use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
-    ModelLifecycle, ModelMetadata, ModelRef, ModelTokenLimits, ModelVariant, ProviderId,
+    ModelLifecycle, ModelMetadata, ModelRef, ModelSpeedMode, ModelSpeedModeRequestOverride,
+    ModelThinkingMode, ModelTokenLimits, ProviderId,
 };
 pub use amazon_bedrock::AmazonBedrockProvider;
 pub use anthropic::{AnthropicProfile, AnthropicProvider};
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
 pub use cataloged_models::CatalogedModelsProvider;
 pub use configured_models::{
-    ConfiguredModelDefinition, ConfiguredModelVariant, ConfiguredModelsProvider,
-    FeatureCapabilityPatch, FeatureCapabilityPatchBody, InputCapabilityPatch,
-    InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch,
+    ConfiguredModelDefinition, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
+    ConfiguredModelsProvider, FeatureCapabilityPatch, FeatureCapabilityPatchBody,
+    InputCapabilityPatch, InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch,
 };
 pub use core::{ModelProvider, StreamResumePolicy};
 pub use credential::{

@@ -74,7 +74,8 @@ async fn run_options_to_core(
             session_id,
             SessionRunOptionsRequest {
                 model: options.model.clone(),
-                variant: options.variant.clone(),
+                thinking_mode: options.thinking_mode.clone(),
+                speed_mode: options.speed_mode.clone(),
                 agent_profile: options.agent_profile.clone(),
                 system: options.system.clone(),
                 temperature: options.temperature,
@@ -245,7 +246,8 @@ fn execution_context_from_http(
         model_provider_id: value.model_provider_id,
         model_adapter_id: value.model_adapter_id,
         model_id: value.model_id,
-        model_variant: value.model_variant,
+        model_thinking_mode: value.model_thinking_mode,
+        model_speed_mode: value.model_speed_mode,
         agent_run: value.agent_run,
         effective_workspace_root: value.effective_workspace_root,
         task_id: value.task_id,
@@ -1836,7 +1838,8 @@ enabled = true
         let session_id = create_session(&state, &workspace_root, "single provider").await;
         let options = RunOptions {
             model: None,
-            variant: None,
+            thinking_mode: None,
+            speed_mode: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1878,7 +1881,8 @@ base_url = "http://localhost:11434"
         let session_id = create_session(&state, &workspace_root, "multiple providers").await;
         let options = RunOptions {
             model: None,
-            variant: None,
+            thinking_mode: None,
+            speed_mode: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1921,7 +1925,8 @@ base_url = "http://localhost:11434"
         let session_id = create_session(&state, &workspace_root, "explicit model").await;
         let options = RunOptions {
             model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
-            variant: None,
+            thinking_mode: None,
+            speed_mode: None,
             agent_profile: None,
             system: Some("be concise".into()),
             temperature: Some(0.7),
@@ -1939,7 +1944,7 @@ base_url = "http://localhost:11434"
     }
 
     #[tokio::test]
-    async fn run_options_to_core_resolves_model_variant_thinking() {
+    async fn run_options_to_core_resolves_model_thinking_mode() {
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
@@ -1953,19 +1958,20 @@ api_key = "dummy"
 [providers.openai.adapters.openai]
 enabled = true
 
-[providers.openai.adapters.openai.models."gpt-5.4".variants.light]
+[providers.openai.adapters.openai.models."gpt-5.4".thinking_modes.light]
 thinking = { type = "budget", budget_tokens = 3000 }
 
-[providers.openai.adapters.openai.models."gpt-5.4".variants.deep]
+[providers.openai.adapters.openai.models."gpt-5.4".thinking_modes.deep]
 thinking = { type = "budget", budget_tokens = 30000 }
 "#,
-            "model-variant",
+            "model-thinking-mode",
         )
         .await;
-        let session_id = create_session(&state, &workspace_root, "variant").await;
+        let session_id = create_session(&state, &workspace_root, "thinking mode").await;
         let options = RunOptions {
             model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
-            variant: Some("deep".to_string()),
+            thinking_mode: Some("deep".to_string()),
+            speed_mode: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1975,9 +1981,9 @@ thinking = { type = "budget", budget_tokens = 30000 }
 
         let core = run_options_to_core(&state, session_id, &options)
             .await
-            .expect("variant should resolve");
+            .expect("thinking mode should resolve");
 
-        assert_eq!(core.variant.as_deref(), Some("deep"));
+        assert_eq!(core.thinking_mode.as_deref(), Some("deep"));
         assert_eq!(
             core.thinking,
             Some(agena::provider::ThinkingRequest::Budget {
@@ -1987,7 +1993,7 @@ thinking = { type = "budget", budget_tokens = 30000 }
     }
 
     #[tokio::test]
-    async fn run_options_to_core_rejects_unknown_model_variant() {
+    async fn run_options_to_core_rejects_unknown_model_thinking_mode() {
         let (state, workspace_root) = test_state_with_config(
             r#"
 [providers.openai]
@@ -2001,16 +2007,17 @@ api_key = "dummy"
 [providers.openai.adapters.openai]
 enabled = true
 
-[providers.openai.adapters.openai.models."gpt-5.4".variants.light]
+[providers.openai.adapters.openai.models."gpt-5.4".thinking_modes.light]
 thinking = { type = "budget", budget_tokens = 3000 }
 "#,
-            "unknown-model-variant",
+            "unknown-model-thinking-mode",
         )
         .await;
-        let session_id = create_session(&state, &workspace_root, "variant").await;
+        let session_id = create_session(&state, &workspace_root, "thinking mode").await;
         let options = RunOptions {
             model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
-            variant: Some("deep".to_string()),
+            thinking_mode: Some("deep".to_string()),
+            speed_mode: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2020,10 +2027,10 @@ thinking = { type = "budget", budget_tokens = 3000 }
 
         let error = run_options_to_core(&state, session_id, &options)
             .await
-            .expect_err("unknown variant should be rejected");
+            .expect_err("unknown thinking mode should be rejected");
 
         assert!(
-            matches!(error, ServerError::BadRequest(message) if message.contains("has no variant `deep`"))
+            matches!(error, ServerError::BadRequest(message) if message.contains("has no thinking mode `deep`"))
         );
     }
 

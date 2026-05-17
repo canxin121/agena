@@ -32,7 +32,7 @@ agena config validate
 - `agena.memory` project instructions。
 - `agena.hooks` shell/HTTP hooks。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
-- provider model metadata 和 model variants。
+- provider model metadata，以及拆分后的 model thinking/speed modes。
 
 这两个示例文件有解析测试，测试位置为 `crates/agena/tests/config_examples.rs`。
 
@@ -374,7 +374,7 @@ enabled = true
 - `provider`：逻辑入口，对外暴露 `provider_id` 和 provider 默认模型。
 - `auth`：认证与身份来源，只负责 token / OAuth / ADC / SigV4 / service key。
 - `adapter`：协议实现，例如 `openai`、`anthropic`、`gemini`、`gitlab`、`amazon_bedrock`、`ollama`。
-- `model`：真实上游模型节点，key 就是上游 model id，本身支持 metadata/capabilities/variants patch。
+- `model`：真实上游模型节点，key 就是上游 model id，本身支持 metadata/capabilities/thinking_modes/speed_modes patch。
 
 关键规则：
 
@@ -511,7 +511,7 @@ enabled = true
 - `https://api.cxits.cn/v1beta/models/gemini-2.5-pro:generateContent` 也会先收敛成 `https://api.cxits.cn`
 - `https://api.cxits.cn/api/provider/openai/v1` 会被识别成 `provider_routed` 共享入口
 
-### Model metadata 和 variants
+### Model metadata 和 modes
 
 canonical 路径是 `providers.<id>.adapters.<adapter>.models."<real-model-id>"`。
 
@@ -526,16 +526,20 @@ description = "Fast general-purpose model."
 input = { supported = ["text", "image"], unsupported = ["audio"] }
 features = { supported = ["tool_calling", "streaming"], unsupported = ["temperature"] }
 
-[providers.openai.adapters.openai.models."gpt-4.1-mini".variants.light]
+[providers.openai.adapters.openai.models."gpt-4.1-mini".thinking_modes.light]
 display_name = "Light"
 thinking = { type = "effort", effort = "low" }
 
-[providers.openai.adapters.openai.models."gpt-4.1-mini".variants.deep]
+[providers.openai.adapters.openai.models."gpt-4.1-mini".thinking_modes.deep]
 display_name = "Deep"
 thinking = { type = "effort", effort = "high" }
+
+[providers.openai.adapters.openai.models."gpt-4.1-mini".speed_modes.fast]
+display_name = "Fast"
+request_override = { body_patch = { service_tier = "priority" } }
 ```
 
-模型节点本身建议只放会影响行为或能力元数据的字段；真正参与路由的是 provider、adapter、model 三级 id。`display_name` 不再作为 model 节点配置字段，variant 的 `display_name` 仍然保留用于命名推理档位等变体。
+模型节点本身建议只放会影响行为或能力元数据的字段；真正参与路由的是 provider、adapter、model 三级 id。`display_name` 不再作为 model 节点配置字段；mode 的 `display_name` 只用于展示。
 
 `input` 和 `features` 都支持 compact array：
 
@@ -585,7 +589,12 @@ experimental
 deprecated
 ```
 
-每个 model id 可以定义自己的 variants。Variant 字段包括 `display_name`、`description`、`thinking`、`disabled`。
+每个 model id 可以定义两套 mode：
+
+- `thinking_modes`：控制 reasoning effort / budget / disabled
+- `speed_modes`：控制请求级 patch，例如 headers、body patch、adapter-specific overrides
+
+`thinking_modes.<name>` 字段包括 `display_name`、`description`、`thinking`、`disabled`。
 
 `thinking` 写法：
 
@@ -604,6 +613,28 @@ medium
 high
 xhigh
 max
+```
+
+`speed_modes.<name>` 字段包括：
+
+- `display_name`
+- `description`
+- `disabled`
+- `request_override.headers`
+- `request_override.body_patch`
+- `adapter_overrides.<adapter>.headers`
+- `adapter_overrides.<adapter>.body_patch`
+
+示例：
+
+```toml
+[providers.openai.adapters.openai.models."gpt-4.1-mini".speed_modes.fast]
+display_name = "Fast"
+description = "Prefer priority service tier"
+request_override = { body_patch = { service_tier = "priority" } }
+
+[providers.openai.adapters.openai.models."gpt-4.1-mini".speed_modes.fast.adapter_overrides.openai]
+headers = { openai-beta = "fast-mode-2026-02-01" }
 ```
 
 ## Agents

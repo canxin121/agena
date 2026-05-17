@@ -246,7 +246,10 @@ pub struct ModelCatalogEntryResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub variants: std::collections::BTreeMap<String, agena::provider::ConfiguredModelVariant>,
+    pub thinking_modes:
+        std::collections::BTreeMap<String, agena::provider::ConfiguredModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub speed_modes: std::collections::BTreeMap<String, agena::provider::ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: agena::provider::ModelCapabilityPatch,
 }
@@ -389,7 +392,9 @@ pub struct SessionExecutionContextResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_variant: Option<String>,
+    pub model_thinking_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_speed_mode: Option<String>,
     #[serde(default, skip_serializing_if = "AgentRunConfig::is_empty")]
     pub agent_run: AgentRunConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -419,7 +424,9 @@ pub struct RunOptions {
     #[serde(default)]
     pub model: Option<ModelRef>,
     #[serde(default)]
-    pub variant: Option<String>,
+    pub thinking_mode: Option<String>,
+    #[serde(default)]
+    pub speed_mode: Option<String>,
     #[serde(default)]
     pub agent_profile: Option<String>,
     #[serde(default)]

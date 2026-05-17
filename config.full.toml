@@ -252,10 +252,11 @@ stream_mode = "sse"
 # context_window_tokens = 200000
 # max_output_tokens = 16384
 
-# Per-model variants. Runtime can select these by name via run options; without
-# a selected variant, Agena does not inject explicit thinking settings.
+# Per-model modes. Thinking 和 speed 分成两套正交配置，避免把
+# reasoning / latency / provider-specific request patch 全塞进一个单独模式名
+# 里导致组合爆炸。
 #
-# Example — OpenAI GPT-5.x with named reasoning levels:
+# Example — OpenAI GPT-5.x with named reasoning levels and a fast speed mode:
 #
 # [providers.openai-reasoning]
 # default_adapter = "openai"
@@ -269,13 +270,17 @@ stream_mode = "sse"
 # [providers.openai-reasoning.adapters.openai]
 # enabled = true
 #
-# [providers.openai-reasoning.adapters.openai.models."gpt-5.5".variants.light]
+# [providers.openai-reasoning.adapters.openai.models."gpt-5.5".thinking_modes.light]
 # display_name = "Light"
 # thinking = { type = "effort", effort = "low" }
 #
-# [providers.openai-reasoning.adapters.openai.models."gpt-5.5".variants.deep]
+# [providers.openai-reasoning.adapters.openai.models."gpt-5.5".thinking_modes.deep]
 # display_name = "Deep"
 # thinking = { type = "effort", effort = "high" }
+#
+# [providers.openai-reasoning.adapters.openai.models."gpt-5.5".speed_modes.fast]
+# display_name = "Fast"
+# request_override = { body_patch = { service_tier = "priority" } }
 #
 # Example — Anthropic with named thinking levels:
 #
@@ -291,11 +296,11 @@ stream_mode = "sse"
 # [providers.anthropic.adapters.anthropic]
 # enabled = true
 #
-# [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".variants.light]
+# [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".thinking_modes.light]
 # display_name = "Light"
 # thinking = { type = "budget", budget_tokens = 3000 }
 #
-# [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".variants.deep]
+# [providers.anthropic.adapters.anthropic.models."claude-sonnet-4-5".thinking_modes.deep]
 # display_name = "Deep"
 # thinking = { type = "budget", budget_tokens = 30000 }
 

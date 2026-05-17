@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
-    ModelLifecycle, ModelMetadata, ModelVariant, ModelVariantRequestOverride,
+    ModelLifecycle, ModelMetadata, ModelSpeedMode, ModelSpeedModeRequestOverride,
+    ModelThinkingMode,
 };
 
 use super::{
@@ -442,56 +443,94 @@ fn validate_named_patch(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct ConfiguredModelVariant {
+pub struct ConfiguredModelThinkingMode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingRequest>,
-    #[serde(default, skip_serializing_if = "ModelVariantRequestOverride::is_empty")]
-    pub request_override: ModelVariantRequestOverride,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapter_overrides: BTreeMap<String, ModelVariantRequestOverride>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
 }
 
-impl ConfiguredModelVariant {
+impl ConfiguredModelThinkingMode {
     pub fn is_empty(&self) -> bool {
         self.display_name.is_none()
             && self.description.is_none()
             && self.thinking.is_none()
+            && !self.disabled
+    }
+
+    pub(crate) fn apply_to_mode(
+        &self,
+        base: Option<&ModelThinkingMode>,
+    ) -> Option<ModelThinkingMode> {
+        if self.disabled {
+            return None;
+        }
+        let mut mode = base.cloned().unwrap_or_default();
+        if let Some(display_name) = self.display_name.clone() {
+            mode.display_name = Some(display_name);
+        }
+        if let Some(description) = self.description.clone() {
+            mode.description = Some(description);
+        }
+        if let Some(thinking) = self.thinking.clone() {
+            mode.thinking = Some(thinking);
+        }
+        Some(mode)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ConfiguredModelSpeedMode {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
+    )]
+    pub request_override: ModelSpeedModeRequestOverride,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
+}
+
+impl ConfiguredModelSpeedMode {
+    pub fn is_empty(&self) -> bool {
+        self.display_name.is_none()
+            && self.description.is_none()
             && self.request_override.is_empty()
             && self.adapter_overrides.is_empty()
             && !self.disabled
     }
 
-    pub(crate) fn apply_to_variant(&self, base: Option<&ModelVariant>) -> Option<ModelVariant> {
+    pub(crate) fn apply_to_mode(&self, base: Option<&ModelSpeedMode>) -> Option<ModelSpeedMode> {
         if self.disabled {
             return None;
         }
-        let mut variant = base.cloned().unwrap_or_default();
+        let mut mode = base.cloned().unwrap_or_default();
         if let Some(display_name) = self.display_name.clone() {
-            variant.display_name = Some(display_name);
+            mode.display_name = Some(display_name);
         }
         if let Some(description) = self.description.clone() {
-            variant.description = Some(description);
+            mode.description = Some(description);
         }
-        if let Some(thinking) = self.thinking.clone() {
-            variant.thinking = Some(thinking);
-        }
-        variant.request_override = variant.request_override.merged_with(&self.request_override);
+        mode.request_override = mode.request_override.merged_with(&self.request_override);
         for (adapter_id, override_patch) in &self.adapter_overrides {
-            let merged = variant
+            let merged = mode
                 .adapter_overrides
                 .get(adapter_id)
                 .cloned()
                 .unwrap_or_default()
                 .merged_with(override_patch);
-            variant.adapter_overrides.insert(adapter_id.clone(), merged);
+            mode.adapter_overrides.insert(adapter_id.clone(), merged);
         }
-        Some(variant)
+        Some(mode)
     }
 }
 
@@ -508,7 +547,9 @@ pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub variants: BTreeMap<String, ConfiguredModelVariant>,
+    pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
 }
@@ -520,7 +561,8 @@ impl ConfiguredModelDefinition {
             && self.max_output_tokens.is_none()
             && self.display_name.is_none()
             && self.description.is_none()
-            && self.variants.is_empty()
+            && self.thinking_modes.is_empty()
+            && self.speed_modes.is_empty()
             && self.capabilities.is_empty()
     }
 
@@ -560,26 +602,46 @@ impl ConfiguredModelDefinition {
             .clone()
             .with_fallbacks_from(metadata_fallback);
         model.metadata = self.metadata().with_fallbacks_from(&base_metadata);
-        model.variants = apply_configured_variants(model.variants, self.variants.iter());
+        model.thinking_modes =
+            apply_configured_thinking_modes(model.thinking_modes, self.thinking_modes.iter());
+        model.speed_modes =
+            apply_configured_speed_modes(model.speed_modes, self.speed_modes.iter());
         model
     }
 }
 
-fn apply_configured_variants<'a>(
-    mut variants: BTreeMap<String, ModelVariant>,
-    model_variants: impl Iterator<Item = (&'a String, &'a ConfiguredModelVariant)>,
-) -> BTreeMap<String, ModelVariant> {
-    for (name, configured) in model_variants {
-        match configured.apply_to_variant(variants.get(name)) {
-            Some(variant) => {
-                variants.insert(name.clone(), variant);
+fn apply_configured_thinking_modes<'a>(
+    mut modes: BTreeMap<String, ModelThinkingMode>,
+    configured_modes: impl Iterator<Item = (&'a String, &'a ConfiguredModelThinkingMode)>,
+) -> BTreeMap<String, ModelThinkingMode> {
+    for (name, configured) in configured_modes {
+        match configured.apply_to_mode(modes.get(name)) {
+            Some(mode) => {
+                modes.insert(name.clone(), mode);
             }
             None => {
-                variants.remove(name);
+                modes.remove(name);
             }
         }
     }
-    variants
+    modes
+}
+
+fn apply_configured_speed_modes<'a>(
+    mut modes: BTreeMap<String, ModelSpeedMode>,
+    configured_modes: impl Iterator<Item = (&'a String, &'a ConfiguredModelSpeedMode)>,
+) -> BTreeMap<String, ModelSpeedMode> {
+    for (name, configured) in configured_modes {
+        match configured.apply_to_mode(modes.get(name)) {
+            Some(mode) => {
+                modes.insert(name.clone(), mode);
+            }
+            None => {
+                modes.remove(name);
+            }
+        }
+    }
+    modes
 }
 
 #[derive(Clone)]
@@ -622,11 +684,21 @@ impl ConfiguredModelsProvider {
             .unwrap_or(base)
     }
 
-    fn configured_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
-        apply_configured_variants(
-            self.target.model_variants(model),
+    fn configured_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+        apply_configured_thinking_modes(
+            self.target.model_thinking_modes(model),
             self.configured_model(model)
-                .map(|configured| configured.variants.iter())
+                .map(|configured| configured.thinking_modes.iter())
+                .into_iter()
+                .flatten(),
+        )
+    }
+
+    fn configured_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
+        apply_configured_speed_modes(
+            self.target.model_speed_modes(model),
+            self.configured_model(model)
+                .map(|configured| configured.speed_modes.iter())
                 .into_iter()
                 .flatten(),
         )
@@ -673,17 +745,30 @@ impl ModelProvider for ConfiguredModelsProvider {
         self.configured_metadata(model)
     }
 
-    fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
-        self.configured_variants(model)
+    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+        self.configured_thinking_modes(model)
     }
 
-    fn model_variants_for_adapter(
+    fn model_thinking_modes_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> BTreeMap<String, ModelVariant> {
+    ) -> BTreeMap<String, ModelThinkingMode> {
         let _ = adapter_id;
-        self.configured_variants(model)
+        self.configured_thinking_modes(model)
+    }
+
+    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
+        self.configured_speed_modes(model)
+    }
+
+    fn model_speed_modes_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelSpeedMode> {
+        let _ = adapter_id;
+        self.configured_speed_modes(model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -731,7 +816,8 @@ impl ModelProvider for ConfiguredModelsProvider {
                     &metadata_fallback,
                 );
             } else {
-                model.variants = self.configured_variants(&model.id);
+                model.thinking_modes = self.configured_thinking_modes(&model.id);
+                model.speed_modes = self.configured_speed_modes(&model.id);
             }
         }
 
@@ -929,7 +1015,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_provider_applies_model_variants() {
+    async fn configured_provider_applies_model_modes() {
         let target = std::sync::Arc::new(StaticProvider {
             default_model: ModelId::new("base-model"),
             listed_models: vec![
@@ -945,14 +1031,22 @@ mod tests {
             BTreeMap::from([(
                 "base-model".to_owned(),
                 ConfiguredModelDefinition {
-                    variants: BTreeMap::from([(
+                    thinking_modes: BTreeMap::from([(
                         "deep".to_owned(),
-                        ConfiguredModelVariant {
+                        ConfiguredModelThinkingMode {
                             display_name: None,
                             description: Some("More reasoning".to_owned()),
                             thinking: Some(ThinkingRequest::Budget {
                                 budget_tokens: 30_000,
                             }),
+                            disabled: false,
+                        },
+                    )]),
+                    speed_modes: BTreeMap::from([(
+                        "fast".to_owned(),
+                        ConfiguredModelSpeedMode {
+                            display_name: Some("Fast".to_owned()),
+                            description: Some("Priority route".to_owned()),
                             request_override: Default::default(),
                             adapter_overrides: BTreeMap::new(),
                             disabled: false,
@@ -974,18 +1068,26 @@ mod tests {
 
         assert_eq!(
             model
-                .variants
+                .thinking_modes
                 .get("deep")
-                .and_then(|variant| variant.thinking.clone()),
+                .and_then(|mode| mode.thinking.clone()),
             Some(ThinkingRequest::Budget {
                 budget_tokens: 30_000
             })
+        );
+        assert_eq!(
+            model
+                .speed_modes
+                .get("fast")
+                .and_then(|mode| mode.display_name.as_deref()),
+            Some("Fast")
         );
         let other_model = models
             .iter()
             .find(|model| model.id.as_str() == "other-model")
             .expect("other model should be listed");
-        assert!(!other_model.variants.contains_key("deep"));
+        assert!(!other_model.thinking_modes.contains_key("deep"));
+        assert!(!other_model.speed_modes.contains_key("fast"));
     }
 
     #[test]

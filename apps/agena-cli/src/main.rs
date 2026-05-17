@@ -366,8 +366,10 @@ fn resolve_permission_continue_options(
 
     Ok(SessionRunOptions {
         model,
-        variant: None,
+        thinking_mode: None,
+        speed_mode: None,
         thinking: None,
+        request_override: Default::default(),
         agent_profile: None,
         system: None,
         temperature: None,
@@ -392,8 +394,10 @@ fn resolve_run_options(
 
     Ok(SessionRunOptions {
         model,
-        variant: None,
+        thinking_mode: None,
+        speed_mode: None,
         thinking: None,
+        request_override: Default::default(),
         agent_profile: None,
         system: None,
         temperature,

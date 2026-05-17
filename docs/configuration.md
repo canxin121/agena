@@ -320,7 +320,9 @@ cache_max_age_secs = 86400
 
 默认 agent 是 `build`。即使省略 `runtime.default_agent`，解析后的默认值也是 `build`。
 
-Model catalog 用来给 provider registry、Studio/TUI 的模型选择器、默认模型和本地模型覆盖提供元数据。默认 `remote_url` 指向本仓库的 `catalog/model-catalog.json` GitHub raw 文件；`fallback_url` 是远程失败时的备用地址，也默认指向同一个本仓库 raw catalog；official catalog 会缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`，本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存本地 override、删除本地 override，以及把某个 catalog model 设为 provider 默认模型。
+Model catalog 按 adapter 管理模型元数据、adapter 默认模型和本地模型覆盖；catalog 文件里的 model key 是真实 model id，例如 `adapters.openai.models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由。默认 `remote_url` 指向本仓库的 `catalog/model-catalog.json` GitHub raw 文件；`fallback_url` 是远程失败时的备用地址，也默认指向同一个本仓库 raw catalog；official catalog 会缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`，本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。
+
+运行时 provider 仍然会把启用的 adapter 模型投影成 provider-local route，例如 `openai/gpt-5`，因为一个 provider 可以同时挂多个 adapter。`providers.<id>.default_model` 也仍然使用 `"<adapter>/<model>"` 来选择 provider 内部路由。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存/删除 adapter-level 本地 override，以及设置 adapter catalog 默认模型。Studio Settings / Providers 页面可以创建 provider，查看 provider 已启用 adapter 和 live models，把 catalog model 复制到某个 provider 的 adapter 下，也可以实时手动添加或修改 provider-local adapter model。
 
 Provider 的 live `/models` 列表还有独立磁盘缓存，用于减少启动 UI 或打开模型选择器时的 provider API 请求。默认位置是 `~/.agena/provider-models`，默认 TTL 是 15 分钟；可以通过 `AGENA_PROVIDER_MODELS_CACHE_DIR`、`AGENA_PROVIDER_MODELS_CACHE_TTL_SECS` 覆盖。如果 live `/models` 请求失败且没有可用缓存，Agena 会尝试从 model catalog 派生列表；该回退地址可通过 `AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL` 覆盖。
 

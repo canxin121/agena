@@ -517,9 +517,15 @@ Provider summary:
 ```json
 {
   "provider_id": "anthropic",
-  "default_model": "claude-sonnet-4-6",
-  "default_model_ref": "anthropic/claude-sonnet-4-6",
-  "catalog_default_model": "claude-sonnet-4-6"
+  "default_model": "anthropic/claude-sonnet-4-6",
+  "default_model_ref": "anthropic/anthropic/claude-sonnet-4-6",
+  "adapters": [
+    {
+      "adapter_id": "anthropic",
+      "enabled": true,
+      "configured_model_count": 1
+    }
+  ]
 }
 ```
 
@@ -531,7 +537,7 @@ Provider models:
   "models": [
     {
       "provider_id": "openai",
-      "id": "gpt-5",
+      "id": "openai/gpt-5",
       "display_name": "GPT-5",
       "capabilities": {
         "tool_calling": "supported",
@@ -560,7 +566,7 @@ Provider models:
 }
 ```
 
-`models` 是 runtime 当前从 provider 解析出来的 live model 列表；Studio Web 用它们作为 model catalog draft 的来源。
+`models` 是 runtime 当前从 provider 解析出来的 live model 列表；`id` 是 provider 内部 route，通常为 `"<adapter>/<model>"`。Studio Web 用它们作为 model catalog draft 和 provider-local model draft 的来源。
 
 ### Model Catalog
 
@@ -570,7 +576,7 @@ Provider models:
 | POST   | `/api/v1/model-catalog/refresh`       | refresh remote/fallback catalog and re-merge local overrides |
 | PUT    | `/api/v1/model-catalog/entries`       | create or update a local catalog override                    |
 | DELETE | `/api/v1/model-catalog/entries`       | delete a local catalog override                              |
-| POST   | `/api/v1/model-catalog/default-model` | set provider default model in the local catalog              |
+| POST   | `/api/v1/model-catalog/default-model` | set adapter default model in the local catalog               |
 
 Model catalog response:
 
@@ -582,12 +588,13 @@ Model catalog response:
   "last_successful_source": "remote",
   "entries": [
     {
+      "adapter_id": "openai",
       "provider_id": "openai",
       "model_id": "gpt-5",
       "kind": "official",
       "source": "remote",
-      "source_label": "remote: https://example.test/catalog.json",
-      "default_model_for_provider": "gpt-5",
+      "source_label": "remote catalog",
+      "default_model_for_adapter": "gpt-5",
       "display_name": "GPT-5",
       "family": "gpt",
       "lifecycle": "active",
@@ -611,26 +618,27 @@ Model catalog response:
       }
     },
     {
+      "adapter_id": "openai",
       "provider_id": "openai",
       "model_id": "gpt-5",
       "kind": "custom",
       "source": "custom",
-      "source_label": "local override",
+      "source_label": "workspace override",
       "display_name": "Workspace GPT-5"
     }
   ]
 }
 ```
 
-`entries` 同时包含官方条目和本地 override，按 `provider_id + model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。
+`entries` 同时包含官方条目和本地 override，按 `adapter_id + model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。`provider_id` 和 `default_model_for_provider` 是旧客户端兼容字段；新客户端应使用 `adapter_id` 和 `default_model_for_adapter`。
 
 Create/update local override:
 
 ```json
 {
-  "provider_id": "openai",
+  "adapter_id": "openai",
   "model_id": "gpt-5",
-  "set_default_for_provider": true,
+  "set_default_for_adapter": true,
   "family": "gpt",
   "lifecycle": "active",
   "context_window_tokens": 400000,
@@ -653,18 +661,20 @@ Create/update local override:
 Delete local override query:
 
 ```text
-provider_id=openai
+adapter_id=openai
 model_id=gpt-5
 ```
 
-Set provider default:
+Set adapter default:
 
 ```json
 {
-  "provider_id": "openai",
+  "adapter_id": "openai",
   "model_id": "gpt-5"
 }
 ```
+
+For compatibility, write/delete/default requests still accept `provider_id` and `set_default_for_provider`, but those map to the adapter id.
 
 ### Workspaces
 

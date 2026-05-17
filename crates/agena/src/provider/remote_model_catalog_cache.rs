@@ -348,12 +348,9 @@ fn catalog_models_from_document(
     source: &RemoteModelCatalogSource,
     document: &ModelCatalogDocument,
 ) -> Option<Vec<Model>> {
-    let catalog_adapter_id = if source.catalog_provider_id.trim().is_empty() {
-        source.provider_id.trim()
-    } else {
-        source.catalog_provider_id.trim()
-    };
-    let adapter = document.adapter_record(catalog_adapter_id)?;
+    let adapter = catalog_adapter_id_candidates(source)
+        .into_iter()
+        .find_map(|adapter_id| document.adapter_record(adapter_id.as_str()))?;
     Some(
         adapter
             .models
@@ -381,6 +378,30 @@ fn catalog_models_from_document(
             })
             .collect(),
     )
+}
+
+fn catalog_adapter_id_candidates(source: &RemoteModelCatalogSource) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let catalog_adapter_id = if source.catalog_provider_id.trim().is_empty() {
+        source.provider_id.trim()
+    } else {
+        source.catalog_provider_id.trim()
+    };
+    push_unique_candidate(&mut candidates, catalog_adapter_id);
+
+    let prefix_adapter_id = source
+        .catalog_visible_model_prefix
+        .trim()
+        .trim_end_matches('/');
+    push_unique_candidate(&mut candidates, prefix_adapter_id);
+    candidates
+}
+
+fn push_unique_candidate(candidates: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() && !candidates.iter().any(|candidate| candidate == value) {
+        candidates.push(value.to_owned());
+    }
 }
 
 fn adapter_model_id_from_catalog<'a>(

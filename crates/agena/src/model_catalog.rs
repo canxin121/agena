@@ -757,6 +757,18 @@ mod tests {
         assert!(catalog.models.contains_key("gemini-3.1-flash-lite"));
         assert!(catalog.models.contains_key("amazon.nova-pro-v1:0"));
         assert!(catalog.models.contains_key("duo-chat-sonnet-4-5"));
+
+        let mut lowered = BTreeSet::new();
+        for model_id in catalog.models.keys() {
+            assert!(
+                !model_id.contains('/'),
+                "bundled catalog model id should not contain '/': {model_id}"
+            );
+            assert!(
+                lowered.insert(model_id.to_ascii_lowercase()),
+                "bundled catalog should not contain case-insensitive duplicate model ids: {model_id}"
+            );
+        }
     }
 
     #[tokio::test]

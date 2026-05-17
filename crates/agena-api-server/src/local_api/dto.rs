@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use agena::{
     agent::{AgentMode, AgentPermissionConfig, AgentRunConfig, PermissionConfig},
     agents::AgentScope,
+    config::SharedGatewayEndpointLayout,
     message::{
         MessageMetadata, MessagePart, MessageStatus, MessageUsage, PartContent, UserInputReply,
         UserInputRequest,
@@ -668,6 +669,46 @@ pub struct ProviderSummaryResource {
 pub struct ProviderModelsResponse {
     pub provider_id: String,
     pub models: Vec<ProviderModel>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProviderAdapterDiscoveryRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    pub base_url: String,
+    #[serde(default)]
+    pub endpoint_layout: SharedGatewayEndpointLayout,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub adapter_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SavedProviderAdapterDiscoveryRequest {
+    #[serde(default)]
+    pub adapter_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderAdapterDiscoveryResource {
+    pub adapter_id: String,
+    pub enabled: bool,
+    pub supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ProviderModel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderAdapterDiscoveryResponse {
+    pub provider_id: String,
+    pub adapters: Vec<ProviderAdapterDiscoveryResource>,
 }
 
 #[derive(Debug, Clone, Serialize)]

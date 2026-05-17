@@ -51,3 +51,5 @@ pub(crate) use raw::{
     RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig,
     RawUiConfig,
 };
+pub use registry::ProviderAdapterProbeResult;
+pub use registry::probe_provider_adapters;

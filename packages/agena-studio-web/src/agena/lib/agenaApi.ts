@@ -342,6 +342,20 @@ export type ProviderModelsResponse = {
   models: ProviderModel[]
 }
 
+export type ProviderAdapterDiscovery = {
+  adapter_id: string
+  enabled: boolean
+  supported: boolean
+  resolved_base_url?: string | null
+  models: ProviderModel[]
+  error?: string | null
+}
+
+export type ProviderAdapterDiscoveryResponse = {
+  provider_id: string
+  adapters: ProviderAdapterDiscovery[]
+}
+
 export type ProviderModelVariant = {
   display_name?: string | null
   description?: string | null
@@ -959,6 +973,48 @@ export async function listProviders(): Promise<ProviderSummary[]> {
 export async function listProviderModels(providerId: string): Promise<ProviderModel[]> {
   const response = await apiJson<ProviderModelsResponse>(`/api/v1/providers/${encodeURIComponent(providerId)}/models`)
   return response.models ?? []
+}
+
+export async function discoverDraftProviderAdapters(input: {
+  providerId?: string
+  baseUrl: string
+  endpointLayout?: 'auto' | 'direct' | 'protocol_root' | 'provider_routed'
+  apiKey?: string
+  apiKeyEnv?: string
+  adapterIds?: string[]
+}): Promise<ProviderAdapterDiscovery[]> {
+  const response = await apiJson<ProviderAdapterDiscoveryResponse>('/api/v1/providers/discover', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...(input.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
+      base_url: input.baseUrl.trim(),
+      ...(input.endpointLayout?.trim() ? { endpoint_layout: input.endpointLayout.trim() } : {}),
+      ...(input.apiKey?.trim() ? { api_key: input.apiKey.trim() } : {}),
+      ...(input.apiKeyEnv?.trim() ? { api_key_env: input.apiKeyEnv.trim() } : {}),
+      ...(input.adapterIds?.length ? { adapter_ids: input.adapterIds } : {}),
+    }),
+  })
+  return response.adapters ?? []
+}
+
+export async function discoverSavedProviderAdapters(
+  providerId: string,
+  input: {
+    adapterIds?: string[]
+  } = {},
+): Promise<ProviderAdapterDiscovery[]> {
+  const response = await apiJson<ProviderAdapterDiscoveryResponse>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/discover`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...(input.adapterIds?.length ? { adapter_ids: input.adapterIds } : {}),
+      }),
+    },
+  )
+  return response.adapters ?? []
 }
 
 export async function listAuthProviders(): Promise<AuthProvider[]> {

@@ -46,6 +46,67 @@ struct WorkflowUpdateGoalToolInput {
     pub status: WorkflowUpdateGoalStatus,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum WorkflowToolInput {
+    Init(WorkflowPromptToolInput),
+    Review(WorkflowPromptToolInput),
+    SecurityReview(WorkflowPromptToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum ToolsToolInput {
+    Search(ToolSearchToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum AgentToolInput {
+    Switch(AgentSwitchToolInput),
+    Restore(AgentRestoreToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum TodoToolInput {
+    Write(TodoWriteToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum GoalToolInput {
+    Get(GetGoalToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum GoalEditToolInput {
+    Create(CreateGoalToolInput),
+    Clear(ClearGoalToolInput),
+    Update(WorkflowUpdateGoalToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum UserToolInput {
+    Ask(AskUserToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum PlanToolInput {
+    Enter(EnterPlanModeToolInput),
+    Exit(ExitPlanModeToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum WorktreeToolInput {
+    Enter(EnterWorktreeToolInput),
+    Exit(ExitWorktreeToolInput),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct GoalToolResponse {
     goal: Option<HostGoal>,
@@ -553,116 +614,94 @@ impl Plugin for WorkflowPlugin {
                 self.invoke_task(&serde_json::from_value(input.input)?)
                     .await
             }
-            "tool_search" => {
-                self.invoke_tool_search(&serde_json::from_value(input.input)?)
-                    .await
-            }
-            "agent_switch" => {
-                self.invoke_agent_switch(&serde_json::from_value(input.input)?)
-                    .await
-            }
-            "agent_restore" => {
-                self.invoke_agent_restore(&serde_json::from_value(input.input)?)
-                    .await
-            }
-            "todo_write" => {
-                let input: TodoWriteToolInput = serde_json::from_value(input.input)?;
-                self.host()?
-                    .todo_write(HostTodoWriteRequest {
-                        items: input.items.iter().map(Self::host_todo_item).collect(),
-                    })
-                    .await
-            }
-            "create_goal" => {
-                self.invoke_create_goal(&serde_json::from_value(input.input)?)
-                    .await
-            }
-            "get_goal" => {
-                self.invoke_get_goal(&serde_json::from_value(input.input)?)
-                    .await
-            }
-            "clear_goal" => {
-                self.invoke_clear_goal(&serde_json::from_value(input.input)?)
-                    .await
-            }
-            "update_goal" => {
-                self.invoke_update_goal(&serde_json::from_value(input.input)?)
-                    .await
-            }
-            "ask_user" => {
-                self.invoke_ask_user(&serde_json::from_value(input.input)?)
-                    .await
-            }
-            "enter_plan_mode" => {
-                let _: EnterPlanModeToolInput = serde_json::from_value(input.input)?;
-                let switch = self
-                    .switch_agent_for_tool(Some("planner".to_string()), true)
-                    .await?;
-                let mut output = self
-                    .host()?
-                    .enter_plan_mode(HostEnterPlanModeRequest::default())
-                    .await?;
-                output = output
-                    .with_metadata("workflow_agent", "planner")
-                    .with_metadata("agent_stack_depth", switch.stack_depth.to_string());
-                if let Some(previous) = switch.previous_agent {
-                    output = output.with_metadata("previous_agent", previous);
+            "tools" => match serde_json::from_value::<ToolsToolInput>(input.input)? {
+                ToolsToolInput::Search(args) => self.invoke_tool_search(&args).await,
+            },
+            "agent" => match serde_json::from_value::<AgentToolInput>(input.input)? {
+                AgentToolInput::Switch(args) => self.invoke_agent_switch(&args).await,
+                AgentToolInput::Restore(args) => self.invoke_agent_restore(&args).await,
+            },
+            "todo" => match serde_json::from_value::<TodoToolInput>(input.input)? {
+                TodoToolInput::Write(args) => {
+                    self.host()?
+                        .todo_write(HostTodoWriteRequest {
+                            items: args.items.iter().map(Self::host_todo_item).collect(),
+                        })
+                        .await
                 }
-                Ok(output)
-            }
-            "exit_plan_mode" => {
-                let _: ExitPlanModeToolInput = serde_json::from_value(input.input)?;
-                let mut output = self
-                    .host()?
-                    .exit_plan_mode(HostExitPlanModeRequest::default())
-                    .await?;
-                let restore = self.restore_agent_for_tool().await?;
-                output = output
-                    .with_metadata("agent_restored", restore.restored.to_string())
-                    .with_metadata("agent_stack_depth", restore.stack_depth.to_string());
-                if let Some(current) = restore.current_agent {
-                    output = output.with_metadata("current_agent", current);
+            },
+            "goal" => match serde_json::from_value::<GoalToolInput>(input.input)? {
+                GoalToolInput::Get(args) => self.invoke_get_goal(&args).await,
+            },
+            "goal_edit" => match serde_json::from_value::<GoalEditToolInput>(input.input)? {
+                GoalEditToolInput::Create(args) => self.invoke_create_goal(&args).await,
+                GoalEditToolInput::Clear(args) => self.invoke_clear_goal(&args).await,
+                GoalEditToolInput::Update(args) => self.invoke_update_goal(&args).await,
+            },
+            "user" => match serde_json::from_value::<UserToolInput>(input.input)? {
+                UserToolInput::Ask(args) => self.invoke_ask_user(&args).await,
+            },
+            "plan" => match serde_json::from_value::<PlanToolInput>(input.input)? {
+                PlanToolInput::Enter(_) => {
+                    let switch = self
+                        .switch_agent_for_tool(Some("planner".to_string()), true)
+                        .await?;
+                    let mut output = self
+                        .host()?
+                        .enter_plan_mode(HostEnterPlanModeRequest::default())
+                        .await?;
+                    output = output
+                        .with_metadata("workflow_agent", "planner")
+                        .with_metadata("agent_stack_depth", switch.stack_depth.to_string());
+                    if let Some(previous) = switch.previous_agent {
+                        output = output.with_metadata("previous_agent", previous);
+                    }
+                    Ok(output)
                 }
-                Ok(output)
-            }
-            "enter_worktree" => {
-                let input: EnterWorktreeToolInput = serde_json::from_value(input.input)?;
-                self.host()?
-                    .enter_worktree(HostEnterWorktreeRequest {
-                        name: input.name,
-                        path: input.path,
-                    })
-                    .await
-            }
-            "exit_worktree" => {
-                let input: ExitWorktreeToolInput = serde_json::from_value(input.input)?;
-                self.host()?
-                    .exit_worktree(HostExitWorktreeRequest {
-                        action: input.action,
-                        discard_changes: input.discard_changes,
-                    })
-                    .await
-            }
-            "workflow_init" => {
-                self.invoke_provided_workflow("init", &serde_json::from_value(input.input)?)
-                    .await
-            }
-            "workflow_review" => {
-                self.invoke_agent_workflow(
-                    "review",
-                    "reviewer",
-                    &serde_json::from_value(input.input)?,
-                )
-                .await
-            }
-            "workflow_security_review" => {
-                self.invoke_agent_workflow(
-                    "security-review",
-                    "reviewer",
-                    &serde_json::from_value(input.input)?,
-                )
-                .await
-            }
+                PlanToolInput::Exit(_) => {
+                    let mut output = self
+                        .host()?
+                        .exit_plan_mode(HostExitPlanModeRequest::default())
+                        .await?;
+                    let restore = self.restore_agent_for_tool().await?;
+                    output = output
+                        .with_metadata("agent_restored", restore.restored.to_string())
+                        .with_metadata("agent_stack_depth", restore.stack_depth.to_string());
+                    if let Some(current) = restore.current_agent {
+                        output = output.with_metadata("current_agent", current);
+                    }
+                    Ok(output)
+                }
+            },
+            "worktree" => match serde_json::from_value::<WorktreeToolInput>(input.input)? {
+                WorktreeToolInput::Enter(args) => {
+                    self.host()?
+                        .enter_worktree(HostEnterWorktreeRequest {
+                            name: args.name,
+                            path: args.path,
+                        })
+                        .await
+                }
+                WorktreeToolInput::Exit(args) => {
+                    self.host()?
+                        .exit_worktree(HostExitWorktreeRequest {
+                            action: args.action,
+                            discard_changes: args.discard_changes,
+                        })
+                        .await
+                }
+            },
+            "workflow" => match serde_json::from_value::<WorkflowToolInput>(input.input)? {
+                WorkflowToolInput::Init(args) => self.invoke_provided_workflow("init", &args).await,
+                WorkflowToolInput::Review(args) => {
+                    self.invoke_agent_workflow("review", "reviewer", &args)
+                        .await
+                }
+                WorkflowToolInput::SecurityReview(args) => {
+                    self.invoke_agent_workflow("security-review", "reviewer", &args)
+                        .await
+                }
+            },
             other => Err(PluginError::invalid_params(format!(
                 "unknown workflow plugin tool '{other}'"
             ))),
@@ -675,8 +714,10 @@ impl Plugin for WorkflowPlugin {
         input: &serde_json::Value,
     ) -> SdkResult<Vec<PathRequest>> {
         match tool_name {
-            "enter_worktree" => {
-                let input: EnterWorktreeToolInput = serde_json::from_value(input.clone())?;
+            "worktree" => {
+                let WorktreeToolInput::Enter(input) = serde_json::from_value(input.clone())? else {
+                    return Ok(Vec::new());
+                };
                 if let Some(path) = input.path.filter(|path| !path.trim().is_empty()) {
                     return Ok(vec![
                         PathRequest::read(path.clone()),
@@ -725,31 +766,25 @@ impl Plugin for WorkflowPlugin {
 fn entries() -> Vec<PluginToolDecl> {
     vec![
         PluginToolDecl::new(
-            "workflow_init",
-            crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
+            "workflow",
+            crate::entry::definition::json_schema_for::<WorkflowToolInput>(),
         )
-        .description("Generate the init workflow prompt so it can be submitted as a normal turn.")
-        .tag(ToolTag::ReadOnly)
-        .always_load()
-        .concurrency_safe(true),
-        PluginToolDecl::new(
-            "workflow_review",
-            crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
+        .description(
+            "Workflow prompt command. Set command to init, review, or security_review; pass that command's payload in args.",
         )
-        .description("Generate the review workflow prompt so it can be submitted as a normal turn.")
         .tag(ToolTag::ReadOnly)
         .always_load()
         .concurrency_safe(true)
         .host_capability(HostCapability::AgentRegistry),
         PluginToolDecl::new(
-            "workflow_security_review",
-            crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
+            "tools",
+            crate::entry::definition::json_schema_for::<ToolsToolInput>(),
         )
-        .description("Generate the security review workflow prompt so it can be submitted as a normal turn.")
-        .tag(ToolTag::ReadOnly)
+        .description("Tool catalog command. Set command to search to find or load deferred tools.")
+        .tags([ToolTag::ReadOnly, ToolTag::Discovery])
         .always_load()
         .concurrency_safe(true)
-        .host_capability(HostCapability::AgentRegistry),
+        .host_capability(HostCapability::ListTools),
         PluginToolDecl::new(
             "task",
             crate::entry::definition::json_schema_for::<TaskToolInput>(),
@@ -762,92 +797,57 @@ fn entries() -> Vec<PluginToolDecl> {
         .deferred_load()
         .host_capability(HostCapability::SpawnSubtask),
         PluginToolDecl::new(
-            "tool_search",
-            crate::entry::definition::json_schema_for::<ToolSearchToolInput>(),
+            "agent",
+            crate::entry::definition::json_schema_for::<AgentToolInput>(),
         )
-        .description("Search the tool catalog and optionally load deferred tools for later turns.")
-        .tags([ToolTag::ReadOnly, ToolTag::Discovery])
-        .always_load()
-        .concurrency_safe(true)
-        .host_capability(HostCapability::ListTools),
-        PluginToolDecl::new(
-            "agent_switch",
-            crate::entry::definition::json_schema_for::<AgentSwitchToolInput>(),
+        .description(
+            "Runtime agent command. Set command to switch or restore; pass that command's payload in args.",
         )
-        .description("Switch the current session to a runtime agent profile without changing local agent files.")
         .always_load()
         .concurrency_safe(false)
         .host_capability(HostCapability::AgentRegistry),
         PluginToolDecl::new(
-            "agent_restore",
-            crate::entry::definition::json_schema_for::<AgentRestoreToolInput>(),
+            "todo",
+            crate::entry::definition::json_schema_for::<TodoToolInput>(),
         )
-        .description("Restore the current session to the previous runtime agent profile pushed by agent_switch.")
-        .always_load()
-        .concurrency_safe(false)
-        .host_capability(HostCapability::AgentRegistry),
-        PluginToolDecl::new(
-            "todo_write",
-            crate::entry::definition::json_schema_for::<TodoWriteToolInput>(),
-        )
-        .description("Replace the session todo list with a short execution plan and updated statuses.")
+        .description("Todo command. Set command to write to replace the session todo list.")
         .tags([ToolTag::Mutating, ToolTag::Planning])
         .always_load(),
         PluginToolDecl::new(
-            "create_goal",
-            crate::entry::definition::json_schema_for::<CreateGoalToolInput>(),
+            "goal",
+            crate::entry::definition::json_schema_for::<GoalToolInput>(),
         )
-        .description(
-            "Create a goal only when explicitly requested by the user or system instructions. Starts a new active goal for this session and fails if one already exists. Set `token_budget` only when a budget was explicitly requested.",
-        )
-        .tags([ToolTag::Mutating, ToolTag::Goal])
-        .always_load()
-        .concurrency_safe(false)
-        .host_capability(HostCapability::GoalRegistry),
-        PluginToolDecl::new(
-            "get_goal",
-            crate::entry::definition::json_schema_for::<GetGoalToolInput>(),
-        )
-        .description("Get the current runtime goal for this session, including status, budgets, token and elapsed-time usage, and remaining token budget.")
+        .description("Goal read command. Set command to get to inspect the current runtime goal.")
         .tags([ToolTag::ReadOnly, ToolTag::Goal])
         .always_load()
         .concurrency_safe(true)
         .host_capability(HostCapability::GoalRegistry),
         PluginToolDecl::new(
-            "clear_goal",
-            crate::entry::definition::json_schema_for::<ClearGoalToolInput>(),
-        )
-        .description("Clear the current runtime goal for this session, if one exists.")
-        .tags([ToolTag::Mutating, ToolTag::Goal])
-        .always_load()
-        .concurrency_safe(false)
-        .host_capability(HostCapability::GoalRegistry),
-        PluginToolDecl::new(
-            "update_goal",
-            crate::entry::definition::json_schema_for::<WorkflowUpdateGoalToolInput>(),
+            "goal_edit",
+            crate::entry::definition::json_schema_for::<GoalEditToolInput>(),
         )
         .description(
-            "Update the existing runtime goal. Use this only to mark the goal achieved with `status = complete` once the objective is actually finished. Pause, resume, and budget-limit transitions are controlled by the user or system. When a budgeted goal completes, report the final usage guidance returned by the tool output to the user.",
+            "Goal mutation command. Set command to create, clear, or update; use update only to mark a goal complete once the objective is actually finished.",
         )
         .tags([ToolTag::Mutating, ToolTag::Goal])
         .always_load()
         .concurrency_safe(false)
         .host_capability(HostCapability::GoalRegistry),
         PluginToolDecl::new(
-            "ask_user",
-            crate::entry::definition::json_schema_for::<AskUserToolInput>(),
+            "user",
+            crate::entry::definition::json_schema_for::<UserToolInput>(),
         )
-        .description("Ask short questions and wait for answers.")
+        .description("User interaction command. Set command to ask to request short answers.")
         .tags([ToolTag::ReadOnly, ToolTag::Interactive])
         .always_load()
         .concurrency_safe(false)
         .host_capability(HostCapability::AskUser),
         PluginToolDecl::new(
-            "enter_plan_mode",
-            crate::entry::definition::json_schema_for::<EnterPlanModeToolInput>(),
+            "plan",
+            crate::entry::definition::json_schema_for::<PlanToolInput>(),
         )
         .description(
-            "Enter plan mode. Allocates a fresh plan markdown file under .agena/plans/, blocks mutating tools, and asks the LLM to draft a plan. Pair with `exit_plan_mode` once the plan is complete.",
+            "Plan mode command. Set command to enter or exit; enter allocates a plan markdown file under .agena/plans/ and exit asks the user to approve the plan.",
         )
         .tags([ToolTag::ReadOnly, ToolTag::Planning])
         .tag(ToolTag::FilesystemWrite)
@@ -859,33 +859,11 @@ fn entries() -> Vec<PluginToolDecl> {
         .concurrency_safe(true)
         .host_capabilities([HostCapability::PlanRegistry, HostCapability::AgentRegistry]),
         PluginToolDecl::new(
-            "exit_plan_mode",
-            crate::entry::definition::json_schema_for::<ExitPlanModeToolInput>(),
+            "worktree",
+            crate::entry::definition::json_schema_for::<WorktreeToolInput>(),
         )
         .description(
-            "Leave plan mode and return to normal tool execution. Surfaces a permission ask so the human can review the plan before approving the unblock.",
-        )
-        .tags([ToolTag::ReadOnly, ToolTag::Planning])
-        .always_load()
-        .concurrency_safe(true)
-        .host_capabilities([HostCapability::PlanRegistry, HostCapability::AgentRegistry]),
-        PluginToolDecl::new(
-            "enter_worktree",
-            crate::entry::definition::json_schema_for::<EnterWorktreeToolInput>(),
-        )
-        .description(
-            "Create or attach to a git worktree under .agena/worktrees and switch the session into it.",
-        )
-        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree])
-        .concurrency_safe(false)
-        .deferred_load()
-        .host_capability(HostCapability::WorktreeRegistry),
-        PluginToolDecl::new(
-            "exit_worktree",
-            crate::entry::definition::json_schema_for::<ExitWorktreeToolInput>(),
-        )
-        .description(
-            "Leave the current worktree. action=keep preserves the worktree, action=remove deletes it (refuses unless discard_changes=true when there are uncommitted changes).",
+            "Worktree command. Set command to enter or exit; enter creates or attaches to a git worktree and exit leaves it.",
         )
         .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree])
         .concurrency_safe(false)
@@ -1025,7 +1003,7 @@ mod tests {
 
         async fn list_tools(&self) -> SdkResult<Vec<ToolDescriptor>> {
             Ok(vec![ToolDescriptor {
-                name: "bash".to_string(),
+                name: "shell".to_string(),
                 description: Some("Execute shell commands".to_string()),
                 tags: vec![
                     crate::plugin::sdk::ToolTag::Mutating,
@@ -1260,12 +1238,27 @@ mod tests {
         }
     }
 
+    fn invoke_command<T: serde::Serialize>(
+        tool_name: &str,
+        command: &str,
+        args: T,
+    ) -> ToolInvokeInput {
+        invoke_input(
+            tool_name,
+            serde_json::json!({
+                "command": command,
+                "args": serde_json::to_value(args).expect("serialize command args"),
+            }),
+        )
+    }
+
     #[tokio::test]
     async fn ask_user_invokes_host_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input(
-                "ask_user",
+            .tool_invoke(invoke_command(
+                "user",
+                "ask",
                 AskUserToolInput {
                     questions: vec![crate::message::UserInputQuestion {
                         id: "color".to_string(),
@@ -1299,7 +1292,7 @@ mod tests {
     async fn get_goal_invokes_host_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input("get_goal", GetGoalToolInput::default()))
+            .tool_invoke(invoke_command("goal", "get", GetGoalToolInput::default()))
             .await
             .expect("get_goal host invoke");
 
@@ -1346,8 +1339,9 @@ mod tests {
     async fn create_goal_invokes_host_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input(
-                "create_goal",
+            .tool_invoke(invoke_command(
+                "goal_edit",
+                "create",
                 CreateGoalToolInput {
                     objective: "ship it".to_string(),
                     token_budget: Some(128),
@@ -1384,7 +1378,11 @@ mod tests {
     async fn clear_goal_invokes_host_without_executor_context() {
         let (plugin, host) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input("clear_goal", ClearGoalToolInput::default()))
+            .tool_invoke(invoke_command(
+                "goal_edit",
+                "clear",
+                ClearGoalToolInput::default(),
+            ))
             .await
             .expect("clear_goal host invoke");
 
@@ -1403,8 +1401,9 @@ mod tests {
     async fn update_goal_invokes_host_without_executor_context() {
         let (plugin, host) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input(
-                "update_goal",
+            .tool_invoke(invoke_command(
+                "goal_edit",
+                "update",
                 WorkflowUpdateGoalToolInput {
                     status: WorkflowUpdateGoalStatus::Complete,
                 },
@@ -1447,13 +1446,9 @@ mod tests {
     }
 
     #[test]
-    fn update_goal_entry_schema_only_exposes_complete_status() {
-        let entry = entries()
-            .into_iter()
-            .find(|entry| entry.name == "update_goal")
-            .expect("update_goal entry should exist");
-        let properties = entry
-            .input_schema
+    fn update_goal_command_schema_only_exposes_complete_status() {
+        let schema = crate::entry::definition::json_schema_for::<WorkflowUpdateGoalToolInput>();
+        let properties = schema
             .get("properties")
             .and_then(|value| value.as_object())
             .expect("update_goal properties should be an object");
@@ -1473,13 +1468,11 @@ mod tests {
                 .rsplit('/')
                 .next()
                 .expect("status schema ref should have a definition name");
-            entry
-                .input_schema
+            schema
                 .get("$defs")
                 .and_then(|defs| defs.get(definition_name))
                 .or_else(|| {
-                    entry
-                        .input_schema
+                    schema
                         .get("definitions")
                         .and_then(|defs| defs.get(definition_name))
                 })
@@ -1550,8 +1543,9 @@ mod tests {
     async fn todo_write_invokes_explicit_host_api() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input(
-                "todo_write",
+            .tool_invoke(invoke_command(
+                "todo",
+                "write",
                 TodoWriteToolInput {
                     items: vec![TodoItem {
                         content: "ship it".to_string(),
@@ -1583,8 +1577,9 @@ mod tests {
         let (plugin, host) = initialized_plugin().await;
 
         let enter_plan = plugin
-            .tool_invoke(invoke_input(
-                "enter_plan_mode",
+            .tool_invoke(invoke_command(
+                "plan",
+                "enter",
                 EnterPlanModeToolInput::default(),
             ))
             .await
@@ -1607,8 +1602,9 @@ mod tests {
         assert!(switches[0].push_previous);
 
         let enter_worktree = plugin
-            .tool_invoke(invoke_input(
-                "enter_worktree",
+            .tool_invoke(invoke_command(
+                "worktree",
+                "enter",
                 EnterWorktreeToolInput {
                     name: Some("demo".to_string()),
                     path: None,
@@ -1630,8 +1626,9 @@ mod tests {
         }
 
         let exit_worktree = plugin
-            .tool_invoke(invoke_input(
-                "exit_worktree",
+            .tool_invoke(invoke_command(
+                "worktree",
+                "exit",
                 ExitWorktreeToolInput {
                     action: "keep".to_string(),
                     discard_changes: false,
@@ -1653,8 +1650,9 @@ mod tests {
         }
 
         let exit_plan = plugin
-            .tool_invoke(invoke_input(
-                "exit_plan_mode",
+            .tool_invoke(invoke_command(
+                "plan",
+                "exit",
                 ExitPlanModeToolInput::default(),
             ))
             .await
@@ -1682,8 +1680,9 @@ mod tests {
     async fn tool_search_invokes_host_catalog_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input(
-                "tool_search",
+            .tool_invoke(invoke_command(
+                "tools",
+                "search",
                 ToolSearchToolInput {
                     query: "shell".to_string(),
                     load: Vec::new(),
@@ -1699,7 +1698,7 @@ mod tests {
         .unwrap();
         match output {
             ToolPayloadOutput::ToolSearch { results, .. } => {
-                assert_eq!(results, vec!["bash".to_string()]);
+                assert_eq!(results, vec!["shell".to_string()]);
             }
             other => panic!("unexpected output: {other:?}"),
         }
@@ -1710,8 +1709,9 @@ mod tests {
         let (plugin, host) = initialized_plugin().await;
 
         let review = plugin
-            .tool_invoke(invoke_input(
-                "workflow_review",
+            .tool_invoke(invoke_command(
+                "workflow",
+                "review",
                 WorkflowPromptToolInput {
                     args: Some("auth flow".to_string()),
                 },
@@ -1732,8 +1732,9 @@ mod tests {
         );
 
         let init = plugin
-            .tool_invoke(invoke_input(
-                "workflow_init",
+            .tool_invoke(invoke_command(
+                "workflow",
+                "init",
                 WorkflowPromptToolInput::default(),
             ))
             .await
@@ -1742,8 +1743,9 @@ mod tests {
         assert!(init.output_text.contains("Save the result to AGENA.md"));
 
         let security = plugin
-            .tool_invoke(invoke_input(
-                "workflow_security_review",
+            .tool_invoke(invoke_command(
+                "workflow",
+                "security_review",
                 WorkflowPromptToolInput::default(),
             ))
             .await

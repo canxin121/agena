@@ -646,7 +646,7 @@ fn parts_from_transcript<F: FnMut() -> i64>(
 
 #[allow(dead_code)]
 fn structured_from_json(value: &serde_json::Value) -> StructuredObject {
-    serde_json::from_value(value.clone()).unwrap_or_default()
+    StructuredObject::try_from(value.clone()).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -797,6 +797,11 @@ mod tests {
         ));
         assert_eq!(tool_part.status, ExecutionStatus::Completed);
         assert_eq!(tool_part.operation_id.as_deref(), Some("call_alpha"));
+        let Some(PartContent::Operation(operation)) = tool_part.content.as_ref() else {
+            panic!("expected operation part");
+        };
+        let payload = serde_json::Value::from(operation.invocation.input.clone());
+        assert_eq!(payload["path"], "x");
         assert_eq!(view.messages[0].as_text_lossy(), "running\nfn main(){}");
     }
 

@@ -584,7 +584,7 @@ TOML 示例：
 [agents.plan]
 description = "Read-only planning agent"
 prompt = "You are a planning agent..."
-allowed_entries = ["read", "view_file", "glob", "grep", "bash", "todo_write"]
+allowed_entries = ["fs", "shell", "todo", "plan"]
 mode = "all"
 model = "anthropic/claude-sonnet-4-6"
 aliases = ["planner"]
@@ -596,7 +596,7 @@ Markdown frontmatter 示例：
 ---
 description: "Read-only planning agent"
 mode: "all"
-allowed_entries: ["read", "view_file", "glob", "grep", "bash", "todo_write"]
+allowed_entries: ["fs", "shell", "todo", "plan"]
 model: "anthropic/claude-sonnet-4-6"
 aliases: ["planner"]
 permission:
@@ -606,7 +606,7 @@ permission:
       write: deny
   entries:
     names:
-      bash: ask
+      shell: ask
 ---
 You are a planning agent...
 ```
@@ -637,7 +637,7 @@ subagent
 all
 ```
 
-`allowed_entries` 会收窄 agent 能调用的 entries 集合，同时保留已有 bash pattern 规则。省略或写空数组表示不额外收窄。
+`allowed_entries` 会收窄 agent 能调用的 entries 集合，同时保留已有 `shell` command pattern 规则。省略或写空数组表示不额外收窄。
 
 ## Permissions
 
@@ -676,9 +676,8 @@ workspace = { read = "allow", write = "deny" }
 external = { read = "ask", write = "ask" }
 
 [agents.plan.permission.entries.names]
-enter_plan_mode = "allow"
-exit_plan_mode = "allow"
-todo_write = "allow"
+plan = "allow"
+todo = "allow"
 ```
 
 Agent permission 默认继承顶层 permission。可用 `inherit` 控制：
@@ -810,8 +809,8 @@ filesystem_write = "ask"
 network = "ask"
 
 [permission.entries.names]
-bash = "ask"
-apply_patch = "ask"
+shell = "ask"
+fs_edit = "ask"
 "my-plugin.echo" = "ask"
 
 [permission.entries.rules]
@@ -820,7 +819,7 @@ apply_patch = "ask"
 [permission.entries.rules."my-plugin.echo"]
 "*" = "ask"
 
-[permission.entries.rules.bash]
+[permission.entries.rules.shell]
 "git status" = "allow"
 "git push *" = "deny"
 "*" = "ask"
@@ -828,7 +827,7 @@ apply_patch = "ask"
 
 `tags` 用于 tool 没有精确规则时的默认策略。Tool 由 plugin manifest 声明自己的 tags，常见 tags 如 `filesystem_read`、`filesystem_write`、`network`、`internet`、`task`、`shell`。`names` 按 tool 名匹配；runtime-provided and user-configured plugin tools 使用同一个名字表。
 
-`rules.<tool>` 可以直接写 mode，也可以写 pattern table。`bash` 的 pattern table 按命令 pattern 覆盖，`"*"` 是 fallback。其他 tool 使用直接 mode；需要 fallback 时也可以写 `rules.<tool>."*" = "ask"`。
+`rules.<tool>` 可以直接写 mode，也可以写 pattern table。`shell` 的 pattern table 按实际 shell command 覆盖，`"*"` 是 fallback。其他 tool 使用直接 mode；需要 fallback 时也可以写 `rules.<tool>."*" = "ask"`。
 
 ## Memory
 
@@ -859,7 +858,7 @@ timeout_ms = 3000
 [[plugins.list."agena.hooks".options.hooks]]
 event = "pre_tool_use"
 command = "python3 .agena/hooks/check_tool.py"
-matcher = { tool = "bash" }
+matcher = { tool = "shell" }
 timeout_ms = 5000
 
 [[plugins.list."agena.hooks".options.hooks]]
@@ -1195,7 +1194,7 @@ exa_api_key = "..."
 brave_api_key = "..."
 ```
 
-`fetch_enabled` 控制 `web_fetch` tool。Search backend 省略时使用 `duck_duck_go_html`。
+`fetch_enabled` 控制 `web` 的 `fetch` command。Search backend 省略时使用 `duck_duck_go_html`。
 
 Search backend：
 

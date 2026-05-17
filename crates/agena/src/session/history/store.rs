@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
     DbErr, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    sea_query::OnConflict,
 };
 
 use crate::db::entities::{activity_message, activity_part, session_snapshot};
@@ -1000,41 +1001,61 @@ async fn upsert_message_projection(
     db: &DatabaseConnection,
     row: activity_message::Model,
 ) -> Result<(), DbErr> {
-    if let Some(existing) = activity_message::Entity::find_by_id(row.message_id)
-        .one(db)
-        .await?
-    {
-        let mut active: activity_message::ActiveModel = existing.into();
-        active.session_id = ActiveValue::Set(row.session_id);
-        active.role = ActiveValue::Set(row.role);
-        active.state = ActiveValue::Set(row.state);
-        active.created_at_ms = ActiveValue::Set(row.created_at_ms);
-        active.updated_at_ms = ActiveValue::Set(row.updated_at_ms);
-        active.metadata = ActiveValue::Set(row.metadata);
-        active.usage = ActiveValue::Set(row.usage);
-        active.finish = ActiveValue::Set(row.finish);
-        active.part_count = ActiveValue::Set(row.part_count);
-        active.is_compacted = ActiveValue::Set(row.is_compacted);
-        active.update(db).await?;
-        return Ok(());
-    }
-
-    activity_message::ActiveModel {
-        message_id: ActiveValue::Set(row.message_id),
-        session_id: ActiveValue::Set(row.session_id),
-        role: ActiveValue::Set(row.role),
-        state: ActiveValue::Set(row.state),
-        created_at_ms: ActiveValue::Set(row.created_at_ms),
-        updated_at_ms: ActiveValue::Set(row.updated_at_ms),
-        metadata: ActiveValue::Set(row.metadata),
-        usage: ActiveValue::Set(row.usage),
-        finish: ActiveValue::Set(row.finish),
-        part_count: ActiveValue::Set(row.part_count),
-        is_compacted: ActiveValue::Set(row.is_compacted),
-    }
-    .insert(db)
-    .await?;
+    let metadata = serde_json::to_value(&row.metadata)
+        .map_err(|err| DbErr::Custom(format!("serialize message metadata: {err}")))?;
+    let metadata = sea_orm::Value::Json(Some(Box::new(metadata)));
+    let usage = row
+        .usage
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|err| DbErr::Custom(format!("serialize message usage: {err}")))?
+        .map(Box::new);
+    let usage = sea_orm::Value::Json(usage);
+    let stmt = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "INSERT INTO agena_activity_messages \
+         (message_id, session_id, role, state, created_at_ms, updated_at_ms, metadata, usage, finish, part_count, is_compacted) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(message_id) DO UPDATE SET \
+         session_id = excluded.session_id, role = excluded.role, state = excluded.state, \
+         created_at_ms = excluded.created_at_ms, updated_at_ms = excluded.updated_at_ms, \
+         metadata = excluded.metadata, usage = excluded.usage, finish = excluded.finish, \
+         part_count = excluded.part_count, is_compacted = excluded.is_compacted",
+        [
+            row.message_id.into(),
+            row.session_id.into(),
+            role_db_value(row.role).into(),
+            execution_status_db_value(row.state).into(),
+            row.created_at_ms.into(),
+            row.updated_at_ms.into(),
+            metadata,
+            usage,
+            row.finish.into(),
+            row.part_count.into(),
+            row.is_compacted.into(),
+        ],
+    );
+    db.execute(stmt).await?;
     Ok(())
+}
+
+fn role_db_value(role: Role) -> i8 {
+    match role {
+        Role::User => 1,
+        Role::Assistant => 2,
+        Role::System => 3,
+    }
+}
+
+fn execution_status_db_value(status: crate::message::ExecutionStatus) -> i8 {
+    match status {
+        crate::message::ExecutionStatus::Pending => 1,
+        crate::message::ExecutionStatus::InProgress => 2,
+        crate::message::ExecutionStatus::Completed => 3,
+        crate::message::ExecutionStatus::Failed => 4,
+        crate::message::ExecutionStatus::Cancelled => 5,
+    }
 }
 
 async fn upsert_part_projection(
@@ -1042,39 +1063,25 @@ async fn upsert_part_projection(
     session_id: i64,
     part: &MessagePart,
 ) -> Result<(), DbErr> {
-    if let Some(existing) = activity_part::Entity::find_by_id(part.id).one(db).await? {
-        let mut active: activity_part::ActiveModel = existing.into();
-        active.message_id = ActiveValue::Set(part.message_id);
-        active.session_id = ActiveValue::Set(session_id);
-        active.part_index = ActiveValue::Set(part.part_index);
-        active.status = ActiveValue::Set(part.status);
-        active.kind = ActiveValue::Set(part.kind);
-        active.name = ActiveValue::Set(part.name.clone());
-        active.summary = ActiveValue::Set(part.summary.clone());
-        active.has_detail = ActiveValue::Set(part.has_detail);
-        active.operation_id = ActiveValue::Set(part.operation_id.clone());
-        active.created_at_ms = ActiveValue::Set(part.created_at.timestamp_millis());
-        active.content = ActiveValue::Set(part.content.clone());
-        active.update(db).await?;
-        return Ok(());
-    }
-
     if let Some(operation_id) = part.operation_id.as_deref() {
         let existing = activity_part::Entity::find()
+            .select_only()
+            .column(activity_part::Column::PartId)
             .filter(activity_part::Column::MessageId.eq(part.message_id))
             .filter(activity_part::Column::OperationId.eq(operation_id))
+            .into_tuple::<i64>()
             .all(db)
             .await?;
-        for row in existing {
-            if row.part_id != part.id {
-                activity_part::Entity::delete_by_id(row.part_id)
+        for part_id in existing {
+            if part_id != part.id {
+                activity_part::Entity::delete_by_id(part_id)
                     .exec(db)
                     .await?;
             }
         }
     }
 
-    activity_part::ActiveModel {
+    activity_part::Entity::insert(activity_part::ActiveModel {
         part_id: ActiveValue::Set(part.id),
         message_id: ActiveValue::Set(part.message_id),
         session_id: ActiveValue::Set(session_id),
@@ -1087,8 +1094,25 @@ async fn upsert_part_projection(
         operation_id: ActiveValue::Set(part.operation_id.clone()),
         created_at_ms: ActiveValue::Set(part.created_at.timestamp_millis()),
         content: ActiveValue::Set(part.content.clone()),
-    }
-    .insert(db)
+    })
+    .on_conflict(
+        OnConflict::column(activity_part::Column::PartId)
+            .update_columns([
+                activity_part::Column::MessageId,
+                activity_part::Column::SessionId,
+                activity_part::Column::PartIndex,
+                activity_part::Column::Status,
+                activity_part::Column::Kind,
+                activity_part::Column::Name,
+                activity_part::Column::Summary,
+                activity_part::Column::HasDetail,
+                activity_part::Column::OperationId,
+                activity_part::Column::CreatedAtMs,
+                activity_part::Column::Content,
+            ])
+            .to_owned(),
+    )
+    .exec(db)
     .await?;
     Ok(())
 }

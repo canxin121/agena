@@ -14,12 +14,13 @@ use crate::entry::result::ToolPayloadExecution;
 use crate::entry::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
-    PowerShellToolInput,
+    NotebookEditToolInput, PowerShellToolInput, ReadToolInput, ViewFileToolInput,
+    WebFetchToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, Plugin, PluginManifest, PluginToolDecl,
-    Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    HookSubscription, InitContext, InitOutcome, NetworkRequest, Plugin, PluginManifest,
+    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
 };
 
 thread_local! {
@@ -86,46 +87,26 @@ fn current_executor(
     IN_PROCESS_TOOL_CTX_BY_CALL
         .lock()
         .ok()
-        .and_then(|contexts| contexts.get(&key).cloned())
+        .and_then(|contexts| {
+            contexts.get(&key).cloned().or_else(|| {
+                contexts
+                    .iter()
+                    .find(|(key, _)| key.session_id == session_id && key.call_id == call_id)
+                    .map(|(_, executor)| executor.clone())
+            })
+        })
         .ok_or_else(|| PluginError::new("static plugin invoked without executor context"))
-}
-
-#[cfg(test)]
-pub(crate) fn current_executor_for_test(
-    session_id: i64,
-    call_id: i64,
-    tool_name: &str,
-) -> Option<ToolExecutor> {
-    current_executor_lookup(session_id, call_id, tool_name)
-}
-
-#[cfg(test)]
-pub(crate) fn current_executor_lookup(
-    session_id: i64,
-    call_id: i64,
-    tool_name: &str,
-) -> Option<ToolExecutor> {
-    if let Some(executor) = IN_PROCESS_TOOL_CTX.with(|cell| cell.borrow().clone()) {
-        return Some(executor);
-    }
-    let key = InProcessContextKey {
-        session_id,
-        call_id,
-        tool_name: tool_name.to_string(),
-    };
-    IN_PROCESS_TOOL_CTX_BY_CALL
-        .lock()
-        .ok()
-        .and_then(|contexts| contexts.get(&key).cloned())
 }
 
 pub(crate) struct InProcessToolPlugin {
     plugin_name: &'static str,
     description: &'static str,
     entries: Vec<PluginToolDecl>,
+    resolver: Option<ToolInputResolver>,
 }
 
 impl InProcessToolPlugin {
+    #[allow(dead_code)]
     pub fn new(
         plugin_name: &'static str,
         description: &'static str,
@@ -135,9 +116,37 @@ impl InProcessToolPlugin {
             plugin_name,
             description,
             entries,
+            resolver: None,
+        }
+    }
+
+    pub fn new_with_resolver(
+        plugin_name: &'static str,
+        description: &'static str,
+        entries: Vec<PluginToolDecl>,
+        resolver: ToolInputResolver,
+    ) -> Self {
+        Self {
+            plugin_name,
+            description,
+            entries,
+            resolver: Some(resolver),
+        }
+    }
+
+    fn resolve_tool_input(
+        &self,
+        tool_name: &str,
+        input: JsonValue,
+    ) -> SdkResult<(String, JsonValue)> {
+        match self.resolver {
+            Some(resolve) => resolve(tool_name, input),
+            None => Ok((tool_name.to_string(), input)),
         }
     }
 }
+
+pub(crate) type ToolInputResolver = fn(&str, JsonValue) -> SdkResult<(String, JsonValue)>;
 
 #[async_trait]
 impl Plugin for InProcessToolPlugin {
@@ -160,12 +169,8 @@ impl Plugin for InProcessToolPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        invoke_tool(
-            &input.tool_name,
-            input.input,
-            input.session_id,
-            input.call_id,
-        )
+        let (tool_name, tool_input) = self.resolve_tool_input(&input.tool_name, input.input)?;
+        invoke_tool(&tool_name, tool_input, input.session_id, input.call_id)
     }
 
     async fn permission_paths(
@@ -173,7 +178,17 @@ impl Plugin for InProcessToolPlugin {
         tool: &str,
         input: &serde_json::Value,
     ) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
-        permission_paths_for(tool, input)
+        let (tool_name, tool_input) = self.resolve_tool_input(tool, input.clone())?;
+        permission_paths_for(&tool_name, &tool_input)
+    }
+
+    async fn permission_networks(
+        &self,
+        tool: &str,
+        input: &serde_json::Value,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        let (tool_name, tool_input) = self.resolve_tool_input(tool, input.clone())?;
+        permission_networks_for(&tool_name, &tool_input)
     }
 }
 
@@ -200,6 +215,16 @@ pub(crate) fn permission_paths_for(
     input: &serde_json::Value,
 ) -> SdkResult<Vec<crate::plugin::sdk::PathRequest>> {
     match tool {
+        "read" => {
+            let payload: ReadToolInput = serde_json::from_value(input.clone())?;
+            Ok(vec![crate::plugin::sdk::PathRequest::read(
+                payload.file_path,
+            )])
+        }
+        "view_file" => {
+            let payload: ViewFileToolInput = serde_json::from_value(input.clone())?;
+            Ok(vec![crate::plugin::sdk::PathRequest::read(payload.path)])
+        }
         "apply_patch" => {
             let payload: ApplyPatchToolInput = serde_json::from_value(input.clone())?;
             let paths = crate::entry::apply_patch::planned_paths(&payload.patch)
@@ -230,6 +255,28 @@ pub(crate) fn permission_paths_for(
             let needs_workspace = matches!(payload, MonitorToolInput::Start { workdir: None, .. });
             Ok(default_workspace_read(needs_workspace))
         }
+        "notebook_edit" => {
+            let payload: NotebookEditToolInput = serde_json::from_value(input.clone())?;
+            Ok(vec![crate::plugin::sdk::PathRequest::write(
+                payload.notebook_path,
+            )])
+        }
+        _ => Ok(Vec::new()),
+    }
+}
+
+pub(crate) fn permission_networks_for(
+    tool: &str,
+    input: &serde_json::Value,
+) -> SdkResult<Vec<NetworkRequest>> {
+    match tool {
+        "web_fetch" => {
+            let payload: WebFetchToolInput = serde_json::from_value(input.clone())?;
+            Ok(vec![NetworkRequest::connect(payload.url)])
+        }
+        "web_search" => Ok(vec![NetworkRequest::connect(
+            "https://html.duckduckgo.com/html/",
+        )]),
         _ => Ok(Vec::new()),
     }
 }

@@ -1,8 +1,5 @@
 //! `agena.lsp` plugin: read-only observability of the configured
-//! LSP servers plus the model-visible LSP entries (`lsp_definition`,
-//! `lsp_references`, `lsp_hover`, `lsp_diagnostics`). `lsp_servers` is
-//! plugin-native and uses `host.lsp_list_servers`; the other LSP entries use
-//! the same in-process executor bridge as other static plugin tools.
+//! LSP servers plus model-visible navigation commands.
 
 use std::sync::{Arc, RwLock};
 
@@ -14,10 +11,10 @@ use crate::message::{
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostLspListServersResponse};
-use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HookSubscription, HostCapability, InitContext, InitOutcome, PathRequest, Plugin,
+    PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    ToolTag,
 };
 use crate::plugins::provided::router;
 
@@ -46,6 +43,16 @@ impl LspPlugin {
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct LspServersInput {}
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum LspToolInput {
+    Servers(LspServersInput),
+    Definition(LspDefinitionToolInput),
+    References(LspReferencesToolInput),
+    Hover(LspHoverToolInput),
+    Diagnostics(LspDiagnosticsToolInput),
+}
+
 #[derive(Debug, Serialize)]
 struct LspServersOutput {
     servers: Vec<LspServerSummary>,
@@ -65,11 +72,7 @@ impl Plugin for LspPlugin {
         PluginManifest::builder("agena-lsp", env!("CARGO_PKG_VERSION"))
             .description("LSP read-only observability and navigation tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(lsp_servers_decl())
-            .tool(lsp_definition_decl())
-            .tool(lsp_references_decl())
-            .tool(lsp_hover_decl())
-            .tool(lsp_diagnostics_decl())
+            .tool(lsp_decl())
             .build()
     }
 
@@ -82,9 +85,14 @@ impl Plugin for LspPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        match input.tool_name.as_str() {
-            "lsp_servers" => {
-                let _: LspServersInput = serde_json::from_value(input.input).unwrap_or_default();
+        if input.tool_name != "lsp" {
+            return Err(PluginError::invalid_params(format!(
+                "unknown lsp plugin tool '{}'",
+                input.tool_name
+            )));
+        }
+        match serde_json::from_value::<LspToolInput>(input.input)? {
+            LspToolInput::Servers(_) => {
                 let HostLspListServersResponse { servers } =
                     self.host()?.lsp_list_servers().await?;
                 let summary = LspServersOutput {
@@ -109,94 +117,91 @@ impl Plugin for LspPlugin {
                     attachments: Vec::new(),
                 })
             }
-            name @ ("lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics") => {
+            LspToolInput::Definition(args) => {
                 let _ = self.host()?;
-                router::invoke_tool(name, input.input, input.session_id, input.call_id)
+                router::invoke_tool(
+                    "lsp_definition",
+                    serde_json::to_value(args)
+                        .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                    input.session_id,
+                    input.call_id,
+                )
             }
-            other => Err(PluginError::invalid_params(format!(
-                "unknown lsp plugin tool '{other}'"
-            ))),
+            LspToolInput::References(args) => {
+                let _ = self.host()?;
+                router::invoke_tool(
+                    "lsp_references",
+                    serde_json::to_value(args)
+                        .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                    input.session_id,
+                    input.call_id,
+                )
+            }
+            LspToolInput::Hover(args) => {
+                let _ = self.host()?;
+                router::invoke_tool(
+                    "lsp_hover",
+                    serde_json::to_value(args)
+                        .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                    input.session_id,
+                    input.call_id,
+                )
+            }
+            LspToolInput::Diagnostics(args) => {
+                let _ = self.host()?;
+                router::invoke_tool(
+                    "lsp_diagnostics",
+                    serde_json::to_value(args)
+                        .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                    input.session_id,
+                    input.call_id,
+                )
+            }
         }
     }
-}
 
-pub(crate) fn lsp_servers_decl() -> PluginToolDecl {
-    PluginToolDecl::new(
-        "lsp_servers",
-        crate::entry::definition::json_schema_for::<LspServersInput>(),
-    )
-    .description("List the configured LSP servers known to the host (read-only).")
-    .tags([ToolTag::ReadOnly, ToolTag::Lsp])
-    .concurrency_safe(true)
-    .host_capability(HostCapability::LspRegistry)
-}
-
-pub(crate) fn lsp_definition_decl() -> PluginToolDecl {
-    PluginToolDecl::new(
-        "lsp_definition",
-        crate::entry::definition::json_schema_for::<LspDefinitionToolInput>(),
-    )
-    .description(
-        "Resolve the symbol at file_path:line:character to its definition site(s) via the configured LSP server.",
-    )
-    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
-    .input_path(required_path("$.file_path", PathKind::Read))
-    .concurrency_safe(true)
-    .deferred_load()
-    .host_capability(HostCapability::LspRegistry)
-}
-
-pub(crate) fn lsp_references_decl() -> PluginToolDecl {
-    PluginToolDecl::new(
-        "lsp_references",
-        crate::entry::definition::json_schema_for::<LspReferencesToolInput>(),
-    )
-    .description(
-        "List every reference to the symbol at file_path:line:character via the configured LSP server.",
-    )
-    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
-    .input_path(required_path("$.file_path", PathKind::Read))
-    .concurrency_safe(true)
-    .deferred_load()
-    .host_capability(HostCapability::LspRegistry)
-}
-
-pub(crate) fn lsp_hover_decl() -> PluginToolDecl {
-    PluginToolDecl::new(
-        "lsp_hover",
-        crate::entry::definition::json_schema_for::<LspHoverToolInput>(),
-    )
-    .description(
-        "Read the hover documentation / type signature for the symbol at file_path:line:character.",
-    )
-    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
-    .input_path(required_path("$.file_path", PathKind::Read))
-    .concurrency_safe(true)
-    .deferred_load()
-    .host_capability(HostCapability::LspRegistry)
-}
-
-pub(crate) fn lsp_diagnostics_decl() -> PluginToolDecl {
-    PluginToolDecl::new(
-        "lsp_diagnostics",
-        crate::entry::definition::json_schema_for::<LspDiagnosticsToolInput>(),
-    )
-    .description(
-        "Return the latest LSP-published diagnostics (errors / warnings / hints) for a file.",
-    )
-    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
-    .input_path(required_path("$.file_path", PathKind::Read))
-    .concurrency_safe(true)
-    .deferred_load()
-    .host_capability(HostCapability::LspRegistry)
-}
-
-fn required_path(jsonpath: &str, kind: PathKind) -> InputPathSpec {
-    InputPathSpec {
-        jsonpath: jsonpath.to_string(),
-        kind,
-        optional: false,
+    async fn permission_paths(
+        &self,
+        tool: &str,
+        input: &serde_json::Value,
+    ) -> SdkResult<Vec<PathRequest>> {
+        if tool != "lsp" {
+            return Ok(Vec::new());
+        }
+        let (tool_name, tool_input) = lsp_route(input.clone())?;
+        router::permission_paths_for(tool_name.as_str(), &tool_input)
     }
+}
+
+pub(crate) fn lsp_decl() -> PluginToolDecl {
+    PluginToolDecl::new(
+        "lsp",
+        crate::entry::definition::json_schema_for::<LspToolInput>(),
+    )
+    .description(
+        "LSP command dispatcher. Set command to servers, definition, references, hover, or diagnostics; pass that command's payload in args.",
+    )
+    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
+    .concurrency_safe(true)
+    .always_load()
+    .host_capability(HostCapability::LspRegistry)
+}
+
+fn lsp_route(input: serde_json::Value) -> SdkResult<(String, serde_json::Value)> {
+    match serde_json::from_value::<LspToolInput>(input)? {
+        LspToolInput::Servers(_) => Ok(("lsp_servers".to_string(), serde_json::json!({}))),
+        LspToolInput::Definition(args) => tool_args("lsp_definition", args),
+        LspToolInput::References(args) => tool_args("lsp_references", args),
+        LspToolInput::Hover(args) => tool_args("lsp_hover", args),
+        LspToolInput::Diagnostics(args) => tool_args("lsp_diagnostics", args),
+    }
+}
+
+fn tool_args<T: serde::Serialize>(tool: &str, args: T) -> SdkResult<(String, serde_json::Value)> {
+    Ok((
+        tool.to_string(),
+        serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
+    ))
 }
 
 #[cfg(test)]
@@ -289,11 +294,14 @@ mod tests {
 
         let output = plugin
             .tool_invoke(ToolInvokeInput {
-                tool_name: "lsp_servers".to_string(),
+                tool_name: "lsp".to_string(),
                 session_id: 1,
                 call_id: 1,
                 workspace_root: "/tmp".to_string(),
-                input: serde_json::Value::Null,
+                input: serde_json::json!({
+                    "command": "servers",
+                    "args": {}
+                }),
             })
             .await
             .expect("lsp_servers");

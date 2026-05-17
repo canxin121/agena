@@ -21,6 +21,67 @@ struct SessionChildCountRow {
     child_session_count: i64,
 }
 
+#[derive(Debug, Clone, FromQueryResult)]
+struct SessionTouchRow {
+    id: i64,
+    parent_id: Option<i64>,
+    depth: i64,
+    root_id: i64,
+    workspace_id: i64,
+    title: String,
+    version: i64,
+    is_subagent: bool,
+    created_at_ms: i64,
+}
+
+impl SessionTouchRow {
+    fn into_model(
+        self,
+        version: i64,
+        updated_at_ms: i64,
+        runtime_state: SessionRuntimeState,
+    ) -> entities::session::Model {
+        entities::session::Model {
+            id: self.id,
+            parent_id: self.parent_id,
+            depth: self.depth,
+            root_id: self.root_id,
+            workspace_id: self.workspace_id,
+            title: self.title,
+            version,
+            is_subagent: self.is_subagent,
+            runtime_state: Some(runtime_state),
+            created_at_ms: self.created_at_ms,
+            updated_at_ms,
+        }
+    }
+}
+
+async fn get_session_touch_row<C>(db: &C, session_id: i64) -> Result<Option<SessionTouchRow>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let stmt = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "SELECT id, parent_id, depth, root_id, workspace_id, title, version, is_subagent, created_at_ms \
+         FROM agena_sessions WHERE id = ?",
+        [session_id.into()],
+    );
+    db.query_one(stmt).await?.map_or(Ok(None), |row| {
+        Ok(Some(SessionTouchRow {
+            id: row.try_get("", "id")?,
+            parent_id: row.try_get("", "parent_id")?,
+            depth: row.try_get("", "depth")?,
+            root_id: row.try_get("", "root_id")?,
+            workspace_id: row.try_get("", "workspace_id")?,
+            title: row.try_get("", "title")?,
+            version: row.try_get("", "version")?,
+            is_subagent: row.try_get("", "is_subagent")?,
+            created_at_ms: row.try_get("", "created_at_ms")?,
+        }))
+    })
+}
+
 /// Lineage info needed when materialising a child session row.
 #[derive(Debug, Clone, Copy)]
 pub struct ParentLineage {
@@ -162,7 +223,7 @@ pub async fn touch_session_with_version<C>(
 where
     C: ConnectionTrait,
 {
-    let Some(existing) = get_session_by_id(db, session_id).await? else {
+    let Some(existing) = get_session_touch_row(db, session_id).await? else {
         return Ok(TouchOutcome::NotFound);
     };
     if let Some(expected) = expected_version
@@ -211,7 +272,7 @@ where
     if exec_result.rows_affected() == 0 {
         // Reload to surface the now-current version. Could only happen with
         // `expected_version` (we just confirmed the row exists above).
-        if let Some(latest) = get_session_by_id(db, session_id).await? {
+        if let Some(latest) = get_session_touch_row(db, session_id).await? {
             return Ok(TouchOutcome::VersionConflict {
                 current_version: latest.version,
                 expected_version: expected_version.unwrap_or(existing.version),
@@ -220,10 +281,11 @@ where
         return Ok(TouchOutcome::NotFound);
     }
 
-    let model = get_session_by_id(db, session_id)
-        .await?
-        .ok_or_else(|| DbErr::Custom(format!("session disappeared after update: {session_id}")))?;
-    Ok(TouchOutcome::Updated(model))
+    Ok(TouchOutcome::Updated(existing.into_model(
+        next_version,
+        now_ms,
+        runtime_state,
+    )))
 }
 
 pub async fn delete_session_by_id<C>(db: &C, session_id: i64) -> Result<u64, DbErr>

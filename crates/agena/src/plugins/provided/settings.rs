@@ -6,7 +6,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use serde::Serialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::config::{
@@ -27,6 +28,22 @@ pub(crate) const SETTINGS_PLUGIN_ID: &str = "agena.settings";
 
 pub(crate) struct SettingsPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum SettingsToolInput {
+    Get(ConfigSettingsGetInput),
+    List(ConfigSettingsListInput),
+    Validate(ConfigSettingsValidateInput),
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum SettingsEditToolInput {
+    Set(ConfigSettingsSetInput),
+    Delete(ConfigSettingsDeleteInput),
+    Patch(ConfigSettingsPatchInput),
 }
 
 impl SettingsPlugin {
@@ -208,12 +225,18 @@ impl Plugin for SettingsPlugin {
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         match input.tool_name.as_str() {
-            "settings_get" => self.get(serde_json::from_value(input.input)?).await,
-            "settings_list" => self.list(serde_json::from_value(input.input)?).await,
-            "settings_set" => self.set(serde_json::from_value(input.input)?).await,
-            "settings_delete" => self.delete(serde_json::from_value(input.input)?).await,
-            "settings_patch" => self.patch(serde_json::from_value(input.input)?).await,
-            "settings_validate" => self.validate(serde_json::from_value(input.input)?).await,
+            "settings" => match serde_json::from_value::<SettingsToolInput>(input.input)? {
+                SettingsToolInput::Get(args) => self.get(args).await,
+                SettingsToolInput::List(args) => self.list(args).await,
+                SettingsToolInput::Validate(args) => self.validate(args).await,
+            },
+            "settings_edit" => {
+                match serde_json::from_value::<SettingsEditToolInput>(input.input)? {
+                    SettingsEditToolInput::Set(args) => self.set(args).await,
+                    SettingsEditToolInput::Delete(args) => self.delete(args).await,
+                    SettingsEditToolInput::Patch(args) => self.patch(args).await,
+                }
+            }
             other => Err(PluginError::invalid_params(format!(
                 "unknown settings tool '{other}'"
             ))),
@@ -228,12 +251,8 @@ impl Plugin for SettingsPlugin {
         let (config_path, _) = self.config_meta().await?;
         let path = config_path.display().to_string();
         match tool {
-            "settings_set" | "settings_delete" | "settings_patch" => {
-                Ok(vec![PathRequest::write(path)])
-            }
-            "settings_get" | "settings_list" | "settings_validate" => {
-                Ok(vec![PathRequest::read(path)])
-            }
+            "settings_edit" => Ok(vec![PathRequest::write(path)]),
+            "settings" => Ok(vec![PathRequest::read(path)]),
             _ => Ok(Vec::new()),
         }
     }
@@ -242,33 +261,22 @@ impl Plugin for SettingsPlugin {
 fn entries() -> Vec<PluginToolDecl> {
     vec![
         PluginToolDecl::new(
-            "settings_get",
-            crate::entry::definition::json_schema_for::<ConfigSettingsGetInput>(),
+            "settings",
+            crate::entry::definition::json_schema_for::<SettingsToolInput>(),
         )
         .description(
-            "Read one Agena setting by dot path. Use source=file for persisted config.toml or source=effective for the resolved runtime value.",
+            "Settings read command. Set command to get, list, or validate; pass that command's payload in args.",
         )
         .tags([ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()])
         .host_capability(crate::plugin::sdk::HostCapability::ReadConfig)
         .concurrency_safe(true)
         .always_load(),
         PluginToolDecl::new(
-            "settings_list",
-            crate::entry::definition::json_schema_for::<ConfigSettingsListInput>(),
+            "settings_edit",
+            crate::entry::definition::json_schema_for::<SettingsEditToolInput>(),
         )
         .description(
-            "List child settings under a dot path, optionally recursively. Use source=file for persisted values or source=effective for resolved runtime values.",
-        )
-        .tags([ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()])
-        .host_capability(crate::plugin::sdk::HostCapability::ReadConfig)
-        .concurrency_safe(true)
-        .always_load(),
-        PluginToolDecl::new(
-            "settings_set",
-            crate::entry::definition::json_schema_for::<ConfigSettingsSetInput>(),
-        )
-        .description(
-            "Create or replace one persisted Agena setting in config.toml, validate it, and reload the runtime by default.",
+            "Settings edit command. Set command to set, delete, or patch; pass that command's payload in args. Edits validate config.toml and reload by default.",
         )
         .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()])
         .host_capabilities([
@@ -277,41 +285,6 @@ fn entries() -> Vec<PluginToolDecl> {
         ])
         .concurrency_safe(false)
         .deferred_load(),
-        PluginToolDecl::new(
-            "settings_delete",
-            crate::entry::definition::json_schema_for::<ConfigSettingsDeleteInput>(),
-        )
-        .description("Delete one persisted Agena setting from config.toml and reload by default.")
-        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()])
-        .host_capabilities([
-            crate::plugin::sdk::HostCapability::ReadConfig,
-            crate::plugin::sdk::HostCapability::ReloadConfig,
-        ])
-        .concurrency_safe(false)
-        .deferred_load(),
-        PluginToolDecl::new(
-            "settings_patch",
-            crate::entry::definition::json_schema_for::<ConfigSettingsPatchInput>(),
-        )
-        .description(
-            "Deep-merge a JSON object into persisted config.toml; object entries merge, scalar entries replace, and null entries delete.",
-        )
-        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()])
-        .host_capabilities([
-            crate::plugin::sdk::HostCapability::ReadConfig,
-            crate::plugin::sdk::HostCapability::ReloadConfig,
-        ])
-        .concurrency_safe(false)
-        .deferred_load(),
-        PluginToolDecl::new(
-            "settings_validate",
-            crate::entry::definition::json_schema_for::<ConfigSettingsValidateInput>(),
-        )
-        .description("Validate the active persisted Agena config.toml without changing it.")
-        .tags([ToolTag::ReadOnly, settings_tag()])
-        .host_capability(crate::plugin::sdk::HostCapability::ReadConfig)
-        .concurrency_safe(true)
-        .always_load(),
     ]
 }
 
@@ -369,7 +342,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_exposes_complete_settings_crud_tools() {
+    fn manifest_exposes_settings_command_tools() {
         let plugin = SettingsPlugin::new();
         let manifest = plugin.manifest();
         let names = manifest
@@ -377,22 +350,12 @@ mod tests {
             .iter()
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            vec![
-                "settings_get",
-                "settings_list",
-                "settings_set",
-                "settings_delete",
-                "settings_patch",
-                "settings_validate",
-            ]
-        );
+        assert_eq!(names, vec!["settings", "settings_edit"]);
         let set = manifest
             .entries
             .iter()
-            .find(|entry| entry.name == "settings_set")
-            .expect("settings_set should exist");
+            .find(|entry| entry.name == "settings_edit")
+            .expect("settings_edit should exist");
         assert!(set.has_tag(ToolTag::Mutating));
         assert!(
             set.host_capabilities

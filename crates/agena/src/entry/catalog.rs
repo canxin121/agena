@@ -114,19 +114,15 @@ mod tests {
         let catalog = ToolCatalog::for_model(None);
         let definitions = catalog.tools();
 
-        let read = definitions
+        let fs = definitions
             .iter()
-            .find(|tool| tool.exposed_name == "read")
-            .expect("read tool should exist");
-        let grep = definitions
-            .iter()
-            .find(|tool| tool.exposed_name == "grep")
-            .expect("grep tool should exist");
+            .find(|tool| tool.exposed_name == "fs")
+            .expect("fs tool should exist");
 
-        assert!(read.has_tag(ToolTag::ReadOnly));
-        assert!(read.decl.concurrency_safe);
-        assert!(!read.is_deferred());
-        assert!(grep.should_load_by_default());
+        assert!(fs.has_tag(ToolTag::ReadOnly));
+        assert!(fs.decl.concurrency_safe);
+        assert!(!fs.is_deferred());
+        assert!(fs.should_load_by_default());
     }
 
     #[test]
@@ -134,7 +130,7 @@ mod tests {
         let catalog = ToolCatalog::for_model(None);
         let definitions = catalog.tools();
 
-        for tool_name in ["bash", "apply_patch", "task", "notebook_edit", "powershell"] {
+        for tool_name in ["shell", "fs_edit", "task"] {
             let definition = definitions
                 .iter()
                 .find(|tool| tool.exposed_name == tool_name)

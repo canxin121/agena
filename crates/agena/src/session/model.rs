@@ -822,25 +822,48 @@ impl Session {
     }
 
     fn compute_approx_bytes(&self) -> usize {
-        serde_json::to_vec(&(
-            self.id,
-            self.parent_id,
-            self.workspace_id,
-            &self.title,
-            self.version,
-            self.created_at,
-            self.updated_at,
-            &self.messages,
-            &self.runtime,
-        ))
-        .map(|bytes| bytes.len())
-        .unwrap_or_else(|_| {
-            self.messages
-                .iter()
-                .map(Message::as_text_lossy)
-                .map(|text| text.len())
-                .sum()
-        })
+        let mut bytes = 160 + self.title.len();
+        bytes = bytes.saturating_add(self.messages.len().saturating_mul(96));
+        for message in &self.messages {
+            bytes = bytes
+                .saturating_add(message.as_text_lossy().len())
+                .saturating_add(message.parts.len().saturating_mul(64))
+                .saturating_add(message.metadata.model_provider_id.len())
+                .saturating_add(message.metadata.model_id.len());
+            for part in &message.parts {
+                bytes = bytes
+                    .saturating_add(part.name.as_ref().map_or(0, |value| value.len()))
+                    .saturating_add(part.summary.as_ref().map_or(0, |value| value.len()))
+                    .saturating_add(part.operation_id.as_ref().map_or(0, |value| value.len()));
+            }
+            if let Some(usage) = message.usage.as_ref() {
+                bytes = bytes.saturating_add(std::mem::size_of_val(usage));
+            }
+        }
+        bytes = bytes
+            .saturating_add(
+                self.runtime
+                    .loaded_deferred_tools
+                    .iter()
+                    .map(String::len)
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                self.runtime
+                    .execution
+                    .allowed_tools
+                    .iter()
+                    .map(String::len)
+                    .sum::<usize>(),
+            )
+            .saturating_add(
+                self.runtime
+                    .turn
+                    .prompt_cache_key
+                    .as_ref()
+                    .map_or(0, String::len),
+            );
+        bytes
     }
 
     fn should_run_model(&self) -> bool {
@@ -1183,10 +1206,7 @@ mod tests {
             "op-1"
         );
         assert_eq!(session.runtime.turn.pending_tool_calls[0].call_id, 7);
-        assert_eq!(
-            session.runtime.turn.pending_tool_calls[0].tool_name,
-            "todo_write"
-        );
+        assert_eq!(session.runtime.turn.pending_tool_calls[0].tool_name, "todo");
     }
 
     #[test]
@@ -1286,7 +1306,7 @@ mod tests {
                 request_id: request_id.to_string(),
                 session_id: Some(1),
                 action: PermissionAction::Tool {
-                    tool_name: "todo_write".to_string(),
+                    tool_name: "todo".to_string(),
                     qualifier: None,
                 },
                 reason: format!("need permission for {operation_id}"),

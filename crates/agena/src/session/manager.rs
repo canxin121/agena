@@ -1081,9 +1081,16 @@ impl SessionManager {
         let session_id = request.session_id;
         let (control, steer_rx) = self.turn_registry.register(session_id).await;
         crate::metrics::session_started();
-        let result = self
-            .submit_user_turn_inner(request, control.clone(), steer_rx)
-            .await;
+        let manager = self.background_handle();
+        let task_control = control.clone();
+        let result = tokio::task::spawn(async move {
+            manager
+                .submit_user_turn_inner(request, task_control, steer_rx)
+                .await
+        })
+        .await
+        .map_err(|err| AppError::Internal(format!("user turn task failed: {err}")))
+        .and_then(std::convert::identity);
         crate::metrics::session_finished();
         self.turn_registry
             .unregister_if_matches(session_id, &control)
@@ -1416,12 +1423,24 @@ impl SessionManager {
             .await?;
 
         let options = self.subtask_run_options(&child, &parent, requested_model.as_deref())?;
-        let session = Box::pin(self.submit_user_turn(SessionUserTurnRequest {
-            session_id: child.id,
-            options: options.clone(),
-            parts: vec![PartContent::text(request.prompt)],
-        }))
-        .await?;
+        let child_id = child.id;
+        drop(child);
+        drop(parent);
+        drop(prompt);
+        drop(requested_model);
+        let manager = self.background_handle();
+        let run_options = options.clone();
+        let session = tokio::task::spawn(async move {
+            manager
+                .submit_user_turn(SessionUserTurnRequest {
+                    session_id: child_id,
+                    options: run_options,
+                    parts: vec![PartContent::text(request.prompt)],
+                })
+                .await
+        })
+        .await
+        .map_err(|err| AppError::Internal(format!("subtask turn task failed: {err}")))??;
 
         Ok(SessionSubtaskResponse {
             profile_name: Some(effective_profile_name),
@@ -1671,8 +1690,16 @@ impl SessionManager {
             }
         }
 
-        self.run_until_stable_for(request.session_id, session, &request.options, state)
-            .await
+        let manager = self.background_handle();
+        let session_id = request.session_id;
+        let options = request.options;
+        tokio::task::spawn(async move {
+            manager
+                .run_until_stable_for(session_id, session, &options, state)
+                .await
+        })
+        .await
+        .map_err(|err| AppError::Internal(format!("permission continuation task failed: {err}")))?
     }
 
     pub async fn reply_user_input(
@@ -1775,8 +1802,16 @@ impl SessionManager {
             }
         }
 
-        self.run_until_stable_for(request.session_id, session, &request.options, state)
-            .await
+        let manager = self.background_handle();
+        let session_id = request.session_id;
+        let options = request.options;
+        tokio::task::spawn(async move {
+            manager
+                .run_until_stable_for(session_id, session, &options, state)
+                .await
+        })
+        .await
+        .map_err(|err| AppError::Internal(format!("user input continuation task failed: {err}")))?
     }
 
     /// Convenience wrapper that registers a fresh `TurnControl` for
@@ -2385,6 +2420,8 @@ impl SessionManager {
                             options.model.model_id.as_str(),
                         );
                     }
+                    drop(request_tools);
+                    drop(prepared);
 
                     let client_events = result.client_events;
                     let goal_token_delta = assistant_message
@@ -2422,10 +2459,17 @@ impl SessionManager {
                             finish_reason: FinishReason::default(),
                         }));
                     }
-                    persisted_session = self
-                        .store
-                        .append_history_items(persisted_session, turn_events, state.cache_policy())
-                        .await?;
+                    let store = Arc::clone(&self.store);
+                    let cache_policy = state.cache_policy();
+                    persisted_session = tokio::task::spawn(async move {
+                        store
+                            .append_history_items(persisted_session, turn_events, cache_policy)
+                            .await
+                    })
+                    .await
+                    .map_err(|err| {
+                        AppError::Internal(format!("history append task failed: {err}"))
+                    })??;
                     persisted_session = self
                         .account_goal_usage_from_turn(
                             persisted_session,
@@ -4178,8 +4222,9 @@ impl SessionManager {
         invocation: &ToolInvocation,
         execution: &ToolInvocationExecution,
     ) {
+        let payload_tool_name = payload_tool_name_for_invocation(invocation);
         if let Some(output) = crate::tool::ToolPayloadOutput::from_tool_output(
-            invocation.name.as_str(),
+            payload_tool_name.as_str(),
             &execution.output,
         ) {
             match output {
@@ -4633,7 +4678,8 @@ fn operation_blocks_from_tool_output(
 ) -> Vec<OperationBlock> {
     let mut blocks = text_result_blocks(output_text);
 
-    match crate::tool::ToolPayloadOutput::from_tool_output(invocation.name.as_str(), details) {
+    let payload_tool_name = payload_tool_name_for_invocation(invocation);
+    match crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details) {
         Some(crate::tool::ToolPayloadOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
             blocks.push(OperationBlock::FileChanges { changes });
         }
@@ -4664,6 +4710,12 @@ fn operation_blocks_from_tool_output(
     }
 
     dedupe_operation_blocks(blocks)
+}
+
+fn payload_tool_name_for_invocation(invocation: &ToolInvocation) -> String {
+    crate::tool::ToolPayloadInput::from_invocation(invocation)
+        .map(|payload| payload.tool_name().to_string())
+        .unwrap_or_else(|| invocation.name.clone())
 }
 
 fn loaded_tools_from_tool_output(details: &ToolOutput) -> Option<Vec<String>> {
@@ -5529,7 +5581,7 @@ mod tests {
                         _ => return false,
                     };
                     loaded_tools_from_tool_output(&operation.details).is_some_and(|loaded_tools| {
-                        loaded_tools.iter().any(|name| name == "apply_patch")
+                        loaded_tools.iter().any(|name| name == "fs_edit")
                     })
                 })
             });
@@ -5541,15 +5593,18 @@ mod tests {
                         model: scripted_model_id(),
                         stream_key: "call_todo_1".to_string(),
                         id: Some("call_todo_1".to_string()),
-                        name: Some("todo_write".to_string()),
-                        arguments_delta: serde_json::to_string(&TodoWriteToolInput {
-                            items: vec![TodoItem {
-                                content: "confirm permission recovery".to_string(),
-                                status: TodoStatus::Completed,
-                                priority: TodoPriority::Low,
-                            }],
+                        name: Some("todo".to_string()),
+                        arguments_delta: serde_json::json!({
+                            "command": "write",
+                            "args": TodoWriteToolInput {
+                                items: vec![TodoItem {
+                                    content: "confirm permission recovery".to_string(),
+                                    status: TodoStatus::Completed,
+                                    priority: TodoPriority::Low,
+                                }],
+                            },
                         })
-                        .expect("serialize todo input"),
+                        .to_string(),
                     }),
                     Ok(CompletionStreamEvent::Completed {
                         provider_id: scripted_provider_id(),
@@ -5625,13 +5680,16 @@ mod tests {
                         model: scripted_model_id(),
                         stream_key: "call_tool_search_1".to_string(),
                         id: Some("call_tool_search_1".to_string()),
-                        name: Some("tool_search".to_string()),
-                        arguments_delta: serde_json::to_string(&ToolSearchToolInput {
-                            query: "patch file".to_string(),
-                            load: vec!["apply_patch".to_string()],
-                            limit: None,
+                        name: Some("tools".to_string()),
+                        arguments_delta: serde_json::json!({
+                            "command": "search",
+                            "args": ToolSearchToolInput {
+                                query: "patch file".to_string(),
+                                load: vec!["fs_edit".to_string()],
+                                limit: None,
+                            },
                         })
-                        .expect("serialize tool search input"),
+                        .to_string(),
                     }),
                     Ok(CompletionStreamEvent::Completed {
                         provider_id: scripted_provider_id(),
@@ -5648,29 +5706,32 @@ mod tests {
                         model: scripted_model_id(),
                         stream_key: "call_ask_user_1".to_string(),
                         id: Some("call_ask_user_1".to_string()),
-                        name: Some("ask_user".to_string()),
-                        arguments_delta: serde_json::to_string(&AskUserToolInput {
-                            questions: vec![UserInputQuestion {
-                                id: "model_choice".to_string(),
-                                header: "Model".to_string(),
-                                question: "Which model should we use?".to_string(),
-                                options: vec![
-                                    UserInputOption {
-                                        label: "gpt-5".to_string(),
-                                        description: "Use the flagship reasoning model."
-                                            .to_string(),
-                                    },
-                                    UserInputOption {
-                                        label: "gpt-4.1".to_string(),
-                                        description: "Use the faster general-purpose model."
-                                            .to_string(),
-                                    },
-                                ],
-                                multiple: false,
-                                allow_custom: false,
-                            }],
+                        name: Some("user".to_string()),
+                        arguments_delta: serde_json::json!({
+                            "command": "ask",
+                            "args": AskUserToolInput {
+                                questions: vec![UserInputQuestion {
+                                    id: "model_choice".to_string(),
+                                    header: "Model".to_string(),
+                                    question: "Which model should we use?".to_string(),
+                                    options: vec![
+                                        UserInputOption {
+                                            label: "gpt-5".to_string(),
+                                            description: "Use the flagship reasoning model."
+                                                .to_string(),
+                                        },
+                                        UserInputOption {
+                                            label: "gpt-4.1".to_string(),
+                                            description: "Use the faster general-purpose model."
+                                                .to_string(),
+                                        },
+                                    ],
+                                    multiple: false,
+                                    allow_custom: false,
+                                }],
+                            },
                         })
-                        .expect("serialize ask_user input"),
+                        .to_string(),
                     }),
                     Ok(CompletionStreamEvent::Completed {
                         provider_id: scripted_provider_id(),
@@ -5706,12 +5767,15 @@ mod tests {
                         model: scripted_model_id(),
                         stream_key: "call_apply_patch_1".to_string(),
                         id: Some("call_apply_patch_1".to_string()),
-                        name: Some("apply_patch".to_string()),
-                        arguments_delta: serde_json::to_string(&ApplyPatchToolInput {
-                            patch: "*** Begin Patch\n*** Add File: result.txt\n+approved\n*** End Patch"
-                                .to_string(),
+                        name: Some("fs_edit".to_string()),
+                        arguments_delta: serde_json::json!({
+                            "command": "apply_patch",
+                            "args": ApplyPatchToolInput {
+                                patch: "*** Begin Patch\n*** Add File: result.txt\n+approved\n*** End Patch"
+                                    .to_string(),
+                            },
                         })
-                        .expect("serialize tool input"),
+                        .to_string(),
                     }),
                     Ok(CompletionStreamEvent::Completed {
                         provider_id: scripted_provider_id(),
@@ -7287,7 +7351,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("reviewer.md"),
-            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - read\n  - grep\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted/scripted-model/audit\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
+            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - fs\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted/scripted-model/audit\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
         )
         .expect("write reviewer profile");
         let service = build_manager(
@@ -7342,7 +7406,7 @@ mod tests {
             child.runtime.execution.agent_profile.as_deref(),
             Some("reviewer")
         );
-        assert_eq!(child.runtime.allowed_tools(), ["grep", "read"]);
+        assert_eq!(child.runtime.allowed_tools(), ["fs"]);
         let system = child
             .runtime
             .execution
@@ -7382,7 +7446,7 @@ mod tests {
         fs::create_dir_all(&agents_dir).expect("create agents dir");
         fs::write(
             agents_dir.join("planner.md"),
-            "---\ndescription: planner\nallowed_entries:\n  - read\n  - grep\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      bash: ask\n    rules:\n      bash:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted/scripted-model/plan\naliases: [\"plan\"]\n---\nYou are a precise planner.",
+            "---\ndescription: planner\nallowed_entries:\n  - fs\n  - shell\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      shell: ask\n    rules:\n      shell:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted/scripted-model/plan\naliases: [\"plan\"]\n---\nYou are a precise planner.",
         )
         .expect("write planner profile");
         let service = build_manager(
@@ -7416,7 +7480,7 @@ mod tests {
             session.runtime.execution.agent_profile.as_deref(),
             Some("planner")
         );
-        assert_eq!(session.runtime.allowed_tools(), ["grep", "read"]);
+        assert_eq!(session.runtime.allowed_tools(), ["fs", "shell"]);
         assert_eq!(
             session.runtime.execution.system_prompt_override.as_deref(),
             Some("You are a precise planner.")
@@ -7438,7 +7502,7 @@ mod tests {
             .agent_permission
             .tools
             .rules
-            .get("bash")
+            .get("shell")
         {
             Some(crate::agent::ToolPermissionRules::Ordered(entries)) => {
                 let collected = entries
@@ -7452,7 +7516,7 @@ mod tests {
                 assert!(collected.contains(&("git *", crate::permission::PermissionMode::Allow)));
                 assert!(collected.contains(&("*", crate::permission::PermissionMode::Ask)));
             }
-            other => panic!("expected ordered bash tool rules, got {other:?}"),
+            other => panic!("expected ordered shell tool rules, got {other:?}"),
         }
         assert_eq!(
             session.runtime.execution.model_provider_id.as_deref(),
@@ -8645,7 +8709,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "permission-resume.db").await;
         let tool_policy =
-            ToolPermissionPolicy::allow_all().with_tool_mode("todo_write", PermissionMode::Ask);
+            ToolPermissionPolicy::allow_all().with_tool_mode("todo", PermissionMode::Ask);
         let first = build_manager_with_provider_on_db(
             &workspace.root,
             db.clone(),

@@ -1,12 +1,13 @@
 //! `agena.cron` plugin: schedules cron and one-shot wakeup jobs.
 //!
-//! The model-visible `cron_create / cron_list / cron_delete / schedule_wakeup`
-//! entries belong to this plugin and execute through the same plugin-entry
+//! The model-visible schedule entries execute through the same plugin-entry
 //! surface as every other tool.
 
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::Deserialize;
 
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::HostClient;
@@ -20,6 +21,20 @@ pub(crate) const CRON_PLUGIN_ID: &str = "agena.cron";
 
 pub(crate) struct CronPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum ScheduleToolInput {
+    List(crate::message::CronListToolInput),
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum ScheduleEditToolInput {
+    Create(crate::message::CronCreateToolInput),
+    Delete(crate::message::CronDeleteToolInput),
+    Wakeup(crate::message::ScheduleWakeupToolInput),
 }
 
 impl CronPlugin {
@@ -44,10 +59,8 @@ impl Plugin for CronPlugin {
         PluginManifest::builder("agena-cron", env!("CARGO_PKG_VERSION"))
             .description("Cron-style and one-shot wakeup scheduling tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
-            .tool(cron_create_decl())
-            .tool(cron_list_decl())
-            .tool(cron_delete_decl())
-            .tool(schedule_wakeup_decl())
+            .tool(schedule_decl())
+            .tool(schedule_edit_decl())
             .build()
     }
 
@@ -60,15 +73,25 @@ impl Plugin for CronPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
+        let _ = self.host()?;
         match input.tool_name.as_str() {
-            "cron_create" | "cron_list" | "cron_delete" | "schedule_wakeup" => {
-                let _ = self.host()?;
-                router::invoke_tool(
-                    &input.tool_name,
-                    input.input,
-                    input.session_id,
-                    input.call_id,
-                )
+            "schedule" => match serde_json::from_value::<ScheduleToolInput>(input.input)? {
+                ScheduleToolInput::List(args) => {
+                    invoke("cron_list", args, input.session_id, input.call_id)
+                }
+            },
+            "schedule_edit" => {
+                match serde_json::from_value::<ScheduleEditToolInput>(input.input)? {
+                    ScheduleEditToolInput::Create(args) => {
+                        invoke("cron_create", args, input.session_id, input.call_id)
+                    }
+                    ScheduleEditToolInput::Delete(args) => {
+                        invoke("cron_delete", args, input.session_id, input.call_id)
+                    }
+                    ScheduleEditToolInput::Wakeup(args) => {
+                        invoke("schedule_wakeup", args, input.session_id, input.call_id)
+                    }
+                }
             }
             other => Err(PluginError::invalid_params(format!(
                 "unknown cron plugin tool '{other}'"
@@ -77,52 +100,42 @@ impl Plugin for CronPlugin {
     }
 }
 
-fn deferred_decl<T: schemars::JsonSchema>(
-    name: &str,
-    description: &str,
-    tags: &[ToolTag],
-    concurrency_safe: bool,
-) -> PluginToolDecl {
-    PluginToolDecl::new(name, crate::entry::definition::json_schema_for::<T>())
-        .description(description)
-        .tags(tags.iter().cloned())
-        .concurrency_safe(concurrency_safe)
-        .deferred_load()
-        .host_capability(HostCapability::Scheduler)
-}
-
-pub(crate) fn cron_create_decl() -> PluginToolDecl {
-    deferred_decl::<crate::message::CronCreateToolInput>(
-        "cron_create",
-        "Schedule a recurring prompt with a 6-field cron expression.",
-        &[ToolTag::Mutating, ToolTag::Scheduler],
-        false,
+fn invoke<T: serde::Serialize>(
+    tool_name: &str,
+    args: T,
+    session_id: i64,
+    call_id: i64,
+) -> SdkResult<ToolInvokeOutput> {
+    router::invoke_tool(
+        tool_name,
+        serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
+        session_id,
+        call_id,
     )
 }
 
-pub(crate) fn cron_list_decl() -> PluginToolDecl {
-    deferred_decl::<crate::message::CronListToolInput>(
-        "cron_list",
-        "List all currently scheduled cron jobs and one-shot wakeups.",
-        &[ToolTag::ReadOnly, ToolTag::Scheduler],
-        true,
+fn schedule_decl() -> PluginToolDecl {
+    PluginToolDecl::new(
+        "schedule",
+        crate::entry::definition::json_schema_for::<ScheduleToolInput>(),
     )
+    .description("Schedule read command. Set command to list; pass that command's payload in args.")
+    .tags([ToolTag::ReadOnly, ToolTag::Scheduler])
+    .concurrency_safe(true)
+    .deferred_load()
+    .host_capability(HostCapability::Scheduler)
 }
 
-pub(crate) fn cron_delete_decl() -> PluginToolDecl {
-    deferred_decl::<crate::message::CronDeleteToolInput>(
-        "cron_delete",
-        "Delete a scheduled job by id.",
-        &[ToolTag::Mutating, ToolTag::Scheduler],
-        false,
+fn schedule_edit_decl() -> PluginToolDecl {
+    PluginToolDecl::new(
+        "schedule_edit",
+        crate::entry::definition::json_schema_for::<ScheduleEditToolInput>(),
     )
-}
-
-pub(crate) fn schedule_wakeup_decl() -> PluginToolDecl {
-    deferred_decl::<crate::message::ScheduleWakeupToolInput>(
-        "schedule_wakeup",
-        "Schedule a one-shot prompt to fire after `delay_seconds`.",
-        &[ToolTag::Mutating, ToolTag::Scheduler],
-        false,
+    .description(
+        "Schedule edit command. Set command to create, delete, or wakeup; pass that command's payload in args.",
     )
+    .tags([ToolTag::Mutating, ToolTag::Scheduler])
+    .concurrency_safe(false)
+    .deferred_load()
+    .host_capability(HostCapability::Scheduler)
 }

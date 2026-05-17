@@ -50,6 +50,22 @@ pub struct CatalogModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge_cutoff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_weights: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_verbosity: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
@@ -67,6 +83,14 @@ impl CatalogModelDefinition {
             && self.context_window_tokens.is_none()
             && self.max_output_tokens.is_none()
             && self.description.is_none()
+            && self.knowledge_cutoff.is_none()
+            && self.release_date.is_none()
+            && self.last_updated.is_none()
+            && self.open_weights.is_none()
+            && self.default_thinking_mode.is_none()
+            && self.supports_parallel_tool_calls.is_none()
+            && self.supports_verbosity.is_none()
+            && self.default_verbosity.is_none()
             && self.display_name.is_none()
             && self.origin.is_none()
             && self.thinking_modes.is_empty()
@@ -81,6 +105,14 @@ impl CatalogModelDefinition {
             max_output_tokens: self.max_output_tokens,
             display_name: self.display_name,
             description: self.description,
+            knowledge_cutoff: self.knowledge_cutoff,
+            release_date: self.release_date,
+            last_updated: self.last_updated,
+            open_weights: self.open_weights,
+            default_thinking_mode: self.default_thinking_mode,
+            supports_parallel_tool_calls: self.supports_parallel_tool_calls,
+            supports_verbosity: self.supports_verbosity,
+            default_verbosity: self.default_verbosity,
             thinking_modes: self.thinking_modes,
             speed_modes: self.speed_modes,
             capabilities: self.capabilities,
@@ -120,6 +152,22 @@ pub struct ModelCatalogEntryRecord {
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge_cutoff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_weights: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_verbosity: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -135,6 +183,14 @@ impl ModelCatalogEntryRecord {
             context_window_tokens: self.context_window_tokens,
             max_output_tokens: self.max_output_tokens,
             description: self.description.clone(),
+            knowledge_cutoff: self.knowledge_cutoff.clone(),
+            release_date: self.release_date.clone(),
+            last_updated: self.last_updated.clone(),
+            open_weights: self.open_weights,
+            default_thinking_mode: self.default_thinking_mode.clone(),
+            supports_parallel_tool_calls: self.supports_parallel_tool_calls,
+            supports_verbosity: self.supports_verbosity,
+            default_verbosity: self.default_verbosity.clone(),
             display_name: self.display_name.clone(),
             origin: self.origin.clone(),
             thinking_modes: self.thinking_modes.clone(),
@@ -229,6 +285,14 @@ impl ModelCatalogSnapshot {
             context_window_tokens: definition.context_window_tokens,
             max_output_tokens: definition.max_output_tokens,
             description: definition.description.clone(),
+            knowledge_cutoff: definition.knowledge_cutoff.clone(),
+            release_date: definition.release_date.clone(),
+            last_updated: definition.last_updated.clone(),
+            open_weights: definition.open_weights,
+            default_thinking_mode: definition.default_thinking_mode.clone(),
+            supports_parallel_tool_calls: definition.supports_parallel_tool_calls,
+            supports_verbosity: definition.supports_verbosity,
+            default_verbosity: definition.default_verbosity.clone(),
             thinking_modes: definition.thinking_modes.clone(),
             speed_modes: definition.speed_modes.clone(),
             capabilities: definition.capabilities.clone(),
@@ -697,6 +761,14 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         context_window_tokens: model.metadata.limits.context_window_tokens,
         max_output_tokens: model.metadata.limits.max_output_tokens,
         description: model.metadata.description.clone(),
+        knowledge_cutoff: model.metadata.knowledge_cutoff.clone(),
+        release_date: model.metadata.release_date.clone(),
+        last_updated: model.metadata.last_updated.clone(),
+        open_weights: model.metadata.open_weights,
+        default_thinking_mode: model.metadata.default_thinking_mode.clone(),
+        supports_parallel_tool_calls: model.metadata.supports_parallel_tool_calls,
+        supports_verbosity: model.metadata.supports_verbosity,
+        default_verbosity: model.metadata.default_verbosity.clone(),
         display_name: model.display_name.clone(),
         origin: None,
         thinking_modes: model
@@ -812,6 +884,30 @@ fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &Catalog
     }
     if current.description.is_none() {
         current.description = next.description.clone();
+    }
+    if current.knowledge_cutoff.is_none() {
+        current.knowledge_cutoff = next.knowledge_cutoff.clone();
+    }
+    if current.release_date.is_none() {
+        current.release_date = next.release_date.clone();
+    }
+    if current.last_updated.is_none() {
+        current.last_updated = next.last_updated.clone();
+    }
+    if current.open_weights.is_none() {
+        current.open_weights = next.open_weights;
+    }
+    if current.default_thinking_mode.is_none() {
+        current.default_thinking_mode = next.default_thinking_mode.clone();
+    }
+    if current.supports_parallel_tool_calls.is_none() {
+        current.supports_parallel_tool_calls = next.supports_parallel_tool_calls;
+    }
+    if current.supports_verbosity.is_none() {
+        current.supports_verbosity = next.supports_verbosity;
+    }
+    if current.default_verbosity.is_none() {
+        current.default_verbosity = next.default_verbosity.clone();
     }
     if current.display_name.is_none() {
         current.display_name = next.display_name.clone();
@@ -937,6 +1033,30 @@ fn merge_public_source_catalog_definition(
     }
     if current.description.is_none() {
         current.description = next.description.clone();
+    }
+    if current.knowledge_cutoff.is_none() {
+        current.knowledge_cutoff = next.knowledge_cutoff.clone();
+    }
+    if current.release_date.is_none() {
+        current.release_date = next.release_date.clone();
+    }
+    if current.last_updated.is_none() {
+        current.last_updated = next.last_updated.clone();
+    }
+    if current.open_weights.is_none() {
+        current.open_weights = next.open_weights;
+    }
+    if current.default_thinking_mode.is_none() {
+        current.default_thinking_mode = next.default_thinking_mode.clone();
+    }
+    if current.supports_parallel_tool_calls.is_none() {
+        current.supports_parallel_tool_calls = next.supports_parallel_tool_calls;
+    }
+    if current.supports_verbosity.is_none() {
+        current.supports_verbosity = next.supports_verbosity;
+    }
+    if current.default_verbosity.is_none() {
+        current.default_verbosity = next.default_verbosity.clone();
     }
     if current.display_name.is_none() {
         current.display_name = next.display_name.clone();
@@ -1633,6 +1753,11 @@ mod tests {
                             "gpt-5": {
                                 "id": "gpt-5",
                                 "name": "GPT-5",
+                                "description": "Models.dev GPT-5 description",
+                                "knowledge": "2025-04",
+                                "release_date": "2026-04-22",
+                                "last_updated": "2026-04-24",
+                                "open_weights": false,
                                 "reasoning": true,
                                 "tool_call": true,
                                 "structured_output": true,
@@ -1676,6 +1801,10 @@ mod tests {
                         "slug": "gpt-5",
                         "display_name": "GPT-5",
                         "description": "Frontier coding model",
+                        "default_reasoning_level": "medium",
+                        "supports_parallel_tool_calls": true,
+                        "support_verbosity": true,
+                        "default_verbosity": "low",
                         "input_modalities": ["text", "image"],
                         "context_window": 400000,
                         "supported_reasoning_levels": [{
@@ -1787,7 +1916,21 @@ mod tests {
         assert_eq!(gpt5.origin.as_deref(), Some("OpenAI"));
         assert_eq!(gpt5.context_window_tokens, Some(400_000));
         assert_eq!(gpt5.max_output_tokens, Some(128_000));
-        assert_eq!(gpt5.description.as_deref(), Some("Frontier coding model"));
+        assert_eq!(
+            gpt5.description.as_deref(),
+            Some("Models.dev GPT-5 description")
+        );
+        assert_eq!(gpt5.knowledge_cutoff.as_deref(), Some("2025-04"));
+        assert_eq!(gpt5.release_date.as_deref(), Some("2026-04-22"));
+        assert_eq!(gpt5.last_updated.as_deref(), Some("2026-04-24"));
+        assert_eq!(gpt5.open_weights, Some(false));
+        assert_eq!(
+            gpt5.default_thinking_mode.as_deref(),
+            Some("thinking-medium")
+        );
+        assert_eq!(gpt5.supports_parallel_tool_calls, Some(true));
+        assert_eq!(gpt5.supports_verbosity, Some(true));
+        assert_eq!(gpt5.default_verbosity.as_deref(), Some("low"));
         assert_eq!(
             gpt5.capabilities
                 .feature_support(ModelCapabilityFeature::Reasoning),

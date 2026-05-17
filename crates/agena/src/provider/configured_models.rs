@@ -546,6 +546,22 @@ pub struct ConfiguredModelDefinition {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge_cutoff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_weights: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_verbosity: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -561,6 +577,14 @@ impl ConfiguredModelDefinition {
             && self.max_output_tokens.is_none()
             && self.display_name.is_none()
             && self.description.is_none()
+            && self.knowledge_cutoff.is_none()
+            && self.release_date.is_none()
+            && self.last_updated.is_none()
+            && self.open_weights.is_none()
+            && self.default_thinking_mode.is_none()
+            && self.supports_parallel_tool_calls.is_none()
+            && self.supports_verbosity.is_none()
+            && self.default_verbosity.is_none()
             && self.thinking_modes.is_empty()
             && self.speed_modes.is_empty()
             && self.capabilities.is_empty()
@@ -579,6 +603,30 @@ impl ConfiguredModelDefinition {
         }
         if let Some(description) = self.description.clone() {
             metadata = metadata.with_description(description);
+        }
+        if let Some(knowledge_cutoff) = self.knowledge_cutoff.clone() {
+            metadata = metadata.with_knowledge_cutoff(knowledge_cutoff);
+        }
+        if let Some(release_date) = self.release_date.clone() {
+            metadata = metadata.with_release_date(release_date);
+        }
+        if let Some(last_updated) = self.last_updated.clone() {
+            metadata = metadata.with_last_updated(last_updated);
+        }
+        if let Some(open_weights) = self.open_weights {
+            metadata = metadata.with_open_weights(open_weights);
+        }
+        if let Some(default_thinking_mode) = self.default_thinking_mode.clone() {
+            metadata = metadata.with_default_thinking_mode(default_thinking_mode);
+        }
+        if let Some(supports_parallel_tool_calls) = self.supports_parallel_tool_calls {
+            metadata = metadata.with_supports_parallel_tool_calls(supports_parallel_tool_calls);
+        }
+        if let Some(supports_verbosity) = self.supports_verbosity {
+            metadata = metadata.with_supports_verbosity(supports_verbosity);
+        }
+        if let Some(default_verbosity) = self.default_verbosity.clone() {
+            metadata = metadata.with_default_verbosity(default_verbosity);
         }
         metadata
     }

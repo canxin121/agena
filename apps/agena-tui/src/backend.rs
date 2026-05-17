@@ -2468,6 +2468,51 @@ fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> J
             JsonValue::String(description.to_owned()),
         );
     }
+    if let Some(knowledge_cutoff) = non_empty(entry.knowledge_cutoff.as_deref()) {
+        value.insert(
+            "knowledge_cutoff".to_owned(),
+            JsonValue::String(knowledge_cutoff.to_owned()),
+        );
+    }
+    if let Some(release_date) = non_empty(entry.release_date.as_deref()) {
+        value.insert(
+            "release_date".to_owned(),
+            JsonValue::String(release_date.to_owned()),
+        );
+    }
+    if let Some(last_updated) = non_empty(entry.last_updated.as_deref()) {
+        value.insert(
+            "last_updated".to_owned(),
+            JsonValue::String(last_updated.to_owned()),
+        );
+    }
+    if let Some(open_weights) = entry.open_weights {
+        value.insert("open_weights".to_owned(), JsonValue::Bool(open_weights));
+    }
+    if let Some(default_thinking_mode) = non_empty(entry.default_thinking_mode.as_deref()) {
+        value.insert(
+            "default_thinking_mode".to_owned(),
+            JsonValue::String(default_thinking_mode.to_owned()),
+        );
+    }
+    if let Some(supports_parallel_tool_calls) = entry.supports_parallel_tool_calls {
+        value.insert(
+            "supports_parallel_tool_calls".to_owned(),
+            JsonValue::Bool(supports_parallel_tool_calls),
+        );
+    }
+    if let Some(supports_verbosity) = entry.supports_verbosity {
+        value.insert(
+            "supports_verbosity".to_owned(),
+            JsonValue::Bool(supports_verbosity),
+        );
+    }
+    if let Some(default_verbosity) = non_empty(entry.default_verbosity.as_deref()) {
+        value.insert(
+            "default_verbosity".to_owned(),
+            JsonValue::String(default_verbosity.to_owned()),
+        );
+    }
     if !entry.thinking_modes.is_empty() {
         value.insert("thinking_modes".to_owned(), json!(entry.thinking_modes));
     }
@@ -2512,6 +2557,52 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
         value.insert(
             "description".to_owned(),
             JsonValue::String(description.to_owned()),
+        );
+    }
+    if let Some(knowledge_cutoff) = non_empty(model.metadata.knowledge_cutoff.as_deref()) {
+        value.insert(
+            "knowledge_cutoff".to_owned(),
+            JsonValue::String(knowledge_cutoff.to_owned()),
+        );
+    }
+    if let Some(release_date) = non_empty(model.metadata.release_date.as_deref()) {
+        value.insert(
+            "release_date".to_owned(),
+            JsonValue::String(release_date.to_owned()),
+        );
+    }
+    if let Some(last_updated) = non_empty(model.metadata.last_updated.as_deref()) {
+        value.insert(
+            "last_updated".to_owned(),
+            JsonValue::String(last_updated.to_owned()),
+        );
+    }
+    if let Some(open_weights) = model.metadata.open_weights {
+        value.insert("open_weights".to_owned(), JsonValue::Bool(open_weights));
+    }
+    if let Some(default_thinking_mode) = non_empty(model.metadata.default_thinking_mode.as_deref())
+    {
+        value.insert(
+            "default_thinking_mode".to_owned(),
+            JsonValue::String(default_thinking_mode.to_owned()),
+        );
+    }
+    if let Some(supports_parallel_tool_calls) = model.metadata.supports_parallel_tool_calls {
+        value.insert(
+            "supports_parallel_tool_calls".to_owned(),
+            JsonValue::Bool(supports_parallel_tool_calls),
+        );
+    }
+    if let Some(supports_verbosity) = model.metadata.supports_verbosity {
+        value.insert(
+            "supports_verbosity".to_owned(),
+            JsonValue::Bool(supports_verbosity),
+        );
+    }
+    if let Some(default_verbosity) = non_empty(model.metadata.default_verbosity.as_deref()) {
+        value.insert(
+            "default_verbosity".to_owned(),
+            JsonValue::String(default_verbosity.to_owned()),
         );
     }
     if !model.thinking_modes.is_empty() {
@@ -2661,6 +2752,7 @@ fn draft_discovery_adapters(
         let config = match trimmed {
             "openai" => ResolvedProviderAdapterConfig {
                 enabled: true,
+                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
                     extra_headers: std::collections::BTreeMap::new(),
                     options: OpenAiProviderOptions {
@@ -2678,6 +2770,7 @@ fn draft_discovery_adapters(
             },
             "anthropic" => ResolvedProviderAdapterConfig {
                 enabled: true,
+                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
                     extra_headers: std::collections::BTreeMap::new(),
                     options: AnthropicProviderOptions {
@@ -2692,6 +2785,7 @@ fn draft_discovery_adapters(
             },
             "gemini" => ResolvedProviderAdapterConfig {
                 enabled: true,
+                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
                     extra_headers: std::collections::BTreeMap::new(),
                     options: SimpleHttpProviderOptions {

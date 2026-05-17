@@ -250,6 +250,14 @@ export type ModelCatalogEntry = {
   context_window_tokens?: number | null
   max_output_tokens?: number | null
   description?: string | null
+  knowledge_cutoff?: string | null
+  release_date?: string | null
+  last_updated?: string | null
+  open_weights?: boolean | null
+  default_thinking_mode?: string | null
+  supports_parallel_tool_calls?: boolean | null
+  supports_verbosity?: boolean | null
+  default_verbosity?: string | null
   thinking_modes?: Record<string, ProviderModelThinkingMode>
   speed_modes?: Record<string, ProviderModelSpeedMode>
   input?: unknown
@@ -295,6 +303,14 @@ export type ModelCatalogEntryWriteRequest = {
   context_window_tokens?: number | null
   max_output_tokens?: number | null
   description?: string | null
+  knowledge_cutoff?: string | null
+  release_date?: string | null
+  last_updated?: string | null
+  open_weights?: boolean | null
+  default_thinking_mode?: string | null
+  supports_parallel_tool_calls?: boolean | null
+  supports_verbosity?: boolean | null
+  default_verbosity?: string | null
   display_name?: string | null
   origin?: string | null
   thinking_modes?: Record<string, ProviderModelThinkingMode>
@@ -348,6 +364,14 @@ export type ProviderModelCapabilities = {
 export type ProviderModelMetadata = {
   lifecycle?: string | null
   description?: string | null
+  knowledge_cutoff?: string | null
+  release_date?: string | null
+  last_updated?: string | null
+  open_weights?: boolean | null
+  default_thinking_mode?: string | null
+  supports_parallel_tool_calls?: boolean | null
+  supports_verbosity?: boolean | null
+  default_verbosity?: string | null
   limits?: {
     context_window_tokens?: number | null
     max_output_tokens?: number | null

@@ -260,10 +260,17 @@ impl ModelProvider for MultiAdapterProvider {
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut visible = Vec::new();
         let mut seen = BTreeSet::new();
+        let mut errors = Vec::new();
 
         for (adapter_id, adapter) in &self.adapters {
             let adapter_id = AdapterId::new(adapter_id.clone());
-            let listed = adapter.list_models().await?;
+            let listed = match adapter.list_models().await {
+                Ok(models) => models,
+                Err(error) => {
+                    errors.push(format!("{adapter_id}: {error}"));
+                    Vec::new()
+                }
+            };
             for model in listed {
                 let target_model = model.id.clone();
                 let route_key = (adapter_id.to_string(), target_model.to_string());
@@ -299,6 +306,13 @@ impl ModelProvider for MultiAdapterProvider {
                 adapter.as_ref(),
                 &route.definition,
             ));
+        }
+
+        if visible.is_empty() && !errors.is_empty() {
+            return Err(AppError::Provider(format!(
+                "adapter model discovery failed: {}",
+                errors.join("; ")
+            )));
         }
 
         Ok(visible)
@@ -406,6 +420,7 @@ mod tests {
         id: String,
         default_model: ModelId,
         models: Vec<Model>,
+        list_models_error: Option<String>,
     }
 
     #[async_trait]
@@ -427,7 +442,11 @@ mod tests {
         }
 
         async fn list_models(&self) -> Result<Vec<Model>, AppError> {
-            Ok(self.models.clone())
+            if let Some(error) = &self.list_models_error {
+                Err(AppError::Provider(error.clone()))
+            } else {
+                Ok(self.models.clone())
+            }
         }
 
         async fn complete(
@@ -460,6 +479,7 @@ mod tests {
                         id: "shared::api".to_owned(),
                         default_model: ModelId::new("gpt-4.1"),
                         models: vec![Model::new("shared::api", "gpt-4.1-mini")],
+                        list_models_error: None,
                     }) as Arc<dyn ModelProvider>,
                 ),
                 (
@@ -468,6 +488,7 @@ mod tests {
                         id: "shared::codex".to_owned(),
                         default_model: ModelId::new("gpt-5-codex"),
                         models: vec![Model::new("shared::codex", "gpt-5-codex")],
+                        list_models_error: None,
                     }) as Arc<dyn ModelProvider>,
                 ),
             ]),
@@ -530,6 +551,7 @@ mod tests {
                     top_k: None,
                     seed: None,
                     thinking: None,
+                    request_override: Default::default(),
                     response_format: None,
                 },
             )
@@ -552,6 +574,7 @@ mod tests {
                     id: "openai".to_owned(),
                     default_model: ModelId::new("gpt-4.1"),
                     models: vec![Model::new("openai", "gpt-4.1")],
+                    list_models_error: None,
                 }) as Arc<dyn ModelProvider>,
             )]),
             BTreeMap::new(),
@@ -582,6 +605,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -589,5 +613,42 @@ mod tests {
         assert_eq!(response.provider_id.as_str(), "openai");
         assert_eq!(response.model.as_str(), "gpt-4.1");
         assert_eq!(response.text, "openai:gpt-4.1");
+    }
+
+    #[tokio::test]
+    async fn multi_adapter_provider_lists_configured_routes_when_live_listing_fails() {
+        let provider = MultiAdapterProvider::new(
+            "shared",
+            "gitlab",
+            "claude-sonnet-4-5",
+            BTreeMap::from([(
+                "gitlab".to_owned(),
+                Arc::new(StaticProvider {
+                    id: "shared::gitlab".to_owned(),
+                    default_model: ModelId::new("claude-sonnet-4-5"),
+                    models: Vec::new(),
+                    list_models_error: Some("401 Unauthorized".to_owned()),
+                }) as Arc<dyn ModelProvider>,
+            )]),
+            BTreeMap::from([(
+                ("gitlab".to_owned(), "claude-sonnet-4-5".to_owned()),
+                ProviderModelRoute {
+                    enabled: true,
+                    definition: ConfiguredModelDefinition::default(),
+                },
+            )]),
+        );
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("configured routes should still list");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "claude-sonnet-4-5");
+        assert_eq!(
+            models[0].adapter_id.as_ref().map(AdapterId::as_str),
+            Some("gitlab")
+        );
     }
 }

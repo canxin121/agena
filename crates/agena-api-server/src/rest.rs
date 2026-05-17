@@ -465,6 +465,8 @@ fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryRe
                     .as_ref()
                     .and_then(|value| serde_json::to_string(value).ok())
                     .unwrap_or_default(),
+                serde_json::to_string(&variant.request_override).unwrap_or_default(),
+                serde_json::to_string(&variant.adapter_overrides).unwrap_or_default(),
             ]
         })
         .collect::<Vec<_>>()

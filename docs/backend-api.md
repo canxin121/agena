@@ -565,24 +565,34 @@ Provider models:
 }
 ```
 
-`models` 是 runtime 当前从 provider 解析出来的 live model 列表；`id` 是 provider 内部 route，通常为 `"<adapter>/<model>"`。Studio Web 用它们作为 model catalog draft 和 provider-local model draft 的来源。
+`models` 是 runtime 当前从 provider / adapter 探测到的 live model 列表。`id` 是 backend-visible 的真实 model id，`adapter_id` 会单独返回；Agena 不再把它们拼成 `"<adapter>/<model>"` 这种 route 字符串。Studio Web 和 TUI 用这些 live models 作为 catalog draft 和 provider-local model draft 的来源。
 
 ### Model Catalog
 
-| Method | Path                                  | 说明                                                         |
-| ------ | ------------------------------------- | ------------------------------------------------------------ |
-| GET    | `/api/v1/model-catalog`               | current merged model catalog snapshot                        |
-| POST   | `/api/v1/model-catalog/refresh`       | regenerate the official catalog and re-merge local overrides |
-| PUT    | `/api/v1/model-catalog/entries`       | create or update a local catalog override                    |
-| DELETE | `/api/v1/model-catalog/entries`       | delete a local catalog override                              |
+| Method | Path                            | 说明                                                                  |
+| ------ | ------------------------------- | --------------------------------------------------------------------- |
+| GET    | `/api/v1/model-catalog`         | paginated catalog query，支持 `q` / `kind` / `origin` / `offset` / `limit` |
+| POST   | `/api/v1/model-catalog/lookup`  | lookup 一组 `model_id`，返回最匹配的 catalog entries                   |
+| POST   | `/api/v1/model-catalog/refresh` | refresh official catalog，重新拉 public sources 并 merge live discovery |
+| PUT    | `/api/v1/model-catalog/entries` | create or update a local catalog override                             |
+| DELETE | `/api/v1/model-catalog/entries` | delete a local catalog override                                       |
 
-Model catalog response:
+Model catalog list response:
 
 ```json
 {
-  "last_refresh_at": "2026-05-15T08:00:00Z",
-  "last_successful_source": "generated",
-  "entries": [
+  "summary": {
+    "last_refresh_at": "2026-05-15T08:00:00Z",
+    "last_successful_source": "generated",
+    "entry_count": 984,
+    "official_entry_count": 940,
+    "custom_entry_count": 44
+  },
+  "total": 2,
+  "offset": 0,
+  "limit": 50,
+  "available_origins": ["Anthropic", "Google", "OpenAI"],
+  "items": [
     {
       "model_id": "gpt-5",
       "kind": "official",
@@ -605,7 +615,26 @@ Model catalog response:
       "variants": {
         "high": {
           "display_name": "High",
-          "description": "Higher reasoning effort"
+          "description": "Higher reasoning effort",
+          "thinking": {
+            "type": "effort",
+            "effort": "high"
+          },
+          "request_override": {
+            "headers": {
+              "openai-beta": "fast-mode-2026-02-01"
+            },
+            "body_patch": {
+              "service_tier": "priority"
+            }
+          },
+          "adapter_overrides": {
+            "openai": {
+              "body_patch": {
+                "service_tier": "priority"
+              }
+            }
+          }
         }
       }
     },
@@ -620,7 +649,7 @@ Model catalog response:
 }
 ```
 
-`entries` 同时包含官方条目和本地 override，按 `model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。
+`items` 同时包含官方条目和本地 override，按 `model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。官方 catalog 主要来自公开 online sources，再叠加 live provider discovery；catalog variant 不会展开成新的模型 id，而是保留在同一个 model entry 下。
 
 Create/update local override:
 

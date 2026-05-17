@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{Message, MessageUsage},
-    model::{ModelId, ProviderId},
+    model::{ModelId, ModelVariantRequestOverride, ProviderId},
     plugin::registry::PluginEntry as RegistryPluginEntry,
 };
 
@@ -93,6 +93,8 @@ pub struct CompletionRequest {
     pub thinking: Option<ThinkingRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+    #[serde(default, skip_serializing_if = "ModelVariantRequestOverride::is_empty")]
+    pub request_override: ModelVariantRequestOverride,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

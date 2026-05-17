@@ -1283,6 +1283,8 @@ mod tests {
 
             thinking: None,
 
+            request_override: Default::default(),
+
             response_format: None,
         }
     }
@@ -1839,6 +1841,7 @@ mod tests {
                     top_k: None,
                     seed: None,
                     thinking: None,
+                    request_override: Default::default(),
                     response_format: None,
                 },
             )

@@ -5,6 +5,7 @@ import type {
   ModelCatalogEntryWriteRequest,
   ProviderModel,
   ProviderModelVariant,
+  ProviderModelVariantRequestOverride,
 } from '../lib/agenaApi'
 import { deleteModelCatalogEntry, refreshModelCatalog, upsertModelCatalogEntry } from '../lib/agenaApi'
 
@@ -50,6 +51,8 @@ export type ModelCatalogVariantEditableDraft = {
   description: string
   disabled: boolean
   thinking_json: string
+  request_override_json: string
+  adapter_overrides_json: string
 }
 
 export const MODEL_LIFECYCLE_OPTIONS = ['active', 'preview', 'beta', 'alpha', 'experimental', 'deprecated'] as const
@@ -117,6 +120,20 @@ type ProviderModelVariantWriteValue = ProviderModelVariant & {
   disabled?: boolean
 }
 
+function normalizeOptionalVariantRequestOverride(
+  value: string,
+  fieldLabel: string,
+): ProviderModelVariantRequestOverride | null {
+  return normalizeOptionalJsonObject(value, fieldLabel) as ProviderModelVariantRequestOverride | null
+}
+
+function normalizeOptionalVariantRequestOverrideMap(
+  value: string,
+  fieldLabel: string,
+): Record<string, ProviderModelVariantRequestOverride> | null {
+  return normalizeOptionalJsonObject(value, fieldLabel) as Record<string, ProviderModelVariantRequestOverride> | null
+}
+
 export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): ModelCatalogEditableDraft {
   return {
     adapter_id: adapterId,
@@ -143,6 +160,8 @@ export function createEmptyModelCatalogVariantDraft(name = ''): ModelCatalogVari
     description: '',
     disabled: false,
     thinking_json: '',
+    request_override_json: '',
+    adapter_overrides_json: '',
   }
 }
 
@@ -156,6 +175,8 @@ function createModelCatalogVariantDraftFromEntry(
     description: String(variant.description || ''),
     disabled: Boolean(variant.disabled),
     thinking_json: stringifyJson(variant.thinking || null),
+    request_override_json: stringifyJson(variant.request_override || null),
+    adapter_overrides_json: stringifyJson(variant.adapter_overrides || null),
   }
 }
 
@@ -245,8 +266,16 @@ function buildModelCatalogVariants(
     const displayName = normalizeOptionalText(variant.display_name)
     const description = normalizeOptionalText(variant.description)
     const thinking = normalizeOptionalJsonObject(variant.thinking_json, `Variant ${name || '(unnamed)'} thinking`)
+    const requestOverride = normalizeOptionalVariantRequestOverride(
+      variant.request_override_json,
+      `Variant ${name || '(unnamed)'} request override`,
+    )
+    const adapterOverrides = normalizeOptionalVariantRequestOverrideMap(
+      variant.adapter_overrides_json,
+      `Variant ${name || '(unnamed)'} adapter overrides`,
+    )
     const disabled = Boolean(variant.disabled)
-    const hasDetails = Boolean(displayName || description || thinking || disabled)
+    const hasDetails = Boolean(displayName || description || thinking || requestOverride || adapterOverrides || disabled)
 
     if (!name) {
       if (!hasDetails) continue
@@ -262,6 +291,8 @@ function buildModelCatalogVariants(
     if (displayName) nextVariant.display_name = displayName
     if (description) nextVariant.description = description
     if (thinking) nextVariant.thinking = thinking
+    if (requestOverride) nextVariant.request_override = requestOverride
+    if (adapterOverrides) nextVariant.adapter_overrides = adapterOverrides
     if (disabled) nextVariant.disabled = true
     normalized[name] = nextVariant
   }

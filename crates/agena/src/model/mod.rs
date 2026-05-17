@@ -605,12 +605,48 @@ impl ModelCapabilities {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelVariantRequestOverride {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub body_patch: BTreeMap<String, serde_json::Value>,
+}
+
+impl ModelVariantRequestOverride {
+    pub fn is_empty(&self) -> bool {
+        self.headers.is_empty() && self.body_patch.is_empty()
+    }
+
+    pub fn merged_with(&self, other: &Self) -> Self {
+        let mut merged = self.clone();
+        for (key, value) in &other.headers {
+            merged.headers.insert(key.clone(), value.clone());
+        }
+        merge_json_patch_maps(&mut merged.body_patch, &other.body_patch);
+        merged
+    }
+}
+
+impl Default for ModelVariantRequestOverride {
+    fn default() -> Self {
+        Self {
+            headers: BTreeMap::new(),
+            body_patch: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModelVariant {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingRequest>,
+    #[serde(default, skip_serializing_if = "ModelVariantRequestOverride::is_empty")]
+    pub request_override: ModelVariantRequestOverride,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adapter_overrides: BTreeMap<String, ModelVariantRequestOverride>,
 }
 
 impl ModelVariant {
@@ -619,6 +655,8 @@ impl ModelVariant {
             display_name: None,
             description: None,
             thinking: None,
+            request_override: ModelVariantRequestOverride::default(),
+            adapter_overrides: BTreeMap::new(),
         }
     }
 
@@ -636,11 +674,56 @@ impl ModelVariant {
         self.thinking = Some(thinking);
         self
     }
+
+    pub fn with_request_override(mut self, request_override: ModelVariantRequestOverride) -> Self {
+        self.request_override = request_override;
+        self
+    }
+
+    pub fn with_adapter_override(
+        mut self,
+        adapter_id: impl Into<String>,
+        request_override: ModelVariantRequestOverride,
+    ) -> Self {
+        self.adapter_overrides
+            .insert(adapter_id.into(), request_override);
+        self
+    }
 }
 
 impl Default for ModelVariant {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn merge_json_patch_maps(
+    target: &mut BTreeMap<String, serde_json::Value>,
+    patch: &BTreeMap<String, serde_json::Value>,
+) {
+    for (key, value) in patch {
+        match target.get_mut(key) {
+            Some(current) => merge_json_value(current, value),
+            None => {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn merge_json_value(current: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (current, patch) {
+        (serde_json::Value::Object(current), serde_json::Value::Object(patch)) => {
+            for (key, value) in patch {
+                match current.get_mut(key) {
+                    Some(existing) => merge_json_value(existing, value),
+                    None => {
+                        current.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (current, patch) => *current = patch.clone(),
     }
 }
 

@@ -96,6 +96,7 @@ fn test_run_options() -> SessionRunOptions {
         model: ModelRef::new("test", "test-model"),
         variant: None,
         thinking: None,
+        request_override: Default::default(),
         system: None,
         temperature: None,
         max_output_tokens: Some(128),

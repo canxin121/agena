@@ -2083,17 +2083,35 @@ impl Backend {
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            let variants = self
-                .runtime
-                .current_snapshot()
-                .provider_registry()
+            let snapshot = self.runtime.current_snapshot();
+            let provider_registry = snapshot.provider_registry();
+            let variants = provider_registry
                 .model_variants(&options.model)
                 .context("failed to resolve selected model variants")?;
             let definition = variants
                 .get(variant)
                 .ok_or_else(|| anyhow!("model {} has no variant {variant}", options.model))?;
+            let adapter_id = options
+                .model
+                .adapter_id
+                .as_ref()
+                .map(|value| value.to_string())
+                .or_else(|| {
+                    provider_registry
+                        .get(options.model.provider_id.as_str())
+                        .and_then(|provider| {
+                            provider.default_adapter().map(|value| value.to_string())
+                        })
+                });
+            let mut request_override = definition.request_override.clone();
+            if let Some(adapter_id) = adapter_id.as_deref()
+                && let Some(adapter_override) = definition.adapter_overrides.get(adapter_id)
+            {
+                request_override = request_override.merged_with(adapter_override);
+            }
             options.variant = Some(variant.to_string());
             options.thinking = definition.thinking.clone();
+            options.request_override = request_override;
         }
 
         if let Some(system) = system {
@@ -2269,6 +2287,8 @@ fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> S
                     .as_ref()
                     .and_then(|value| serde_json::to_string(value).ok())
                     .unwrap_or_default(),
+                serde_json::to_string(&variant.request_override).unwrap_or_default(),
+                serde_json::to_string(&variant.adapter_overrides).unwrap_or_default(),
             ]
         })
         .collect::<Vec<_>>()
@@ -2471,6 +2491,8 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
                         "display_name": variant.display_name,
                         "description": variant.description,
                         "thinking": variant.thinking,
+                        "request_override": variant.request_override,
+                        "adapter_overrides": variant.adapter_overrides,
                     }),
                 )
             })

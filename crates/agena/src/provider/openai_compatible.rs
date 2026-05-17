@@ -265,7 +265,7 @@ impl OpenAiCompatibleProvider {
         req: reqwest::RequestBuilder,
         api_key: &str,
     ) -> reqwest::RequestBuilder {
-        self.apply_request_headers(req, api_key, None)
+        self.apply_request_headers(req, api_key, None, None)
     }
 
     fn apply_request_headers(
@@ -273,6 +273,7 @@ impl OpenAiCompatibleProvider {
         mut req: reqwest::RequestBuilder,
         api_key: &str,
         session_affinity: Option<&str>,
+        request_headers: Option<&std::collections::BTreeMap<String, String>>,
     ) -> reqwest::RequestBuilder {
         let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
 
@@ -280,7 +281,12 @@ impl OpenAiCompatibleProvider {
         if let Some(session_affinity) = session_affinity.filter(|value| !value.trim().is_empty()) {
             req = req.header("x-session-affinity", session_affinity);
         }
-        utils::apply_request_headers(self.id.as_str(), req, &self.extra_headers)
+        let headers = request_headers
+            .map(|request_headers| {
+                utils::merged_request_headers(&self.extra_headers, request_headers)
+            })
+            .unwrap_or_else(|| self.extra_headers.clone());
+        utils::apply_request_headers(self.id.as_str(), req, &headers)
     }
 
     fn parse_models(&self, payload: Value) -> Result<Vec<ProviderModel>, AppError> {
@@ -732,15 +738,18 @@ impl ModelProvider for OpenAiCompatibleProvider {
                 model.as_str(),
             ),
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             self.apply_request_headers(
                 self.client.post(self.completions_endpoint()),
                 api_key,
                 prompt_cache_key.as_deref(),
+                Some(&request.request_override.headers),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
+            .json(&body_json)
         })
         .await?;
         let payload: ChatCompletionResponse =
@@ -842,15 +851,18 @@ impl ModelProvider for OpenAiCompatibleProvider {
                 model.as_str(),
             ),
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             self.apply_request_headers(
                 self.client.post(self.completions_endpoint()),
                 api_key,
                 prompt_cache_key.as_deref(),
+                Some(&request.request_override.headers),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
+            .json(&body_json)
         })
         .await?;
         if !response.status().is_success() {
@@ -1298,6 +1310,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1342,6 +1355,7 @@ mod tests {
             top_k: None,
             seed: None,
             thinking: None,
+            request_override: Default::default(),
             response_format: None,
         };
         let messages = chat_wire::request_to_chat_messages(&request);
@@ -1424,6 +1438,7 @@ mod tests {
             top_k: None,
             seed: None,
             thinking: None,
+            request_override: Default::default(),
             response_format: None,
         };
         let messages = chat_wire::request_to_chat_messages(&request);
@@ -1508,6 +1523,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1567,6 +1583,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1630,6 +1647,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1701,6 +1719,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1829,6 +1848,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2066,6 +2086,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2185,6 +2206,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2248,6 +2270,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2301,6 +2324,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2361,6 +2385,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await

@@ -28,7 +28,7 @@ use agena::{
         ExecutionStatus, Message, MessagePart, PartContent, PermissionRequestPart,
         UserInputRequest, UserInputRequestPart,
     },
-    model::ModelRef,
+    model::{ModelRef, ModelVariantRequestOverride},
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,
     session::{Session, SessionGoal, SessionManager},
@@ -1126,22 +1126,34 @@ impl ApiService {
             ));
         }
         let variant = non_empty(request.variant.as_deref()).map(ToOwned::to_owned);
-        let thinking = if let Some(variant_name) = variant.as_deref() {
+        let (thinking, request_override) = if let Some(variant_name) = variant.as_deref() {
             let variants = provider_registry
                 .model_variants(&model)
                 .map_err(api_error_from_app)?;
             let variant = variants.get(variant_name).ok_or_else(|| {
                 ApiError::bad_request(format!("model `{}` has no variant `{variant_name}`", model))
             })?;
-            variant.thinking.clone()
+            let resolved_adapter_id = model.adapter_id.clone().or_else(|| {
+                provider_registry
+                    .get(model.provider_id.as_str())
+                    .and_then(|provider| provider.default_adapter().cloned())
+            });
+            let mut request_override = variant.request_override.clone();
+            if let Some(adapter_id) = resolved_adapter_id.as_ref()
+                && let Some(adapter_override) = variant.adapter_overrides.get(adapter_id.as_str())
+            {
+                request_override = request_override.merged_with(adapter_override);
+            }
+            (variant.thinking.clone(), request_override)
         } else {
-            None
+            (None, ModelVariantRequestOverride::default())
         };
 
         Ok(agena::session::SessionRunOptions {
             model,
             variant,
             thinking,
+            request_override,
             system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
             temperature: request.temperature,
             max_output_tokens: request.max_output_tokens,

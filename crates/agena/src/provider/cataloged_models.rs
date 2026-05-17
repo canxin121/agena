@@ -208,7 +208,7 @@ impl ModelProvider for CatalogedModelsProvider {
             *model = self.apply_to_model(&model.id.clone(), model.clone());
         }
 
-        for model_id in self.provider.models.keys() {
+        for model_id in &self.provider.appendable_model_ids {
             if listed.contains(model_id.as_str())
                 || listed_catalog_ids.contains(model_id.as_str())
                 || models.iter().any(|model| {
@@ -350,12 +350,15 @@ mod tests {
                                 thinking: Some(ThinkingRequest::Budget {
                                     budget_tokens: 20_000,
                                 }),
+                                request_override: Default::default(),
+                                adapter_overrides: BTreeMap::new(),
                                 disabled: false,
                             },
                         )]),
                         ..crate::model_catalog::CatalogModelDefinition::default()
                     },
                 )]),
+                appendable_model_ids: std::collections::BTreeSet::from(["gpt-5".to_owned()]),
             },
         );
 

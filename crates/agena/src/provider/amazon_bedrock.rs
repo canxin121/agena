@@ -800,7 +800,17 @@ impl AmazonBedrockProvider {
         static_credentials: Option<&Credentials>,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
+        let request_override = request.request_override.clone();
         let (model, body) = Self::build_anthropic_request(request);
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
+        let mut headers = Self::anthropic_invoke_headers(false);
+        headers.extend(
+            request_override
+                .headers
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
 
         let response = self
             .send_sigv4_request(
@@ -808,8 +818,8 @@ impl AmazonBedrockProvider {
                 static_credentials,
                 reqwest::Method::POST,
                 self.native_anthropic_invoke_endpoint(model.as_str(), false)?,
-                Some(serde_json::to_vec(&body)?),
-                Self::anthropic_invoke_headers(false),
+                Some(serde_json::to_vec(&body_json)?),
+                headers,
             )
             .await?;
 
@@ -827,15 +837,25 @@ impl AmazonBedrockProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        let request_override = request.request_override.clone();
         let (model, body) = Self::build_anthropic_request(request);
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
+        let mut headers = Self::anthropic_invoke_headers(true);
+        headers.extend(
+            request_override
+                .headers
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
         let response = self
             .send_sigv4_request(
                 profile,
                 static_credentials,
                 reqwest::Method::POST,
                 self.native_anthropic_invoke_endpoint(model.as_str(), true)?,
-                Some(serde_json::to_vec(&body)?),
-                Self::anthropic_invoke_headers(true),
+                Some(serde_json::to_vec(&body_json)?),
+                headers,
             )
             .await?;
 
@@ -1098,6 +1118,8 @@ impl AmazonBedrockProvider {
             prompt_cache_key: prompt_cache_key.clone(),
             prompt_cache_key_camel_case: prompt_cache_key.clone(),
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
         let mut headers = vec![(
             reqwest::header::CONTENT_TYPE.as_str().to_owned(),
             JSON_CONTENT_TYPE.to_owned(),
@@ -1105,6 +1127,13 @@ impl AmazonBedrockProvider {
         if let Some(session_affinity) = prompt_cache_key {
             headers.push(("x-session-affinity".to_owned(), session_affinity));
         }
+        headers.extend(
+            request
+                .request_override
+                .headers
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
 
         let response = self
             .send_sigv4_request(
@@ -1112,7 +1141,7 @@ impl AmazonBedrockProvider {
                 static_credentials,
                 reqwest::Method::POST,
                 self.completions_endpoint(),
-                Some(serde_json::to_vec(&body)?),
+                Some(serde_json::to_vec(&body_json)?),
                 headers,
             )
             .await?;
@@ -1153,6 +1182,8 @@ impl AmazonBedrockProvider {
             prompt_cache_key: prompt_cache_key.clone(),
             prompt_cache_key_camel_case: prompt_cache_key.clone(),
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
         let mut headers = vec![(
             reqwest::header::CONTENT_TYPE.as_str().to_owned(),
             JSON_CONTENT_TYPE.to_owned(),
@@ -1160,6 +1191,13 @@ impl AmazonBedrockProvider {
         if let Some(session_affinity) = prompt_cache_key {
             headers.push(("x-session-affinity".to_owned(), session_affinity));
         }
+        headers.extend(
+            request
+                .request_override
+                .headers
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
 
         let response = self
             .send_sigv4_request(
@@ -1167,7 +1205,7 @@ impl AmazonBedrockProvider {
                 static_credentials,
                 reqwest::Method::POST,
                 self.completions_endpoint(),
-                Some(serde_json::to_vec(&body)?),
+                Some(serde_json::to_vec(&body_json)?),
                 headers,
             )
             .await?;
@@ -2574,6 +2612,7 @@ mod tests {
             top_k: None,
             seed: None,
             thinking: None,
+            request_override: Default::default(),
             response_format: None,
         });
 
@@ -3405,6 +3444,8 @@ data: [DONE]\n\n";
             seed: None,
 
             thinking: None,
+
+            request_override: Default::default(),
 
             response_format: None,
         }

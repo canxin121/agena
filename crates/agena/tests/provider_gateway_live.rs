@@ -319,6 +319,7 @@ fn hi_request() -> CompletionRequest {
         top_k: None,
         seed: None,
         thinking: None,
+        request_override: Default::default(),
         response_format: None,
     }
 }
@@ -359,6 +360,7 @@ fn tool_request() -> CompletionRequest {
         top_k: None,
         seed: None,
         thinking: None,
+        request_override: Default::default(),
         response_format: None,
     }
 }
@@ -403,6 +405,7 @@ fn openai_cache_probe_request(nonce: &str) -> CompletionRequest {
         top_k: None,
         seed: None,
         thinking: None,
+        request_override: Default::default(),
         response_format: None,
     }
 }
@@ -442,6 +445,7 @@ fn anthropic_cache_probe_request(nonce: &str) -> CompletionRequest {
         top_k: None,
         seed: None,
         thinking: None,
+        request_override: Default::default(),
         response_format: None,
     }
 }
@@ -468,6 +472,7 @@ fn gemini_cache_probe_request(nonce: &str) -> CompletionRequest {
         top_k: None,
         seed: None,
         thinking: None,
+        request_override: Default::default(),
         response_format: None,
     }
 }
@@ -541,6 +546,7 @@ fn run_options(case: LiveProviderCase, system: &str, max_output_tokens: u32) -> 
         model: case.model_ref(),
         variant: None,
         thinking: None,
+        request_override: Default::default(),
         system: Some(system.to_owned()),
         temperature: None,
         max_output_tokens: Some(max_output_tokens),

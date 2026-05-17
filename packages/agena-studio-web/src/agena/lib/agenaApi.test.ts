@@ -50,6 +50,7 @@ describe('listProviderModels', () => {
                 lifecycle: 'active',
                 limits: {
                   context_window_tokens: 400000,
+                  max_input_tokens: 300000,
                   max_output_tokens: 16384,
                 },
               },
@@ -79,6 +80,7 @@ describe('listProviderModels', () => {
           lifecycle: 'active',
           limits: {
             context_window_tokens: 400000,
+            max_input_tokens: 300000,
             max_output_tokens: 16384,
           },
         },

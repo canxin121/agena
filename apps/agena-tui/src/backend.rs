@@ -2329,6 +2329,18 @@ fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> S
         entry.display_name.clone().unwrap_or_default(),
         entry.origin.clone().unwrap_or_default(),
         entry.description.clone().unwrap_or_default(),
+        entry
+            .context_window_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        entry
+            .max_input_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        entry
+            .max_output_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
         match entry.kind {
             ModelCatalogEntryKind::Official => "official".to_owned(),
             ModelCatalogEntryKind::Custom => "custom".to_owned(),
@@ -2450,6 +2462,12 @@ fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> J
             JsonValue::Number(context_window_tokens.into()),
         );
     }
+    if let Some(max_input_tokens) = entry.max_input_tokens {
+        value.insert(
+            "max_input_tokens".to_owned(),
+            JsonValue::Number(max_input_tokens.into()),
+        );
+    }
     if let Some(max_output_tokens) = entry.max_output_tokens {
         value.insert(
             "max_output_tokens".to_owned(),
@@ -2554,6 +2572,12 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
         value.insert(
             "context_window_tokens".to_owned(),
             JsonValue::Number(context_window_tokens.into()),
+        );
+    }
+    if let Some(max_input_tokens) = model.metadata.limits.max_input_tokens {
+        value.insert(
+            "max_input_tokens".to_owned(),
+            JsonValue::Number(max_input_tokens.into()),
         );
     }
     if let Some(max_output_tokens) = model.metadata.limits.max_output_tokens {

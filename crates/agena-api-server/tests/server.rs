@@ -724,6 +724,7 @@ enabled = true
                 description: Some("Catalog description".to_owned()),
                 lifecycle: Some(ModelLifecycle::Preview),
                 context_window_tokens: Some(123_456),
+                max_input_tokens: Some(100_000),
                 max_output_tokens: Some(7_890),
                 ..CatalogModelDefinition::default()
             },
@@ -777,6 +778,12 @@ enabled = true
             .pointer("/metadata/limits/context_window_tokens")
             .and_then(|value| value.as_u64()),
         Some(123_456)
+    );
+    assert_eq!(
+        model
+            .pointer("/metadata/limits/max_input_tokens")
+            .and_then(|value| value.as_u64()),
+        Some(100_000)
     );
     assert_eq!(
         model
@@ -943,6 +950,7 @@ enabled = true
                 description: Some("Only in catalog".to_owned()),
                 lifecycle: Some(ModelLifecycle::Preview),
                 context_window_tokens: Some(222_222),
+                max_input_tokens: Some(180_000),
                 max_output_tokens: Some(3_333),
                 ..CatalogModelDefinition::default()
             },
@@ -997,6 +1005,12 @@ enabled = true
             .pointer("/metadata/lifecycle")
             .and_then(|value| value.as_str()),
         Some("preview")
+    );
+    assert_eq!(
+        catalog_only
+            .pointer("/metadata/limits/max_input_tokens")
+            .and_then(|value| value.as_u64()),
+        Some(180_000)
     );
 }
 

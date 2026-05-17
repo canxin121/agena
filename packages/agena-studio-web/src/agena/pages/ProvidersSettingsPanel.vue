@@ -862,6 +862,16 @@ onMounted(() => {
           />
         </div>
         <div class="field">
+          <label class="label" for="provider-model-input">Max Input</label>
+          <input
+            id="provider-model-input"
+            v-model="providerModelDraft.max_input_tokens"
+            class="input mono"
+            inputmode="numeric"
+            placeholder="200000"
+          />
+        </div>
+        <div class="field">
           <label class="label" for="provider-model-output">Max Output</label>
           <input
             id="provider-model-output"

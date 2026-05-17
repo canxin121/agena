@@ -362,16 +362,25 @@ pub struct ModelTokenLimits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
 }
 
 impl ModelTokenLimits {
     pub fn is_empty(&self) -> bool {
-        self.context_window_tokens.is_none() && self.max_output_tokens.is_none()
+        self.context_window_tokens.is_none()
+            && self.max_input_tokens.is_none()
+            && self.max_output_tokens.is_none()
     }
 
     pub fn with_context_window_tokens(mut self, context_window_tokens: u32) -> Self {
         self.context_window_tokens = Some(context_window_tokens);
+        self
+    }
+
+    pub fn with_max_input_tokens(mut self, max_input_tokens: u32) -> Self {
+        self.max_input_tokens = Some(max_input_tokens);
         self
     }
 
@@ -383,6 +392,9 @@ impl ModelTokenLimits {
     pub fn with_fallbacks_from(mut self, fallback: &Self) -> Self {
         if self.context_window_tokens.is_none() {
             self.context_window_tokens = fallback.context_window_tokens;
+        }
+        if self.max_input_tokens.is_none() {
+            self.max_input_tokens = fallback.max_input_tokens;
         }
         if self.max_output_tokens.is_none() {
             self.max_output_tokens = fallback.max_output_tokens;
@@ -566,6 +578,11 @@ impl ModelMetadata {
         self.limits = self
             .limits
             .with_context_window_tokens(context_window_tokens);
+        self
+    }
+
+    pub fn with_max_input_tokens(mut self, max_input_tokens: u32) -> Self {
+        self.limits = self.limits.with_max_input_tokens(max_input_tokens);
         self
     }
 
@@ -1057,6 +1074,11 @@ impl Model {
         self
     }
 
+    pub fn with_max_input_tokens(mut self, max_input_tokens: u32) -> Self {
+        self.metadata = self.metadata.with_max_input_tokens(max_input_tokens);
+        self
+    }
+
     pub fn with_max_output_tokens(mut self, max_output_tokens: u32) -> Self {
         self.metadata = self.metadata.with_max_output_tokens(max_output_tokens);
         self
@@ -1131,6 +1153,7 @@ mod tests {
         let fallback = ModelMetadata::default()
             .with_lifecycle(ModelLifecycle::Preview)
             .with_context_window_tokens(128_000)
+            .with_max_input_tokens(96_000)
             .with_max_output_tokens(16_384)
             .with_knowledge_cutoff("2025-04")
             .with_release_date("2026-04-23")
@@ -1160,6 +1183,7 @@ mod tests {
         assert_eq!(merged.description.as_deref(), Some("GPT model"));
         assert_eq!(merged.lifecycle, Some(ModelLifecycle::Preview));
         assert_eq!(merged.limits.context_window_tokens, Some(128_000));
+        assert_eq!(merged.limits.max_input_tokens, Some(96_000));
         assert_eq!(merged.limits.max_output_tokens, Some(16_384));
         assert_eq!(merged.knowledge_cutoff.as_deref(), Some("2025-04"));
         assert_eq!(merged.release_date.as_deref(), Some("2026-04-23"));

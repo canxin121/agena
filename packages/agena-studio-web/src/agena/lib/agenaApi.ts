@@ -265,6 +265,7 @@ export type ModelCatalogEntry = {
   origin?: string | null
   lifecycle?: string | null
   context_window_tokens?: number | null
+  max_input_tokens?: number | null
   max_output_tokens?: number | null
   description?: string | null
   knowledge_cutoff?: string | null
@@ -320,6 +321,7 @@ export type ModelCatalogEntryWriteRequest = {
   model_id: string
   lifecycle?: string | null
   context_window_tokens?: number | null
+  max_input_tokens?: number | null
   max_output_tokens?: number | null
   description?: string | null
   knowledge_cutoff?: string | null
@@ -397,6 +399,7 @@ export type ProviderModelMetadata = {
   pricing?: ProviderModelPricing | null
   limits?: {
     context_window_tokens?: number | null
+    max_input_tokens?: number | null
     max_output_tokens?: number | null
   } | null
 }

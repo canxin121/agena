@@ -99,7 +99,7 @@ enabled = true
 # mode = "api"
 # base_url = "https://api.cxits.cn/"
 # endpoint_layout = "protocol_root"
-# api_key_env = "CX-API-KEY"
+# api_key_env = "CX_API_KEY"
 #
 # [providers.shared.adapters.openai]
 # enabled = true

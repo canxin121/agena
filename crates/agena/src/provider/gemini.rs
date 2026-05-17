@@ -469,6 +469,7 @@ impl ModelProvider for GeminiProvider {
             utils::parse_json_response(PROVIDER_ID, response).await?;
         let candidate = payload.candidates.first();
         let text = candidate.map(GeminiCandidate::text).unwrap_or_default();
+        let reasoning_text = candidate.and_then(GeminiCandidate::reasoning_text);
         let tool_calls = candidate
             .map(GeminiCandidate::function_calls)
             .unwrap_or_default();
@@ -476,7 +477,7 @@ impl ModelProvider for GeminiProvider {
         let finish_reason = candidate.and_then(|c| c.finish_reason.clone());
         let usage = payload.usage_metadata.map(map_gemini_usage);
 
-        if text.is_empty() && tool_calls.is_empty() {
+        if text.is_empty() && tool_calls.is_empty() && reasoning_text.is_none() {
             return self
                 .complete_by_aggregating_stream(stream_fallback_request)
                 .await;
@@ -486,7 +487,7 @@ impl ModelProvider for GeminiProvider {
             provider_id: ProviderId::new(PROVIDER_ID),
             model,
             text,
-            reasoning_text: None,
+            reasoning_text,
             finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
             tool_calls,
             usage,
@@ -583,6 +584,7 @@ impl ModelProvider for GeminiProvider {
 
         let stream = async_stream::try_stream! {
             let mut emitted = String::new();
+            let mut emitted_reasoning = String::new();
             let mut emitted_tool_calls: usize = 0;
             let mut saw_content = false;
             let mut fallback_usage: Option<crate::provider::CompletionUsage> = None;
@@ -607,11 +609,24 @@ impl ModelProvider for GeminiProvider {
                 }
                 let mut done = false;
 
-                for stream_event in GeminiStreamEvent::from_chunk(chunk, &mut emitted, &mut emitted_tool_calls) {
+                for stream_event in GeminiStreamEvent::from_chunk(
+                    chunk,
+                    &mut emitted,
+                    &mut emitted_reasoning,
+                    &mut emitted_tool_calls,
+                ) {
                     match stream_event {
                         GeminiStreamEvent::TextDelta(delta) => {
                             saw_content = true;
                             yield CompletionStreamEvent::TextDelta {
+                                provider_id: provider_id.clone(),
+                                model: model_name.clone(),
+                                delta,
+                            };
+                        }
+                        GeminiStreamEvent::ThinkingDelta(delta) => {
+                            saw_content = true;
+                            yield CompletionStreamEvent::ThinkingDelta {
                                 provider_id: provider_id.clone(),
                                 model: model_name.clone(),
                                 delta,
@@ -730,6 +745,7 @@ fn gemini_thinking_config(
         return Some(GeminiThinkingConfig {
             thinking_budget,
             thinking_level: None,
+            include_thoughts: Some(true),
         });
     }
 
@@ -762,6 +778,7 @@ fn gemini_thinking_config(
         return Some(GeminiThinkingConfig {
             thinking_budget: None,
             thinking_level,
+            include_thoughts: Some(true),
         });
     }
 
@@ -799,6 +816,8 @@ struct GeminiContent {
 struct GeminiPart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thought: Option<bool>,
     #[serde(
         default,
         rename = "inlineData",
@@ -934,6 +953,8 @@ struct GeminiThinkingConfig {
     thinking_budget: Option<u32>,
     #[serde(rename = "thinkingLevel", skip_serializing_if = "Option::is_none")]
     thinking_level: Option<&'static str>,
+    #[serde(rename = "includeThoughts", skip_serializing_if = "Option::is_none")]
+    include_thoughts: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -977,11 +998,29 @@ impl GeminiCandidate {
                 content
                     .parts
                     .iter()
+                    .filter(|part| !part.thought.unwrap_or(false))
                     .filter_map(|part| part.text.clone())
                     .collect::<Vec<_>>()
                     .join("")
             })
             .unwrap_or_default()
+    }
+
+    fn reasoning_text(&self) -> Option<String> {
+        let text = self
+            .content
+            .as_ref()
+            .map(|content| {
+                content
+                    .parts
+                    .iter()
+                    .filter(|part| part.thought.unwrap_or(false))
+                    .filter_map(|part| part.text.clone())
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default();
+        (!text.is_empty()).then_some(text)
     }
 
     fn function_calls(&self) -> Vec<crate::provider::CompletionToolCall> {
@@ -1138,6 +1177,7 @@ fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage 
 #[derive(Debug)]
 enum GeminiStreamEvent {
     TextDelta(String),
+    ThinkingDelta(String),
     ToolCall(crate::provider::CompletionToolCall),
     Completed {
         finish_reason: String,
@@ -1150,12 +1190,25 @@ impl GeminiStreamEvent {
     fn from_chunk(
         chunk: GeminiGenerateResponse,
         emitted: &mut String,
+        emitted_reasoning: &mut String,
         emitted_tool_calls: &mut usize,
     ) -> Vec<Self> {
         let mut events = Vec::new();
         let candidate = chunk.candidates.first();
 
         if let Some(candidate) = candidate {
+            let full_reasoning = candidate.reasoning_text().unwrap_or_default();
+            if full_reasoning.starts_with(emitted_reasoning.as_str()) {
+                let delta = full_reasoning[emitted_reasoning.len()..].to_owned();
+                if !delta.is_empty() {
+                    *emitted_reasoning = full_reasoning;
+                    events.push(Self::ThinkingDelta(delta));
+                }
+            } else if !full_reasoning.is_empty() {
+                *emitted_reasoning = full_reasoning.clone();
+                events.push(Self::ThinkingDelta(full_reasoning));
+            }
+
             let full_text = candidate.text();
             if full_text.starts_with(emitted.as_str()) {
                 let delta = full_text[emitted.len()..].to_owned();
@@ -1454,6 +1507,141 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_includes_thinking_config_with_include_thoughts() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "key".to_owned(),
+                "test-key".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\"thinkingBudget\":4096".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\"includeThoughts\":true".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "candidates": [{
+                        "content": { "parts": [{ "text": "Hello" }] },
+                        "finishReason": "STOP"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: Some(ThinkingRequest::Effort {
+                    effort: ReasoningEffort::Low,
+                }),
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "Hello");
+    }
+
+    #[tokio::test]
+    async fn complete_parses_reasoning_text_from_thought_parts() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "key".to_owned(),
+                "test-key".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "candidates": [{
+                        "content": {
+                            "parts": [
+                                { "text": "Hidden step. ", "thought": true },
+                                { "text": "Final answer." }
+                            ]
+                        },
+                        "finishReason": "STOP"
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 4,
+                        "candidatesTokenCount": 2,
+                        "thoughtsTokenCount": 1
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: Some(ThinkingRequest::Effort {
+                    effort: ReasoningEffort::High,
+                }),
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "Final answer.");
+        assert_eq!(response.reasoning_text.as_deref(), Some("Hidden step. "));
+        let usage = response.usage.expect("usage should be present");
+        assert_eq!(usage.reasoning_tokens, 1);
+    }
+
+    #[tokio::test]
     async fn gemini_list_models_uses_disk_cache_after_first_fetch() {
         let _env_lock = env_lock().lock().expect("env lock should succeed");
         let dir = tempfile::tempdir().expect("tempdir should create");
@@ -1681,6 +1869,80 @@ mod tests {
 
         assert_eq!(text, "Hello");
         assert!(done);
+    }
+
+    #[tokio::test]
+    async fn complete_stream_emits_thinking_delta_for_thought_parts() {
+        let mut server = mockito::Server::new_async().await;
+        let body = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hidden\",\"thought\":true}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hidden path\",\"thought\":true},{\"text\":\"Visible\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":\"Hidden path\",\"thought\":true},{\"text\":\"Visible answer\"}]}}],\"usageMetadata\":{\"promptTokenCount\":4,\"candidatesTokenCount\":2,\"thoughtsTokenCount\":3}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let _mock = server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("alt".to_owned(), "sse".to_owned()),
+                mockito::Matcher::UrlEncoded("key".to_owned(), "test-key".to_owned()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = GeminiProvider::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        );
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: Some(ThinkingRequest::Effort {
+                    effort: ReasoningEffort::High,
+                }),
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut text = String::new();
+        let mut reasoning = String::new();
+
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should parse") {
+                CompletionStreamEvent::TextDelta { delta, .. } => text.push_str(delta.as_str()),
+                CompletionStreamEvent::ThinkingDelta { delta, .. } => {
+                    reasoning.push_str(delta.as_str())
+                }
+                CompletionStreamEvent::Completed { finish_reason, .. } => {
+                    assert!(matches!(finish_reason, Some(CompletionFinishReason::Stop)));
+                }
+                CompletionStreamEvent::ToolCallDelta { .. } => {}
+            }
+        }
+
+        assert_eq!(reasoning, "Hidden path");
+        assert_eq!(text, "Visible answer");
     }
 
     #[tokio::test]

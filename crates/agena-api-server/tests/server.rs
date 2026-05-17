@@ -1602,6 +1602,160 @@ async fn cxits_live_provider_creation_flow_can_save_provider_and_list_models() {
 }
 
 #[tokio::test]
+#[ignore = "real integration test against api.cxits.cn"]
+async fn cxits_live_catalog_match_coverage_reports_unmatched_models() {
+    let _api_key = live_provider_gateway_key();
+    let config = format!(
+        r#"
+[providers.cxits_gateway]
+default_adapter = "openai"
+default_model = "gpt-5.4"
+
+[providers.cxits_gateway.auth]
+mode = "api"
+base_url = "{base_url}"
+api_key_env = "{key_env}"
+
+[providers.cxits_gateway.adapters.openai]
+enabled = true
+
+[providers.cxits_gateway.adapters.anthropic]
+enabled = true
+
+[providers.cxits_gateway.adapters.gemini]
+enabled = true
+"#,
+        base_url = LIVE_PROVIDER_GATEWAY_BASE_URL,
+        key_env = LIVE_PROVIDER_GATEWAY_KEY_ENV,
+    );
+
+    let (state, _, _) = build_state_with_config(config.as_str()).await;
+    let snapshot = state.runtime().current_snapshot();
+    let source_providers = snapshot.catalog_source_provider_registry();
+    snapshot
+        .model_catalog()
+        .refresh_from_registry(
+            source_providers.as_ref(),
+            Some(snapshot.config_resolution()),
+        )
+        .await
+        .expect("live cxits catalog refresh should succeed");
+    let catalog_ids = snapshot
+        .model_catalog_response()
+        .entries
+        .into_iter()
+        .map(|entry| entry.model_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        !catalog_ids.is_empty(),
+        "live cxits catalog refresh should produce catalog entries"
+    );
+
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/providers/cxits_gateway/discover")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let adapters = value
+        .get("adapters")
+        .and_then(|value| value.as_array())
+        .expect("cxits discovery response should include adapters");
+
+    let supported_adapters = adapters
+        .iter()
+        .filter(|adapter| adapter.get("supported").and_then(|value| value.as_bool()) == Some(true))
+        .collect::<Vec<_>>();
+    assert!(
+        !supported_adapters.is_empty(),
+        "cxits discovery should return at least one supported adapter: {value:?}"
+    );
+
+    let mut raw_models = std::collections::BTreeSet::new();
+    let mut matched_raw_models = std::collections::BTreeSet::new();
+    let mut matched_catalog_ids = std::collections::BTreeSet::new();
+    let mut unmatched = Vec::new();
+    let mut discovery_entry_count = 0_usize;
+
+    for adapter in supported_adapters {
+        let models = adapter
+            .get("models")
+            .and_then(|value| value.as_array())
+            .expect("supported adapter should include models");
+        discovery_entry_count += models.len();
+        for model in models {
+            let Some(raw_model_id) = model.get("id").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            if !raw_models.insert(raw_model_id.to_owned()) {
+                continue;
+            }
+            let catalog_model_id = model
+                .get("catalog_model_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| agena::model_catalog::canonical_model_catalog_id(raw_model_id));
+            if catalog_ids.contains(catalog_model_id.as_str()) {
+                matched_raw_models.insert(raw_model_id.to_owned());
+                matched_catalog_ids.insert(catalog_model_id);
+            } else {
+                unmatched.push(if catalog_model_id == raw_model_id {
+                    raw_model_id.to_owned()
+                } else {
+                    format!("{raw_model_id} -> {catalog_model_id}")
+                });
+            }
+        }
+    }
+
+    unmatched.sort();
+    let unmatched_preview = if unmatched.is_empty() {
+        "(none)".to_owned()
+    } else {
+        unmatched
+            .iter()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    eprintln!(
+        "cxits catalog coverage: supported_adapters={} discovery_entries={} unique_models={} matched_unique_models={} unmatched_unique_models={} matched_catalog_ids={} catalog_entries={}",
+        adapters
+            .iter()
+            .filter(
+                |adapter| adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+            )
+            .count(),
+        discovery_entry_count,
+        raw_models.len(),
+        matched_raw_models.len(),
+        unmatched.len(),
+        matched_catalog_ids.len(),
+        catalog_ids.len(),
+    );
+    eprintln!("cxits unmatched model ids (up to 20):\n{unmatched_preview}");
+
+    assert!(
+        !matched_raw_models.is_empty(),
+        "cxits live catalog coverage should match at least one discovered model"
+    );
+}
+
+#[tokio::test]
 async fn operational_probes_and_metrics_return_expected_shapes() {
     let (state, _, _) = build_state().await;
     let app = router(state);

@@ -392,6 +392,57 @@ impl ModelTokenLimits {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ModelPricing {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_usd_per_million_tokens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_usd_per_million_tokens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_usd_per_million_tokens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_usd_per_million_tokens: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tiers: Vec<ModelPricingTier>,
+}
+
+impl ModelPricing {
+    pub fn is_empty(&self) -> bool {
+        self.input_usd_per_million_tokens.is_none()
+            && self.output_usd_per_million_tokens.is_none()
+            && self.cache_read_usd_per_million_tokens.is_none()
+            && self.cache_write_usd_per_million_tokens.is_none()
+            && self.tiers.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ModelPricingTier {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_usd_per_million_tokens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_usd_per_million_tokens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_usd_per_million_tokens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_usd_per_million_tokens: Option<String>,
+}
+
+impl ModelPricingTier {
+    pub fn is_empty(&self) -> bool {
+        self.tier_type.is_none()
+            && self.size_tokens.is_none()
+            && self.input_usd_per_million_tokens.is_none()
+            && self.output_usd_per_million_tokens.is_none()
+            && self.cache_read_usd_per_million_tokens.is_none()
+            && self.cache_write_usd_per_million_tokens.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ModelMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
@@ -415,6 +466,10 @@ pub struct ModelMetadata {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
 }
 
 impl ModelMetadata {
@@ -430,6 +485,8 @@ impl ModelMetadata {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.output_modalities.is_empty()
+            && self.pricing.is_none()
     }
 
     pub fn with_lifecycle(mut self, lifecycle: ModelLifecycle) -> Self {
@@ -482,6 +539,29 @@ impl ModelMetadata {
         self
     }
 
+    pub fn with_output_modalities(
+        mut self,
+        output_modalities: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.output_modalities = output_modalities
+            .into_iter()
+            .filter_map(|value| {
+                let trimmed = value.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_owned())
+            })
+            .collect();
+        self
+    }
+
+    pub fn with_pricing(mut self, pricing: ModelPricing) -> Self {
+        if pricing.is_empty() {
+            self.pricing = None;
+        } else {
+            self.pricing = Some(pricing);
+        }
+        self
+    }
+
     pub fn with_context_window_tokens(mut self, context_window_tokens: u32) -> Self {
         self.limits = self
             .limits
@@ -525,6 +605,12 @@ impl ModelMetadata {
         }
         if self.default_verbosity.is_none() {
             self.default_verbosity = fallback.default_verbosity.clone();
+        }
+        if self.output_modalities.is_empty() {
+            self.output_modalities = fallback.output_modalities.clone();
+        }
+        if self.pricing.is_none() {
+            self.pricing = fallback.pricing.clone();
         }
         self
     }
@@ -1053,7 +1139,22 @@ mod tests {
             .with_default_thinking_mode("thinking-medium")
             .with_supports_parallel_tool_calls(true)
             .with_supports_verbosity(true)
-            .with_default_verbosity("low");
+            .with_default_verbosity("low")
+            .with_output_modalities(["text".to_owned(), "image".to_owned()])
+            .with_pricing(ModelPricing {
+                input_usd_per_million_tokens: Some("1.25".to_owned()),
+                output_usd_per_million_tokens: Some("10".to_owned()),
+                cache_read_usd_per_million_tokens: None,
+                cache_write_usd_per_million_tokens: None,
+                tiers: vec![ModelPricingTier {
+                    tier_type: Some("context".to_owned()),
+                    size_tokens: Some(200_000),
+                    input_usd_per_million_tokens: Some("2.5".to_owned()),
+                    output_usd_per_million_tokens: Some("15".to_owned()),
+                    cache_read_usd_per_million_tokens: None,
+                    cache_write_usd_per_million_tokens: None,
+                }],
+            });
 
         let merged = base.with_fallbacks_from(&fallback);
         assert_eq!(merged.description.as_deref(), Some("GPT model"));
@@ -1071,5 +1172,17 @@ mod tests {
         assert_eq!(merged.supports_parallel_tool_calls, Some(true));
         assert_eq!(merged.supports_verbosity, Some(true));
         assert_eq!(merged.default_verbosity.as_deref(), Some("low"));
+        assert_eq!(merged.output_modalities, vec!["text", "image"]);
+        assert_eq!(
+            merged
+                .pricing
+                .as_ref()
+                .and_then(|pricing| pricing.input_usd_per_million_tokens.as_deref()),
+            Some("1.25")
+        );
+        assert_eq!(
+            merged.pricing.as_ref().map(|pricing| pricing.tiers.len()),
+            Some(1)
+        );
     }
 }

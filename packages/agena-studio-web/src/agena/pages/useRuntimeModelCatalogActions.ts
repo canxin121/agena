@@ -4,6 +4,7 @@ import type {
   ModelCatalogEntry,
   ModelCatalogEntryWriteRequest,
   ProviderModel,
+  ProviderModelPricing,
   ProviderModelSpeedMode,
   ProviderModelSpeedModeRequestOverride,
   ProviderModelThinkingMode,
@@ -38,6 +39,8 @@ export type ModelCatalogEditableDraft = {
   display_name: string
   origin: string
   description: string
+  output_modalities_json: string
+  pricing_json: string
   tool_calling: boolean
   streaming: boolean
   reasoning: boolean
@@ -102,6 +105,30 @@ function stringifyJson(value: Record<string, unknown> | null | undefined): strin
   return JSON.stringify(value, null, 2)
 }
 
+function stringifyJsonValue(value: unknown): string {
+  if (value == null) return ''
+  return JSON.stringify(value, null, 2)
+}
+
+function normalizeOptionalStringArray(value: string, fieldLabel: string): string[] | null {
+  const normalized = String(value || '').trim()
+  if (!normalized) return null
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(normalized)
+  } catch {
+    throw new Error(`${fieldLabel} must be valid JSON.`)
+  }
+
+  if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== 'string')) {
+    throw new Error(`${fieldLabel} must be a JSON array of strings.`)
+  }
+
+  const values = parsed.map((item) => String(item).trim()).filter(Boolean)
+  return values.length ? [...new Set(values)] : null
+}
+
 function readCapabilityFlag(
   entry: { capabilities?: Record<string, unknown> | null; features?: unknown; [key: string]: unknown },
   key: 'tool_calling' | 'streaming' | 'reasoning' | 'structured_output' | 'temperature_supported',
@@ -161,6 +188,8 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
     display_name: '',
     origin: '',
     description: '',
+    output_modalities_json: '',
+    pricing_json: '',
     tool_calling: false,
     streaming: false,
     reasoning: false,
@@ -245,6 +274,8 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     display_name: String(entry.display_name || ''),
     origin: String(entry.origin || ''),
     description: String(entry.description || ''),
+    output_modalities_json: stringifyJsonValue(entry.output_modalities || null),
+    pricing_json: stringifyJsonValue(entry.pricing || null),
     tool_calling: readCapabilityFlag(entry, 'tool_calling'),
     streaming: readCapabilityFlag(entry, 'streaming'),
     reasoning: readCapabilityFlag(entry, 'reasoning'),
@@ -268,6 +299,8 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
     display_name: String(model.display_name || ''),
     origin: '',
     description: String(model.metadata?.description || ''),
+    output_modalities_json: stringifyJsonValue(model.metadata?.output_modalities || null),
+    pricing_json: stringifyJsonValue(model.metadata?.pricing || null),
     tool_calling: readCapabilityFlag(model, 'tool_calling'),
     streaming: readCapabilityFlag(model, 'streaming'),
     reasoning: readCapabilityFlag(model, 'reasoning'),
@@ -287,7 +320,9 @@ export function findCatalogEntryForProviderModel(
   entries: ModelCatalogEntry[],
   model: ProviderModel,
 ): ModelCatalogEntry | null {
-  const lookupIds = [...new Set([String(model.id || '').trim(), catalogLookupIdForProviderModel(model)].filter(Boolean))]
+  const lookupIds = [
+    ...new Set([String(model.id || '').trim(), catalogLookupIdForProviderModel(model)].filter(Boolean)),
+  ]
   const matches = entries.filter((entry) => lookupIds.includes(entry.model_id))
   return matches.find((entry) => entry.kind === 'custom') || matches[0] || null
 }
@@ -394,6 +429,8 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
     display_name: normalizeOptionalText(draft.display_name),
     origin: normalizeOptionalText(draft.origin),
     description: normalizeOptionalText(draft.description),
+    output_modalities: normalizeOptionalStringArray(draft.output_modalities_json, 'Output modalities'),
+    pricing: normalizeOptionalJsonObject(draft.pricing_json, 'Pricing') as ProviderModelPricing | null,
     thinking_modes: buildModelCatalogThinkingModes(draft.thinking_modes),
     speed_modes: buildModelCatalogSpeedModes(draft.speed_modes),
     features: supportedFeatures.length ? { supported: supportedFeatures } : undefined,

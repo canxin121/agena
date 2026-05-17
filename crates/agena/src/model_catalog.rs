@@ -17,6 +17,7 @@ use crate::{
     config::{ConfigResolution, ProviderAdapterDefinition, ProviderCapabilityFamilyConfig},
     model::{
         CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality, ModelLifecycle,
+        ModelPricing,
     },
     provider::{
         ConfiguredModelDefinition, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
@@ -65,6 +66,10 @@ pub struct CatalogModelDefinition {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -91,6 +96,8 @@ impl CatalogModelDefinition {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.output_modalities.is_empty()
+            && self.pricing.is_none()
             && self.display_name.is_none()
             && self.origin.is_none()
             && self.thinking_modes.is_empty()
@@ -113,6 +120,8 @@ impl CatalogModelDefinition {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity,
+            output_modalities: self.output_modalities,
+            pricing: self.pricing,
             thinking_modes: self.thinking_modes,
             speed_modes: self.speed_modes,
             capabilities: self.capabilities,
@@ -168,6 +177,10 @@ pub struct ModelCatalogEntryRecord {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub thinking_modes: BTreeMap<String, ConfiguredModelThinkingMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -191,6 +204,8 @@ impl ModelCatalogEntryRecord {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity.clone(),
+            output_modalities: self.output_modalities.clone(),
+            pricing: self.pricing.clone(),
             display_name: self.display_name.clone(),
             origin: self.origin.clone(),
             thinking_modes: self.thinking_modes.clone(),
@@ -293,6 +308,8 @@ impl ModelCatalogSnapshot {
             supports_parallel_tool_calls: definition.supports_parallel_tool_calls,
             supports_verbosity: definition.supports_verbosity,
             default_verbosity: definition.default_verbosity.clone(),
+            output_modalities: definition.output_modalities.clone(),
+            pricing: definition.pricing.clone(),
             thinking_modes: definition.thinking_modes.clone(),
             speed_modes: definition.speed_modes.clone(),
             capabilities: definition.capabilities.clone(),
@@ -769,6 +786,8 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         supports_parallel_tool_calls: model.metadata.supports_parallel_tool_calls,
         supports_verbosity: model.metadata.supports_verbosity,
         default_verbosity: model.metadata.default_verbosity.clone(),
+        output_modalities: model.metadata.output_modalities.clone(),
+        pricing: model.metadata.pricing.clone(),
         display_name: model.display_name.clone(),
         origin: None,
         thinking_modes: model
@@ -909,6 +928,8 @@ fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &Catalog
     if current.default_verbosity.is_none() {
         current.default_verbosity = next.default_verbosity.clone();
     }
+    merge_unique(&mut current.output_modalities, &next.output_modalities);
+    merge_model_pricing(&mut current.pricing, next.pricing.as_ref());
     if current.display_name.is_none() {
         current.display_name = next.display_name.clone();
     }
@@ -1058,6 +1079,8 @@ fn merge_public_source_catalog_definition(
     if current.default_verbosity.is_none() {
         current.default_verbosity = next.default_verbosity.clone();
     }
+    merge_unique(&mut current.output_modalities, &next.output_modalities);
+    merge_model_pricing(&mut current.pricing, next.pricing.as_ref());
     if current.display_name.is_none() {
         current.display_name = next.display_name.clone();
     }
@@ -1231,6 +1254,54 @@ fn merge_unique<T: Clone + PartialEq>(current: &mut Vec<T>, next: &[T]) {
         if !current.contains(value) {
             current.push(value.clone());
         }
+    }
+}
+
+fn merge_model_pricing(current: &mut Option<ModelPricing>, next: Option<&ModelPricing>) {
+    match (current.as_mut(), next) {
+        (None, Some(next)) => *current = Some(next.clone()),
+        (Some(current), Some(next)) => {
+            if current.input_usd_per_million_tokens.is_none() {
+                current.input_usd_per_million_tokens = next.input_usd_per_million_tokens.clone();
+            }
+            if current.output_usd_per_million_tokens.is_none() {
+                current.output_usd_per_million_tokens = next.output_usd_per_million_tokens.clone();
+            }
+            if current.cache_read_usd_per_million_tokens.is_none() {
+                current.cache_read_usd_per_million_tokens =
+                    next.cache_read_usd_per_million_tokens.clone();
+            }
+            if current.cache_write_usd_per_million_tokens.is_none() {
+                current.cache_write_usd_per_million_tokens =
+                    next.cache_write_usd_per_million_tokens.clone();
+            }
+            for tier in &next.tiers {
+                match current.tiers.iter_mut().find(|existing| {
+                    existing.tier_type == tier.tier_type && existing.size_tokens == tier.size_tokens
+                }) {
+                    Some(existing) => {
+                        if existing.input_usd_per_million_tokens.is_none() {
+                            existing.input_usd_per_million_tokens =
+                                tier.input_usd_per_million_tokens.clone();
+                        }
+                        if existing.output_usd_per_million_tokens.is_none() {
+                            existing.output_usd_per_million_tokens =
+                                tier.output_usd_per_million_tokens.clone();
+                        }
+                        if existing.cache_read_usd_per_million_tokens.is_none() {
+                            existing.cache_read_usd_per_million_tokens =
+                                tier.cache_read_usd_per_million_tokens.clone();
+                        }
+                        if existing.cache_write_usd_per_million_tokens.is_none() {
+                            existing.cache_write_usd_per_million_tokens =
+                                tier.cache_write_usd_per_million_tokens.clone();
+                        }
+                    }
+                    None => current.tiers.push(tier.clone()),
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1763,7 +1834,19 @@ mod tests {
                                 "structured_output": true,
                                 "temperature": false,
                                 "modalities": {
-                                    "input": ["text", "image"]
+                                    "input": ["text", "image"],
+                                    "output": ["text", "image"]
+                                },
+                                "cost": {
+                                    "input": 1.25,
+                                    "output": 10,
+                                    "cache_read": 0.125,
+                                    "tiers": [{
+                                        "type": "context",
+                                        "size": 200000,
+                                        "input": 2.5,
+                                        "output": 15
+                                    }]
                                 },
                                 "limit": {
                                     "context": 400000,
@@ -1931,6 +2014,23 @@ mod tests {
         assert_eq!(gpt5.supports_parallel_tool_calls, Some(true));
         assert_eq!(gpt5.supports_verbosity, Some(true));
         assert_eq!(gpt5.default_verbosity.as_deref(), Some("low"));
+        assert_eq!(gpt5.output_modalities, vec!["text", "image"]);
+        assert_eq!(
+            gpt5.pricing
+                .as_ref()
+                .and_then(|pricing| pricing.input_usd_per_million_tokens.as_deref()),
+            Some("1.25")
+        );
+        assert_eq!(
+            gpt5.pricing
+                .as_ref()
+                .and_then(|pricing| pricing.output_usd_per_million_tokens.as_deref()),
+            Some("10")
+        );
+        assert_eq!(
+            gpt5.pricing.as_ref().map(|pricing| pricing.tiers.len()),
+            Some(1)
+        );
         assert_eq!(
             gpt5.capabilities
                 .feature_support(ModelCapabilityFeature::Reasoning),

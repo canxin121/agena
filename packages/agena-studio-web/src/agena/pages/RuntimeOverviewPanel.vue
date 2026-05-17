@@ -72,13 +72,9 @@ const { deleteCatalogEntryAction, refreshCatalogAction, saveCatalogEntryAction }
 
 const sortedCatalogEntries = computed(() => catalogEntriesState.value)
 
-const customCatalogEntriesCount = computed(
-  () => catalogSummaryState.value?.custom_entry_count ?? 0,
-)
+const customCatalogEntriesCount = computed(() => catalogSummaryState.value?.custom_entry_count ?? 0)
 
-const officialCatalogEntriesCount = computed(
-  () => catalogSummaryState.value?.official_entry_count ?? 0,
-)
+const officialCatalogEntriesCount = computed(() => catalogSummaryState.value?.official_entry_count ?? 0)
 
 const hasCatalogFilters = computed(
   () => Boolean(catalogQuery.value.trim()) || catalogKindFilter.value !== 'all' || catalogOriginFilter.value !== 'all',
@@ -110,6 +106,8 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
     entry.display_name,
     entry.origin,
     entry.description,
+    Array.isArray(entry.output_modalities) ? entry.output_modalities.join(',') : '',
+    entry.pricing ? JSON.stringify(entry.pricing) : '',
     entry.kind,
     entry.source,
     entry.source_label,
@@ -438,12 +436,7 @@ onMounted(() => {
         <div class="grid two" style="margin-top: 16px">
           <div class="field">
             <label class="label" for="catalog-model-id">Model ID</label>
-            <input
-              id="catalog-model-id"
-              v-model="draft.model_id"
-              class="input mono"
-              placeholder="gpt-4.1-mini"
-            />
+            <input id="catalog-model-id" v-model="draft.model_id" class="input mono" placeholder="gpt-4.1-mini" />
           </div>
 
           <div class="field">
@@ -544,7 +537,9 @@ onMounted(() => {
           >
             <div class="page-header" style="align-items: flex-start">
               <strong>{{ mode.name.trim() || `Thinking Mode ${index + 1}` }}</strong>
-              <button class="button danger" :disabled="submitting" @click="removeThinkingModeDraft(index)">Remove</button>
+              <button class="button danger" :disabled="submitting" @click="removeThinkingModeDraft(index)">
+                Remove
+              </button>
             </div>
 
             <div class="grid two" style="margin-top: 12px">
@@ -760,13 +755,7 @@ onMounted(() => {
 
         <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
           <button class="button primary" :disabled="submitting" @click="runCatalogSearch">Search</button>
-          <button
-            class="button"
-            :disabled="!hasCatalogFilters"
-            @click="clearCatalogFilters"
-          >
-            Clear Filters
-          </button>
+          <button class="button" :disabled="!hasCatalogFilters" @click="clearCatalogFilters">Clear Filters</button>
           <button class="button" :disabled="submitting || catalogOffset <= 0" @click="previousCatalogPage">
             Previous
           </button>
@@ -792,7 +781,8 @@ onMounted(() => {
                   <strong>{{ entry.model_id }}</strong>
                 </div>
                 <div class="muted">
-                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.origin || 'Unknown origin' }} · {{ entry.kind }} ·
+                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.origin || 'Unknown origin' }} ·
+                  {{ entry.kind }} ·
                   {{ entry.source_label || entry.source }}
                 </div>
                 <div v-if="entry.kind === 'custom'" class="muted">Custom entry saved for this model.</div>
@@ -815,9 +805,7 @@ onMounted(() => {
                       <span v-if="mode.disabled" class="badge" style="margin-left: 8px">disabled</span>
                     </div>
                     <div v-if="mode.description" class="muted">{{ mode.description }}</div>
-                    <div v-if="mode.thinking" class="muted mono">
-                      thinking {{ formatModeJson(mode.thinking) }}
-                    </div>
+                    <div v-if="mode.thinking" class="muted mono">thinking {{ formatModeJson(mode.thinking) }}</div>
                   </div>
                 </div>
                 <div v-if="entrySpeedModeItems(entry).length" class="stack" style="margin-top: 8px">

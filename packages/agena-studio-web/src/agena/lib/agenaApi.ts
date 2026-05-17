@@ -239,6 +239,23 @@ export type ProviderAdapterSummary = {
 export type ModelCatalogSourceKind = 'generated' | 'cache' | 'custom'
 export type ModelCatalogEntryKind = 'official' | 'custom'
 
+export type ProviderModelPricingTier = {
+  tier_type?: string | null
+  size_tokens?: number | null
+  input_usd_per_million_tokens?: string | null
+  output_usd_per_million_tokens?: string | null
+  cache_read_usd_per_million_tokens?: string | null
+  cache_write_usd_per_million_tokens?: string | null
+}
+
+export type ProviderModelPricing = {
+  input_usd_per_million_tokens?: string | null
+  output_usd_per_million_tokens?: string | null
+  cache_read_usd_per_million_tokens?: string | null
+  cache_write_usd_per_million_tokens?: string | null
+  tiers?: ProviderModelPricingTier[] | null
+}
+
 export type ModelCatalogEntry = {
   model_id: string
   kind: ModelCatalogEntryKind
@@ -258,6 +275,8 @@ export type ModelCatalogEntry = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  output_modalities?: string[] | null
+  pricing?: ProviderModelPricing | null
   thinking_modes?: Record<string, ProviderModelThinkingMode>
   speed_modes?: Record<string, ProviderModelSpeedMode>
   input?: unknown
@@ -311,6 +330,8 @@ export type ModelCatalogEntryWriteRequest = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  output_modalities?: string[] | null
+  pricing?: ProviderModelPricing | null
   display_name?: string | null
   origin?: string | null
   thinking_modes?: Record<string, ProviderModelThinkingMode>
@@ -372,6 +393,8 @@ export type ProviderModelMetadata = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  output_modalities?: string[] | null
+  pricing?: ProviderModelPricing | null
   limits?: {
     context_window_tokens?: number | null
     max_output_tokens?: number | null

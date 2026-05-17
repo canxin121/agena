@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::{
     AppError,
-    model::{CapabilitySupport, ModelInputModality, ModelLifecycle, ModelSpeedModeRequestOverride},
+    model::{
+        CapabilitySupport, ModelInputModality, ModelLifecycle, ModelPricing, ModelPricingTier,
+        ModelSpeedModeRequestOverride,
+    },
     provider::{
         ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, FeatureCapabilityPatch,
         FeatureCapabilityPatchBody, InputCapabilityPatch, InputCapabilityPatchBody,
@@ -187,6 +190,8 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                 supports_parallel_tool_calls: None,
                 supports_verbosity: None,
                 default_verbosity: None,
+                output_modalities: models_dev_output_modalities(model.modalities.as_ref()),
+                pricing: models_dev_pricing(model.cost.as_ref()),
                 display_name: normalize_optional_string(model.name),
                 origin: origin.clone(),
                 thinking_modes: BTreeMap::new(),
@@ -263,6 +268,8 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                 supports_parallel_tool_calls: None,
                 supports_verbosity: None,
                 default_verbosity: None,
+                output_modalities: Vec::new(),
+                pricing: None,
                 display_name: normalize_optional_string(model.display_name),
                 origin,
                 speed_modes: BTreeMap::new(),
@@ -312,6 +319,8 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
             supports_parallel_tool_calls: model.supports_parallel_tool_calls,
             supports_verbosity: model.support_verbosity,
             default_verbosity: normalize_optional_string(model.default_verbosity),
+            output_modalities: Vec::new(),
+            pricing: None,
             display_name,
             origin: Some("OpenAI".to_owned()),
             thinking_modes,
@@ -709,6 +718,80 @@ fn modalities_to_support(
     (supported, unsupported)
 }
 
+fn models_dev_output_modalities(modalities: Option<&ModelsDevModalities>) -> Vec<String> {
+    let mut output = Vec::new();
+    let Some(modalities) = modalities else {
+        return output;
+    };
+    for modality in &modalities.output {
+        let normalized = normalize_modality_label(modality);
+        if !normalized.is_empty() && !output.contains(&normalized) {
+            output.push(normalized);
+        }
+    }
+    output
+}
+
+fn models_dev_pricing(cost: Option<&ModelsDevCost>) -> Option<ModelPricing> {
+    let Some(cost) = cost else {
+        return None;
+    };
+    let mut pricing = ModelPricing {
+        input_usd_per_million_tokens: pricing_value(cost.input.as_ref()),
+        output_usd_per_million_tokens: pricing_value(cost.output.as_ref()),
+        cache_read_usd_per_million_tokens: pricing_value(cost.cache_read.as_ref()),
+        cache_write_usd_per_million_tokens: pricing_value(cost.cache_write.as_ref()),
+        tiers: cost
+            .tiers
+            .iter()
+            .filter_map(models_dev_pricing_tier)
+            .collect(),
+    };
+
+    if let Some(context_over_200k) = cost.context_over_200k.as_ref() {
+        let tier = ModelPricingTier {
+            tier_type: Some("context".to_owned()),
+            size_tokens: Some(200_000),
+            input_usd_per_million_tokens: pricing_value(context_over_200k.input.as_ref()),
+            output_usd_per_million_tokens: pricing_value(context_over_200k.output.as_ref()),
+            cache_read_usd_per_million_tokens: pricing_value(context_over_200k.cache_read.as_ref()),
+            cache_write_usd_per_million_tokens: pricing_value(
+                context_over_200k.cache_write.as_ref(),
+            ),
+        };
+        if !tier.is_empty()
+            && !pricing.tiers.iter().any(|existing| {
+                existing.tier_type.as_deref() == Some("context")
+                    && existing.size_tokens == Some(200_000)
+            })
+        {
+            pricing.tiers.push(tier);
+        }
+    }
+
+    (!pricing.is_empty()).then_some(pricing)
+}
+
+fn models_dev_pricing_tier(tier: &ModelsDevCostTier) -> Option<ModelPricingTier> {
+    let tier = ModelPricingTier {
+        tier_type: normalize_optional_string(tier.tier_type.clone()),
+        size_tokens: tier.size.map(clamp_u64_to_u32),
+        input_usd_per_million_tokens: pricing_value(tier.input.as_ref()),
+        output_usd_per_million_tokens: pricing_value(tier.output.as_ref()),
+        cache_read_usd_per_million_tokens: pricing_value(tier.cache_read.as_ref()),
+        cache_write_usd_per_million_tokens: pricing_value(tier.cache_write.as_ref()),
+    };
+    (!tier.is_empty()).then_some(tier)
+}
+
+fn pricing_value(value: Option<&serde_json::Value>) -> Option<String> {
+    match value {
+        Some(serde_json::Value::Number(value)) => Some(value.to_string()),
+        Some(serde_json::Value::String(value)) => normalize_optional_string(Some(value.clone())),
+        _ => None,
+    }
+}
+
 fn features_from_bool_flags(
     flags: &[(ModelCapabilityFeature, Option<bool>)],
 ) -> (Vec<ModelCapabilityFeature>, Vec<ModelCapabilityFeature>) {
@@ -757,6 +840,13 @@ fn map_modality_name(value: &str) -> Option<ModelInputModality> {
         "document" | "pdf" => Some(ModelInputModality::Document),
         "file" => Some(ModelInputModality::File),
         _ => None,
+    }
+}
+
+fn normalize_modality_label(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "pdf" => "document".to_owned(),
+        other => other.to_owned(),
     }
 }
 
@@ -929,6 +1019,8 @@ struct ModelsDevModel {
     #[serde(default)]
     limit: Option<ModelsDevLimits>,
     #[serde(default)]
+    cost: Option<ModelsDevCost>,
+    #[serde(default)]
     experimental: Option<ModelsDevExperimental>,
 }
 
@@ -936,8 +1028,52 @@ struct ModelsDevModel {
 struct ModelsDevModalities {
     #[serde(default)]
     input: Vec<String>,
-    #[serde(default, rename = "output")]
-    _output: Vec<String>,
+    #[serde(default)]
+    output: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevCost {
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+    #[serde(default)]
+    output: Option<serde_json::Value>,
+    #[serde(default)]
+    cache_read: Option<serde_json::Value>,
+    #[serde(default)]
+    cache_write: Option<serde_json::Value>,
+    #[serde(default)]
+    context_over_200k: Option<ModelsDevCostTierContext>,
+    #[serde(default)]
+    tiers: Vec<ModelsDevCostTier>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevCostTierContext {
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+    #[serde(default)]
+    output: Option<serde_json::Value>,
+    #[serde(default)]
+    cache_read: Option<serde_json::Value>,
+    #[serde(default)]
+    cache_write: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevCostTier {
+    #[serde(default, rename = "type")]
+    tier_type: Option<String>,
+    #[serde(default)]
+    size: Option<u64>,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+    #[serde(default)]
+    output: Option<serde_json::Value>,
+    #[serde(default)]
+    cache_read: Option<serde_json::Value>,
+    #[serde(default)]
+    cache_write: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

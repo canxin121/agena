@@ -22,6 +22,11 @@ function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderMo
     metadata: {
       lifecycle: 'active',
       description: 'Latest flagship model',
+      output_modalities: ['text', 'image'],
+      pricing: {
+        input_usd_per_million_tokens: '1.25',
+        output_usd_per_million_tokens: '10',
+      },
       limits: {
         context_window_tokens: 400000,
         max_output_tokens: 16384,
@@ -161,6 +166,15 @@ describe('useRuntimeModelCatalogActions', () => {
       display_name: 'GPT-5',
       origin: '',
       description: 'Latest flagship model',
+      output_modalities_json: JSON.stringify(['text', 'image'], null, 2),
+      pricing_json: JSON.stringify(
+        {
+          input_usd_per_million_tokens: '1.25',
+          output_usd_per_million_tokens: '10',
+        },
+        null,
+        2,
+      ),
       tool_calling: true,
       streaming: true,
       reasoning: true,
@@ -236,6 +250,8 @@ describe('useRuntimeModelCatalogActions', () => {
   test('buildModelCatalogWriteRequest preserves split thinking and speed modes and omits them when absent', () => {
     const draft = createEmptyModelCatalogDraft('anthropic', 'claude-sonnet-4-6')
     draft.origin = 'Anthropic'
+    draft.output_modalities_json = '["text","audio"]'
+    draft.pricing_json = '{"input_usd_per_million_tokens":"3","output_usd_per_million_tokens":"15"}'
     draft.thinking_modes.push({
       name: ' deep ',
       display_name: ' Deep ',
@@ -257,6 +273,11 @@ describe('useRuntimeModelCatalogActions', () => {
     const request = buildModelCatalogWriteRequest(draft)
 
     expect(request.origin).toBe('Anthropic')
+    expect(request.output_modalities).toEqual(['text', 'audio'])
+    expect(request.pricing).toEqual({
+      input_usd_per_million_tokens: '3',
+      output_usd_per_million_tokens: '15',
+    })
     expect(request.thinking_modes).toEqual({
       deep: {
         display_name: 'Deep',
@@ -390,6 +411,11 @@ describe('useRuntimeModelCatalogActions', () => {
       display_name: 'GPT-5',
       origin: null,
       description: 'Latest flagship model',
+      output_modalities: ['text', 'image'],
+      pricing: {
+        input_usd_per_million_tokens: '1.25',
+        output_usd_per_million_tokens: '10',
+      },
       features: {
         supported: ['tool_calling', 'streaming', 'reasoning', 'structured_output'],
       },

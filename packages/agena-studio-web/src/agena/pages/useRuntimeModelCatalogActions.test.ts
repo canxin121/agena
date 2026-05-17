@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 import type { ModelCatalogEntry, ModelCatalogEntryWriteRequest, ProviderModel } from '../lib/agenaApi'
 import {
+  buildConfiguredProviderModelFromDraft,
   buildModelCatalogWriteRequest,
   createEmptyModelCatalogDraft,
   createModelCatalogDraftFromEntry,
@@ -49,6 +50,7 @@ function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCa
     source: 'remote',
     source_label: 'remote',
     display_name: 'GPT-5 Catalog',
+    origin: 'OpenAI',
     lifecycle: 'preview',
     context_window_tokens: 256000,
     max_output_tokens: 8192,
@@ -117,6 +119,7 @@ describe('useRuntimeModelCatalogActions', () => {
       context_window_tokens: '400000',
       max_output_tokens: '16384',
       display_name: 'GPT-5',
+      origin: '',
       description: 'Latest flagship model',
       tool_calling: true,
       streaming: true,
@@ -155,12 +158,14 @@ describe('useRuntimeModelCatalogActions', () => {
     )
 
     expect(fromCustom.display_name).toBe('Workspace GPT-5')
+    expect(fromCustom.origin).toBe('OpenAI')
     expect(fromCustom.description).toBe('Local override')
     expect(fromCustom.reasoning).toBe(true)
     expect(fromCustom.context_window_tokens).toBe('256000')
 
     const fromCatalog = createModelCatalogDraftFromProviderSelection([sampleCatalogEntry()], sampleProviderModel())
     expect(fromCatalog.display_name).toBe('GPT-5 Catalog')
+    expect(fromCatalog.origin).toBe('OpenAI')
     expect(fromCatalog.lifecycle).toBe('preview')
     expect(fromCatalog.context_window_tokens).toBe('256000')
     expect(fromCatalog.variants).toEqual([
@@ -176,6 +181,7 @@ describe('useRuntimeModelCatalogActions', () => {
 
   test('buildModelCatalogWriteRequest preserves variants and omits them when absent', () => {
     const draft = createEmptyModelCatalogDraft('anthropic', 'claude-sonnet-4-6')
+    draft.origin = 'Anthropic'
     draft.variants.push({
       name: ' deep ',
       display_name: ' Deep ',
@@ -193,6 +199,7 @@ describe('useRuntimeModelCatalogActions', () => {
 
     const request = buildModelCatalogWriteRequest(draft)
 
+    expect(request.origin).toBe('Anthropic')
     expect(request.variants).toEqual({
       deep: {
         display_name: 'Deep',
@@ -205,6 +212,16 @@ describe('useRuntimeModelCatalogActions', () => {
     expect(buildModelCatalogWriteRequest(createEmptyModelCatalogDraft('shared', 'openai/gpt-5')).variants).toBe(
       undefined,
     )
+  })
+
+  test('buildConfiguredProviderModelFromDraft drops display-only origin metadata', () => {
+    const draft = createEmptyModelCatalogDraft('openai', 'gpt-5')
+    draft.display_name = 'GPT-5'
+    draft.origin = 'OpenAI'
+
+    expect(buildConfiguredProviderModelFromDraft(draft)).toEqual({
+      display_name: 'GPT-5',
+    })
   })
 
   test('saveCatalogEntryAction reports local variant validation errors before submitting', async () => {
@@ -286,6 +303,7 @@ describe('useRuntimeModelCatalogActions', () => {
       context_window_tokens: 400000,
       max_output_tokens: 16384,
       display_name: 'GPT-5',
+      origin: null,
       description: 'Latest flagship model',
       features: {
         supported: ['tool_calling', 'streaming', 'reasoning', 'structured_output'],

@@ -37,6 +37,7 @@ const actionError = ref('')
 const actionMessage = ref('')
 const catalogEntriesState = ref<ModelCatalogEntry[]>([])
 const catalogKindFilter = ref<'all' | ModelCatalogEntryKind>('all')
+const catalogOriginFilter = ref('all')
 const catalogQuery = ref('')
 const draft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft())
 const editingEntryKey = ref('')
@@ -72,6 +73,12 @@ const officialCatalogEntriesCount = computed(
   () => catalogEntriesState.value.filter((entry) => entry.kind === 'official').length,
 )
 
+const catalogOriginOptions = computed(() =>
+  [...new Set(catalogEntriesState.value.map((entry) => String(entry.origin || '').trim()).filter(Boolean))].sort(
+    (left, right) => left.localeCompare(right),
+  ),
+)
+
 function catalogEntrySearchText(entry: ModelCatalogEntry) {
   const variantText = Object.entries(entry.variants || {})
     .flatMap(([name, variant]) => [
@@ -86,6 +93,7 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
   return [
     entry.model_id,
     entry.display_name,
+    entry.origin,
     entry.description,
     entry.kind,
     entry.source,
@@ -101,9 +109,11 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
 const filteredCatalogEntries = computed(() => {
   const query = catalogQuery.value.trim().toLowerCase()
   const kind = catalogKindFilter.value
+  const origin = catalogOriginFilter.value
 
   return sortedCatalogEntries.value.filter((entry) => {
     if (kind !== 'all' && entry.kind !== kind) return false
+    if (origin !== 'all' && String(entry.origin || '').trim() !== origin) return false
     return !query || catalogEntrySearchText(entry).includes(query)
   })
 })
@@ -131,6 +141,7 @@ function editEntry(entry: ModelCatalogEntry) {
 function clearCatalogFilters() {
   catalogQuery.value = ''
   catalogKindFilter.value = 'all'
+  catalogOriginFilter.value = 'all'
 }
 
 type ProviderModelVariantWithDisabled = ProviderModelVariant & {
@@ -370,13 +381,17 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               id="catalog-model-id"
               v-model="draft.model_id"
               class="input mono"
-              placeholder="openai/gpt-4.1-mini"
+              placeholder="gpt-4.1-mini"
             />
           </div>
 
           <div class="field">
             <label class="label" for="catalog-display-name">Display Name</label>
             <input id="catalog-display-name" v-model="draft.display_name" class="input" placeholder="Acme Reasoner" />
+          </div>
+          <div class="field">
+            <label class="label" for="catalog-origin">Origin</label>
+            <input id="catalog-origin" v-model="draft.origin" class="input" placeholder="OpenAI" />
           </div>
           <div class="field">
             <label class="label" for="catalog-lifecycle">Lifecycle</label>
@@ -578,7 +593,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               id="catalog-entry-search"
               v-model="catalogQuery"
               class="input mono"
-              placeholder="model, variant, description"
+              placeholder="model, origin, variant, description"
             />
           </div>
           <div class="field">
@@ -589,10 +604,23 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               <option value="custom">Custom only</option>
             </select>
           </div>
+          <div class="field">
+            <label class="label" for="catalog-entry-origin-filter">Origin</label>
+            <select id="catalog-entry-origin-filter" v-model="catalogOriginFilter" class="select">
+              <option value="all">All origins</option>
+              <option v-for="origin in catalogOriginOptions" :key="origin" :value="origin">
+                {{ origin }}
+              </option>
+            </select>
+          </div>
         </div>
 
         <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
-          <button class="button" :disabled="!catalogQuery && catalogKindFilter === 'all'" @click="clearCatalogFilters">
+          <button
+            class="button"
+            :disabled="!catalogQuery && catalogKindFilter === 'all' && catalogOriginFilter === 'all'"
+            @click="clearCatalogFilters"
+          >
             Clear Filters
           </button>
         </div>
@@ -610,7 +638,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                   <strong>{{ entry.model_id }}</strong>
                 </div>
                 <div class="muted">
-                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} ·
+                  {{ entry.display_name || 'Unnamed model' }} · {{ entry.origin || 'Unknown origin' }} · {{ entry.kind }} ·
                   {{ entry.source_label || entry.source }}
                 </div>
                 <div v-if="entry.kind === 'custom'" class="muted">Custom entry saved for this model.</div>

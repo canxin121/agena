@@ -9,6 +9,7 @@ describe('RuntimeOverviewPanel', () => {
         {
           model_id: 'claude-sonnet-4-6',
           display_name: 'Claude Sonnet 4.6',
+          origin: 'Anthropic',
           description: 'Balanced model',
           variants: {
             deep: {
@@ -34,6 +35,7 @@ describe('RuntimeOverviewPanel', () => {
     expect(html.includes('deep')).toBe(true)
     expect(html.includes('More reasoning')).toBe(true)
     expect(html.includes('thinking')).toBe(true)
+    expect(html.includes('Anthropic')).toBe(true)
   })
 
   test('renders live provider models as one-click draft sources', async () => {
@@ -44,6 +46,7 @@ describe('RuntimeOverviewPanel', () => {
           kind: 'official',
           source: 'remote',
           display_name: 'GPT-5 Catalog',
+          origin: 'OpenAI',
         },
       ],
       operatorCards: [{ label: 'Providers', value: '1' }],
@@ -105,6 +108,7 @@ describe('RuntimeOverviewPanel', () => {
           source: 'remote',
           source_label: 'remote catalog',
           display_name: 'GPT-5 Official',
+          origin: 'OpenAI',
         },
         {
           model_id: 'gpt-5',
@@ -112,6 +116,7 @@ describe('RuntimeOverviewPanel', () => {
           source: 'custom',
           source_label: 'workspace override',
           display_name: 'GPT-5 Workspace',
+          origin: 'OpenAI',
         },
       ],
       operatorCards: [{ label: 'Providers', value: '1' }],
@@ -149,8 +154,10 @@ describe('RuntimeOverviewPanel', () => {
     expect(html.includes('Find Entries')).toBe(true)
     expect(html.includes('Official only')).toBe(true)
     expect(html.includes('Custom only')).toBe(true)
+    expect(html.includes('All origins')).toBe(true)
     expect(html.includes('2/2')).toBe(true)
     expect(html.includes('remote catalog')).toBe(true)
     expect(html.includes('workspace override')).toBe(true)
+    expect(html.includes('OpenAI')).toBe(true)
   })
 })

@@ -34,6 +34,7 @@ export type ModelCatalogEditableDraft = {
   context_window_tokens: string
   max_output_tokens: string
   display_name: string
+  origin: string
   description: string
   tool_calling: boolean
   streaming: boolean
@@ -124,6 +125,7 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
     context_window_tokens: '',
     max_output_tokens: '',
     display_name: '',
+    origin: '',
     description: '',
     tool_calling: false,
     streaming: false,
@@ -175,6 +177,7 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     context_window_tokens: entry.context_window_tokens == null ? '' : String(entry.context_window_tokens),
     max_output_tokens: entry.max_output_tokens == null ? '' : String(entry.max_output_tokens),
     display_name: String(entry.display_name || ''),
+    origin: String(entry.origin || ''),
     description: String(entry.description || ''),
     tool_calling: readCapabilityFlag(entry, 'tool_calling'),
     streaming: readCapabilityFlag(entry, 'streaming'),
@@ -196,6 +199,7 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
     max_output_tokens:
       model.metadata?.limits?.max_output_tokens == null ? '' : String(model.metadata.limits.max_output_tokens),
     display_name: String(model.display_name || ''),
+    origin: '',
     description: String(model.metadata?.description || ''),
     tool_calling: readCapabilityFlag(model, 'tool_calling'),
     streaming: readCapabilityFlag(model, 'streaming'),
@@ -273,6 +277,7 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
     context_window_tokens: normalizeOptionalInteger(draft.context_window_tokens),
     max_output_tokens: normalizeOptionalInteger(draft.max_output_tokens),
     display_name: normalizeOptionalText(draft.display_name),
+    origin: normalizeOptionalText(draft.origin),
     description: normalizeOptionalText(draft.description),
     variants: buildModelCatalogVariants(draft.variants),
     features: supportedFeatures.length ? { supported: supportedFeatures } : undefined,
@@ -282,6 +287,7 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
 export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditableDraft): Record<string, unknown> {
   const request = buildModelCatalogWriteRequest(draft) as Record<string, unknown>
   delete request.model_id
+  delete request.origin
 
   for (const [key, value] of Object.entries({ ...request })) {
     const isEmptyObject =

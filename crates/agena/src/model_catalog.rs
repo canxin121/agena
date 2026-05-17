@@ -47,6 +47,8 @@ pub struct CatalogModelDefinition {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub variants: BTreeMap<String, ConfiguredModelVariant>,
     #[serde(flatten)]
@@ -60,6 +62,7 @@ impl CatalogModelDefinition {
             && self.max_output_tokens.is_none()
             && self.description.is_none()
             && self.display_name.is_none()
+            && self.origin.is_none()
             && self.variants.is_empty()
             && self.capabilities.is_empty()
     }
@@ -95,6 +98,8 @@ pub struct ModelCatalogEntryRecord {
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_local_override: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,6 +124,7 @@ impl ModelCatalogEntryRecord {
             max_output_tokens: self.max_output_tokens,
             description: self.description.clone(),
             display_name: self.display_name.clone(),
+            origin: self.origin.clone(),
             variants: self.variants.clone(),
             capabilities: self.capabilities.clone(),
         }
@@ -208,6 +214,7 @@ impl ModelCatalogSnapshot {
         ModelCatalogEntryRecord {
             model_id: model_id.to_owned(),
             display_name: definition.display_name.clone(),
+            origin: definition.origin.clone(),
             has_local_override,
             lifecycle: definition.lifecycle,
             context_window_tokens: definition.context_window_tokens,
@@ -788,7 +795,10 @@ mod tests {
                     Regex::new(r"^claude-3-7-sonnet-(\d{8})-v1:0$").unwrap(),
                     "claude-sonnet-3-7-$1",
                 ),
-                (Regex::new(r"^claude-opus-4-6-v1$").unwrap(), "claude-opus-4-6"),
+                (
+                    Regex::new(r"^claude-opus-4-6-v1$").unwrap(),
+                    "claude-opus-4-6",
+                ),
                 (
                     Regex::new(r"^(deepseek-v)(\d+)[-.](\d+)(.*)$").unwrap(),
                     "$1$2.$3$4",
@@ -812,10 +822,7 @@ mod tests {
                     Regex::new(r"^gpt-oss-(120b|20b)-1:0$").unwrap(),
                     "gpt-oss-$1",
                 ),
-                (
-                    Regex::new(r"^(grok)-(\d+)(\d)(.*)$").unwrap(),
-                    "$1-$2.$3$4",
-                ),
+                (Regex::new(r"^(grok)-(\d+)(\d)(.*)$").unwrap(), "$1-$2.$3$4"),
                 (
                     Regex::new(r"^(grok)-(\d+)[-.](\d+)(.*)$").unwrap(),
                     "$1-$2.$3$4",
@@ -845,18 +852,12 @@ mod tests {
                     Regex::new(r"^pixtral-large-2502-v1:0$").unwrap(),
                     "pixtral-large-2502",
                 ),
-                (
-                    Regex::new(r"^(qwen\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1.$2$3",
-                ),
+                (Regex::new(r"^(qwen\d+)[-.](\d+)(.*)$").unwrap(), "$1.$2$3"),
                 (
                     Regex::new(r"^qwen3\.235b-a22b-instruct-2507$").unwrap(),
                     "qwen3-235b-a22b-instruct-2507",
                 ),
-                (
-                    Regex::new(r"^qwen3\.5:397b$").unwrap(),
-                    "qwen3.5-397b-a17b",
-                ),
+                (Regex::new(r"^qwen3\.5:397b$").unwrap(), "qwen3.5-397b-a17b"),
             ]
         }) {
             normalized = pattern
@@ -974,6 +975,20 @@ mod tests {
         assert!(catalog.models.contains_key("command-a"));
         assert!(catalog.models.contains_key("gemma-3-27b-it"));
         assert!(catalog.models.contains_key("gpt-4o"));
+        assert_eq!(
+            catalog
+                .models
+                .get("gpt-5.5")
+                .and_then(|definition| definition.origin.as_deref()),
+            Some("OpenAI")
+        );
+        assert_eq!(
+            catalog
+                .models
+                .get("claude-opus-4-7")
+                .and_then(|definition| definition.origin.as_deref()),
+            Some("Anthropic")
+        );
         assert!(!catalog.models.contains_key("openai.gpt-5.4"));
         assert!(!catalog.models.contains_key("gpt-oss-120b:free"));
         assert!(!catalog.models.contains_key("study_gpt-chatgpt-4o-latest"));
@@ -1014,6 +1029,14 @@ mod tests {
             assert!(
                 !route_suffix.is_match(model_id),
                 "bundled catalog model id should not contain provider route suffix like '-v1:0': {model_id}"
+            );
+            assert!(
+                catalog
+                    .models
+                    .get(model_id)
+                    .and_then(|definition| definition.origin.as_ref())
+                    .is_some_and(|origin| !origin.trim().is_empty()),
+                "bundled catalog model id should include a non-empty origin label: {model_id}"
             );
             assert!(
                 lowered.insert(model_id.to_ascii_lowercase()),

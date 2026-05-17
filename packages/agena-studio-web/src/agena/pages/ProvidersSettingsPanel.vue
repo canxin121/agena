@@ -575,6 +575,7 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
               <span class="badge neutral">{{ entry.kind }}</span>
             </div>
           </div>
+          <p v-if="entry.origin" class="muted">Origin: {{ entry.origin }}</p>
           <p v-if="entry.description" class="muted">{{ entry.description }}</p>
           <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
             <button class="button" :disabled="submittingConfig" @click="loadCatalogEntryIntoProviderDraft(entry)">

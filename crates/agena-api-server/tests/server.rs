@@ -52,6 +52,9 @@ use tower::ServiceExt;
 
 struct TestProvider;
 
+const LIVE_PROVIDER_GATEWAY_BASE_URL: &str = "https://api.cxits.cn";
+const LIVE_PROVIDER_GATEWAY_KEY_ENV: &str = "AGENA_PROVIDER_GATEWAY_API_KEY";
+
 #[async_trait::async_trait]
 impl ModelProvider for TestProvider {
     fn id(&self) -> &str {
@@ -237,6 +240,107 @@ async fn insert_projected_text_part(
     .insert(db)
     .await
     .expect("activity part projection should insert");
+}
+
+fn live_provider_gateway_key() -> String {
+    std::env::var(LIVE_PROVIDER_GATEWAY_KEY_ENV)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .expect("AGENA_PROVIDER_GATEWAY_API_KEY must be set for cxits live provider creation tests")
+}
+
+fn live_provider_id(prefix: &str) -> String {
+    format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
+}
+
+fn live_provider_discovery_request(provider_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "provider_id": provider_id,
+        "base_url": LIVE_PROVIDER_GATEWAY_BASE_URL,
+        "api_key_env": LIVE_PROVIDER_GATEWAY_KEY_ENV
+    })
+}
+
+fn select_supported_live_adapter_and_model(discovery: &serde_json::Value) -> (String, String) {
+    let adapters = discovery
+        .get("adapters")
+        .and_then(|value| value.as_array())
+        .expect("discovery response should include adapters array");
+
+    for preferred in ["openai", "anthropic", "gemini"] {
+        if let Some(model_id) = adapters.iter().find_map(|adapter| {
+            if adapter.get("adapter_id").and_then(|value| value.as_str()) != Some(preferred)
+                || adapter.get("supported").and_then(|value| value.as_bool()) != Some(true)
+            {
+                return None;
+            }
+            adapter
+                .get("models")
+                .and_then(|value| value.as_array())
+                .and_then(|models| {
+                    models
+                        .iter()
+                        .find_map(|model| model.get("id").and_then(|value| value.as_str()))
+                })
+                .map(str::to_owned)
+        }) {
+            return (preferred.to_owned(), model_id);
+        }
+    }
+
+    panic!(
+        "cxits live discovery should return at least one supported adapter with models: {discovery:?}"
+    );
+}
+
+fn build_live_provider_patch_from_discovery(
+    discovery: &serde_json::Value,
+    default_adapter: &str,
+    default_model: &str,
+) -> serde_json::Value {
+    let mut adapters = serde_json::Map::new();
+    for adapter in discovery
+        .get("adapters")
+        .and_then(|value| value.as_array())
+        .expect("discovery response should include adapters array")
+    {
+        if adapter.get("supported").and_then(|value| value.as_bool()) != Some(true) {
+            continue;
+        }
+        let Some(adapter_id) = adapter.get("adapter_id").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        adapters.insert(
+            adapter_id.to_owned(),
+            serde_json::json!({ "enabled": true }),
+        );
+    }
+
+    let default_adapter_patch = adapters
+        .entry(default_adapter.to_owned())
+        .or_insert_with(|| serde_json::json!({ "enabled": true }));
+    default_adapter_patch
+        .as_object_mut()
+        .expect("default adapter patch should be an object")
+        .insert(
+            "models".to_owned(),
+            serde_json::json!({
+                default_model: {}
+            }),
+        );
+
+    serde_json::json!({
+        "enabled": true,
+        "default_adapter": default_adapter,
+        "default_model": default_model,
+        "auth": {
+            "mode": "api",
+            "base_url": LIVE_PROVIDER_GATEWAY_BASE_URL,
+            "api_key_env": LIVE_PROVIDER_GATEWAY_KEY_ENV
+        },
+        "adapters": adapters
+    })
 }
 
 #[tokio::test]
@@ -1100,6 +1204,276 @@ enabled = true
                 && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
         }),
         "saved discovery should include unconfigured gemini adapter: {value:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "real integration test against api.cxits.cn"]
+async fn cxits_live_provider_creation_flow_discovers_gateway_root() {
+    let _api_key = live_provider_gateway_key();
+    let provider_id = live_provider_id("cxits_draft");
+    let (state, _, _) = build_state().await;
+    let app = router(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/providers/discover")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    live_provider_discovery_request(provider_id.as_str()).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        value.get("provider_id").and_then(|value| value.as_str()),
+        Some(provider_id.as_str())
+    );
+    let adapters = value
+        .get("adapters")
+        .and_then(|items| items.as_array())
+        .expect("discovery response should include adapters");
+    assert!(
+        adapters.iter().any(|adapter| {
+            adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+                && adapter
+                    .get("models")
+                    .and_then(|value| value.as_array())
+                    .map(|models| !models.is_empty())
+                    == Some(true)
+        }),
+        "cxits discovery should yield at least one supported adapter with models: {value:?}"
+    );
+
+    let (adapter_id, model_id) = select_supported_live_adapter_and_model(&value);
+    let selected_adapter = adapters
+        .iter()
+        .find(|adapter| {
+            adapter.get("adapter_id").and_then(|value| value.as_str()) == Some(adapter_id.as_str())
+        })
+        .expect("selected adapter should be present");
+    assert!(
+        selected_adapter
+            .get("resolved_base_url")
+            .and_then(|value| value.as_str())
+            .is_some_and(|resolved| resolved.starts_with(LIVE_PROVIDER_GATEWAY_BASE_URL)),
+        "selected adapter should resolve from cxits root: {selected_adapter:?}"
+    );
+    assert!(
+        selected_adapter
+            .get("models")
+            .and_then(|value| value.as_array())
+            .map(|models| {
+                models.iter().any(|model| {
+                    model.get("id").and_then(|value| value.as_str()) == Some(model_id.as_str())
+                })
+            })
+            == Some(true),
+        "selected adapter should include chosen model {model_id}: {selected_adapter:?}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "real integration test against api.cxits.cn"]
+async fn cxits_live_provider_creation_flow_can_save_provider_and_list_models() {
+    let _api_key = live_provider_gateway_key();
+    let provider_id = live_provider_id("cxits_live");
+    let (state, _, _) = build_state().await;
+    let app = router(state);
+
+    let draft_discovery = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/providers/discover")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    live_provider_discovery_request(provider_id.as_str()).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(draft_discovery.status(), StatusCode::OK);
+
+    let discovery_body = draft_discovery
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let discovery_value: serde_json::Value = serde_json::from_slice(&discovery_body).unwrap();
+    let (adapter_id, model_id) = select_supported_live_adapter_and_model(&discovery_value);
+    let provider_patch = build_live_provider_patch_from_discovery(
+        &discovery_value,
+        adapter_id.as_str(),
+        model_id.as_str(),
+    );
+    let mut provider_changes = serde_json::Map::new();
+    provider_changes.insert(provider_id.clone(), provider_patch);
+
+    let patch_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v1/settings")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "path": "providers",
+                        "changes": serde_json::Value::Object(provider_changes),
+                        "validate": true,
+                        "reload": true
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(patch_response.status(), StatusCode::OK);
+
+    let patch_body = patch_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let patch_value: serde_json::Value = serde_json::from_slice(&patch_body).unwrap();
+    assert_eq!(
+        patch_value.get("changed").and_then(|value| value.as_bool()),
+        Some(true),
+        "provider creation patch should change config: {patch_value:?}"
+    );
+    assert_eq!(
+        patch_value.pointer(format!("/current/{provider_id}/default_adapter").as_str()),
+        Some(&serde_json::json!(adapter_id.as_str()))
+    );
+    assert_eq!(
+        patch_value.pointer(format!("/current/{provider_id}/default_model").as_str()),
+        Some(&serde_json::json!(model_id.as_str()))
+    );
+
+    let runtime_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/runtime")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(runtime_response.status(), StatusCode::OK);
+    let runtime_body = runtime_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let runtime_value: serde_json::Value = serde_json::from_slice(&runtime_body).unwrap();
+    assert!(
+        runtime_value
+            .get("provider_ids")
+            .and_then(|value| value.as_array())
+            .is_some_and(|providers| {
+                providers
+                    .iter()
+                    .any(|value| value.as_str() == Some(provider_id.as_str()))
+            }),
+        "runtime should include saved cxits provider: {runtime_value:?}"
+    );
+
+    let saved_discovery = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/providers/{provider_id}/discover"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "adapter_ids": [adapter_id]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved_discovery.status(), StatusCode::OK);
+
+    let saved_discovery_body = saved_discovery
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let saved_discovery_value: serde_json::Value =
+        serde_json::from_slice(&saved_discovery_body).unwrap();
+    assert!(
+        saved_discovery_value
+            .get("adapters")
+            .and_then(|value| value.as_array())
+            .is_some_and(|adapters| {
+                adapters.iter().any(|adapter| {
+                    adapter.get("adapter_id").and_then(|value| value.as_str())
+                        == Some(adapter_id.as_str())
+                        && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+                        && adapter
+                            .get("models")
+                            .and_then(|value| value.as_array())
+                            .map(|models| {
+                                models.iter().any(|model| {
+                                    model.get("id").and_then(|value| value.as_str())
+                                        == Some(model_id.as_str())
+                                })
+                            })
+                            == Some(true)
+                })
+            }),
+        "saved provider discovery should include the selected live adapter/model: {saved_discovery_value:?}"
+    );
+
+    let models_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/providers/{provider_id}/models"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(models_response.status(), StatusCode::OK);
+
+    let models_body = models_response
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    let models_value: serde_json::Value = serde_json::from_slice(&models_body).unwrap();
+    assert!(
+        models_value
+            .get("models")
+            .and_then(|value| value.as_array())
+            .is_some_and(|models| {
+                models.iter().any(|model| {
+                    model.get("id").and_then(|value| value.as_str()) == Some(model_id.as_str())
+                        && model.get("adapter_id").and_then(|value| value.as_str())
+                            == Some(adapter_id.as_str())
+                })
+            }),
+        "saved provider models should include the selected live adapter/model: {models_value:?}"
     );
 }
 

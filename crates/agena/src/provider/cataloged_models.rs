@@ -6,7 +6,10 @@ use futures_core::Stream;
 use crate::{
     error::AppError,
     model::{AdapterId, Model, ModelId, ModelMetadata, ModelVariant},
-    model_catalog::{ModelCatalogProviderRecord, catalog_definition_to_provider_definition},
+    model_catalog::{
+        ModelCatalogProviderRecord, canonical_model_catalog_id,
+        catalog_definition_to_provider_definition,
+    },
 };
 
 use super::{
@@ -43,6 +46,11 @@ impl CatalogedModelsProvider {
         self.provider
             .models
             .get(model.as_str())
+            .or_else(|| {
+                catalog_model_id_for_raw(model.as_str())
+                    .as_ref()
+                    .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
+            })
             .map(catalog_definition_to_provider_definition)
     }
 
@@ -50,10 +58,18 @@ impl CatalogedModelsProvider {
         self.provider
             .models
             .get(model.as_str())
+            .or_else(|| {
+                catalog_model_id_for_raw(model.as_str())
+                    .as_ref()
+                    .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
+            })
             .and_then(|definition| definition.display_name.clone())
     }
 
     fn apply_to_model(&self, model_id: &ModelId, mut model: Model) -> Model {
+        if let Some(catalog_model_id) = catalog_model_id_for_raw(model_id.as_str()) {
+            model.catalog_model_id = Some(ModelId::new(catalog_model_id));
+        }
         if let Some(display_name) = self.display_name_for_model(model_id) {
             model.display_name = Some(display_name);
         }
@@ -182,17 +198,30 @@ impl ModelProvider for CatalogedModelsProvider {
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut models = self.target.list_models().await?;
         let mut listed = std::collections::BTreeSet::new();
+        let mut listed_catalog_ids = std::collections::BTreeSet::new();
         for model in &mut models {
             listed.insert(model.id.to_string());
+            if let Some(catalog_model_id) = catalog_model_id_for_raw(model.id.as_str()) {
+                listed_catalog_ids.insert(catalog_model_id.clone());
+                model.catalog_model_id = Some(ModelId::new(catalog_model_id));
+            }
             *model = self.apply_to_model(&model.id.clone(), model.clone());
         }
 
         for model_id in self.provider.models.keys() {
-            if listed.contains(model_id.as_str()) {
+            if listed.contains(model_id.as_str())
+                || listed_catalog_ids.contains(model_id.as_str())
+                || models.iter().any(|model| {
+                    model.id.as_str() == model_id.as_str()
+                        || model.catalog_model_id.as_ref().map(ModelId::as_str)
+                            == Some(model_id.as_str())
+                })
+            {
                 continue;
             }
             let model_id = ModelId::new(model_id.clone());
             let base = Model::new(self.target.id(), model_id.as_str())
+                .with_catalog_model_id(model_id.as_str())
                 .with_capabilities(self.model_capabilities(&model_id))
                 .with_metadata(self.model_metadata(&model_id))
                 .with_variants(self.model_variants(&model_id));
@@ -235,6 +264,12 @@ impl ModelProvider for CatalogedModelsProvider {
             .complete_stream_for_adapter(adapter_id, request)
             .await
     }
+}
+
+fn catalog_model_id_for_raw(raw_model_id: &str) -> Option<String> {
+    let canonical = canonical_model_catalog_id(raw_model_id);
+    let trimmed = canonical.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 #[cfg(test)]

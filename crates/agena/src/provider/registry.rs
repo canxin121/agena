@@ -59,6 +59,15 @@ impl RequestRetryPolicy {
     }
 }
 
+fn assign_catalog_model_id(model: &mut Model) {
+    let catalog_model_id = crate::model_catalog::canonical_model_catalog_id(model.id.as_str());
+    if catalog_model_id.is_empty() {
+        model.catalog_model_id = None;
+        return;
+    }
+    model.catalog_model_id = Some(ModelId::new(catalog_model_id));
+}
+
 #[derive(Debug, Clone, Copy)]
 struct StreamReplayPolicy {
     max_retries_after_output: u32,
@@ -688,6 +697,7 @@ impl ProviderRegistry {
                     let mut models = provider.list_models().await?;
                     for model in &mut models {
                         model.provider_id = ProviderId::new(provider_id.clone());
+                        assign_catalog_model_id(model);
                         let fallback = provider
                             .model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.id);
                         model.capabilities =
@@ -765,6 +775,7 @@ impl ProviderRegistry {
             let mut fallback_model =
                 Model::new(model.provider_id.as_str(), model.model_id.as_str());
             fallback_model.adapter_id = model.adapter_id.clone();
+            assign_catalog_model_id(&mut fallback_model);
             fallback_model
         }
         .with_capabilities(

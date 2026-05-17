@@ -14,6 +14,7 @@ import { listModelCatalogEntries, lookupModelCatalogEntries } from '@/agena/lib/
 
 import {
   MODEL_LIFECYCLE_OPTIONS,
+  catalogLookupIdForProviderModel,
   createEmptyModelCatalogDraft,
   createEmptyModelCatalogVariantDraft,
   createModelCatalogDraftFromEntry,
@@ -194,7 +195,7 @@ async function runCatalogSearch() {
 }
 
 async function loadProviderModelDraft(model: ProviderModel) {
-  const exactEntries = await lookupModelCatalogEntries([model.id])
+  const exactEntries = await lookupModelCatalogEntries([catalogLookupIdForProviderModel(model) || model.id])
   const matchingEntry = findCatalogEntryForProviderModel(exactEntries, model)
   draft.value = matchingEntry
     ? createModelCatalogDraftFromEntry(matchingEntry)

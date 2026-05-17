@@ -581,6 +581,7 @@ pub(super) fn curate_catalog_document(
 
 pub(super) fn normalized_catalog_model_id(model_id: &str) -> String {
     let mut normalized = model_id.trim().to_ascii_lowercase();
+    normalized = strip_path_prefixes(normalized.as_str());
     if let Some(stripped) = normalized.strip_suffix("@default") {
         normalized = stripped.to_owned();
     }
@@ -673,6 +674,15 @@ pub(super) fn normalized_catalog_model_id(model_id: &str) -> String {
     }
 
     normalized
+}
+
+fn strip_path_prefixes(value: &str) -> String {
+    value
+        .rsplit('/')
+        .find(|segment| !segment.trim().is_empty())
+        .unwrap_or(value)
+        .trim()
+        .to_owned()
 }
 
 fn is_allowed_canonical_model_id(id: &str) -> bool {
@@ -998,6 +1008,18 @@ mod tests {
     #[test]
     fn canonical_model_id_matches_expected_aliases() {
         assert_eq!(normalized_catalog_model_id("openai.gpt-5.4"), "gpt-5.4");
+        assert_eq!(
+            normalized_catalog_model_id("openai/gpt-oss-120b"),
+            "gpt-oss-120b"
+        );
+        assert_eq!(
+            normalized_catalog_model_id("models/qwen/qwen3-next-80b-a3b-thinking"),
+            "qwen3-next-80b-a3b-thinking"
+        );
+        assert_eq!(
+            normalized_catalog_model_id("deepseek-ai/deepseek-v4-pro"),
+            "deepseek-v4-pro"
+        );
         assert_eq!(
             normalized_catalog_model_id("amazon.nova-pro-v1:0"),
             "nova-pro-v1"

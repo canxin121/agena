@@ -210,11 +210,17 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
   }
 }
 
+export function catalogLookupIdForProviderModel(model: ProviderModel): string {
+  const lookupId = String(model.catalog_model_id || '').trim()
+  return lookupId || String(model.id || '').trim()
+}
+
 export function findCatalogEntryForProviderModel(
   entries: ModelCatalogEntry[],
   model: ProviderModel,
 ): ModelCatalogEntry | null {
-  const matches = entries.filter((entry) => entry.model_id === model.id)
+  const lookupIds = [...new Set([String(model.id || '').trim(), catalogLookupIdForProviderModel(model)].filter(Boolean))]
+  const matches = entries.filter((entry) => lookupIds.includes(entry.model_id))
   return matches.find((entry) => entry.kind === 'custom') || matches[0] || null
 }
 

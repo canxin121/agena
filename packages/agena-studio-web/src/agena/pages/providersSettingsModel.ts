@@ -1,5 +1,9 @@
 import type { ModelCatalogEntry, ProviderAdapterDiscovery, ProviderModel } from '../lib/agenaApi'
-import { buildConfiguredProviderModelFromDraft, createModelCatalogDraftFromEntry } from './useRuntimeModelCatalogActions'
+import {
+  buildConfiguredProviderModelFromDraft,
+  catalogLookupIdForProviderModel,
+  createModelCatalogDraftFromEntry,
+} from './useRuntimeModelCatalogActions'
 
 export type ProviderAdapterPatch = {
   enabled: boolean
@@ -19,13 +23,33 @@ export function preferredCatalogEntryForModelId(entries: ModelCatalogEntry[], mo
   return catalogEntriesForModelId(entries, modelId)[0] || null
 }
 
+export function preferredCatalogEntryForLookupIds(
+  entries: ModelCatalogEntry[],
+  modelIds: string[],
+): ModelCatalogEntry | null {
+  const lookupIds = [...new Set(modelIds.map((value) => String(value || '').trim()).filter(Boolean))]
+  if (!lookupIds.length) return null
+  const matches = entries.filter((entry) => lookupIds.includes(entry.model_id))
+  return matches.sort((left, right) => {
+    if (left.kind !== right.kind) return left.kind === 'custom' ? -1 : 1
+    return left.model_id.localeCompare(right.model_id)
+  })[0] || null
+}
+
+export function preferredCatalogEntryForProviderModel(
+  entries: ModelCatalogEntry[],
+  model: ProviderModel,
+): ModelCatalogEntry | null {
+  return preferredCatalogEntryForLookupIds(entries, [model.id, catalogLookupIdForProviderModel(model)])
+}
+
 export function matchedCatalogModelDefinitions(
   entries: ModelCatalogEntry[],
   models: ProviderModel[],
 ): Record<string, Record<string, unknown>> {
   const definitions: Record<string, Record<string, unknown>> = {}
   for (const model of models) {
-    const entry = preferredCatalogEntryForModelId(entries, model.id)
+    const entry = preferredCatalogEntryForProviderModel(entries, model)
     if (!entry) continue
     definitions[model.id] = buildConfiguredProviderModelFromDraft(createModelCatalogDraftFromEntry(entry))
   }
@@ -33,14 +57,14 @@ export function matchedCatalogModelDefinitions(
 }
 
 export function discoveryMatchedModels(entries: ModelCatalogEntry[], discovery: ProviderAdapterDiscovery): ProviderModel[] {
-  return discovery.models.filter((model) => Boolean(preferredCatalogEntryForModelId(entries, model.id)))
+  return discovery.models.filter((model) => Boolean(preferredCatalogEntryForProviderModel(entries, model)))
 }
 
 export function discoveryUnmatchedModels(
   entries: ModelCatalogEntry[],
   discovery: ProviderAdapterDiscovery,
 ): ProviderModel[] {
-  return discovery.models.filter((model) => !preferredCatalogEntryForModelId(entries, model.id))
+  return discovery.models.filter((model) => !preferredCatalogEntryForProviderModel(entries, model))
 }
 
 export function buildAdaptersPatchFromDraftSelection(input: {
@@ -49,6 +73,7 @@ export function buildAdaptersPatchFromDraftSelection(input: {
   selectedAdapterIds: string[]
   defaultAdapterId: string
   defaultModelId: string
+  defaultCatalogModelId?: string
 }): Record<string, ProviderAdapterPatch> {
   const adaptersPatch: Record<string, ProviderAdapterPatch> = {}
 
@@ -61,7 +86,10 @@ export function buildAdaptersPatchFromDraftSelection(input: {
     }
   }
 
-  const defaultModelEntry = preferredCatalogEntryForModelId(input.catalogEntries, input.defaultModelId)
+  const defaultModelEntry = preferredCatalogEntryForLookupIds(input.catalogEntries, [
+    input.defaultModelId,
+    input.defaultCatalogModelId || '',
+  ])
   adaptersPatch[input.defaultAdapterId] = {
     enabled: true,
     models: {

@@ -356,6 +356,7 @@ export type ProviderModel = {
   provider_id: string
   adapter_id?: string | null
   id: string
+  catalog_model_id?: string | null
   display_name?: string | null
   capabilities?: ProviderModelCapabilities | null
   metadata?: ProviderModelMetadata | null

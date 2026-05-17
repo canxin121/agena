@@ -601,8 +601,18 @@ pub async fn lookup_model_catalog(
     let requested = request
         .model_ids
         .into_iter()
-        .map(|model_id| model_id.trim().to_owned())
-        .filter(|model_id| !model_id.is_empty())
+        .flat_map(|model_id| {
+            let raw = model_id.trim().to_owned();
+            if raw.is_empty() {
+                return Vec::new();
+            }
+            let canonical = agena::model_catalog::canonical_model_catalog_id(raw.as_str());
+            if canonical.is_empty() || canonical == raw {
+                vec![raw]
+            } else {
+                vec![raw, canonical]
+            }
+        })
         .collect::<BTreeSet<_>>();
     let snapshot = state.runtime().current_snapshot();
     let catalog = snapshot.model_catalog_response();

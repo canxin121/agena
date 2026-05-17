@@ -590,7 +590,7 @@ Provider models:
 | ------ | ------------------------------- | --------------------------------------------------------------------- |
 | GET    | `/api/v1/model-catalog`         | paginated catalog query，支持 `q` / `kind` / `origin` / `offset` / `limit` |
 | POST   | `/api/v1/model-catalog/lookup`  | lookup 一组 `model_id`，返回最匹配的 catalog entries                   |
-| POST   | `/api/v1/model-catalog/refresh` | refresh official catalog，重新拉 public sources 并 merge live discovery |
+| POST   | `/api/v1/model-catalog/refresh` | refresh official catalog，按 source 优先级重新拉 public sources 并 merge live discovery |
 | PUT    | `/api/v1/model-catalog/entries` | create or update a local catalog override                             |
 | DELETE | `/api/v1/model-catalog/entries` | delete a local catalog override                                       |
 

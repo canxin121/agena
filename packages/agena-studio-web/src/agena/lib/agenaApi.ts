@@ -228,17 +228,26 @@ export type ProviderSummary = {
   default_model: string
   default_model_ref: string
   catalog_default_model?: string | null
+  adapters?: ProviderAdapterSummary[]
+}
+
+export type ProviderAdapterSummary = {
+  adapter_id: string
+  enabled: boolean
+  configured_model_count: number
 }
 
 export type ModelCatalogSourceKind = 'remote' | 'fallback' | 'cache' | 'custom'
 export type ModelCatalogEntryKind = 'official' | 'custom'
 
 export type ModelCatalogEntry = {
-  provider_id: string
+  adapter_id: string
+  provider_id?: string
   model_id: string
   kind: ModelCatalogEntryKind
   source: ModelCatalogSourceKind
   source_label?: string | null
+  default_model_for_adapter?: string | null
   default_model_for_provider?: string | null
   display_name?: string | null
   family?: string | null
@@ -247,6 +256,8 @@ export type ModelCatalogEntry = {
   max_output_tokens?: number | null
   description?: string | null
   variants?: Record<string, ProviderModelVariant>
+  input?: unknown
+  features?: unknown
   capabilities?: Record<string, unknown>
 }
 
@@ -260,8 +271,10 @@ export type ModelCatalogResponse = {
 }
 
 export type ModelCatalogEntryWriteRequest = {
-  provider_id: string
+  adapter_id: string
+  provider_id?: string
   model_id: string
+  set_default_for_adapter?: boolean
   set_default_for_provider?: boolean
   family?: string | null
   lifecycle?: string | null
@@ -270,12 +283,40 @@ export type ModelCatalogEntryWriteRequest = {
   description?: string | null
   display_name?: string | null
   variants?: Record<string, ProviderModelVariant>
+  input?: unknown
+  features?: unknown
   capabilities?: Record<string, unknown>
 }
 
 export type ModelCatalogProviderDefaultRequest = {
-  provider_id: string
+  adapter_id: string
+  provider_id?: string
   model_id: string
+}
+
+export type ConfigSettingsPatchRequest = {
+  path?: string | null
+  changes: Record<string, unknown>
+  dry_run?: boolean
+  validate?: boolean
+  reload?: boolean
+}
+
+export type ConfigSettingsEditResponse = {
+  config_path: string
+  config_found: boolean
+  operation: string
+  path?: string | null
+  dry_run: boolean
+  changed: boolean
+  created: boolean
+  deleted: boolean
+  validated: boolean
+  reload_requested: boolean
+  reload_required: boolean
+  reload?: RuntimeReloadResponse | null
+  previous: unknown
+  current: unknown
 }
 
 export type CapabilitySupportValue = 'supported' | 'unsupported' | 'unknown'
@@ -335,6 +376,10 @@ export type AuthProvider = {
   expired?: boolean | null
   account_id?: string | null
   enterprise_url?: string | null
+  username?: string | null
+  display_name?: string | null
+  email?: string | null
+  avatar_url?: string | null
 }
 
 export type AuthBrowserStartResponse = {
@@ -745,6 +790,14 @@ export async function reloadRuntime(): Promise<RuntimeReloadResponse> {
   })
 }
 
+export async function patchSettings(input: ConfigSettingsPatchRequest): Promise<ConfigSettingsEditResponse> {
+  return await apiJson<ConfigSettingsEditResponse>('/api/v1/settings', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
 export async function fetchModelCatalog(): Promise<ModelCatalogResponse> {
   return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog')
 }
@@ -773,9 +826,9 @@ export async function setModelCatalogProviderDefault(
   })
 }
 
-export async function deleteModelCatalogEntry(providerId: string, modelId: string): Promise<ModelCatalogResponse> {
+export async function deleteModelCatalogEntry(adapterId: string, modelId: string): Promise<ModelCatalogResponse> {
   const params = new URLSearchParams({
-    provider_id: providerId,
+    adapter_id: adapterId,
     model_id: modelId,
   })
   return await apiJson<ModelCatalogResponse>(`/api/v1/model-catalog/entries?${params.toString()}`, {
@@ -1031,6 +1084,28 @@ export async function finishGitLabBrowserAuth(input: {
       code: input.code,
       pkce_verifier: input.pkceVerifier,
       redirect_uri: input.redirectUri,
+    }),
+  })
+}
+
+export async function startAtomGitBrowserAuth(providerId: string): Promise<AuthBrowserStartResponse> {
+  return await apiJson<AuthBrowserStartResponse>('/api/v1/auth/providers/atomgit/browser/start', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider_id: providerId }),
+  })
+}
+
+export async function pollAtomGitBrowserAuth(input: {
+  providerId: string
+  state: string
+}): Promise<AuthLoginResultResponse> {
+  return await apiJson<AuthLoginResultResponse>('/api/v1/auth/providers/atomgit/browser/poll', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      provider_id: input.providerId,
+      state: input.state,
     }),
   })
 }

@@ -2850,6 +2850,7 @@ mod tests {
                 expires_at_ms: 4_102_444_800_000,
                 account_id: Some("acct-123".to_owned()),
                 enterprise_url: None,
+                user: None,
             },
         ));
 
@@ -3615,6 +3616,7 @@ mod tests {
                 expires_at_ms: 0,
                 account_id: Some("acct-a".to_owned()),
                 enterprise_url: None,
+                user: None,
             },
         ));
         let provider_a = OpenAiProvider::new_managed_with_id(
@@ -3641,6 +3643,7 @@ mod tests {
                 expires_at_ms: 0,
                 account_id: Some("acct-b".to_owned()),
                 enterprise_url: None,
+                user: None,
             },
         ));
         let provider_b = OpenAiProvider::new_managed_with_id(
@@ -4182,6 +4185,7 @@ mod tests {
                 expires_at_ms: 0,
                 account_id: Some("acct-123".to_owned()),
                 enterprise_url: None,
+                user: None,
             },
         ));
 

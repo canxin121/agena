@@ -5,16 +5,17 @@
 use std::{collections::BTreeSet, convert::Infallible, sync::Arc};
 
 use crate::local_api::{
-    AuthApiKeyWriteRequest, AuthBrowserStartRequest, AuthBrowserStartResource,
-    AuthCopilotDevicePollRequest, AuthCopilotDeviceStartRequest, AuthCredentialType,
-    AuthDeviceStartResource, AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest,
-    AuthLoginResultResource, AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest,
-    AuthOpenAiDeviceStartRequest, AuthProviderResource, HealthResponse,
-    MarketplaceInstallOutcomeResource, MarketplaceInstallRequestBody,
-    MarketplaceInstalledListResponse, MarketplaceInstalledPluginResource,
-    MarketplaceOutdatedListResponse, MarketplaceOutdatedPluginResource, MarketplacePluginResource,
-    MarketplaceRegistryRequestBody, MarketplaceSearchRequestBody, MarketplaceSearchResponse,
-    MarketplaceSyncResponse, MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
+    AuthApiKeyWriteRequest, AuthAtomGitBrowserPollRequest, AuthAtomGitBrowserStartRequest,
+    AuthBrowserStartRequest, AuthBrowserStartResource, AuthCopilotDevicePollRequest,
+    AuthCopilotDeviceStartRequest, AuthCredentialType, AuthDeviceStartResource,
+    AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest, AuthLoginResultResource,
+    AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest, AuthOpenAiDeviceStartRequest,
+    AuthProviderResource, HealthResponse, MarketplaceInstallOutcomeResource,
+    MarketplaceInstallRequestBody, MarketplaceInstalledListResponse,
+    MarketplaceInstalledPluginResource, MarketplaceOutdatedListResponse,
+    MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequestBody,
+    MarketplaceSearchRequestBody, MarketplaceSearchResponse, MarketplaceSyncResponse,
+    MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
     MarketplaceUninstallResponse, MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
     MarketplaceUpgradeResponse, MessageListQuery, ModelCatalogEntryWriteRequest,
     ModelCatalogProviderDefaultRequest, ModelCatalogResponse, PartLoadMode,
@@ -34,8 +35,8 @@ use agena::config::{
     ProviderConfigCredentialStore, ResolvedProviderConfig, delete_file_setting, get_json_path,
     list_file_settings, list_json_path, patch_file_settings, provider_auth_data,
     provider_gitlab_instance_url, provider_has_gitlab_adapter, provider_supports_api_key_write,
-    provider_supports_copilot_device, provider_supports_openai_oauth, read_file_setting,
-    set_file_setting, validate_file_settings,
+    provider_supports_atomgit_oauth, provider_supports_copilot_device,
+    provider_supports_openai_oauth, read_file_setting, set_file_setting, validate_file_settings,
 };
 use agena::event::{EventStore, StoreRange};
 use agena::provider::auth::{AuthManager, CopilotDeployment};
@@ -67,7 +68,10 @@ pub struct SessionEventListCompatQuery {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelCatalogEntryDeleteQuery {
-    pub provider_id: String,
+    #[serde(default)]
+    pub adapter_id: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub model_id: String,
 }
 
@@ -422,18 +426,30 @@ pub async fn refresh_model_catalog(
     get_model_catalog(State(state)).await
 }
 
+fn model_catalog_adapter_id(
+    adapter_id: Option<String>,
+    legacy_provider_id: Option<String>,
+) -> Result<String, ServerError> {
+    adapter_id
+        .or(legacy_provider_id)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ServerError::BadRequest("adapter_id is required".to_owned()))
+}
+
 pub async fn upsert_model_catalog_entry(
     State(state): State<AppState>,
     Json(request): Json<ModelCatalogEntryWriteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let adapter_id = model_catalog_adapter_id(request.adapter_id, request.provider_id)?;
     let snapshot = state.runtime().current_snapshot();
     snapshot
         .model_catalog()
         .upsert_custom_entry(
-            request.provider_id,
+            adapter_id,
             request.model_id,
             request.definition,
-            request.set_default_for_provider,
+            request.set_default_for_adapter || request.set_default_for_provider,
         )
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
@@ -444,10 +460,11 @@ pub async fn set_model_catalog_provider_default(
     State(state): State<AppState>,
     Json(request): Json<ModelCatalogProviderDefaultRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let adapter_id = model_catalog_adapter_id(request.adapter_id, request.provider_id)?;
     let snapshot = state.runtime().current_snapshot();
     snapshot
         .model_catalog()
-        .set_provider_default_model(request.provider_id, request.model_id)
+        .set_adapter_default_model(adapter_id, request.model_id)
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
     get_model_catalog(State(state)).await
@@ -457,10 +474,11 @@ pub async fn delete_model_catalog_entry(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<ModelCatalogEntryDeleteQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
+    let adapter_id = model_catalog_adapter_id(query.adapter_id, query.provider_id)?;
     let snapshot = state.runtime().current_snapshot();
     snapshot
         .model_catalog()
-        .remove_custom_entry(query.provider_id.as_str(), query.model_id.as_str())
+        .remove_custom_entry(adapter_id.as_str(), query.model_id.as_str())
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
     get_model_catalog(State(state)).await
@@ -948,6 +966,11 @@ pub async fn start_openai_browser_auth(
                 "{provider_id} does not support openai browser login"
             )));
         }
+        BrowserAuthTarget::AtomGit => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support openai browser login"
+            )));
+        }
     }
 
     let start = auth_manager(&state)
@@ -971,6 +994,11 @@ pub async fn finish_openai_browser_auth(
     match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
         BrowserAuthTarget::OpenAi => {}
         BrowserAuthTarget::Gitlab { .. } => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support openai browser login"
+            )));
+        }
+        BrowserAuthTarget::AtomGit => {
             return Err(ServerError::BadRequest(format!(
                 "{provider_id} does not support openai browser login"
             )));
@@ -1075,6 +1103,11 @@ pub async fn start_gitlab_browser_auth(
                 "{provider_id} does not support gitlab browser login"
             )));
         }
+        BrowserAuthTarget::AtomGit => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support gitlab browser login"
+            )));
+        }
     };
 
     let start = auth_manager(&state)
@@ -1102,6 +1135,11 @@ pub async fn finish_gitlab_browser_auth(
                 "{provider_id} does not support gitlab browser login"
             )));
         }
+        BrowserAuthTarget::AtomGit => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support gitlab browser login"
+            )));
+        }
     };
 
     auth_manager(&state)
@@ -1121,6 +1159,70 @@ pub async fn finish_gitlab_browser_auth(
             &state,
             provider_id.as_str(),
         )?),
+    }))
+}
+
+pub async fn start_atomgit_browser_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthAtomGitBrowserStartRequest>,
+) -> Result<Json<AuthBrowserStartResource>, ServerError> {
+    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "atomgit");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
+        BrowserAuthTarget::AtomGit => {}
+        BrowserAuthTarget::OpenAi | BrowserAuthTarget::Gitlab { .. } => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support atomgit browser login"
+            )));
+        }
+    }
+
+    let start = auth_manager(&state)
+        .start_atomgit_login()
+        .await
+        .map_err(ServerError::Core)?;
+    Ok(Json(AuthBrowserStartResource {
+        provider_id,
+        instance_url: None,
+        authorize_url: start.authorize_url,
+        state: start.state,
+        pkce_verifier: start.pkce_verifier,
+    }))
+}
+
+pub async fn poll_atomgit_browser_auth(
+    State(state): State<AppState>,
+    Json(request): Json<AuthAtomGitBrowserPollRequest>,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "atomgit");
+    let resolved = auth_provider_config(&state, provider_id.as_str())?;
+    match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
+        BrowserAuthTarget::AtomGit => {}
+        BrowserAuthTarget::OpenAi | BrowserAuthTarget::Gitlab { .. } => {
+            return Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support atomgit browser login"
+            )));
+        }
+    }
+
+    let auth = auth_manager(&state)
+        .poll_atomgit_login(provider_id.as_str(), request.state)
+        .await
+        .map_err(ServerError::Core)?;
+    if auth.is_some() {
+        reload_runtime_from_config(&state).await?;
+    }
+    let provider = if auth.is_some() {
+        Some(auth_provider_resource_from_state(
+            &state,
+            provider_id.as_str(),
+        )?)
+    } else {
+        None
+    };
+    Ok(Json(AuthLoginResultResource {
+        completed: auth.is_some(),
+        provider,
     }))
 }
 
@@ -1224,6 +1326,12 @@ pub async fn refresh_auth_provider(
         RefreshAuthTarget::Gitlab { instance_url } => {
             auth_manager(&state)
                 .refresh_gitlab_login(provider_id.as_str(), instance_url)
+                .await
+                .map_err(ServerError::Core)?;
+        }
+        RefreshAuthTarget::AtomGit => {
+            auth_manager(&state)
+                .refresh_atomgit_login(provider_id.as_str())
                 .await
                 .map_err(ServerError::Core)?;
         }
@@ -2510,6 +2618,7 @@ fn copilot_deployment(enterprise_domain: Option<&str>) -> CopilotDeployment {
 enum BrowserAuthTarget {
     OpenAi,
     Gitlab { instance_url: String },
+    AtomGit,
 }
 
 enum DeviceAuthTarget {
@@ -2520,6 +2629,7 @@ enum DeviceAuthTarget {
 enum RefreshAuthTarget {
     OpenAi,
     Gitlab { instance_url: String },
+    AtomGit,
 }
 
 fn resolve_browser_auth_target(
@@ -2528,20 +2638,22 @@ fn resolve_browser_auth_target(
 ) -> Result<BrowserAuthTarget, ServerError> {
     let openai = provider_supports_openai_oauth(resolved);
     let gitlab = provider_has_gitlab_adapter(resolved);
-    match (openai, gitlab) {
-        (true, false) => Ok(BrowserAuthTarget::OpenAi),
-        (false, true) => provider_gitlab_instance_url(resolved)
+    let atomgit = provider_supports_atomgit_oauth(resolved);
+    match (openai, gitlab, atomgit) {
+        (true, false, false) => Ok(BrowserAuthTarget::OpenAi),
+        (false, true, false) => provider_gitlab_instance_url(resolved)
             .map(|instance_url| BrowserAuthTarget::Gitlab { instance_url })
             .ok_or_else(|| {
                 ServerError::BadRequest(format!(
                     "{provider_id} has ambiguous gitlab browser auth adapters"
                 ))
             }),
-        (true, true) => Err(ServerError::BadRequest(format!(
-            "{provider_id} has ambiguous browser auth providers"
-        ))),
-        (false, false) => Err(ServerError::BadRequest(format!(
+        (false, false, true) => Ok(BrowserAuthTarget::AtomGit),
+        (false, false, false) => Err(ServerError::BadRequest(format!(
             "{provider_id} does not support browser login"
+        ))),
+        _ => Err(ServerError::BadRequest(format!(
+            "{provider_id} has ambiguous browser auth providers"
         ))),
     }
 }
@@ -2570,20 +2682,22 @@ fn resolve_refresh_auth_target(
 ) -> Result<RefreshAuthTarget, ServerError> {
     let openai = provider_supports_openai_oauth(resolved);
     let gitlab = provider_has_gitlab_adapter(resolved);
-    match (openai, gitlab) {
-        (true, false) => Ok(RefreshAuthTarget::OpenAi),
-        (false, true) => provider_gitlab_instance_url(resolved)
+    let atomgit = provider_supports_atomgit_oauth(resolved);
+    match (openai, gitlab, atomgit) {
+        (true, false, false) => Ok(RefreshAuthTarget::OpenAi),
+        (false, true, false) => provider_gitlab_instance_url(resolved)
             .map(|instance_url| RefreshAuthTarget::Gitlab { instance_url })
             .ok_or_else(|| {
                 ServerError::BadRequest(format!(
                     "{provider_id} has ambiguous gitlab refresh adapters"
                 ))
             }),
-        (true, true) => Err(ServerError::BadRequest(format!(
-            "{provider_id} has ambiguous credential refresh handlers"
-        ))),
-        (false, false) => Err(ServerError::BadRequest(format!(
+        (false, false, true) => Ok(RefreshAuthTarget::AtomGit),
+        (false, false, false) => Err(ServerError::BadRequest(format!(
             "credential refresh is not supported for provider '{provider_id}'"
+        ))),
+        _ => Err(ServerError::BadRequest(format!(
+            "{provider_id} has ambiguous credential refresh handlers"
         ))),
     }
 }
@@ -2603,6 +2717,10 @@ fn auth_provider_resource(
         expired: None,
         account_id: None,
         enterprise_url: None,
+        username: None,
+        display_name: None,
+        email: None,
+        avatar_url: None,
     };
 
     match auth {
@@ -2614,6 +2732,7 @@ fn auth_provider_resource(
             expires_at_ms,
             account_id,
             enterprise_url,
+            user,
             ..
         }) => {
             resource.credential_type = Some(AuthCredentialType::Oauth);
@@ -2631,8 +2750,16 @@ fn auth_provider_resource(
             resource.expired = resource
                 .expires_at
                 .map(|expires_at| expires_at <= chrono::Utc::now());
-            resource.account_id = account_id.clone();
             resource.enterprise_url = enterprise_url.clone();
+            if let Some(user) = user {
+                resource.account_id = account_id.clone().or_else(|| Some(user.id.clone()));
+                resource.username = Some(user.username.clone());
+                resource.display_name = user.name.clone();
+                resource.email = user.email.clone();
+                resource.avatar_url = user.avatar_url.clone();
+            } else {
+                resource.account_id = account_id.clone();
+            }
         }
         Some(agena::provider::auth::AuthData::WellKnown { key, .. }) => {
             resource.credential_type = Some(AuthCredentialType::WellKnown);
@@ -2718,6 +2845,7 @@ mod tests {
                     expires_at_ms: 4_102_444_800_000,
                     account_id: Some("acct-openai".to_owned()),
                     enterprise_url: None,
+                    user: None,
                 }),
             }),
             vec![openai_adapter(OpenAiBackendConfig::ChatgptCodex)],
@@ -2741,6 +2869,7 @@ mod tests {
                     expires_at_ms: 4_102_444_800_000,
                     account_id: None,
                     enterprise_url: None,
+                    user: None,
                 }),
             }),
             vec![],
@@ -2782,6 +2911,7 @@ mod tests {
                     expires_at_ms: 4_102_444_800_000,
                     account_id: None,
                     enterprise_url: None,
+                    user: None,
                 }),
             }),
             vec![],
@@ -2823,6 +2953,7 @@ mod tests {
                     expires_at_ms: 4_102_444_800_000,
                     account_id: None,
                     enterprise_url: Some("github.example.com".to_owned()),
+                    user: None,
                 }),
             }),
             vec![openai_adapter(OpenAiBackendConfig::Api)],

@@ -22,6 +22,8 @@ use super::{
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, SharedGatewayEndpointLayout,
 };
 
+const ATOMGIT_LLM_BASE_URL: &str = "https://api-ai.gitcode.com/v1";
+
 impl ResolvedConfig {
     pub fn build_provider_registry(&self) -> Result<ProviderRegistry, ConfigError> {
         self.build_provider_registry_with_env(&ProcessEnvironment)
@@ -256,9 +258,16 @@ fn build_provider(
         routes,
     ));
 
-    if let Some(provider_record) =
-        catalog.and_then(|snapshot| snapshot.merged_provider(provider_id))
-    {
+    let catalog_adapter_ids = resolved
+        .adapters
+        .iter()
+        .filter(|(_, adapter)| adapter.enabled)
+        .map(|(adapter_id, _)| adapter_id.clone())
+        .collect::<Vec<_>>();
+
+    if let Some(provider_record) = catalog.and_then(|snapshot| {
+        snapshot.merged_provider_for_adapters(provider_id, &catalog_adapter_ids)
+    }) {
         Ok(CatalogedModelsProvider::new(provider, provider_record))
     } else {
         Ok(provider)
@@ -388,6 +397,44 @@ fn build_adapter_provider(
                     if let Some(auth_data) = credential.auth_data {
                         provider = provider.with_auth_data(auth_data);
                     }
+                    Arc::new(provider)
+                }
+                crate::provider::auth::CredentialIssuer::AtomGit => {
+                    let credential = require_provider_auth_credential(
+                        provider_id,
+                        "api_key",
+                        auth,
+                        AuthSecretSelector::AccessOrApiKey,
+                        AuthRefreshStrategy::AtomGitOAuth,
+                        env,
+                    )?;
+                    let mut provider = OpenAiProvider::new_managed_with_id(
+                        runtime_provider_id.as_str(),
+                        client,
+                        credential.credential,
+                        ATOMGIT_LLM_BASE_URL.to_owned(),
+                        adapter_default_model.to_owned(),
+                    )
+                    .with_backend(adapter.options.backend.into())
+                    .with_auth_header(
+                        adapter.options.auth_header.clone(),
+                        adapter.options.auth_scheme.clone(),
+                    )
+                    .with_extra_headers(to_hash_map(&adapter.extra_headers))
+                    .with_api_mode(adapter.options.api_mode.into())
+                    .with_api_mode_explicit(adapter.options.api_mode_explicit)
+                    .with_stream_mode(adapter.options.stream_mode.into())
+                    .with_models_url(adapter.options.models_url.clone())
+                    .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
+
+                    if let Some(family) = adapter.options.capability_family {
+                        provider = provider.with_capability_family(family.into());
+                    }
+
+                    if let Some(auth_data) = credential.auth_data {
+                        provider = provider.with_auth_data(auth_data);
+                    }
+
                     Arc::new(provider)
                 }
                 _ => {
@@ -1610,6 +1657,41 @@ enabled = true
 
         let ids = registry.provider_ids();
         assert!(ids.iter().any(|id| id == "github-copilot"));
+    }
+
+    #[test]
+    fn registry_builder_registers_atomgit_via_openai_adapter_with_inline_oauth() {
+        let path = write_temp_file(
+            r#"
+[providers.atomgit]
+default_model = "openai/Kimi-K2-Instruct"
+
+[providers.atomgit.auth]
+mode = "credential"
+issuer = "atomgit"
+credential = { type = "oauth", issuer = "atomgit", refresh = "atomgit-refresh-token", access = "atomgit-access-token", expires_at_ms = 4102444800000, account_id = "atomgit-user" }
+
+[providers.atomgit.adapters.openai]
+enabled = true
+"#,
+        );
+
+        let env = TestEnvironment::default();
+        let loader = ConfigLoader::new(env.clone());
+        let resolution = loader
+            .load(&LoadConfigRequest {
+                config_path: Some(path),
+                ..LoadConfigRequest::default()
+            })
+            .expect("config should load");
+
+        let registry = resolution
+            .config
+            .build_provider_registry_with_env(&env)
+            .expect("registry should build with inline atomgit oauth");
+
+        let ids = registry.provider_ids();
+        assert!(ids.iter().any(|id| id == "atomgit"));
     }
 
     #[test]

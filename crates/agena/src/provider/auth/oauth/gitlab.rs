@@ -67,6 +67,7 @@ pub async fn exchange_gitlab_oauth_code(
         access: token.access_token().secret().to_owned(),
         expires_at_ms,
         account_id: None,
+        user: None,
     })
 }
 
@@ -103,6 +104,7 @@ pub async fn refresh_gitlab_token(
         access: token.access_token().secret().to_owned(),
         expires_at_ms,
         account_id: None,
+        user: None,
     })
 }
 

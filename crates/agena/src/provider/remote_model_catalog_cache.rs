@@ -348,9 +348,14 @@ fn catalog_models_from_document(
     source: &RemoteModelCatalogSource,
     document: &ModelCatalogDocument,
 ) -> Option<Vec<Model>> {
-    let provider = document.providers.get(source.catalog_provider_id.trim())?;
+    let catalog_adapter_id = if source.catalog_provider_id.trim().is_empty() {
+        source.provider_id.trim()
+    } else {
+        source.catalog_provider_id.trim()
+    };
+    let adapter = document.adapter_record(catalog_adapter_id)?;
     Some(
-        provider
+        adapter
             .models
             .iter()
             .map(|(model_id, definition)| {

@@ -74,6 +74,7 @@ pub async fn exchange_openai_oauth_code(
         access: token.access_token().secret().to_owned(),
         expires_at_ms,
         account_id: extract_openai_account_id(token.access_token().secret()),
+        user: None,
     })
 }
 
@@ -108,6 +109,7 @@ pub async fn refresh_openai_token(refresh_token: &str) -> Result<OAuthTokenRespo
         access: token.access_token().secret().to_owned(),
         expires_at_ms,
         account_id: extract_openai_account_id(token.access_token().secret()),
+        user: None,
     })
 }
 
@@ -260,6 +262,7 @@ pub async fn poll_openai_headless_device_code(
         access: token_data.access_token.clone(),
         expires_at_ms,
         account_id: extract_openai_account_id(token_data.access_token.as_str()),
+        user: None,
     }))
 }
 

@@ -7,20 +7,23 @@ import { createSettingsPermissionsPanelState } from './useSettingsPermissionsPag
 import { createSettingsProvidersPanelState } from './useSettingsProvidersPageState'
 import { createSettingsSectionShellState } from './useSettingsSectionShellState'
 
-export function useSettingsPageState(input: {
-  route: RouteLocationNormalizedLoaded
-  router: Router
-}) {
+export function useSettingsPageState(input: { route: RouteLocationNormalizedLoaded; router: Router }) {
   const { shared, state } = useRuntimeSectionState({ ...input, section: 'settings' })
 
   const providers = createSettingsProvidersPanelState({
+    actionError: shared.actionError,
+    actionMessage: shared.actionMessage,
     authProviders: state.authProviders,
     browserAuthCodeDrafts: state.browserAuthCodeDrafts,
     browserAuthInstanceDrafts: state.browserAuthInstanceDrafts,
     browserAuthStartState: state.browserAuthStartState,
+    catalogEntries: state.catalogEntries,
     deviceAuthEnterpriseDrafts: state.deviceAuthEnterpriseDrafts,
     deviceAuthStartState: state.deviceAuthStartState,
     drafts: state.drafts,
+    load: shared.load,
+    providerModels: state.providerModels,
+    providers: state.providers,
     finishBrowserAuth: state.finishBrowserAuth,
     pollDeviceAuth: state.pollDeviceAuth,
     saveApiKey: state.saveApiKey,

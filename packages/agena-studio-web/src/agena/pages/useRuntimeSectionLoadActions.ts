@@ -94,6 +94,10 @@ export function useRuntimeSectionLoadActions(
   async function loadSettingsSection() {
     const data = await deps.loadSettingsSectionData(input.permissionSearch.value)
     input.authProviders.value = data.authProviders
+    input.runtime.value = data.runtime
+    input.catalogEntries.value = data.runtime.model_catalog?.entries ?? []
+    input.providers.value = data.providers
+    input.replaceProviderModels(data.providerModels)
     input.permissionRules.value = data.permissionRules
 
     if (input.activeSettingsTab.value === 'desktop' && input.desktopEnabled.value) {

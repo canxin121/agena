@@ -5,10 +5,12 @@ import {
   deleteProviderCredential,
   finishGitLabBrowserAuth,
   finishOpenAiBrowserAuth,
+  pollAtomGitBrowserAuth,
   pollCopilotDeviceAuth,
   pollOpenAiDeviceAuth,
   refreshProviderCredential,
   setProviderApiKey,
+  startAtomGitBrowserAuth,
   startCopilotDeviceAuth,
   startGitLabBrowserAuth,
   startOpenAiBrowserAuth,
@@ -35,10 +37,12 @@ export type RuntimeProviderActionsDeps = {
   deleteProviderCredential: typeof deleteProviderCredential
   finishGitLabBrowserAuth: typeof finishGitLabBrowserAuth
   finishOpenAiBrowserAuth: typeof finishOpenAiBrowserAuth
+  pollAtomGitBrowserAuth: typeof pollAtomGitBrowserAuth
   pollCopilotDeviceAuth: typeof pollCopilotDeviceAuth
   pollOpenAiDeviceAuth: typeof pollOpenAiDeviceAuth
   refreshProviderCredential: typeof refreshProviderCredential
   setProviderApiKey: typeof setProviderApiKey
+  startAtomGitBrowserAuth: typeof startAtomGitBrowserAuth
   startCopilotDeviceAuth: typeof startCopilotDeviceAuth
   startGitLabBrowserAuth: typeof startGitLabBrowserAuth
   startOpenAiBrowserAuth: typeof startOpenAiBrowserAuth
@@ -49,10 +53,12 @@ const defaultDeps: RuntimeProviderActionsDeps = {
   deleteProviderCredential,
   finishGitLabBrowserAuth,
   finishOpenAiBrowserAuth,
+  pollAtomGitBrowserAuth,
   pollCopilotDeviceAuth,
   pollOpenAiDeviceAuth,
   refreshProviderCredential,
   setProviderApiKey,
+  startAtomGitBrowserAuth,
   startCopilotDeviceAuth,
   startGitLabBrowserAuth,
   startOpenAiBrowserAuth,
@@ -63,6 +69,11 @@ export function useRuntimeProviderActions(
   input: RuntimeProviderActionsInput,
   deps: RuntimeProviderActionsDeps = defaultDeps,
 ) {
+  function isAtomGitProvider(providerId: string) {
+    const normalized = providerId.toLowerCase()
+    return normalized === 'atomgit' || normalized.startsWith('atomgit-')
+  }
+
   function readProviderIdFromBrowserState(stateValue: string): string | null {
     const state = String(stateValue || '').trim()
     if (!state) return null
@@ -129,6 +140,11 @@ export function useRuntimeProviderActions(
         input.browserAuthStartState[providerId] = start
         input.openUrl(start.authorize_url)
         input.actionMessage.value = `Opened browser login for ${providerId}.`
+      } else if (isAtomGitProvider(providerId)) {
+        const start = await deps.startAtomGitBrowserAuth(providerId)
+        input.browserAuthStartState[providerId] = start
+        input.openUrl(start.authorize_url)
+        input.actionMessage.value = `Opened browser login for ${providerId}.`
       }
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
@@ -138,7 +154,8 @@ export function useRuntimeProviderActions(
   async function finishBrowserAuth(providerId: string) {
     const start = input.browserAuthStartState[providerId]
     const code = String(input.browserAuthCodeDrafts[providerId] || '').trim()
-    if (!start || !code) return
+    if (!start) return
+    if (!isAtomGitProvider(providerId) && !code) return
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
@@ -148,9 +165,21 @@ export function useRuntimeProviderActions(
           pkceVerifier: start.pkce_verifier,
           redirectUri: input.readRedirectUri(),
         })
+      } else if (isAtomGitProvider(providerId)) {
+        const result = await deps.pollAtomGitBrowserAuth({
+          providerId,
+          state: start.state,
+        })
+        if (!result.completed) {
+          input.actionMessage.value = `Browser login for ${providerId} is still pending.`
+          return
+        }
       } else if (providerId === 'gitlab') {
         await deps.finishGitLabBrowserAuth({
-          instanceUrl: start.instance_url || String(input.browserAuthInstanceDrafts[providerId] || '').trim() || 'https://gitlab.com',
+          instanceUrl:
+            start.instance_url ||
+            String(input.browserAuthInstanceDrafts[providerId] || '').trim() ||
+            'https://gitlab.com',
           code,
           pkceVerifier: start.pkce_verifier,
           redirectUri: input.readRedirectUri(),
@@ -165,11 +194,7 @@ export function useRuntimeProviderActions(
     }
   }
 
-  async function handleBrowserAuthCallback(inputValue: {
-    code?: string
-    state?: string
-    error?: string
-  }) {
+  async function handleBrowserAuthCallback(inputValue: { code?: string; state?: string; error?: string }) {
     const error = String(inputValue.error || '').trim()
     if (error) {
       input.actionError.value = error

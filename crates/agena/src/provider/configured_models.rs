@@ -482,11 +482,15 @@ impl ConfiguredModelVariant {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<crate::model::ModelFamily>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -497,9 +501,11 @@ pub struct ConfiguredModelDefinition {
 
 impl ConfiguredModelDefinition {
     pub fn is_empty(&self) -> bool {
-        self.lifecycle.is_none()
+        self.family.is_none()
+            && self.lifecycle.is_none()
             && self.context_window_tokens.is_none()
             && self.max_output_tokens.is_none()
+            && self.display_name.is_none()
             && self.description.is_none()
             && self.variants.is_empty()
             && self.capabilities.is_empty()
@@ -507,6 +513,9 @@ impl ConfiguredModelDefinition {
 
     pub fn metadata(&self) -> ModelMetadata {
         let mut metadata = ModelMetadata::default();
+        if let Some(family) = self.family {
+            metadata = metadata.with_family(family);
+        }
         if let Some(lifecycle) = self.lifecycle {
             metadata = metadata.with_lifecycle(lifecycle);
         }
@@ -528,6 +537,9 @@ impl ConfiguredModelDefinition {
         capability_fallback: &ModelCapabilities,
         metadata_fallback: &ModelMetadata,
     ) -> Model {
+        if let Some(display_name) = self.display_name.clone() {
+            model.display_name = Some(display_name);
+        }
         let base_capabilities = model
             .capabilities
             .clone()

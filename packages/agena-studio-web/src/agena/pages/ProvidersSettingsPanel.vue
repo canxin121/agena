@@ -1,10 +1,28 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, reactive, ref, type Ref } from 'vue'
 
+import { patchSettings } from '../lib/agenaApi'
 import { buildAuthProviderFacts } from './runtimePageModel'
-import type { AuthBrowserStartResponse, AuthDeviceStartResponse, AuthProvider } from '@/agena/lib/agenaApi'
+import {
+  buildConfiguredProviderModelFromDraft,
+  createEmptyModelCatalogDraft,
+  createModelCatalogDraftFromEntry,
+  createModelCatalogDraftFromProviderModel,
+  splitProviderModelRoute,
+  type ModelCatalogEditableDraft,
+} from './useRuntimeModelCatalogActions'
+import type {
+  AuthBrowserStartResponse,
+  AuthDeviceStartResponse,
+  AuthProvider,
+  ModelCatalogEntry,
+  ProviderModel,
+  ProviderSummary,
+} from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
+  actionError: Ref<string>
+  actionMessage: Ref<string>
   authProviders: AuthProvider[]
   browserAuthCodeDrafts: Record<string, string>
   browserAuthInstanceDrafts: Record<string, string>
@@ -12,6 +30,10 @@ const props = defineProps<{
   deviceAuthEnterpriseDrafts: Record<string, string>
   deviceAuthStartState: Record<string, AuthDeviceStartResponse | null>
   drafts: Record<string, string>
+  catalogEntries: ModelCatalogEntry[]
+  load: () => Promise<void>
+  providerModels: Record<string, ProviderModel[]>
+  providers: ProviderSummary[]
   finishBrowserAuth: (providerId: string) => void | Promise<void>
   pollDeviceAuth: (providerId: string) => void | Promise<void>
   saveApiKey: (providerId: string) => void | Promise<void>
@@ -20,6 +42,23 @@ const props = defineProps<{
   startBrowserAuth: (providerId: string) => void | Promise<void>
   startDeviceAuth: (providerId: string) => void | Promise<void>
 }>()
+
+const ADAPTER_OPTIONS = ['openai', 'anthropic', 'gemini', 'ollama', 'gitlab', 'amazon_bedrock'] as const
+const submittingConfig = ref(false)
+const catalogCopyProviderId = ref('')
+const catalogCopySetDefault = ref(false)
+const providerModelProviderId = ref('')
+const providerModelSetDefault = ref(false)
+const providerModelDraft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft('openai', ''))
+const providerCreateDraft = reactive({
+  provider_id: '',
+  auth_mode: 'api' as 'api' | 'none',
+  base_url: '',
+  api_key_env: '',
+  api_key: '',
+  adapter_id: 'openai',
+  model_id: '',
+})
 
 const connectedCount = computed(
   () => props.authProviders.filter((provider) => provider.credential_present && !provider.expired).length,
@@ -30,6 +69,16 @@ const browserFlowCount = computed(
 )
 const deviceFlowCount = computed(
   () => props.authProviders.filter((provider) => supportsDeviceLogin(provider.provider_id)).length,
+)
+const providerConfigCount = computed(() => props.providers.length)
+const catalogEntriesByAdapter = computed(() =>
+  [...props.catalogEntries].sort((left, right) => {
+    const leftAdapterId = left.adapter_id || left.provider_id || ''
+    const rightAdapterId = right.adapter_id || right.provider_id || ''
+    if (leftAdapterId !== rightAdapterId) return leftAdapterId.localeCompare(rightAdapterId)
+    if (left.model_id !== right.model_id) return left.model_id.localeCompare(right.model_id)
+    return left.kind.localeCompare(right.kind)
+  }),
 )
 
 function providerName(providerId: string) {
@@ -55,16 +104,495 @@ function credentialLabel(provider: AuthProvider) {
 }
 
 function supportsBrowserLogin(providerId: string) {
-  return providerId === 'openai' || providerId === 'gitlab'
+  return providerId === 'openai' || providerId === 'gitlab' || isAtomGitProvider(providerId)
 }
 
 function supportsDeviceLogin(providerId: string) {
   return providerId === 'openai' || providerId === 'github-copilot'
 }
+
+function isAtomGitProvider(providerId: string) {
+  const normalized = providerId.toLowerCase()
+  return normalized === 'atomgit' || normalized.startsWith('atomgit-')
+}
+
+function optionalText(value: string) {
+  const normalized = String(value || '').trim()
+  return normalized || undefined
+}
+
+function adapterIdForEntry(entry: ModelCatalogEntry) {
+  return entry.adapter_id || entry.provider_id || ''
+}
+
+function providerRoute(adapterId: string, modelId: string) {
+  return `${adapterId.trim()}/${modelId.trim()}`
+}
+
+function setConfigMessage(message: string) {
+  props.actionError.value = ''
+  props.actionMessage.value = message
+}
+
+function setConfigError(message: string) {
+  props.actionMessage.value = ''
+  props.actionError.value = message
+}
+
+function modelDefinitionFromEntry(entry: ModelCatalogEntry) {
+  return buildConfiguredProviderModelFromDraft(createModelCatalogDraftFromEntry(entry))
+}
+
+async function patchProviderAdapterModel(input: {
+  providerId: string
+  adapterId: string
+  modelId: string
+  definition: Record<string, unknown>
+  setDefault: boolean
+}) {
+  const providerId = input.providerId.trim()
+  const adapterId = input.adapterId.trim()
+  const modelId = input.modelId.trim()
+  if (!providerId || !adapterId || !modelId) {
+    setConfigError('provider_id, adapter_id and model_id are required.')
+    return
+  }
+
+  const providerPatch: Record<string, unknown> = {
+    adapters: {
+      [adapterId]: {
+        enabled: true,
+        models: {
+          [modelId]: input.definition,
+        },
+      },
+    },
+  }
+  if (input.setDefault) providerPatch.default_model = providerRoute(adapterId, modelId)
+
+  submittingConfig.value = true
+  try {
+    await patchSettings({
+      path: 'providers',
+      changes: {
+        [providerId]: providerPatch,
+      },
+      validate: true,
+      reload: true,
+    })
+    setConfigMessage(`Saved ${providerId}/${adapterId}/${modelId}.`)
+    await props.load()
+  } catch (err) {
+    setConfigError(err instanceof Error ? err.message : String(err))
+  } finally {
+    submittingConfig.value = false
+  }
+}
+
+async function createProvider() {
+  const providerId = providerCreateDraft.provider_id.trim()
+  const adapterId = providerCreateDraft.adapter_id.trim()
+  const modelId = providerCreateDraft.model_id.trim()
+  if (!providerId || !adapterId || !modelId) {
+    setConfigError('Provider ID, adapter ID and model ID are required.')
+    return
+  }
+  if (providerCreateDraft.auth_mode === 'api' && !providerCreateDraft.base_url.trim()) {
+    setConfigError('API auth providers require a base URL.')
+    return
+  }
+
+  const auth =
+    providerCreateDraft.auth_mode === 'none'
+      ? { mode: 'none' }
+      : {
+          mode: 'api',
+          base_url: providerCreateDraft.base_url.trim(),
+          ...(optionalText(providerCreateDraft.api_key_env)
+            ? { api_key_env: optionalText(providerCreateDraft.api_key_env) }
+            : {}),
+          ...(optionalText(providerCreateDraft.api_key) ? { api_key: optionalText(providerCreateDraft.api_key) } : {}),
+        }
+
+  submittingConfig.value = true
+  try {
+    await patchSettings({
+      path: 'providers',
+      changes: {
+        [providerId]: {
+          enabled: true,
+          default_model: providerRoute(adapterId, modelId),
+          auth,
+          adapters: {
+            [adapterId]: {
+              enabled: true,
+              models: {
+                [modelId]: {},
+              },
+            },
+          },
+        },
+      },
+      validate: true,
+      reload: true,
+    })
+    setConfigMessage(`Created provider ${providerId} with ${adapterId}/${modelId}.`)
+    await props.load()
+  } catch (err) {
+    setConfigError(err instanceof Error ? err.message : String(err))
+  } finally {
+    submittingConfig.value = false
+  }
+}
+
+function loadCatalogEntryIntoProviderDraft(entry: ModelCatalogEntry) {
+  providerModelDraft.value = createModelCatalogDraftFromEntry(entry)
+  providerModelProviderId.value = catalogCopyProviderId.value || providerModelProviderId.value
+  providerModelSetDefault.value = catalogCopySetDefault.value
+  setConfigMessage(`Loaded ${adapterIdForEntry(entry)}/${entry.model_id} into provider model draft.`)
+}
+
+function loadLiveModelIntoProviderDraft(model: ProviderModel) {
+  providerModelProviderId.value = model.provider_id
+  providerModelDraft.value = createModelCatalogDraftFromProviderModel(model)
+  providerModelSetDefault.value = false
+  const route = splitProviderModelRoute(model.id)
+  setConfigMessage(
+    `Loaded ${model.provider_id}/${route.adapterId || 'adapter'}/${route.modelId} into provider model draft.`,
+  )
+}
+
+async function saveProviderModelDraft() {
+  await patchProviderAdapterModel({
+    providerId: providerModelProviderId.value,
+    adapterId: providerModelDraft.value.adapter_id,
+    modelId: providerModelDraft.value.model_id,
+    definition: buildConfiguredProviderModelFromDraft(providerModelDraft.value),
+    setDefault: providerModelSetDefault.value,
+  })
+}
+
+async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
+  await patchProviderAdapterModel({
+    providerId: catalogCopyProviderId.value,
+    adapterId: adapterIdForEntry(entry),
+    modelId: entry.model_id,
+    definition: modelDefinitionFromEntry(entry),
+    setDefault: catalogCopySetDefault.value,
+  })
+}
 </script>
 
 <template>
   <div class="settings-page">
+    <section class="settings-panel">
+      <div class="settings-panel-header">
+        <div>
+          <p class="settings-panel-kicker">Provider Config</p>
+          <h3 class="settings-panel-title">Adapters and Models</h3>
+        </div>
+      </div>
+
+      <div class="settings-summary">
+        <div class="summary-item">
+          <div class="summary-label">Configured Providers</div>
+          <div class="summary-value">{{ providerConfigCount }}</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">Catalog Entries</div>
+          <div class="summary-value">{{ props.catalogEntries.length }}</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">Copy Target</div>
+          <div class="summary-value mono">{{ catalogCopyProviderId || 'unset' }}</div>
+        </div>
+      </div>
+
+      <p v-if="props.actionMessage.value" class="muted" style="margin-top: 12px">{{ props.actionMessage.value }}</p>
+      <p v-if="props.actionError.value" class="muted" style="margin-top: 8px">{{ props.actionError.value }}</p>
+    </section>
+
+    <section class="record-card">
+      <div class="settings-panel-header">
+        <div>
+          <p class="settings-panel-kicker">Create Provider</p>
+          <h3 class="settings-panel-title">New Runtime Provider</h3>
+        </div>
+        <button class="button primary" :disabled="submittingConfig" @click="createProvider">Create Provider</button>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label class="label" for="provider-create-id">Provider ID</label>
+          <input
+            id="provider-create-id"
+            v-model="providerCreateDraft.provider_id"
+            class="input mono"
+            placeholder="shared-gateway"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-create-auth">Auth Mode</label>
+          <select id="provider-create-auth" v-model="providerCreateDraft.auth_mode" class="select">
+            <option value="api">api</option>
+            <option value="none">none</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label" for="provider-create-base">Base URL</label>
+          <input
+            id="provider-create-base"
+            v-model="providerCreateDraft.base_url"
+            class="input mono"
+            placeholder="https://api.example.com/v1"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-create-key-env">API Key Env</label>
+          <input
+            id="provider-create-key-env"
+            v-model="providerCreateDraft.api_key_env"
+            class="input mono"
+            placeholder="OPENAI_API_KEY"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-create-adapter">Adapter</label>
+          <select id="provider-create-adapter" v-model="providerCreateDraft.adapter_id" class="select">
+            <option v-for="adapterId in ADAPTER_OPTIONS" :key="adapterId" :value="adapterId">{{ adapterId }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label" for="provider-create-model">Initial Model</label>
+          <input
+            id="provider-create-model"
+            v-model="providerCreateDraft.model_id"
+            class="input mono"
+            placeholder="gpt-4.1-mini"
+          />
+        </div>
+        <div class="field full">
+          <label class="label" for="provider-create-key">Inline API Key</label>
+          <input
+            id="provider-create-key"
+            v-model="providerCreateDraft.api_key"
+            class="input mono"
+            type="password"
+            placeholder="optional"
+          />
+        </div>
+      </div>
+    </section>
+
+    <section v-if="props.providers.length" class="record-list">
+      <article v-for="provider in props.providers" :key="provider.provider_id" class="record-card">
+        <div class="record-header">
+          <div>
+            <p class="settings-panel-kicker">{{ provider.provider_id }}</p>
+            <h3 class="record-title">{{ provider.provider_id }}</h3>
+            <div class="record-subtitle mono">{{ provider.default_model || 'default unset' }}</div>
+          </div>
+          <div class="record-meta">
+            <span
+              v-for="adapter in provider.adapters || []"
+              :key="adapter.adapter_id"
+              class="badge"
+              :class="adapter.enabled ? 'success' : 'neutral'"
+            >
+              {{ adapter.adapter_id }} · {{ adapter.configured_model_count }}
+            </span>
+          </div>
+        </div>
+
+        <div
+          v-if="(props.providerModels[provider.provider_id] || []).length"
+          class="button-row"
+          style="margin-top: 12px; flex-wrap: wrap"
+        >
+          <button
+            v-for="model in props.providerModels[provider.provider_id] || []"
+            :key="model.id"
+            class="button"
+            :disabled="submittingConfig"
+            @click="loadLiveModelIntoProviderDraft(model)"
+          >
+            Edit {{ model.display_name || model.id }}
+          </button>
+        </div>
+        <p v-else class="muted" style="margin-top: 12px">No live models loaded for this provider.</p>
+      </article>
+    </section>
+
+    <section class="record-card">
+      <div class="settings-panel-header">
+        <div>
+          <p class="settings-panel-kicker">Provider Model Draft</p>
+          <h3 class="settings-panel-title">Add or Update Adapter Model</h3>
+        </div>
+        <button class="button primary" :disabled="submittingConfig" @click="saveProviderModelDraft">Save Model</button>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label class="label" for="provider-model-provider">Provider ID</label>
+          <input
+            id="provider-model-provider"
+            v-model="providerModelProviderId"
+            class="input mono"
+            placeholder="shared-gateway"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-model-adapter">Adapter ID</label>
+          <input
+            id="provider-model-adapter"
+            v-model="providerModelDraft.adapter_id"
+            class="input mono"
+            placeholder="openai"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-model-id">Model ID</label>
+          <input
+            id="provider-model-id"
+            v-model="providerModelDraft.model_id"
+            class="input mono"
+            placeholder="gpt-4.1-mini"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-model-display">Display Name</label>
+          <input
+            id="provider-model-display"
+            v-model="providerModelDraft.display_name"
+            class="input"
+            placeholder="GPT-4.1 Mini"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-model-family">Family</label>
+          <input id="provider-model-family" v-model="providerModelDraft.family" class="input mono" placeholder="gpt" />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-model-lifecycle">Lifecycle</label>
+          <input
+            id="provider-model-lifecycle"
+            v-model="providerModelDraft.lifecycle"
+            class="input mono"
+            placeholder="active"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-model-context">Context Window</label>
+          <input
+            id="provider-model-context"
+            v-model="providerModelDraft.context_window_tokens"
+            class="input mono"
+            inputmode="numeric"
+            placeholder="128000"
+          />
+        </div>
+        <div class="field">
+          <label class="label" for="provider-model-output">Max Output</label>
+          <input
+            id="provider-model-output"
+            v-model="providerModelDraft.max_output_tokens"
+            class="input mono"
+            inputmode="numeric"
+            placeholder="8192"
+          />
+        </div>
+        <div class="field full">
+          <label class="label" for="provider-model-description">Description</label>
+          <textarea id="provider-model-description" v-model="providerModelDraft.description" class="input" rows="2" />
+        </div>
+      </div>
+      <div class="button-row" style="margin-top: 12px; flex-wrap: wrap">
+        <label class="muted" style="display: flex; gap: 8px; align-items: center">
+          <input v-model="providerModelDraft.tool_calling" type="checkbox" />
+          Tool calling
+        </label>
+        <label class="muted" style="display: flex; gap: 8px; align-items: center">
+          <input v-model="providerModelDraft.streaming" type="checkbox" />
+          Streaming
+        </label>
+        <label class="muted" style="display: flex; gap: 8px; align-items: center">
+          <input v-model="providerModelDraft.reasoning" type="checkbox" />
+          Reasoning
+        </label>
+        <label class="muted" style="display: flex; gap: 8px; align-items: center">
+          <input v-model="providerModelDraft.structured_output" type="checkbox" />
+          Structured output
+        </label>
+        <label class="muted" style="display: flex; gap: 8px; align-items: center">
+          <input v-model="providerModelDraft.temperature_supported" type="checkbox" />
+          Temperature
+        </label>
+        <label class="muted" style="display: flex; gap: 8px; align-items: center">
+          <input v-model="providerModelSetDefault" type="checkbox" />
+          Set provider default
+        </label>
+      </div>
+    </section>
+
+    <section class="record-card">
+      <div class="settings-panel-header">
+        <div>
+          <p class="settings-panel-kicker">Adapter Catalog</p>
+          <h3 class="settings-panel-title">Copy Catalog Models to Provider</h3>
+        </div>
+        <div class="inline-fields" style="align-items: end">
+          <div class="field">
+            <label class="label" for="catalog-copy-target">Target Provider</label>
+            <select id="catalog-copy-target" v-model="catalogCopyProviderId" class="select">
+              <option value="">Select provider</option>
+              <option v-for="provider in props.providers" :key="provider.provider_id" :value="provider.provider_id">
+                {{ provider.provider_id }}
+              </option>
+            </select>
+          </div>
+          <label class="muted" style="display: flex; gap: 8px; align-items: center">
+            <input v-model="catalogCopySetDefault" type="checkbox" />
+            Set default
+          </label>
+        </div>
+      </div>
+
+      <div v-if="catalogEntriesByAdapter.length" class="record-list">
+        <article
+          v-for="entry in catalogEntriesByAdapter"
+          :key="`${adapterIdForEntry(entry)}/${entry.model_id}/${entry.kind}`"
+          class="record-card"
+        >
+          <div class="record-header">
+            <div>
+              <p class="settings-panel-kicker">{{ adapterIdForEntry(entry) }}</p>
+              <h3 class="record-title">{{ entry.display_name || entry.model_id }}</h3>
+              <div class="record-subtitle mono">{{ entry.model_id }}</div>
+            </div>
+            <div class="record-meta">
+              <span class="badge neutral">{{ entry.kind }}</span>
+              <span v-if="entry.family" class="badge neutral">{{ entry.family }}</span>
+            </div>
+          </div>
+          <p v-if="entry.description" class="muted">{{ entry.description }}</p>
+          <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+            <button class="button" :disabled="submittingConfig" @click="loadCatalogEntryIntoProviderDraft(entry)">
+              Load Draft
+            </button>
+            <button
+              class="button primary"
+              :disabled="submittingConfig || !catalogCopyProviderId"
+              @click="copyCatalogEntryToProvider(entry)"
+            >
+              Copy to Provider
+            </button>
+          </div>
+        </article>
+      </div>
+      <p v-else class="muted">No adapter catalog entries loaded.</p>
+    </section>
+
     <section class="settings-panel">
       <div class="settings-panel-header">
         <div>
@@ -142,7 +670,13 @@ function supportsDeviceLogin(providerId: string) {
             <div>
               <p class="settings-panel-kicker">Browser Login</p>
               <h4 class="settings-panel-title">
-                {{ provider.provider_id === 'gitlab' ? 'GitLab OAuth' : 'OAuth Redirect' }}
+                {{
+                  provider.provider_id === 'gitlab'
+                    ? 'GitLab OAuth'
+                    : isAtomGitProvider(provider.provider_id)
+                      ? 'AtomGit OAuth'
+                      : 'OAuth Redirect'
+                }}
               </h4>
             </div>
             <button class="button" @click="props.startBrowserAuth(provider.provider_id)">Start Browser Login</button>
@@ -159,7 +693,7 @@ function supportsDeviceLogin(providerId: string) {
           </div>
 
           <div v-if="props.browserAuthStartState[provider.provider_id]" class="form-grid">
-            <div class="field">
+            <div v-if="!isAtomGitProvider(provider.provider_id)" class="field">
               <label class="label" :for="`browser-code-${provider.provider_id}`">Authorization Code</label>
               <input
                 :id="`browser-code-${provider.provider_id}`"
@@ -174,7 +708,7 @@ function supportsDeviceLogin(providerId: string) {
             </div>
             <div class="button-row full">
               <button class="button primary" @click="props.finishBrowserAuth(provider.provider_id)">
-                Finish Browser Login
+                {{ isAtomGitProvider(provider.provider_id) ? 'Poll Browser Login' : 'Finish Browser Login' }}
               </button>
             </div>
           </div>

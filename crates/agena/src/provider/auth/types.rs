@@ -7,6 +7,20 @@ pub enum CredentialIssuer {
     OpenaiChatgpt,
     GithubCopilot,
     Gitlab,
+    #[serde(rename = "atomgit", alias = "atom_git")]
+    AtomGit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OAuthUserInfo {
+    pub id: String,
+    pub username: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(default, alias = "avatarUrl", skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,6 +47,8 @@ pub enum AuthData {
             skip_serializing_if = "Option::is_none"
         )]
         enterprise_url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user: Option<OAuthUserInfo>,
     },
     WellKnown {
         key: String,
@@ -51,7 +67,11 @@ impl AuthData {
 
     pub fn account_id(&self) -> Option<&str> {
         match self {
-            Self::OAuth { account_id, .. } => account_id.as_deref(),
+            Self::OAuth {
+                account_id, user, ..
+            } => account_id
+                .as_deref()
+                .or_else(|| user.as_ref().map(|u| u.id.as_str())),
             _ => None,
         }
     }
@@ -71,6 +91,7 @@ impl AuthData {
                 expires_at_ms,
                 account_id,
                 enterprise_url,
+                user,
                 ..
             } => Self::OAuth {
                 issuer: Some(issuer),
@@ -79,6 +100,7 @@ impl AuthData {
                 expires_at_ms,
                 account_id,
                 enterprise_url,
+                user,
             },
             other => other,
         }
@@ -99,6 +121,13 @@ impl AuthData {
             _ => false,
         }
     }
+
+    pub fn user(&self) -> Option<&OAuthUserInfo> {
+        match self {
+            Self::OAuth { user, .. } => user.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,6 +137,8 @@ pub struct OAuthTokenResponse {
     pub expires_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<OAuthUserInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -157,6 +188,7 @@ mod tests {
                 expires_at_ms: 123,
                 account_id: Some("acct".to_owned()),
                 enterprise_url: Some("github.example.com".to_owned()),
+                user: None,
             }
         );
     }
@@ -170,6 +202,13 @@ mod tests {
             expires_at_ms: 123,
             account_id: Some("acct".to_owned()),
             enterprise_url: Some("github.example.com".to_owned()),
+            user: Some(super::OAuthUserInfo {
+                id: "user-1".to_owned(),
+                username: "octo".to_owned(),
+                name: Some("Octo".to_owned()),
+                email: None,
+                avatar_url: Some("https://example.com/avatar.png".to_owned()),
+            }),
         };
 
         let value = serde_json::to_value(auth).expect("should serialize oauth");
@@ -181,10 +220,18 @@ mod tests {
         assert!(object.contains_key("issuer"));
         assert!(object.contains_key("account_id"));
         assert!(object.contains_key("enterprise_url"));
+        assert!(object.contains_key("user"));
         assert!(!object.contains_key("refreshToken"));
         assert!(!object.contains_key("accessToken"));
         assert!(!object.contains_key("expiresAtMs"));
         assert!(!object.contains_key("accountId"));
         assert!(!object.contains_key("enterpriseUrl"));
+    }
+
+    #[test]
+    fn atomgit_issuer_deserializes_without_underscore() {
+        let issuer: super::CredentialIssuer =
+            serde_json::from_str("\"atomgit\"").expect("issuer should deserialize");
+        assert_eq!(issuer, super::CredentialIssuer::AtomGit);
     }
 }

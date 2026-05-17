@@ -380,6 +380,20 @@ credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "openai-refr
 enabled = true
 backend = "chatgpt_codex"
 
+[providers.atomgit]
+default_model = "openai/Kimi-K2-Instruct"
+
+[providers.atomgit.auth]
+mode = "credential"
+issuer = "atomgit"
+credential = { type = "oauth", issuer = "atomgit", refresh = "atomgit-refresh-token", access = "atomgit-access-token", expires_at_ms = 4102444800000, account_id = "atomgit-user" }
+
+[providers.atomgit.adapters.openai]
+enabled = true
+
+[providers.atomgit.adapters.openai.models."Kimi-K2-Instruct"]
+enabled = true
+
 [providers."github-copilot"]
 default_model = "openai/gpt-4o-mini"
 

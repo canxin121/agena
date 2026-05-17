@@ -236,11 +236,29 @@ pub fn provider_supports_copilot_device(resolved: &ResolvedProviderConfig) -> bo
     })
 }
 
+pub fn provider_supports_atomgit_oauth(resolved: &ResolvedProviderConfig) -> bool {
+    matches!(
+        resolved.auth,
+        ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig {
+            issuer: crate::provider::auth::CredentialIssuer::AtomGit,
+            ..
+        })
+    ) && resolved.adapters.values().any(|adapter| {
+        matches!(
+            &adapter.definition,
+            super::ProviderAdapterDefinition::OpenAi(config)
+                if matches!(config.options.backend, super::OpenAiBackendConfig::Api)
+        )
+    })
+}
+
 pub fn provider_supports_api_key_write(resolved: &ResolvedProviderConfig) -> bool {
     match resolved.auth {
         ProviderAuthConfig::SapAiCore(_) => true,
         ProviderAuthConfig::Api(_) => {
-            !provider_supports_openai_oauth(resolved) && !provider_supports_copilot_device(resolved)
+            !provider_supports_openai_oauth(resolved)
+                && !provider_supports_copilot_device(resolved)
+                && !provider_supports_atomgit_oauth(resolved)
         }
         ProviderAuthConfig::Credential(_) => false,
         ProviderAuthConfig::None
@@ -292,6 +310,7 @@ fn credential_issuer_value(issuer: crate::provider::auth::CredentialIssuer) -> &
         crate::provider::auth::CredentialIssuer::OpenaiChatgpt => "openai_chatgpt",
         crate::provider::auth::CredentialIssuer::GithubCopilot => "github_copilot",
         crate::provider::auth::CredentialIssuer::Gitlab => "gitlab",
+        crate::provider::auth::CredentialIssuer::AtomGit => "atomgit",
     }
 }
 
@@ -309,6 +328,7 @@ fn auth_data_item(auth: AuthData) -> Item {
             expires_at_ms,
             account_id,
             enterprise_url,
+            user,
         } => {
             table.insert("type", Value::from("oauth"));
             if let Some(issuer) = issuer {
@@ -322,6 +342,21 @@ fn auth_data_item(auth: AuthData) -> Item {
             }
             if let Some(enterprise_url) = normalize_text(enterprise_url.as_deref()) {
                 table.insert("enterprise_url", Value::from(enterprise_url));
+            }
+            if let Some(user) = user {
+                let mut user_table = InlineTable::new();
+                user_table.insert("id", Value::from(user.id));
+                user_table.insert("username", Value::from(user.username));
+                if let Some(name) = normalize_text(user.name.as_deref()) {
+                    user_table.insert("name", Value::from(name));
+                }
+                if let Some(email) = normalize_text(user.email.as_deref()) {
+                    user_table.insert("email", Value::from(email));
+                }
+                if let Some(avatar_url) = normalize_text(user.avatar_url.as_deref()) {
+                    user_table.insert("avatar_url", Value::from(avatar_url));
+                }
+                table.insert("user", Value::InlineTable(user_table));
             }
         }
         AuthData::WellKnown { key, token } => {

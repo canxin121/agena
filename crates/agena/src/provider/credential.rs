@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use crate::{
     error::AppError,
     provider::{
-        auth::{AuthData, refresh_gitlab_token},
+        auth::{AuthData, refresh_atomgit_token, refresh_gitlab_token},
         utils,
     },
 };
@@ -27,6 +27,7 @@ pub enum AuthRefreshStrategy {
     ReloadFromStore,
     OpenAiOAuth,
     GitlabOAuth { instance_url: String },
+    AtomGitOAuth,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -535,6 +536,7 @@ fn auth_refresh_strategy_key(strategy: &AuthRefreshStrategy) -> String {
         AuthRefreshStrategy::GitlabOAuth { instance_url } => {
             format!("gitlab_oauth:{}", instance_url.trim_end_matches('/'))
         }
+        AuthRefreshStrategy::AtomGitOAuth => "atomgit_oauth".to_owned(),
     }
 }
 
@@ -551,6 +553,7 @@ fn auth_data_prompt_cache_identity(auth: &AuthData) -> Option<String> {
         AuthData::OAuth {
             account_id,
             enterprise_url,
+            user,
             ..
         } => {
             let mut parts = vec!["oauth".to_owned()];
@@ -569,6 +572,12 @@ fn auth_data_prompt_cache_identity(auth: &AuthData) -> Option<String> {
                     enterprise_url.trim_end_matches('/')
                 ));
             }
+            if let Some(username) = user
+                .as_ref()
+                .and_then(|user| normalize_optional_text(user.username.clone()))
+            {
+                parts.push(format!("username={username}"));
+            }
             Some(parts.join(";"))
         }
     }
@@ -585,7 +594,9 @@ async fn resolve_inline_auth_credential(
     let selected = select_auth_secret(&current, selector, provider_id);
     let now_ms = chrono::Utc::now().timestamp_millis();
     let should_refresh = match refresh {
-        AuthRefreshStrategy::GitlabOAuth { .. } | AuthRefreshStrategy::OpenAiOAuth => {
+        AuthRefreshStrategy::GitlabOAuth { .. }
+        | AuthRefreshStrategy::OpenAiOAuth
+        | AuthRefreshStrategy::AtomGitOAuth => {
             oauth_refresh_token(&current).is_some()
                 && match selected.as_ref() {
                     Ok(selected) => force_refresh || !selected.is_fresh(now_ms),
@@ -606,6 +617,7 @@ async fn resolve_inline_auth_credential(
                 refresh: refresh_token,
                 account_id,
                 enterprise_url,
+                user,
                 ..
             } = current
             else {
@@ -621,6 +633,7 @@ async fn resolve_inline_auth_credential(
                 expires_at_ms: refreshed.expires_at_ms,
                 account_id: refreshed.account_id.or(account_id),
                 enterprise_url,
+                user,
             };
             *auth.lock().await = updated.clone();
             select_auth_secret(&updated, selector, provider_id)
@@ -631,6 +644,7 @@ async fn resolve_inline_auth_credential(
                 refresh: refresh_token,
                 account_id,
                 enterprise_url,
+                user,
                 ..
             } = current
             else {
@@ -646,6 +660,33 @@ async fn resolve_inline_auth_credential(
                 expires_at_ms: refreshed.expires_at_ms,
                 account_id,
                 enterprise_url,
+                user,
+            };
+            *auth.lock().await = updated.clone();
+            select_auth_secret(&updated, selector, provider_id)
+        }
+        AuthRefreshStrategy::AtomGitOAuth => {
+            let AuthData::OAuth {
+                issuer,
+                refresh: refresh_token,
+                account_id,
+                enterprise_url,
+                user,
+                ..
+            } = current
+            else {
+                return selected;
+            };
+
+            let refreshed = refresh_atomgit_token(refresh_token.as_str()).await?;
+            let updated = AuthData::OAuth {
+                issuer,
+                refresh: refreshed.refresh,
+                access: refreshed.access,
+                expires_at_ms: refreshed.expires_at_ms,
+                account_id: refreshed.account_id.or(account_id),
+                enterprise_url,
+                user: refreshed.user.or(user),
             };
             *auth.lock().await = updated.clone();
             select_auth_secret(&updated, selector, provider_id)

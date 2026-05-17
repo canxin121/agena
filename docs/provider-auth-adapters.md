@@ -264,6 +264,7 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "...", acces
 - `openai_chatgpt`
 - `github_copilot`
 - `gitlab`
+- `atomgit`
 
 ### `bedrock_sigv4`
 
@@ -302,6 +303,7 @@ auth 决定身份来源；adapter 决定协议。
 
 - `github_copilot` credential 可以配 `openai` adapter
 - `github_copilot` credential 也可以配 `anthropic` adapter
+- `atomgit` credential 可以配 `openai` adapter，运行时使用 AtomGit 的 OpenAI-compatible gateway
 - `openai_chatgpt` credential 只适合 `openai` adapter 且 `backend = "chatgpt_codex"`
 - `bedrock_sigv4` 只适合 `amazon_bedrock`
 - `sap_ai_core` 只适合 `openai`
@@ -362,6 +364,24 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "...", acces
 enabled = true
 
 [providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
+enabled = true
+```
+
+### AtomGit OAuth
+
+```toml
+[providers.atomgit]
+default_model = "openai/Kimi-K2-Instruct"
+
+[providers.atomgit.auth]
+mode = "credential"
+issuer = "atomgit"
+credential = { type = "oauth", issuer = "atomgit", refresh = "...", access = "...", expires_at_ms = 4102444800000, account_id = "atomgit-user" }
+
+[providers.atomgit.adapters.openai]
+enabled = true
+
+[providers.atomgit.adapters.openai.models."Kimi-K2-Instruct"]
 enabled = true
 ```
 

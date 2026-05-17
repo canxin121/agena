@@ -201,16 +201,32 @@ impl Backend {
             .provider_ids()
             .into_iter()
             .filter_map(|provider_id| {
-                registry
-                    .get(provider_id.as_str())
-                    .map(|provider| ProviderSummaryResource {
+                registry.get(provider_id.as_str()).map(|provider| {
+                    let adapter_ids = snapshot
+                        .config_resolution()
+                        .config
+                        .providers
+                        .get(provider_id.as_str())
+                        .map(|provider| {
+                            provider
+                                .adapters
+                                .iter()
+                                .filter(|(_, adapter)| adapter.enabled)
+                                .map(|(adapter_id, _)| adapter_id.clone())
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+
+                    ProviderSummaryResource {
                         default_model_ref: format!("{provider_id}/{}", provider.default_model()),
                         default_model: provider.default_model().to_string(),
                         catalog_default_model: catalog_snapshot
-                            .merged_provider(provider_id.as_str())
+                            .merged_provider_for_adapters(provider_id.as_str(), &adapter_ids)
                             .and_then(|catalog_provider| catalog_provider.default_model),
+                        adapters: Vec::new(),
                         provider_id,
-                    })
+                    }
+                })
             })
             .collect::<Vec<_>>();
         providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));

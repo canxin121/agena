@@ -285,11 +285,17 @@ impl GitlabProvider {
             },
         };
 
-        document.providers.get(PROVIDER_ID).cloned().ok_or_else(|| {
-            AppError::Config(format!(
-                "gitlab model catalog does not contain provider `{PROVIDER_ID}`"
-            ))
-        })
+        document
+            .adapter_record(PROVIDER_ID)
+            .map(|adapter| ModelCatalogProviderRecord {
+                default_model: adapter.default_model,
+                models: adapter.models,
+            })
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "gitlab model catalog does not contain adapter `{PROVIDER_ID}`"
+                ))
+            })
     }
 
     async fn get_direct_access_token(

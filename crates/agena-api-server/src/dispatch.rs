@@ -44,14 +44,14 @@ use agena_api::{
         ListSessionsParams, ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        ModelCatalogEntryResource, ModelCatalogResponse, ProviderModelsResponse,
-        ProviderSummaryResource, RunOptions, RuntimeAgentResource, RuntimeAgentsResource,
-        RuntimeAutomationResource, RuntimeLspResource, RuntimeLspServerResource,
-        RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
-        RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
-        RuntimeStatusResponse, RuntimeTaskResource, SessionAutomationResource,
-        SessionExecutionContextResource, SessionExecutionResource, SessionGoalResource,
-        SessionResource, SessionRunState, WorkspaceResource,
+        ModelCatalogEntryResource, ModelCatalogResponse, ProviderAdapterSummaryResource,
+        ProviderModelsResponse, ProviderSummaryResource, RunOptions, RuntimeAgentResource,
+        RuntimeAgentsResource, RuntimeAutomationResource, RuntimeLspResource,
+        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+        RuntimeOperatorResource, RuntimeSessionCacheResource, RuntimeSkillResource,
+        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
+        SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
+        SessionGoalResource, SessionResource, SessionRunState, WorkspaceResource,
     },
 };
 
@@ -203,6 +203,7 @@ fn model_catalog_entry_from_http(
     value: HttpModelCatalogEntryResource,
 ) -> ModelCatalogEntryResource {
     ModelCatalogEntryResource {
+        adapter_id: value.adapter_id,
         provider_id: value.provider_id,
         model_id: value.model_id,
         kind: match value.kind {
@@ -228,6 +229,7 @@ fn model_catalog_entry_from_http(
             }
         },
         source_label: value.source_label,
+        default_model_for_adapter: value.default_model_for_adapter,
         default_model_for_provider: value.default_model_for_provider,
         has_local_override: value.has_local_override,
         display_name: value.display_name,
@@ -614,16 +616,57 @@ fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource> {
         .provider_ids()
         .into_iter()
         .filter_map(|provider_id| {
-            registry
-                .get(provider_id.as_str())
-                .map(|provider| ProviderSummaryResource {
+            registry.get(provider_id.as_str()).map(|provider| {
+                let provider_config = snapshot
+                    .config_resolution()
+                    .config
+                    .providers
+                    .get(provider_id.as_str());
+                let adapter_ids = provider_config
+                    .map(|provider| {
+                        provider
+                            .adapters
+                            .iter()
+                            .filter(|(_, adapter)| adapter.enabled)
+                            .map(|(adapter_id, _)| adapter_id.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let adapters = provider_config
+                    .map(|provider| {
+                        provider
+                            .adapters
+                            .iter()
+                            .map(|(adapter_id, adapter)| ProviderAdapterSummaryResource {
+                                adapter_id: adapter_id.clone(),
+                                enabled: adapter.enabled,
+                                configured_model_count: provider
+                                    .models
+                                    .keys()
+                                    .filter(|model_id| {
+                                        model_id
+                                            .split_once('/')
+                                            .map(|(route_adapter_id, _)| {
+                                                route_adapter_id == adapter_id
+                                            })
+                                            .unwrap_or(false)
+                                    })
+                                    .count(),
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+
+                ProviderSummaryResource {
                     default_model_ref: format!("{provider_id}/{}", provider.default_model()),
                     default_model: provider.default_model().to_string(),
                     catalog_default_model: catalog_snapshot
-                        .merged_provider(provider_id.as_str())
+                        .merged_provider_for_adapters(provider_id.as_str(), &adapter_ids)
                         .and_then(|catalog_provider| catalog_provider.default_model),
+                    adapters,
                     provider_id,
-                })
+                }
+            })
         })
         .collect::<Vec<_>>();
     providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));

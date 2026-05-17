@@ -356,10 +356,24 @@ impl RuntimeSnapshot {
         provider_id: &str,
     ) -> Result<Vec<crate::provider::ProviderModel>, AppError> {
         let models = self.services.providers.list_models(provider_id).await?;
+        let adapter_ids = self
+            .resolution
+            .config
+            .providers
+            .get(provider_id)
+            .map(|provider| {
+                provider
+                    .adapters
+                    .iter()
+                    .filter(|(_, adapter)| adapter.enabled)
+                    .map(|(adapter_id, _)| adapter_id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let Some(provider_record) = self
             .services
             .model_catalog
-            .effective_provider_record(provider_id)
+            .effective_provider_record(provider_id, &adapter_ids)
         else {
             return Ok(models);
         };

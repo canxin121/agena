@@ -145,12 +145,16 @@ pub enum ModelCatalogSourceKind {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelCatalogEntryResource {
+    pub adapter_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provider_id: String,
     pub model_id: String,
     pub kind: ModelCatalogEntryKind,
     pub source: ModelCatalogSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model_for_adapter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model_for_provider: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -207,12 +211,14 @@ impl ModelCatalogEntryResource {
         .map(str::to_owned);
 
         Self {
-            provider_id: value.provider_id,
+            adapter_id: value.adapter_id.clone(),
+            provider_id: value.adapter_id.clone(),
             model_id: value.model_id,
             kind,
             source,
             source_label,
-            default_model_for_provider: value.default_model_for_provider,
+            default_model_for_adapter: value.default_model_for_adapter.clone(),
+            default_model_for_provider: value.default_model_for_adapter,
             has_local_override: value.has_local_override,
             display_name: value.display_name,
             family: value.family,
@@ -228,8 +234,13 @@ impl ModelCatalogEntryResource {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelCatalogEntryWriteRequest {
-    pub provider_id: String,
+    #[serde(default)]
+    pub adapter_id: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub model_id: String,
+    #[serde(default)]
+    pub set_default_for_adapter: bool,
     #[serde(default)]
     pub set_default_for_provider: bool,
     #[serde(flatten)]
@@ -238,7 +249,10 @@ pub struct ModelCatalogEntryWriteRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelCatalogProviderDefaultRequest {
-    pub provider_id: String,
+    #[serde(default)]
+    pub adapter_id: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub model_id: String,
 }
 
@@ -547,6 +561,14 @@ pub struct AuthProviderResource {
     pub account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enterprise_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -584,6 +606,19 @@ pub struct AuthGitLabBrowserFinishRequest {
     pub code: String,
     pub pkce_verifier: String,
     pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AuthAtomGitBrowserStartRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthAtomGitBrowserPollRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -646,12 +681,21 @@ pub struct AuthLoginResultResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ProviderAdapterSummaryResource {
+    pub adapter_id: String,
+    pub enabled: bool,
+    pub configured_model_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ProviderSummaryResource {
     pub provider_id: String,
     pub default_model: String,
     pub default_model_ref: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_default_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adapters: Vec<ProviderAdapterSummaryResource>,
 }
 
 #[derive(Debug, Clone, Serialize)]

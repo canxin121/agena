@@ -1,8 +1,17 @@
 import type { Ref } from 'vue'
 
-import type { AuthBrowserStartResponse, AuthDeviceStartResponse, AuthProvider } from '../lib/agenaApi'
+import type {
+  AuthBrowserStartResponse,
+  AuthDeviceStartResponse,
+  AuthProvider,
+  ModelCatalogEntry,
+  ProviderModel,
+  ProviderSummary,
+} from '../lib/agenaApi'
 
 export type SettingsProvidersStateInput = {
+  actionError: Ref<string>
+  actionMessage: Ref<string>
   authProviders: Ref<AuthProvider[]>
   browserAuthCodeDrafts: Record<string, string>
   browserAuthInstanceDrafts: Record<string, string>
@@ -10,6 +19,10 @@ export type SettingsProvidersStateInput = {
   deviceAuthEnterpriseDrafts: Record<string, string>
   deviceAuthStartState: Record<string, AuthDeviceStartResponse | null>
   drafts: Record<string, string>
+  catalogEntries: Ref<ModelCatalogEntry[]>
+  load: () => Promise<void>
+  providerModels: Record<string, ProviderModel[]>
+  providers: Ref<ProviderSummary[]>
   finishBrowserAuth: (providerId: string) => void | Promise<void>
   pollDeviceAuth: (providerId: string) => void | Promise<void>
   saveApiKey: (providerId: string) => void | Promise<void>
@@ -21,6 +34,8 @@ export type SettingsProvidersStateInput = {
 
 export function useSettingsProvidersState(input: SettingsProvidersStateInput) {
   return {
+    actionError: input.actionError,
+    actionMessage: input.actionMessage,
     authProviders: input.authProviders,
     browserAuthCodeDrafts: input.browserAuthCodeDrafts,
     browserAuthInstanceDrafts: input.browserAuthInstanceDrafts,
@@ -28,6 +43,10 @@ export function useSettingsProvidersState(input: SettingsProvidersStateInput) {
     deviceAuthEnterpriseDrafts: input.deviceAuthEnterpriseDrafts,
     deviceAuthStartState: input.deviceAuthStartState,
     drafts: input.drafts,
+    catalogEntries: input.catalogEntries,
+    load: input.load,
+    providerModels: input.providerModels,
+    providers: input.providers,
     finishBrowserAuth: input.finishBrowserAuth,
     pollDeviceAuth: input.pollDeviceAuth,
     saveApiKey: input.saveApiKey,

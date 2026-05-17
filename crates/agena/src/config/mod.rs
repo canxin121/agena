@@ -32,8 +32,8 @@ pub use types::{
 
 pub use credential_store::{
     ProviderConfigCredentialStore, provider_auth_data, provider_gitlab_instance_url,
-    provider_has_gitlab_adapter, provider_supports_api_key_write, provider_supports_copilot_device,
-    provider_supports_openai_oauth,
+    provider_has_gitlab_adapter, provider_supports_api_key_write, provider_supports_atomgit_oauth,
+    provider_supports_copilot_device, provider_supports_openai_oauth,
 };
 pub use edit::{
     ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,

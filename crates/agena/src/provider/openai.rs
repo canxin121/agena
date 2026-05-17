@@ -991,6 +991,20 @@ impl OpenAiProvider {
     }
 
     fn extract_reasoning_text(response: &OpenAiResponsesResponse) -> Option<String> {
+        let summaries: String = response
+            .output
+            .iter()
+            .flatten()
+            .filter(|item| item.kind.as_deref() == Some("reasoning"))
+            .flat_map(|item| item.summary.iter().flatten())
+            .filter_map(|part| part.text.as_ref())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("");
+        if !summaries.is_empty() {
+            return Some(summaries);
+        }
+
         let text: String = response
             .output
             .iter()
@@ -2157,10 +2171,18 @@ struct OpenAiOutputItem {
     arguments: Option<String>,
     #[serde(default)]
     content: Option<Vec<OpenAiOutputContent>>,
+    #[serde(default)]
+    summary: Option<Vec<OpenAiReasoningSummaryContent>>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpenAiOutputContent {
+    #[serde(default)]
+    text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiReasoningSummaryContent {
     #[serde(default)]
     text: Option<String>,
 }
@@ -2750,6 +2772,35 @@ mod tests {
         assert_eq!(json["prompt_cache_key"], "session-42");
         assert_eq!(json["previous_response_id"], "resp_prev");
         assert_eq!(request.window_id_header().as_deref(), Some("session-42:4"));
+    }
+
+    #[test]
+    fn responses_reasoning_summary_is_preferred_over_reasoning_content() {
+        let response = OpenAiResponsesResponse {
+            id: None,
+            model: None,
+            output_text: None,
+            output: Some(vec![OpenAiOutputItem {
+                kind: Some("reasoning".to_owned()),
+                id: None,
+                call_id: None,
+                name: None,
+                arguments: None,
+                content: Some(vec![OpenAiOutputContent {
+                    text: Some("hidden chain".to_owned()),
+                }]),
+                summary: Some(vec![OpenAiReasoningSummaryContent {
+                    text: Some("summary text".to_owned()),
+                }]),
+            }]),
+            stop_reason: None,
+            usage: None,
+        };
+
+        assert_eq!(
+            OpenAiProvider::extract_reasoning_text(&response).as_deref(),
+            Some("summary text")
+        );
     }
 
     #[test]

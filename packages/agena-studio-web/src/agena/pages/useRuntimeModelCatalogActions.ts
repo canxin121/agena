@@ -57,6 +57,8 @@ export type ModelCatalogThinkingModeEditableDraft = {
   description: string
   disabled: boolean
   thinking_json: string
+  request_override_json: string
+  adapter_overrides_json: string
 }
 
 export type ModelCatalogSpeedModeEditableDraft = {
@@ -209,6 +211,8 @@ export function createEmptyModelCatalogThinkingModeDraft(name = ''): ModelCatalo
     description: '',
     disabled: false,
     thinking_json: '',
+    request_override_json: '',
+    adapter_overrides_json: '',
   }
 }
 
@@ -233,6 +237,8 @@ function createThinkingModeDraftFromEntry(
     description: String(mode.description || ''),
     disabled: Boolean(mode.disabled),
     thinking_json: stringifyJson(mode.thinking || null),
+    request_override_json: stringifyJson(mode.request_override || null),
+    adapter_overrides_json: stringifyJson(mode.adapter_overrides || null),
   }
 }
 
@@ -353,8 +359,16 @@ function buildModelCatalogThinkingModes(
     const displayName = normalizeOptionalText(mode.display_name)
     const description = normalizeOptionalText(mode.description)
     const thinking = normalizeOptionalJsonObject(mode.thinking_json, `Thinking mode ${name || '(unnamed)'}`)
+    const requestOverride = normalizeOptionalSpeedModeRequestOverride(
+      mode.request_override_json,
+      `Thinking mode ${name || '(unnamed)'} request override`,
+    )
+    const adapterOverrides = normalizeOptionalSpeedModeRequestOverrideMap(
+      mode.adapter_overrides_json,
+      `Thinking mode ${name || '(unnamed)'} adapter overrides`,
+    )
     const disabled = Boolean(mode.disabled)
-    const hasDetails = Boolean(displayName || description || thinking || disabled)
+    const hasDetails = Boolean(displayName || description || thinking || requestOverride || adapterOverrides || disabled)
 
     if (!name) {
       if (!hasDetails) continue
@@ -369,6 +383,8 @@ function buildModelCatalogThinkingModes(
     if (displayName) nextMode.display_name = displayName
     if (description) nextMode.description = description
     if (thinking) nextMode.thinking = thinking
+    if (requestOverride) nextMode.request_override = requestOverride
+    if (adapterOverrides) nextMode.adapter_overrides = adapterOverrides
     if (disabled) nextMode.disabled = true
     normalized[name] = nextMode
   }

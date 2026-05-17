@@ -444,6 +444,8 @@ export type ProviderModelThinkingMode = {
   display_name?: string | null
   description?: string | null
   thinking?: Record<string, unknown> | null
+  request_override?: ProviderModelSpeedModeRequestOverride | null
+  adapter_overrides?: Record<string, ProviderModelSpeedModeRequestOverride> | null
   disabled?: boolean
 }
 

@@ -22,7 +22,7 @@ use agena::{
         AttachmentItem, AttachmentKind, AttachmentSource, EnterWorktreeToolInput,
         ExitWorktreeToolInput, PartContent, ToolInvocation, UserInputReply,
     },
-    model::ModelRef,
+    model::{AdapterId, ModelRef, ModelSpeedModeRequestOverride},
     permission::PermissionReplyKind,
     provider::ProviderModel,
     runtime::AgenaRuntime,
@@ -42,6 +42,22 @@ fn parse_worktree_payload(payload: Option<serde_json::Value>) -> Result<Worktree
     let payload = payload.ok_or_else(|| anyhow!("worktree tool returned no payload"))?;
     serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
 }
+
+fn resolve_mode_request_override(
+    base: &ModelSpeedModeRequestOverride,
+    request_override: &ModelSpeedModeRequestOverride,
+    adapter_overrides: &std::collections::BTreeMap<String, ModelSpeedModeRequestOverride>,
+    resolved_adapter_id: Option<&AdapterId>,
+) -> ModelSpeedModeRequestOverride {
+    let mut merged = base.merged_with(request_override);
+    if let Some(adapter_id) = resolved_adapter_id.map(AdapterId::as_str)
+        && let Some(adapter_override) = adapter_overrides.get(adapter_id)
+    {
+        merged = merged.merged_with(adapter_override);
+    }
+    merged
+}
+
 use agena_api::{
     commands::{
         Command as ApiCommand, CommandResult, ContinueRunParams, CreateSessionParams,
@@ -2079,6 +2095,18 @@ impl Backend {
         if let Some(model) = model {
             options.model = model;
         }
+        let resolved_adapter_id = options
+            .model
+            .adapter_id
+            .clone()
+            .or_else(|| {
+                let snapshot = self.runtime.current_snapshot();
+                let provider_registry = snapshot.provider_registry();
+                provider_registry
+                    .get(options.model.provider_id.as_str())
+                    .and_then(|provider| provider.default_adapter().cloned())
+            });
+
         if let Some(thinking_mode) = thinking_mode
             .as_deref()
             .map(str::trim)
@@ -2097,6 +2125,12 @@ impl Backend {
             })?;
             options.thinking_mode = Some(thinking_mode.to_string());
             options.thinking = definition.thinking.clone();
+            options.request_override = resolve_mode_request_override(
+                &options.request_override,
+                &definition.request_override,
+                &definition.adapter_overrides,
+                resolved_adapter_id.as_ref(),
+            );
         }
         if let Some(speed_mode) = speed_mode
             .as_deref()
@@ -2111,26 +2145,13 @@ impl Backend {
             let definition = speed_modes
                 .get(speed_mode)
                 .ok_or_else(|| anyhow!("model {} has no speed mode {speed_mode}", options.model))?;
-            let adapter_id = options
-                .model
-                .adapter_id
-                .as_ref()
-                .map(|value| value.to_string())
-                .or_else(|| {
-                    provider_registry
-                        .get(options.model.provider_id.as_str())
-                        .and_then(|provider| {
-                            provider.default_adapter().map(|value| value.to_string())
-                        })
-                });
-            let mut request_override = definition.request_override.clone();
-            if let Some(adapter_id) = adapter_id.as_deref()
-                && let Some(adapter_override) = definition.adapter_overrides.get(adapter_id)
-            {
-                request_override = request_override.merged_with(adapter_override);
-            }
             options.speed_mode = Some(speed_mode.to_string());
-            options.request_override = request_override;
+            options.request_override = resolve_mode_request_override(
+                &options.request_override,
+                &definition.request_override,
+                &definition.adapter_overrides,
+                resolved_adapter_id.as_ref(),
+            );
         }
 
         if let Some(system) = system {
@@ -2658,6 +2679,8 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
                         "display_name": mode.display_name,
                         "description": mode.description,
                         "thinking": mode.thinking,
+                        "request_override": mode.request_override,
+                        "adapter_overrides": mode.adapter_overrides,
                     }),
                 )
             })

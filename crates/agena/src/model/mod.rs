@@ -840,6 +840,13 @@ pub struct ModelThinkingMode {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingRequest>,
+    #[serde(
+        default,
+        skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
+    )]
+    pub request_override: ModelSpeedModeRequestOverride,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
 }
 
 impl ModelThinkingMode {
@@ -848,6 +855,8 @@ impl ModelThinkingMode {
             display_name: None,
             description: None,
             thinking: None,
+            request_override: ModelSpeedModeRequestOverride::default(),
+            adapter_overrides: BTreeMap::new(),
         }
     }
 
@@ -863,6 +872,24 @@ impl ModelThinkingMode {
 
     pub fn with_thinking(mut self, thinking: ThinkingRequest) -> Self {
         self.thinking = Some(thinking);
+        self
+    }
+
+    pub fn with_request_override(
+        mut self,
+        request_override: ModelSpeedModeRequestOverride,
+    ) -> Self {
+        self.request_override = request_override;
+        self
+    }
+
+    pub fn with_adapter_override(
+        mut self,
+        adapter_id: impl Into<String>,
+        request_override: ModelSpeedModeRequestOverride,
+    ) -> Self {
+        self.adapter_overrides
+            .insert(adapter_id.into(), request_override);
         self
     }
 }

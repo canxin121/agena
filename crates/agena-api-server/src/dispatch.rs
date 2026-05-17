@@ -1993,6 +1993,70 @@ thinking = { type = "budget", budget_tokens = 30000 }
     }
 
     #[tokio::test]
+    async fn run_options_to_core_resolves_model_thinking_mode_and_merges_adapter_override() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_adapter = "openai"
+default_model = "openai/gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[providers.openai.adapters.openai.models."gpt-5.4".thinking_modes.deep]
+thinking = { type = "effort", effort = "high" }
+
+[providers.openai.adapters.openai.models."gpt-5.4".thinking_modes.deep.request_override]
+body_patch = { reasoning = { summary = "auto" } }
+
+[providers.openai.adapters.openai.models."gpt-5.4".thinking_modes.deep.adapter_overrides.openai]
+headers = { x_reasoning_profile = "deep" }
+"#,
+            "model-thinking-mode-override",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "thinking mode override").await;
+        let options = RunOptions {
+            model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
+            thinking_mode: Some("deep".to_string()),
+            speed_mode: None,
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+
+        let core = run_options_to_core(&state, session_id, &options)
+            .await
+            .expect("thinking mode with override should resolve");
+
+        assert_eq!(core.thinking_mode.as_deref(), Some("deep"));
+        assert_eq!(
+            core.thinking,
+            Some(agena::provider::ThinkingRequest::Effort {
+                effort: agena::provider::ReasoningEffort::High
+            })
+        );
+        assert_eq!(
+            core.request_override.body_patch.get("reasoning"),
+            Some(&serde_json::json!({ "summary": "auto" }))
+        );
+        assert_eq!(
+            core.request_override
+                .headers
+                .get("x_reasoning_profile")
+                .map(String::as_str),
+            Some("deep")
+        );
+    }
+
+    #[tokio::test]
     async fn run_options_to_core_resolves_model_speed_mode_and_merges_adapter_override() {
         let (state, workspace_root) = test_state_with_config(
             r#"

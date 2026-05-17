@@ -1993,6 +1993,77 @@ thinking = { type = "budget", budget_tokens = 30000 }
     }
 
     #[tokio::test]
+    async fn run_options_to_core_resolves_model_speed_mode_and_merges_adapter_override() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_adapter = "openai"
+default_model = "openai/gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[providers.openai.adapters.openai.models."gpt-5.4".speed_modes.fast]
+request_override = { headers = { x-mode = "fast" }, body_patch = { service_tier = "priority" } }
+
+[providers.openai.adapters.openai.models."gpt-5.4".speed_modes.fast.adapter_overrides.openai]
+headers = { x-openai-mode = "fast" }
+body_patch = { response_format = "json_schema" }
+"#,
+            "model-speed-mode",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "speed mode").await;
+        let options = RunOptions {
+            model: Some(ModelRef::new_with_adapter(
+                "openai",
+                "openai",
+                "openai/gpt-5.4",
+            )),
+            thinking_mode: None,
+            speed_mode: Some("fast".to_string()),
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+
+        let core = run_options_to_core(&state, session_id, &options)
+            .await
+            .expect("speed mode should resolve");
+
+        assert_eq!(core.speed_mode.as_deref(), Some("fast"));
+        assert_eq!(
+            core.request_override
+                .headers
+                .get("x-mode")
+                .map(String::as_str),
+            Some("fast")
+        );
+        assert_eq!(
+            core.request_override
+                .headers
+                .get("x-openai-mode")
+                .map(String::as_str),
+            Some("fast")
+        );
+        assert_eq!(
+            core.request_override.body_patch.get("service_tier"),
+            Some(&serde_json::Value::String("priority".to_string()))
+        );
+        assert_eq!(
+            core.request_override.body_patch.get("response_format"),
+            Some(&serde_json::Value::String("json_schema".to_string()))
+        );
+    }
+
+    #[tokio::test]
     async fn run_options_to_core_rejects_unknown_model_thinking_mode() {
         let (state, workspace_root) = test_state_with_config(
             r#"

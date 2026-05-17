@@ -592,7 +592,6 @@ Model catalog response:
       "source": "remote",
       "source_label": "remote catalog",
       "display_name": "GPT-5",
-      "family": "gpt",
       "lifecycle": "active",
       "context_window_tokens": 400000,
       "max_output_tokens": 16384,
@@ -631,7 +630,6 @@ Create/update local override:
 ```json
 {
   "model_id": "gpt-5",
-  "family": "gpt",
   "lifecycle": "active",
   "context_window_tokens": 400000,
   "max_output_tokens": 16384,

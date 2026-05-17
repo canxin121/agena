@@ -88,12 +88,7 @@ impl ModelProvider for CatalogedModelsProvider {
     }
 
     fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
-        let mut metadata = self.target.model_metadata(model);
-        if let Some(definition) = self.provider.models.get(model.as_str()) {
-            if let Some(family) = definition.family {
-                metadata.family = Some(family);
-            }
-        }
+        let metadata = self.target.model_metadata(model);
         self.configured_definition(model)
             .map(|configured| configured.metadata().with_fallbacks_from(&metadata))
             .unwrap_or(metadata)

@@ -246,9 +246,6 @@ impl GitlabProvider {
                 if let Some(display_name) = definition.display_name {
                     model.display_name = Some(display_name);
                 }
-                if let Some(family) = definition.family {
-                    model.metadata = model.metadata.with_family(family);
-                }
                 model
             })
             .collect()
@@ -806,12 +803,10 @@ mod tests {
                         "models": {
                             "duo-chat-sonnet-4-5": {
                                 "display_name": "GitLab Duo Chat Sonnet 4.5",
-                                "family": "claude",
                                 "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
                             },
                             "duo-chat-gpt-5-codex": {
                                 "display_name": "GitLab Duo Chat GPT-5 Codex",
-                                "family": "gpt",
                                 "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
                             }
                         }

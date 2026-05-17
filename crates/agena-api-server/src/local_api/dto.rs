@@ -155,8 +155,6 @@ pub struct ModelCatalogEntryResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub family: Option<agena::model::ModelFamily>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<agena::model::ModelLifecycle>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
@@ -210,7 +208,6 @@ impl ModelCatalogEntryResource {
             source_label,
             has_local_override: value.has_local_override,
             display_name: value.display_name,
-            family: value.family,
             lifecycle: value.lifecycle,
             context_window_tokens: value.context_window_tokens,
             max_output_tokens: value.max_output_tokens,

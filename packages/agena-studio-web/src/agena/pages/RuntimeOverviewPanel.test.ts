@@ -16,6 +16,18 @@ describe('RuntimeOverviewPanel', () => {
               display_name: 'Deep',
               description: 'More reasoning',
               thinking: { type: 'budget', budget_tokens: 20000 },
+              request_override: {
+                headers: {
+                  'anthropic-beta': 'fast-mode-2026-02-01',
+                },
+              },
+              adapter_overrides: {
+                openai: {
+                  body_patch: {
+                    service_tier: 'priority',
+                  },
+                },
+              },
             },
           },
         },
@@ -35,6 +47,8 @@ describe('RuntimeOverviewPanel', () => {
     expect(html.includes('deep')).toBe(true)
     expect(html.includes('More reasoning')).toBe(true)
     expect(html.includes('thinking')).toBe(true)
+    expect(html.includes('request')).toBe(true)
+    expect(html.includes('adapters')).toBe(true)
     expect(html.includes('Anthropic')).toBe(true)
   })
 

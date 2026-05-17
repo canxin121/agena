@@ -112,6 +112,66 @@ pub fn apply_request_headers(
     req
 }
 
+pub fn merged_request_headers(
+    base_headers: &HashMap<String, String>,
+    request_headers: &BTreeMap<String, String>,
+) -> HashMap<String, String> {
+    let mut merged = base_headers.clone();
+    for (key, value) in request_headers {
+        merged.insert(key.clone(), value.clone());
+    }
+    merged
+}
+
+pub fn serialize_request_body_with_patch(
+    body: &impl serde::Serialize,
+    patch: &BTreeMap<String, serde_json::Value>,
+) -> Result<serde_json::Value, AppError> {
+    let mut value = serde_json::to_value(body).map_err(AppError::from)?;
+    if patch.is_empty() {
+        return Ok(value);
+    }
+
+    let serde_json::Value::Object(target) = &mut value else {
+        return Err(AppError::Config(
+            "request body patch can only be applied to JSON object bodies".to_owned(),
+        ));
+    };
+
+    merge_json_object_patch_map(target, patch);
+    Ok(value)
+}
+
+pub fn merge_json_object_patch_map(
+    target: &mut serde_json::Map<String, serde_json::Value>,
+    patch: &BTreeMap<String, serde_json::Value>,
+) {
+    for (key, value) in patch {
+        match target.get_mut(key) {
+            Some(current) => merge_json_value(current, value),
+            None => {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn merge_json_value(current: &mut serde_json::Value, patch: &serde_json::Value) {
+    match (current, patch) {
+        (serde_json::Value::Object(current), serde_json::Value::Object(patch)) => {
+            for (key, value) in patch {
+                match current.get_mut(key) {
+                    Some(existing) => merge_json_value(existing, value),
+                    None => {
+                        current.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        (current, patch) => *current = patch.clone(),
+    }
+}
+
 // ─── HTTP response helpers ────────────────────────────────────────────────────
 
 pub async fn parse_json_response<T: DeserializeOwned>(

@@ -464,6 +464,8 @@ impl OpenAiProvider {
                 model.as_str(),
             ),
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
@@ -474,7 +476,7 @@ impl OpenAiProvider {
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
                 RequestHeaderContext::from_request(request),
             )
-            .json(&body)
+            .json(&body_json)
         })
         .await?;
 
@@ -515,6 +517,8 @@ impl OpenAiProvider {
                 model.as_str(),
             ),
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
@@ -525,7 +529,7 @@ impl OpenAiProvider {
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
                 RequestHeaderContext::from_request(request),
             )
-            .json(&body)
+            .json(&body_json)
         })
         .await?;
 
@@ -1451,6 +1455,10 @@ impl OpenAiProvider {
             }
         }
 
+        if let Some(request_headers) = context.request_headers {
+            headers = utils::merged_request_headers(&headers, request_headers);
+        }
+
         utils::apply_request_headers(self.id.as_str(), req, &headers)
     }
 }
@@ -1465,6 +1473,7 @@ struct RequestHeaderContext<'a> {
     prompt_window_generation: Option<u64>,
     initiator: Option<&'a str>,
     vision_request: bool,
+    request_headers: Option<&'a std::collections::BTreeMap<String, String>>,
 }
 
 impl<'a> RequestHeaderContext<'a> {
@@ -1474,6 +1483,7 @@ impl<'a> RequestHeaderContext<'a> {
             prompt_window_generation: request.prompt_window_generation,
             initiator: Some(OpenAiProvider::initiator(request)),
             vision_request: OpenAiProvider::is_vision_request(request),
+            request_headers: Some(&request.request_override.headers),
         }
     }
 
@@ -1635,11 +1645,13 @@ impl ModelProvider for OpenAiProvider {
                 model.as_str(),
             ),
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response: OpenAiResponsesResponse = match self
             .send_json(
                 self.responses_endpoint()?,
-                Some(&body),
+                Some(&body_json),
                 RequestHeaderContext::from_request(&request),
             )
             .await
@@ -1727,6 +1739,8 @@ impl ModelProvider for OpenAiProvider {
                 model.as_str(),
             ),
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
@@ -1740,7 +1754,7 @@ impl ModelProvider for OpenAiProvider {
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
                 RequestHeaderContext::from_request(&request),
             )
-            .json(&body)
+            .json(&body_json)
         })
         .await?;
 
@@ -2512,6 +2526,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2568,6 +2583,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2620,6 +2636,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2688,6 +2705,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2820,6 +2838,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2895,6 +2914,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2961,6 +2981,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -3015,6 +3036,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -3060,6 +3082,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -3118,6 +3141,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -3185,6 +3209,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -3269,6 +3294,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -3299,6 +3325,8 @@ mod tests {
             seed: None,
 
             thinking: None,
+
+            request_override: Default::default(),
 
             response_format: None,
         };
@@ -3341,6 +3369,8 @@ mod tests {
             seed: None,
 
             thinking: None,
+
+            request_override: Default::default(),
 
             response_format: None,
         };
@@ -3415,6 +3445,8 @@ mod tests {
             seed: None,
 
             thinking: None,
+
+            request_override: Default::default(),
 
             response_format: None,
         };
@@ -3496,6 +3528,8 @@ mod tests {
 
             thinking: None,
 
+            request_override: Default::default(),
+
             response_format: None,
         });
         let json = serde_json::to_value(&messages).expect("chat messages should serialize");
@@ -3538,6 +3572,8 @@ mod tests {
             seed: None,
 
             thinking: None,
+
+            request_override: Default::default(),
 
             response_format: None,
         };
@@ -3700,6 +3736,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -3785,6 +3822,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -3862,6 +3900,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -4056,6 +4095,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await

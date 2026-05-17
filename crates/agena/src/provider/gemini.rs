@@ -10,7 +10,8 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ManagedCredential, ModelProvider, ProviderModel, ResponseFormat,
+        ManagedCredential, ModelProvider, ProviderModel, ReasoningEffort, ResponseFormat,
+        ThinkingRequest,
         remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
         should_retry_credential, sse, utils, wire_message,
     },
@@ -431,12 +432,20 @@ impl ModelProvider for GeminiProvider {
                     stop_sequences: request.stop_sequences.clone(),
                     response_mime_type,
                     response_schema,
+                    thinking_config: gemini_thinking_config(
+                        model.as_str(),
+                        request.thinking.as_ref(),
+                    ),
                 }
             },
             stream: None,
             tools: build_gemini_tools(request.tools.as_slice()),
             tool_config: None,
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+        let request_headers =
+            utils::merged_request_headers(&self.extra_headers, &request.request_override.headers);
 
         let response = self
             .send_request(|api_key| {
@@ -448,10 +457,10 @@ impl ModelProvider for GeminiProvider {
                         self.client
                             .post(endpoint)
                             .header(reqwest::header::CONTENT_TYPE, "application/json")
-                            .json(&body),
+                            .json(&body_json),
                         api_key,
                     ),
-                    &self.extra_headers,
+                    &request_headers,
                 )
             })
             .await?;
@@ -531,12 +540,20 @@ impl ModelProvider for GeminiProvider {
                     stop_sequences: request.stop_sequences.clone(),
                     response_mime_type,
                     response_schema,
+                    thinking_config: gemini_thinking_config(
+                        model.as_str(),
+                        request.thinking.as_ref(),
+                    ),
                 }
             },
             stream: Some(true),
             tools: build_gemini_tools(request.tools.as_slice()),
             tool_config: None,
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+        let request_headers =
+            utils::merged_request_headers(&self.extra_headers, &request.request_override.headers);
 
         let response = self
             .send_request(|api_key| {
@@ -548,10 +565,10 @@ impl ModelProvider for GeminiProvider {
                         self.client
                             .post(endpoint)
                             .header(reqwest::header::CONTENT_TYPE, "application/json")
-                            .json(&body),
+                            .json(&body_json),
                         api_key,
                     ),
-                    &self.extra_headers,
+                    &request_headers,
                 )
             })
             .await?;
@@ -670,6 +687,63 @@ fn gemini_tool_response_name(tool_name: &str) -> String {
     } else {
         trimmed.to_owned()
     }
+}
+
+fn gemini_thinking_config(
+    model: &str,
+    thinking: Option<&ThinkingRequest>,
+) -> Option<GeminiThinkingConfig> {
+    let thinking = thinking?;
+    let normalized = model.to_ascii_lowercase();
+
+    if normalized.contains("gemini-2.5") {
+        let thinking_budget = match thinking {
+            ThinkingRequest::Budget { budget_tokens } => Some(*budget_tokens),
+            ThinkingRequest::Effort { effort } => Some(match effort {
+                ReasoningEffort::Minimal => 1_024,
+                ReasoningEffort::Low => 4_096,
+                ReasoningEffort::Medium => 10_240,
+                ReasoningEffort::High => 16_384,
+                ReasoningEffort::Xhigh | ReasoningEffort::Max => {
+                    if normalized.contains("pro") && !normalized.contains("flash") {
+                        32_768
+                    } else {
+                        24_576
+                    }
+                }
+            }),
+            ThinkingRequest::Disabled => Some(0),
+        };
+        return Some(GeminiThinkingConfig {
+            thinking_budget,
+            thinking_level: None,
+        });
+    }
+
+    if normalized.contains("gemini-3") {
+        let thinking_level = match thinking {
+            ThinkingRequest::Budget { budget_tokens } => {
+                if *budget_tokens == 0 {
+                    None
+                } else if *budget_tokens >= 12_000 {
+                    Some("HIGH")
+                } else {
+                    Some("LOW")
+                }
+            }
+            ThinkingRequest::Effort { effort } => Some(match effort {
+                ReasoningEffort::Minimal | ReasoningEffort::Low | ReasoningEffort::Medium => "LOW",
+                ReasoningEffort::High | ReasoningEffort::Xhigh | ReasoningEffort::Max => "HIGH",
+            }),
+            ThinkingRequest::Disabled => None,
+        };
+        return Some(GeminiThinkingConfig {
+            thinking_budget: None,
+            thinking_level,
+        });
+    }
+
+    None
 }
 
 #[derive(Debug, Serialize)]
@@ -828,6 +902,16 @@ struct GeminiGenerationConfig {
     response_mime_type: Option<String>,
     #[serde(rename = "responseSchema", skip_serializing_if = "Option::is_none")]
     response_schema: Option<serde_json::Value>,
+    #[serde(rename = "thinkingConfig", skip_serializing_if = "Option::is_none")]
+    thinking_config: Option<GeminiThinkingConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiThinkingConfig {
+    #[serde(rename = "thinkingBudget", skip_serializing_if = "Option::is_none")]
+    thinking_budget: Option<u32>,
+    #[serde(rename = "thinkingLevel", skip_serializing_if = "Option::is_none")]
+    thinking_level: Option<&'static str>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1283,6 +1367,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1335,6 +1420,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1469,6 +1555,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1533,6 +1620,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1611,6 +1699,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1740,6 +1829,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1800,6 +1890,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await

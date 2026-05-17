@@ -200,6 +200,7 @@ static LLAMA_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 static GEMMA_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
+        r"^gemma-(2b|7b)$",
         r"^gemma-2-(2b|9b|27b)-it$",
         r"^gemma-3$",
         r"^gemma-3-(1b|4b|12b|27b)-it$",
@@ -212,7 +213,7 @@ static GEMMA_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 });
 
 static CODEGEMMA_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    [r"^codegemma-(2b|7b|7b-it)$"]
+    [r"^codegemma-(1\.1-7b|2b|7b|7b-it)$"]
         .into_iter()
         .map(|pattern| Regex::new(pattern).unwrap())
         .collect()
@@ -718,6 +719,16 @@ fn is_allowed_canonical_model_id(id: &str) -> bool {
         || id.starts_with("tts-")
         || id.starts_with("whisper-")
         || id.starts_with("dall-e-")
+        || looks_like_generic_model_id(id)
+}
+
+fn looks_like_generic_model_id(id: &str) -> bool {
+    let has_alpha = id.chars().any(|ch| ch.is_ascii_alphabetic());
+    let has_signal = id.contains('-')
+        || id.contains('.')
+        || id.chars().any(|ch| ch.is_ascii_digit())
+        || id.len() >= 5;
+    has_alpha && has_signal
 }
 
 fn is_canonical_source_alias(id: &str) -> bool {

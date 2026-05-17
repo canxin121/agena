@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::AppError;
 use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
-    ModelLifecycle, ModelMetadata, ModelVariant,
+    ModelLifecycle, ModelMetadata, ModelVariant, ModelVariantRequestOverride,
 };
 
 use super::{
@@ -449,6 +449,10 @@ pub struct ConfiguredModelVariant {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingRequest>,
+    #[serde(default, skip_serializing_if = "ModelVariantRequestOverride::is_empty")]
+    pub request_override: ModelVariantRequestOverride,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adapter_overrides: BTreeMap<String, ModelVariantRequestOverride>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
 }
@@ -458,6 +462,8 @@ impl ConfiguredModelVariant {
         self.display_name.is_none()
             && self.description.is_none()
             && self.thinking.is_none()
+            && self.request_override.is_empty()
+            && self.adapter_overrides.is_empty()
             && !self.disabled
     }
 
@@ -474,6 +480,16 @@ impl ConfiguredModelVariant {
         }
         if let Some(thinking) = self.thinking.clone() {
             variant.thinking = Some(thinking);
+        }
+        variant.request_override = variant.request_override.merged_with(&self.request_override);
+        for (adapter_id, override_patch) in &self.adapter_overrides {
+            let merged = variant
+                .adapter_overrides
+                .get(adapter_id)
+                .cloned()
+                .unwrap_or_default()
+                .merged_with(override_patch);
+            variant.adapter_overrides.insert(adapter_id.clone(), merged);
         }
         Some(variant)
     }
@@ -937,6 +953,8 @@ mod tests {
                             thinking: Some(ThinkingRequest::Budget {
                                 budget_tokens: 30_000,
                             }),
+                            request_override: Default::default(),
+                            adapter_overrides: BTreeMap::new(),
                             disabled: false,
                         },
                     )]),

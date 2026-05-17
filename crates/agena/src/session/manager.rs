@@ -22,6 +22,7 @@ use crate::message::{
     UserInputRequest, UserInputRequestPart,
 };
 use crate::model::ModelRef;
+use crate::model::ModelVariantRequestOverride;
 use crate::permission::{
     DecisionTraceStep, PermissionAction, PermissionDecision, PermissionMode, PermissionReply,
     PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PermissionScope,
@@ -101,6 +102,7 @@ pub struct SessionRunOptions {
     pub model: ModelRef,
     pub variant: Option<String>,
     pub thinking: Option<ThinkingRequest>,
+    pub request_override: ModelVariantRequestOverride,
     pub system: Option<String>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
@@ -151,6 +153,7 @@ impl SessionRunOptions {
             seed: None,
             thinking: self.thinking.clone(),
             response_format: None,
+            request_override: self.request_override.clone(),
         }
     }
 }
@@ -717,6 +720,7 @@ impl SessionManager {
                     model,
                     variant: None,
                     thinking: None,
+                    request_override: Default::default(),
                     system: None,
                     temperature: None,
                     max_output_tokens: None,
@@ -748,6 +752,7 @@ impl SessionManager {
                 model: ModelRef::new(provider_id, provider.default_model().to_string()),
                 variant: None,
                 thinking: None,
+                request_override: Default::default(),
                 system: None,
                 temperature: None,
                 max_output_tokens: None,
@@ -4051,6 +4056,7 @@ impl SessionManager {
                 model,
                 variant: None,
                 thinking: None,
+                request_override: Default::default(),
                 system: None,
                 temperature: None,
                 max_output_tokens: None,
@@ -4450,6 +4456,7 @@ impl SessionManager {
             model,
             variant: None,
             thinking: None,
+            request_override: Default::default(),
             system: child.runtime.execution.system_prompt_override.clone(),
             temperature: child
                 .runtime
@@ -6415,6 +6422,7 @@ mod tests {
             model: ModelRef::new("interruptible", "interruptible-model"),
             variant: None,
             thinking: None,
+            request_override: Default::default(),
             system: None,
             temperature: None,
             max_output_tokens: Some(64),
@@ -6672,6 +6680,7 @@ mod tests {
             model: scripted_model_ref(),
             variant: None,
             thinking: None,
+            request_override: Default::default(),
             system: None,
             temperature: None,
             max_output_tokens: Some(128),
@@ -6685,6 +6694,7 @@ mod tests {
             model: recording_model_ref(),
             variant: None,
             thinking: None,
+            request_override: Default::default(),
             system: Some("system".to_string()),
             temperature: Some(0.2),
             max_output_tokens: Some(256),
@@ -6704,6 +6714,7 @@ mod tests {
             model: interrupted_model_ref(),
             variant: None,
             thinking: None,
+            request_override: Default::default(),
             system: None,
             temperature: None,
             max_output_tokens: Some(128),
@@ -7761,6 +7772,7 @@ mod tests {
                     model: recording_model_ref(),
                     variant: None,
                     thinking: None,
+                    request_override: Default::default(),
                     system: None,
                     temperature: None,
                     max_output_tokens: None,
@@ -8605,6 +8617,7 @@ mod tests {
                 model: ModelRef::new("restartable", "restartable-model"),
                 variant: None,
                 thinking: None,
+                request_override: Default::default(),
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(128),
@@ -9846,6 +9859,7 @@ mod tests {
                 model: ModelRef::new("slow", "slow-model"),
                 variant: None,
                 thinking: None,
+                request_override: Default::default(),
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(64),

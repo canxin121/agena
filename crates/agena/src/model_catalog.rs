@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 mod curate;
+mod sources;
 
 use crate::{
     AppError,
@@ -86,6 +87,8 @@ impl CatalogModelDefinition {
 pub struct ModelCatalogProviderRecord {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, CatalogModelDefinition>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub appendable_model_ids: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -141,6 +144,7 @@ impl ModelCatalogDocument {
     pub(crate) fn model_record(&self) -> ModelCatalogProviderRecord {
         ModelCatalogProviderRecord {
             models: self.models.clone(),
+            appendable_model_ids: BTreeSet::new(),
         }
     }
 }
@@ -175,6 +179,7 @@ impl ModelCatalogSnapshot {
     pub fn merged_models(&self) -> ModelCatalogProviderRecord {
         let mut merged = self.official.model_record();
         let custom = self.custom.model_record();
+        merged.appendable_model_ids = custom.models.keys().cloned().collect();
         for (model_id, definition) in custom.models {
             merged.models.insert(model_id, definition);
         }
@@ -330,10 +335,19 @@ impl ModelCatalogStore {
 pub struct ModelCatalogService {
     store: ModelCatalogStore,
     state: Arc<RwLock<ModelCatalogSnapshot>>,
+    client: reqwest::Client,
+    remote_sources: Vec<sources::ModelCatalogRemoteSource>,
 }
 
 impl ModelCatalogService {
     pub fn new(store: ModelCatalogStore) -> Result<Self, AppError> {
+        Self::with_remote_sources(store, default_remote_sources())
+    }
+
+    fn with_remote_sources(
+        store: ModelCatalogStore,
+        remote_sources: Vec<sources::ModelCatalogRemoteSource>,
+    ) -> Result<Self, AppError> {
         let custom = store.read_custom()?;
         let mut snapshot = ModelCatalogSnapshot {
             custom,
@@ -350,6 +364,12 @@ impl ModelCatalogService {
         Ok(Self {
             store,
             state: Arc::new(RwLock::new(snapshot)),
+            client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(20))
+                .user_agent(format!("agena/{} model-catalog", env!("CARGO_PKG_VERSION")))
+                .build()?,
+            remote_sources,
         })
     }
 
@@ -448,12 +468,75 @@ impl ModelCatalogService {
         providers: &ProviderRegistry,
         resolution: Option<&ConfigResolution>,
     ) -> Result<(ModelCatalogDocument, Option<String>), AppError> {
+        let mut merged = ModelCatalogDocument::default();
+        let mut warnings = Vec::new();
+        let mut succeeded = 0_usize;
+
+        let (remote_documents, remote_warnings) =
+            sources::fetch_documents(&self.client, &self.remote_sources).await;
+        warnings.extend(remote_warnings);
+        for (_, document) in remote_documents {
+            merge_catalog_document(&mut merged, document);
+            succeeded += 1;
+        }
+
+        match self
+            .build_live_provider_catalog_document(providers, resolution)
+            .await
+        {
+            Ok((Some(document), warning)) => {
+                merge_catalog_document(&mut merged, document);
+                succeeded += 1;
+                if let Some(warning) = warning {
+                    warnings.push(warning);
+                }
+            }
+            Ok((None, warning)) => {
+                if let Some(warning) = warning {
+                    warnings.push(warning);
+                }
+            }
+            Err(error) => {
+                warnings.push(format!("live discovery: {error}"));
+                if succeeded == 0 {
+                    return Err(error);
+                }
+            }
+        }
+
+        if succeeded == 0 {
+            let detail = if warnings.is_empty() {
+                "no public catalog sources or live provider model lists succeeded".to_owned()
+            } else {
+                warnings.join("; ")
+            };
+            return Err(AppError::Config(format!(
+                "model catalog generation failed: {detail}"
+            )));
+        }
+
+        let mut document = curate::curate_catalog_document(merged)
+            .map_err(|err| AppError::Config(format!("curate generated model catalog: {err}")))?;
+        sources::enrich_catalog_document_variants(&mut document);
+        let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
+        Ok((document, warning))
+    }
+
+    async fn build_live_provider_catalog_document(
+        &self,
+        providers: &ProviderRegistry,
+        resolution: Option<&ConfigResolution>,
+    ) -> Result<(Option<ModelCatalogDocument>, Option<String>), AppError> {
         let mut provider_ids = providers.provider_ids();
         provider_ids.sort_by(|left, right| {
             provider_priority(right.as_str(), resolution)
                 .cmp(&provider_priority(left.as_str(), resolution))
                 .then_with(|| left.cmp(right))
         });
+
+        if provider_ids.is_empty() {
+            return Ok((None, None));
+        }
 
         let mut raw_models = BTreeMap::<String, CatalogModelDefinition>::new();
         let mut errors = Vec::new();
@@ -480,25 +563,27 @@ impl ModelCatalogService {
 
         if succeeded == 0 {
             let detail = if errors.is_empty() {
-                "no enabled providers exposed model lists".to_owned()
+                return Ok((None, None));
             } else {
                 errors.join("; ")
             };
             return Err(AppError::Config(format!(
-                "model catalog generation failed: {detail}"
+                "live provider model discovery failed: {detail}"
             )));
         }
 
         let document = curate::curate_catalog_document(ModelCatalogDocument { models: raw_models })
-            .map_err(|err| AppError::Config(format!("curate generated model catalog: {err}")))?;
+            .map_err(|err| {
+                AppError::Config(format!("curate live provider model catalog: {err}"))
+            })?;
         let warning = (!errors.is_empty()).then(|| {
             format!(
-                "catalog generated from {succeeded} provider(s); skipped {} provider(s): {}",
+                "live discovery generated catalog from {succeeded} provider(s); skipped {} provider(s): {}",
                 errors.len(),
                 errors.join("; ")
             )
         });
-        Ok((document, warning))
+        Ok((Some(document), warning))
     }
 
     fn cache_is_fresh(&self, cached: &CachedOfficialCatalog) -> bool {
@@ -535,6 +620,25 @@ fn now_unix_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or_default()
+}
+
+fn default_remote_sources() -> Vec<sources::ModelCatalogRemoteSource> {
+    if public_catalog_sources_disabled() {
+        Vec::new()
+    } else {
+        sources::default_public_sources()
+    }
+}
+
+fn public_catalog_sources_disabled() -> bool {
+    std::env::var_os("AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES")
+        .map(|value| {
+            matches!(
+                value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 pub fn canonical_model_catalog_id(model_id: &str) -> String {
@@ -588,6 +692,8 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
                         display_name: variant.display_name.clone(),
                         description: variant.description.clone(),
                         thinking: variant.thinking.clone(),
+                        request_override: variant.request_override.clone(),
+                        adapter_overrides: variant.adapter_overrides.clone(),
                         disabled: false,
                     },
                 )
@@ -686,9 +792,43 @@ fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &Catalog
         current
             .variants
             .entry(name.clone())
+            .and_modify(|existing| merge_catalog_variant(existing, variant))
             .or_insert_with(|| variant.clone());
     }
     merge_capability_patch(&mut current.capabilities, &next.capabilities);
+}
+
+fn merge_catalog_variant(current: &mut ConfiguredModelVariant, next: &ConfiguredModelVariant) {
+    if current.display_name.is_none() {
+        current.display_name = next.display_name.clone();
+    }
+    if current.description.is_none() {
+        current.description = next.description.clone();
+    }
+    if current.thinking.is_none() {
+        current.thinking = next.thinking.clone();
+    }
+    current.request_override = current.request_override.merged_with(&next.request_override);
+    for (adapter_id, override_patch) in &next.adapter_overrides {
+        let merged = current
+            .adapter_overrides
+            .get(adapter_id)
+            .cloned()
+            .unwrap_or_default()
+            .merged_with(override_patch);
+        current.adapter_overrides.insert(adapter_id.clone(), merged);
+    }
+    current.disabled |= next.disabled;
+}
+
+fn merge_catalog_document(current: &mut ModelCatalogDocument, next: ModelCatalogDocument) {
+    for (model_id, definition) in next.models {
+        current
+            .models
+            .entry(model_id)
+            .and_modify(|existing| merge_catalog_definition(existing, &definition))
+            .or_insert(definition);
+    }
 }
 
 fn merge_capability_patch(current: &mut ModelCapabilityPatch, next: &ModelCapabilityPatch) {
@@ -825,7 +965,7 @@ pub fn decorate_provider_models(
             decorate_provider_model(provider, provider_record, model.id.clone(), model.clone());
     }
 
-    for model_id in provider_record.models.keys() {
+    for model_id in &provider_record.appendable_model_ids {
         if listed.contains(model_id.as_str())
             || listed_catalog_ids.contains(model_id.as_str())
             || models.iter().any(|model| {
@@ -945,8 +1085,10 @@ fn catalog_match_model_id_for_raw(raw_model_id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{
-        model::{CapabilitySupport, ModelId, ModelMetadata},
-        provider::ConfiguredModelVariant,
+        model::{CapabilitySupport, ModelId, ModelMetadata, ModelVariantRequestOverride},
+        provider::{
+            ConfiguredModelVariant, ModelCapabilityFeature, ReasoningEffort, ThinkingRequest,
+        },
     };
     use tempfile::tempdir;
 
@@ -1049,6 +1191,8 @@ mod tests {
                                 display_name: Some("Deep".to_owned()),
                                 description: None,
                                 thinking: None,
+                                request_override: Default::default(),
+                                adapter_overrides: BTreeMap::new(),
                                 disabled: false,
                             },
                         )]),
@@ -1202,7 +1346,8 @@ mod tests {
             })
             .expect("cache should be written");
 
-        let service = ModelCatalogService::new(store).expect("service should load");
+        let service = ModelCatalogService::with_remote_sources(store, Vec::new())
+            .expect("service should load");
         let providers = ProviderRegistry::new();
 
         let snapshot = service
@@ -1233,7 +1378,8 @@ mod tests {
             })
             .expect("stale cache should be written");
 
-        let service = ModelCatalogService::new(store).expect("service should load");
+        let service = ModelCatalogService::with_remote_sources(store, Vec::new())
+            .expect("service should load");
         let mut providers = ProviderRegistry::new();
         providers.register(StaticListProvider::new(
             "openai",
@@ -1265,6 +1411,331 @@ mod tests {
                 .get("gpt-5.4")
                 .and_then(|definition| definition.origin.as_deref()),
             Some("OpenAI")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_from_registry_merges_public_sources_and_keeps_custom_appendable_only() {
+        let mut server = mockito::Server::new_async().await;
+        let _models_dev = server
+            .mock("GET", "/models-dev.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "openai": {
+                        "id": "openai",
+                        "name": "OpenAI",
+                        "models": {
+                            "gpt-5": {
+                                "id": "gpt-5",
+                                "name": "GPT-5",
+                                "reasoning": true,
+                                "tool_call": true,
+                                "structured_output": true,
+                                "temperature": false,
+                                "modalities": {
+                                    "input": ["text", "image"]
+                                },
+                                "limit": {
+                                    "context": 400000,
+                                    "output": 128000
+                                },
+                                "experimental": {
+                                    "modes": {
+                                        "fast": {
+                                            "provider": {
+                                                "headers": {
+                                                    "openai-beta": "fast-mode-2026-02-01"
+                                                },
+                                                "body": {
+                                                    "service_tier": "priority"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let _router = server
+            .mock("GET", "/router.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "claude": [{
+                        "id": "claude-opus-4-7",
+                        "display_name": "Claude Opus 4.7",
+                        "owned_by": "anthropic",
+                        "description": "Anthropic route",
+                        "context_length": 200000,
+                        "max_completion_tokens": 64000,
+                        "thinking": {
+                            "zero_allowed": true,
+                            "levels": ["low", "high", "max"]
+                        }
+                    }, {
+                        "id": "gemini-2.5-pro",
+                        "display_name": "Gemini 2.5 Pro",
+                        "owned_by": "google",
+                        "description": "Google route",
+                        "inputTokenLimit": 1048576,
+                        "outputTokenLimit": 65536,
+                        "thinking": {
+                            "min": 1024,
+                            "max": 32768,
+                            "dynamic_allowed": true
+                        }
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let dir = tempdir().expect("tempdir should create");
+        let store = ModelCatalogStore::new(ModelCatalogConfig {
+            cache_path: dir.path().join("model-catalog-cache.json"),
+            custom_path: dir.path().join("model-catalog-custom.json"),
+            cache_max_age_secs: 60,
+        });
+        let service = ModelCatalogService::with_remote_sources(
+            store,
+            vec![
+                sources::ModelCatalogRemoteSource::new(
+                    "models.dev",
+                    sources::ModelCatalogRemoteSourceKind::ModelsDev,
+                    [format!("{}/models-dev.json", server.url())],
+                ),
+                sources::ModelCatalogRemoteSource::new(
+                    "router-for-me",
+                    sources::ModelCatalogRemoteSourceKind::RouterForMe,
+                    [format!("{}/router.json", server.url())],
+                ),
+            ],
+        )
+        .expect("service should load");
+        let mut providers = ProviderRegistry::new();
+        providers.register(StaticListProvider::new(
+            "gateway",
+            "openai/gpt-5",
+            vec![Model::new("gateway", "openai/gpt-5")],
+        ));
+
+        let snapshot = service
+            .refresh_from_registry(&providers, None)
+            .await
+            .expect("refresh should succeed");
+
+        let gpt5 = snapshot
+            .official
+            .models
+            .get("gpt-5")
+            .expect("gpt-5 should exist");
+        assert_eq!(gpt5.display_name.as_deref(), Some("GPT-5"));
+        assert_eq!(gpt5.origin.as_deref(), Some("OpenAI"));
+        assert_eq!(gpt5.context_window_tokens, Some(400_000));
+        assert_eq!(gpt5.max_output_tokens, Some(128_000));
+        assert_eq!(
+            gpt5.capabilities
+                .feature_support(ModelCapabilityFeature::Reasoning),
+            Some(CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            gpt5.capabilities
+                .feature_support(ModelCapabilityFeature::StructuredOutput),
+            Some(CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            gpt5.capabilities
+                .feature_support(ModelCapabilityFeature::Temperature),
+            Some(CapabilitySupport::Unsupported)
+        );
+        assert!(gpt5.variants.contains_key("fast"));
+        assert_eq!(
+            gpt5.variants
+                .get("fast")
+                .and_then(|variant| variant.adapter_overrides.get("openai")),
+            Some(&ModelVariantRequestOverride {
+                headers: BTreeMap::from([(
+                    "openai-beta".to_owned(),
+                    "fast-mode-2026-02-01".to_owned(),
+                )]),
+                body_patch: BTreeMap::from([(
+                    "service_tier".to_owned(),
+                    serde_json::json!("priority"),
+                )]),
+            })
+        );
+
+        let claude = snapshot
+            .official
+            .models
+            .get("claude-opus-4-7")
+            .expect("claude-opus-4-7 should exist");
+        assert_eq!(claude.origin.as_deref(), Some("Anthropic"));
+        assert_eq!(claude.description.as_deref(), Some("Anthropic route"));
+        assert_eq!(claude.context_window_tokens, Some(200_000));
+        assert_eq!(claude.max_output_tokens, Some(64_000));
+        assert_eq!(
+            claude
+                .capabilities
+                .feature_support(ModelCapabilityFeature::Reasoning),
+            Some(CapabilitySupport::Supported)
+        );
+        assert!(claude.variants.contains_key("no-thinking"));
+        assert!(claude.variants.contains_key("thinking-low"));
+        assert!(claude.variants.contains_key("thinking-high"));
+        assert!(claude.variants.contains_key("thinking-max"));
+
+        let gemini = snapshot
+            .official
+            .models
+            .get("gemini-2.5-pro")
+            .expect("gemini-2.5-pro should exist");
+        assert_eq!(gemini.origin.as_deref(), Some("Google"));
+        assert_eq!(gemini.context_window_tokens, Some(1_048_576));
+        assert_eq!(gemini.max_output_tokens, Some(65_536));
+        assert_eq!(
+            gemini
+                .capabilities
+                .feature_support(ModelCapabilityFeature::Reasoning),
+            Some(CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            gemini
+                .variants
+                .get("thinking-high")
+                .and_then(|variant| variant.thinking.as_ref()),
+            Some(&ThinkingRequest::Budget {
+                budget_tokens: 16_384,
+            })
+        );
+        assert_eq!(
+            gemini
+                .variants
+                .get("thinking-max")
+                .and_then(|variant| variant.thinking.as_ref()),
+            Some(&ThinkingRequest::Budget {
+                budget_tokens: 32_768,
+            })
+        );
+
+        let merged = snapshot.merged_models();
+        assert!(
+            merged.appendable_model_ids.is_empty(),
+            "official public sources should not append every catalog model into provider /models"
+        );
+    }
+
+    #[test]
+    fn merge_catalog_variant_merges_request_overrides_and_adapter_overrides() {
+        let mut current = ConfiguredModelVariant {
+            display_name: Some("Fast".to_owned()),
+            description: None,
+            thinking: Some(ThinkingRequest::Effort {
+                effort: ReasoningEffort::Medium,
+            }),
+            request_override: ModelVariantRequestOverride {
+                headers: BTreeMap::from([("x-base".to_owned(), "one".to_owned())]),
+                body_patch: BTreeMap::from([(
+                    "response_format".to_owned(),
+                    serde_json::json!({
+                        "type": "json_object"
+                    }),
+                )]),
+            },
+            adapter_overrides: BTreeMap::from([(
+                "openai".to_owned(),
+                ModelVariantRequestOverride {
+                    headers: BTreeMap::new(),
+                    body_patch: BTreeMap::from([(
+                        "service_tier".to_owned(),
+                        serde_json::json!("default"),
+                    )]),
+                },
+            )]),
+            disabled: false,
+        };
+        let next = ConfiguredModelVariant {
+            display_name: None,
+            description: Some("Priority route".to_owned()),
+            thinking: None,
+            request_override: ModelVariantRequestOverride {
+                headers: BTreeMap::from([("x-extra".to_owned(), "two".to_owned())]),
+                body_patch: BTreeMap::from([(
+                    "response_format".to_owned(),
+                    serde_json::json!({
+                        "strict": true
+                    }),
+                )]),
+            },
+            adapter_overrides: BTreeMap::from([(
+                "openai".to_owned(),
+                ModelVariantRequestOverride {
+                    headers: BTreeMap::from([("openai-beta".to_owned(), "fast".to_owned())]),
+                    body_patch: BTreeMap::from([(
+                        "service_tier".to_owned(),
+                        serde_json::json!("priority"),
+                    )]),
+                },
+            )]),
+            disabled: false,
+        };
+
+        merge_catalog_variant(&mut current, &next);
+
+        assert_eq!(current.display_name.as_deref(), Some("Fast"));
+        assert_eq!(current.description.as_deref(), Some("Priority route"));
+        assert_eq!(
+            current.thinking,
+            Some(ThinkingRequest::Effort {
+                effort: ReasoningEffort::Medium,
+            })
+        );
+        assert_eq!(
+            current
+                .request_override
+                .headers
+                .get("x-base")
+                .map(String::as_str),
+            Some("one")
+        );
+        assert_eq!(
+            current
+                .request_override
+                .headers
+                .get("x-extra")
+                .map(String::as_str),
+            Some("two")
+        );
+        assert_eq!(
+            current.request_override.body_patch.get("response_format"),
+            Some(&serde_json::json!({
+                "type": "json_object",
+                "strict": true
+            }))
+        );
+        assert_eq!(
+            current
+                .adapter_overrides
+                .get("openai")
+                .and_then(|override_patch| override_patch.headers.get("openai-beta"))
+                .map(String::as_str),
+            Some("fast")
+        );
+        assert_eq!(
+            current
+                .adapter_overrides
+                .get("openai")
+                .and_then(|override_patch| override_patch.body_patch.get("service_tier")),
+            Some(&serde_json::json!("priority"))
         );
     }
 

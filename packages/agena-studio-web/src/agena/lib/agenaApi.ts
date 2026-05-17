@@ -382,10 +382,17 @@ export type ProviderAdapterDiscoveryResponse = {
   adapters: ProviderAdapterDiscovery[]
 }
 
+export type ProviderModelVariantRequestOverride = {
+  headers?: Record<string, string> | null
+  body_patch?: Record<string, unknown> | null
+}
+
 export type ProviderModelVariant = {
   display_name?: string | null
   description?: string | null
   thinking?: Record<string, unknown> | null
+  request_override?: ProviderModelVariantRequestOverride | null
+  adapter_overrides?: Record<string, ProviderModelVariantRequestOverride> | null
   disabled?: boolean
 }
 

@@ -467,7 +467,12 @@ impl AnthropicProvider {
         }
     }
 
-    async fn send_json<R>(&self, endpoint: String, body: &impl Serialize) -> Result<R, AppError>
+    async fn send_json<R>(
+        &self,
+        endpoint: String,
+        body: &impl Serialize,
+        request: Option<&CompletionRequest>,
+    ) -> Result<R, AppError>
     where
         R: for<'de> Deserialize<'de>,
     {
@@ -478,7 +483,7 @@ impl AnthropicProvider {
                     .header("anthropic-version", ANTHROPIC_VERSION)
                     .header(reqwest::header::CONTENT_TYPE, "application/json"),
                 api_key,
-                None,
+                request,
             )
             .json(body)
         })
@@ -506,7 +511,15 @@ impl AnthropicProvider {
                 }
             }
         }
-        utils::apply_request_headers(self.id.as_str(), req, &self.extra_headers)
+        let headers = request
+            .map(|request| {
+                utils::merged_request_headers(
+                    &self.extra_headers,
+                    &request.request_override.headers,
+                )
+            })
+            .unwrap_or_else(|| self.extra_headers.clone());
+        utils::apply_request_headers(self.id.as_str(), req, &headers)
     }
 }
 
@@ -651,13 +664,16 @@ impl ModelProvider for AnthropicProvider {
             temperature: request.temperature,
             stream: None,
             thinking: thinking_body,
-            stop_sequences: request.stop_sequences,
+            stop_sequences: request.stop_sequences.clone(),
             top_p: request.top_p,
             top_k: request.top_k,
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
-        let response: AnthropicMessagesResponse =
-            self.send_json(self.messages_endpoint()?, &body).await?;
+        let response: AnthropicMessagesResponse = self
+            .send_json(self.messages_endpoint()?, &body_json, Some(&request))
+            .await?;
 
         let text = response
             .content
@@ -781,6 +797,8 @@ impl ModelProvider for AnthropicProvider {
             top_p: request.top_p,
             top_k: request.top_k,
         };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             self.apply_headers(
@@ -794,7 +812,7 @@ impl ModelProvider for AnthropicProvider {
                 api_key,
                 Some(&request),
             )
-            .json(&body)
+            .json(&body_json)
         })
         .await?;
 
@@ -1788,6 +1806,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1868,6 +1887,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -1930,6 +1950,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2000,6 +2021,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2058,6 +2080,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2133,6 +2156,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await
@@ -2212,6 +2236,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                request_override: Default::default(),
                 response_format: None,
             })
             .await

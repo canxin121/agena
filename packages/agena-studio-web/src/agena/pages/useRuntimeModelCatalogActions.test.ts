@@ -99,6 +99,8 @@ describe('useRuntimeModelCatalogActions', () => {
         description: 'More reasoning',
         disabled: true,
         thinking_json: JSON.stringify({ type: 'budget', budget_tokens: 30000 }, null, 2),
+        request_override_json: '',
+        adapter_overrides_json: '',
       },
       {
         name: 'light',
@@ -106,6 +108,8 @@ describe('useRuntimeModelCatalogActions', () => {
         description: 'Faster responses',
         disabled: false,
         thinking_json: '',
+        request_override_json: '',
+        adapter_overrides_json: '',
       },
     ])
   })
@@ -134,6 +138,8 @@ describe('useRuntimeModelCatalogActions', () => {
           description: 'More reasoning',
           disabled: false,
           thinking_json: '',
+          request_override_json: '',
+          adapter_overrides_json: '',
         },
       ],
     })
@@ -176,6 +182,8 @@ describe('useRuntimeModelCatalogActions', () => {
         description: 'Default profile',
         disabled: false,
         thinking_json: '',
+        request_override_json: '',
+        adapter_overrides_json: '',
       },
     ])
   })
@@ -221,6 +229,10 @@ describe('useRuntimeModelCatalogActions', () => {
       description: ' More reasoning ',
       disabled: true,
       thinking_json: '{"type":"budget","budget_tokens":30000}',
+      request_override_json:
+        '{"headers":{"anthropic-beta":"fast-mode-2026-02-01"},"body_patch":{"service_tier":"priority"}}',
+      adapter_overrides_json:
+        '{"anthropic":{"headers":{"anthropic-beta":"fast-mode-2026-02-01"}},"openai":{"body_patch":{"service_tier":"priority"}}}',
     })
     draft.variants.push({
       name: '',
@@ -228,6 +240,8 @@ describe('useRuntimeModelCatalogActions', () => {
       description: '',
       disabled: false,
       thinking_json: '',
+      request_override_json: '',
+      adapter_overrides_json: '',
     })
 
     const request = buildModelCatalogWriteRequest(draft)
@@ -238,6 +252,18 @@ describe('useRuntimeModelCatalogActions', () => {
         display_name: 'Deep',
         description: 'More reasoning',
         thinking: { type: 'budget', budget_tokens: 30000 },
+        request_override: {
+          headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
+          body_patch: { service_tier: 'priority' },
+        },
+        adapter_overrides: {
+          anthropic: {
+            headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
+          },
+          openai: {
+            body_patch: { service_tier: 'priority' },
+          },
+        },
         disabled: true,
       },
     })
@@ -286,6 +312,8 @@ describe('useRuntimeModelCatalogActions', () => {
       description: '',
       disabled: false,
       thinking_json: '{',
+      request_override_json: '',
+      adapter_overrides_json: '',
     })
 
     await actions.saveCatalogEntryAction(draft)
@@ -347,5 +375,53 @@ describe('useRuntimeModelCatalogActions', () => {
     })
     expect(actionError.value).toBe('')
     expect(actionMessage.value).toBe('Saved catalog entry gpt-5.')
+  })
+
+  test('createModelCatalogDraftFromEntry preserves request overrides in variant drafts', () => {
+    const draft = createModelCatalogDraftFromEntry(
+      sampleCatalogEntry({
+        variants: {
+          fast: {
+            display_name: 'Fast',
+            request_override: {
+              headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
+              body_patch: { service_tier: 'priority' },
+            },
+            adapter_overrides: {
+              openai: {
+                body_patch: { service_tier: 'priority' },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    expect(draft.variants).toEqual([
+      {
+        name: 'fast',
+        display_name: 'Fast',
+        description: '',
+        disabled: false,
+        thinking_json: '',
+        request_override_json: JSON.stringify(
+          {
+            headers: { 'anthropic-beta': 'fast-mode-2026-02-01' },
+            body_patch: { service_tier: 'priority' },
+          },
+          null,
+          2,
+        ),
+        adapter_overrides_json: JSON.stringify(
+          {
+            openai: {
+              body_patch: { service_tier: 'priority' },
+            },
+          },
+          null,
+          2,
+        ),
+      },
+    ])
   })
 })

@@ -91,6 +91,8 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
       variant.display_name,
       variant.description,
       variant.thinking ? JSON.stringify(variant.thinking) : '',
+      variant.request_override ? JSON.stringify(variant.request_override) : '',
+      variant.adapter_overrides ? JSON.stringify(variant.adapter_overrides) : '',
     ])
     .filter(Boolean)
     .join('\n')
@@ -158,7 +160,7 @@ function entryVariantItems(entry: ModelCatalogEntry): Array<[string, ProviderMod
     .map(([name, variant]) => [name, variant as ProviderModelVariantWithDisabled])
 }
 
-function formatVariantThinking(value: Record<string, unknown> | null | undefined) {
+function formatVariantJson(value: Record<string, unknown> | null | undefined) {
   if (!value) return ''
   const text = JSON.stringify(value)
   return text.length > 96 ? `${text.slice(0, 93)}...` : text
@@ -499,8 +501,8 @@ onMounted(() => {
           <div>
             <h4 style="margin: 0">Variants</h4>
             <p class="muted" style="margin: 4px 0 0">
-              Add a few provider/model variants with optional labels, descriptions, disabled state, and raw thinking
-              JSON.
+              Add provider/model variants with optional labels, descriptions, disabled state, thinking, and raw
+              request overrides. Variants stay attached to the same model id.
             </p>
           </div>
           <button class="button" :disabled="submitting" @click="addVariantDraft">Add Variant</button>
@@ -564,6 +566,41 @@ onMounted(() => {
                 <span class="mono">{"type":"budget","budget_tokens":20000}</span>
                 or
                 <span class="mono">{"type":"effort","effort":"medium"}</span>.
+              </div>
+            </div>
+
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-variant-request-override-${index}`">Request Override JSON</label>
+              <textarea
+                :id="`catalog-variant-request-override-${index}`"
+                v-model="variant.request_override_json"
+                class="input mono"
+                rows="5"
+                placeholder='{"headers":{"anthropic-beta":"fast-mode-2026-02-01"},"body_patch":{"service_tier":"priority"}}'
+              />
+              <div class="muted" style="margin-top: 6px">
+                Optional generic override payload with
+                <span class="mono">headers</span>
+                and
+                <span class="mono">body_patch</span>.
+              </div>
+            </div>
+
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-variant-adapter-overrides-${index}`">Adapter Overrides JSON</label>
+              <textarea
+                :id="`catalog-variant-adapter-overrides-${index}`"
+                v-model="variant.adapter_overrides_json"
+                class="input mono"
+                rows="5"
+                placeholder='{"openai":{"body_patch":{"service_tier":"priority"}},"anthropic":{"headers":{"anthropic-beta":"fast-mode-2026-02-01"}}}'
+              />
+              <div class="muted" style="margin-top: 6px">
+                Optional per-adapter overrides keyed by adapter id, for example
+                <span class="mono">openai</span>,
+                <span class="mono">anthropic</span>,
+                or
+                <span class="mono">gemini</span>.
               </div>
             </div>
 
@@ -705,7 +742,13 @@ onMounted(() => {
                     </div>
                     <div v-if="variant.description" class="muted">{{ variant.description }}</div>
                     <div v-if="variant.thinking" class="muted mono">
-                      thinking {{ formatVariantThinking(variant.thinking) }}
+                      thinking {{ formatVariantJson(variant.thinking) }}
+                    </div>
+                    <div v-if="variant.request_override" class="muted mono">
+                      request {{ formatVariantJson(variant.request_override) }}
+                    </div>
+                    <div v-if="variant.adapter_overrides" class="muted mono">
+                      adapters {{ formatVariantJson(variant.adapter_overrides) }}
                     </div>
                   </div>
                 </div>

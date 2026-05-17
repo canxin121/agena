@@ -744,6 +744,339 @@ enabled = true
 }
 
 #[tokio::test]
+async fn provider_discovery_endpoint_probes_shared_gateway_adapters() {
+    let mut server = mockito::Server::new_async().await;
+    let _openai = server
+        .mock("GET", "/v1/models")
+        .match_header("authorization", "Bearer sk-test")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "gpt-4.1-mini" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _anthropic = server
+        .mock("GET", "/v1/models")
+        .match_header("x-api-key", "sk-test")
+        .match_header("anthropic-version", "2023-06-01")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "claude-sonnet-4-5", "display_name": "Claude Sonnet 4.5" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _gemini = server
+        .mock("GET", "/v1beta/models")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "key".to_owned(),
+            "sk-test".to_owned(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "models": [{ "name": "models/gemini-2.5-flash", "displayName": "Gemini 2.5 Flash" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let (state, _, _) = build_state().await;
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/providers/discover")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "provider_id": "draft-gateway",
+                        "base_url": server.url(),
+                        "api_key": "sk-test"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let adapters = value
+        .get("adapters")
+        .and_then(|items| items.as_array())
+        .expect("discovery response should include adapters");
+    assert_eq!(
+        adapters.len(),
+        3,
+        "expected openai/anthropic/gemini: {value:?}"
+    );
+    assert!(adapters.iter().any(|adapter| {
+        adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("openai")
+            && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+            && adapter
+                .get("resolved_base_url")
+                .and_then(|value| value.as_str())
+                == Some(&format!("{}/v1", server.url()))
+            && adapter
+                .get("models")
+                .and_then(|value| value.as_array())
+                .map(|models| {
+                    models.iter().any(|model| {
+                        model.get("id").and_then(|value| value.as_str()) == Some("gpt-4.1-mini")
+                            && model.get("adapter_id").and_then(|value| value.as_str())
+                                == Some("openai")
+                    })
+                })
+                == Some(true)
+    }));
+    assert!(adapters.iter().any(|adapter| {
+        adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("anthropic")
+            && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+            && adapter
+                .get("models")
+                .and_then(|value| value.as_array())
+                .map(|models| {
+                    models.iter().any(|model| {
+                        model.get("id").and_then(|value| value.as_str())
+                            == Some("claude-sonnet-4-5")
+                            && model.get("adapter_id").and_then(|value| value.as_str())
+                                == Some("anthropic")
+                    })
+                })
+                == Some(true)
+    }));
+    assert!(adapters.iter().any(|adapter| {
+        adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("gemini")
+            && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+            && adapter
+                .get("resolved_base_url")
+                .and_then(|value| value.as_str())
+                == Some(&format!("{}/v1beta", server.url()))
+            && adapter
+                .get("models")
+                .and_then(|value| value.as_array())
+                .map(|models| {
+                    models.iter().any(|model| {
+                        model.get("id").and_then(|value| value.as_str()) == Some("gemini-2.5-flash")
+                            && model.get("adapter_id").and_then(|value| value.as_str())
+                                == Some("gemini")
+                    })
+                })
+                == Some(true)
+    }));
+}
+
+#[tokio::test]
+async fn saved_provider_discovery_endpoint_filters_to_requested_adapters() {
+    let mut server = mockito::Server::new_async().await;
+    let _openai = server
+        .mock("GET", "/v1/models")
+        .match_header("authorization", "Bearer sk-test")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "gpt-4.1-mini" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _anthropic = server
+        .mock("GET", "/v1/models")
+        .match_header("x-api-key", "sk-test")
+        .match_header("anthropic-version", "2023-06-01")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "claude-sonnet-4-5" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let config = format!(
+        r#"
+[providers.gateway]
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "{base_url}"
+api_key = "sk-test"
+
+[providers.gateway.adapters.openai]
+enabled = true
+
+[providers.gateway.adapters.anthropic]
+enabled = true
+"#,
+        base_url = server.url()
+    );
+
+    let (state, _, _) = build_state_with_config(config.as_str()).await;
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/providers/gateway/discover")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    serde_json::json!({
+                        "adapter_ids": ["anthropic"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let adapters = value
+        .get("adapters")
+        .and_then(|items| items.as_array())
+        .expect("saved discovery response should include adapters");
+    assert_eq!(
+        adapters.len(),
+        1,
+        "only requested adapter should be returned: {value:?}"
+    );
+    assert_eq!(
+        adapters[0]
+            .get("adapter_id")
+            .and_then(|value| value.as_str()),
+        Some("anthropic")
+    );
+    assert_eq!(
+        adapters[0]
+            .get("supported")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+}
+
+#[tokio::test]
+async fn saved_provider_discovery_endpoint_includes_supported_unconfigured_http_adapters() {
+    let mut server = mockito::Server::new_async().await;
+    let _openai = server
+        .mock("GET", "/v1/models")
+        .match_header("authorization", "Bearer sk-test")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "gpt-4.1-mini" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _anthropic = server
+        .mock("GET", "/v1/models")
+        .match_header("x-api-key", "sk-test")
+        .match_header("anthropic-version", "2023-06-01")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "claude-sonnet-4-5" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _gemini = server
+        .mock("GET", "/v1beta/models")
+        .match_query(mockito::Matcher::UrlEncoded(
+            "key".to_owned(),
+            "sk-test".to_owned(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "models": [{ "name": "models/gemini-2.5-flash" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let config = format!(
+        r#"
+[providers.gateway]
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "{base_url}"
+api_key = "sk-test"
+
+[providers.gateway.adapters.openai]
+enabled = true
+"#,
+        base_url = server.url()
+    );
+
+    let (state, _, _) = build_state_with_config(config.as_str()).await;
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/providers/gateway/discover")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let adapters = value
+        .get("adapters")
+        .and_then(|items| items.as_array())
+        .expect("saved discovery response should include adapters");
+    assert!(
+        adapters.iter().any(|adapter| {
+            adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("anthropic")
+                && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+        }),
+        "saved discovery should include unconfigured anthropic adapter: {value:?}"
+    );
+    assert!(
+        adapters.iter().any(|adapter| {
+            adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("gemini")
+                && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+        }),
+        "saved discovery should include unconfigured gemini adapter: {value:?}"
+    );
+}
+
+#[tokio::test]
 async fn operational_probes_and_metrics_return_expected_shapes() {
     let (state, _, _) = build_state().await;
     let app = router(state);

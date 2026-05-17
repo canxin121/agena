@@ -189,8 +189,16 @@ pub fn router(state: AppState) -> Router {
             )
             .route("/api/v1/providers", get(rest::list_providers))
             .route(
+                "/api/v1/providers/discover",
+                post(rest::discover_provider_adapters),
+            )
+            .route(
                 "/api/v1/providers/{provider_id}/models",
                 get(rest::list_provider_models),
+            )
+            .route(
+                "/api/v1/providers/{provider_id}/discover",
+                post(rest::discover_saved_provider_adapters),
             )
             .route(
                 "/api/v1/workspaces",

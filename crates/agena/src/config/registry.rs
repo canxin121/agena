@@ -1,9 +1,14 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use aws_credential_types::Credentials;
 use tokio::sync::Mutex;
 
 use crate::{
+    model::{AdapterId, ProviderId},
     model_catalog::ModelCatalogSnapshot,
     plugin::{PluginHost, PluginHostBuilder},
     provider::{
@@ -23,6 +28,17 @@ use super::{
 };
 
 const ATOMGIT_LLM_BASE_URL: &str = "https://api-ai.gitcode.com/v1";
+const PROBE_DEFAULT_MODEL_ID: &str = "__probe__";
+
+#[derive(Debug, Clone)]
+pub struct ProviderAdapterProbeResult {
+    pub adapter_id: String,
+    pub enabled: bool,
+    pub supported: bool,
+    pub resolved_base_url: Option<String>,
+    pub models: Vec<crate::provider::ProviderModel>,
+    pub error: Option<String>,
+}
 
 impl ResolvedConfig {
     pub fn build_provider_registry(&self) -> Result<ProviderRegistry, ConfigError> {
@@ -616,6 +632,95 @@ fn build_adapter_provider(
     Ok(provider)
 }
 
+pub async fn probe_provider_adapters(
+    provider_id: &str,
+    auth: &ProviderAuthConfig,
+    adapters: &BTreeMap<String, ResolvedProviderAdapterConfig>,
+    client: reqwest::Client,
+    env: &dyn ConfigEnvironment,
+) -> Vec<ProviderAdapterProbeResult> {
+    let mut results = Vec::new();
+    for (adapter_id, adapter) in adapters {
+        let resolved_base_url =
+            resolved_adapter_probe_base_url(provider_id, auth, &adapter.definition)
+                .ok()
+                .flatten();
+        if !adapter.enabled {
+            results.push(ProviderAdapterProbeResult {
+                adapter_id: adapter_id.clone(),
+                enabled: false,
+                supported: false,
+                resolved_base_url,
+                models: Vec::new(),
+                error: Some("adapter is disabled".to_owned()),
+            });
+            continue;
+        }
+
+        let provider = match build_adapter_provider(
+            provider_id,
+            adapter_id.as_str(),
+            adapter,
+            PROBE_DEFAULT_MODEL_ID,
+            auth,
+            client.clone(),
+            env,
+        ) {
+            Ok(provider) => provider,
+            Err(err) => {
+                results.push(ProviderAdapterProbeResult {
+                    adapter_id: adapter_id.clone(),
+                    enabled: true,
+                    supported: false,
+                    resolved_base_url,
+                    models: Vec::new(),
+                    error: Some(err.to_string()),
+                });
+                continue;
+            }
+        };
+
+        match provider.list_models().await {
+            Ok(mut models) => {
+                for model in &mut models {
+                    model.provider_id = ProviderId::new(provider_id.to_owned());
+                    model.adapter_id = Some(AdapterId::new(adapter_id.clone()));
+                    let fallback = provider.model_capabilities_for_adapter(None, &model.id);
+                    model.capabilities = model.capabilities.clone().with_fallbacks_from(&fallback);
+                    let metadata_fallback = provider.model_metadata_for_adapter(None, &model.id);
+                    model.metadata = model
+                        .metadata
+                        .clone()
+                        .with_fallbacks_from(&metadata_fallback);
+                    if model.variants.is_empty() {
+                        model.variants = provider.model_variants_for_adapter(None, &model.id);
+                    }
+                }
+                results.push(ProviderAdapterProbeResult {
+                    adapter_id: adapter_id.clone(),
+                    enabled: true,
+                    supported: true,
+                    resolved_base_url,
+                    models,
+                    error: None,
+                });
+            }
+            Err(err) => {
+                results.push(ProviderAdapterProbeResult {
+                    adapter_id: adapter_id.clone(),
+                    enabled: true,
+                    supported: false,
+                    resolved_base_url,
+                    models: Vec::new(),
+                    error: Some(err.to_string()),
+                });
+            }
+        }
+    }
+    results.sort_by(|left, right| left.adapter_id.cmp(&right.adapter_id));
+    results
+}
+
 fn resolve_adapter_default_models(
     provider_id: &str,
     resolved: &ResolvedProviderConfig,
@@ -637,6 +742,45 @@ fn resolve_adapter_default_models(
     }
 
     Ok(defaults)
+}
+
+fn resolved_adapter_probe_base_url(
+    provider_id: &str,
+    auth: &ProviderAuthConfig,
+    definition: &ProviderAdapterDefinition,
+) -> Result<Option<String>, ConfigError> {
+    match definition {
+        ProviderAdapterDefinition::OpenAi(_) => Ok(Some(resolve_http_adapter_base_url(
+            provider_id,
+            auth,
+            HttpAdapterKind::OpenAi,
+        )?)),
+        ProviderAdapterDefinition::Anthropic(_) => Ok(Some(resolve_http_adapter_base_url(
+            provider_id,
+            auth,
+            HttpAdapterKind::Anthropic,
+        )?)),
+        ProviderAdapterDefinition::Gemini(_) => Ok(Some(resolve_http_adapter_base_url(
+            provider_id,
+            auth,
+            HttpAdapterKind::Gemini,
+        )?)),
+        ProviderAdapterDefinition::Ollama(adapter) => Ok(Some(
+            adapter
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_owned()),
+        )),
+        ProviderAdapterDefinition::Gitlab(adapter) => Ok(Some(
+            adapter
+                .ai_gateway_url
+                .clone()
+                .unwrap_or_else(|| "https://cloud.gitlab.com".to_owned()),
+        )),
+        ProviderAdapterDefinition::AmazonBedrock(_) => Ok(Some(
+            provider_endpoint_root(auth, provider_id)?.0.to_owned(),
+        )),
+    }
 }
 
 fn api_auth<'a>(

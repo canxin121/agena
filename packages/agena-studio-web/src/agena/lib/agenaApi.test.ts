@@ -16,7 +16,7 @@ describe('deleteModelCatalogEntry', () => {
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       capturedUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
       capturedInit = init
-      return new Response(JSON.stringify({ remote_url: '', fallback_url: '', entries: [] }), {
+      return new Response(JSON.stringify({ entries: [] }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })

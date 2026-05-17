@@ -36,6 +36,7 @@ pub struct RuntimeSnapshot {
 #[derive(Clone)]
 struct RuntimeServices {
     providers: Arc<ProviderRegistry>,
+    catalog_source_providers: Arc<ProviderRegistry>,
     model_catalog: Arc<ModelCatalogService>,
     plugins: Arc<PluginHost>,
     agents: crate::agents::SubagentRegistry,
@@ -83,6 +84,7 @@ impl RuntimeServices {
     #[allow(clippy::too_many_arguments)]
     fn new(
         providers: Arc<ProviderRegistry>,
+        catalog_source_providers: Arc<ProviderRegistry>,
         model_catalog: Arc<ModelCatalogService>,
         plugins: Arc<PluginHost>,
         agents: crate::agents::SubagentRegistry,
@@ -94,6 +96,7 @@ impl RuntimeServices {
     ) -> Self {
         Self {
             providers,
+            catalog_source_providers,
             model_catalog,
             plugins,
             agents,
@@ -215,21 +218,22 @@ impl RuntimeSnapshot {
         // Make the active host visible to provider request builders for the
         // `chat.headers` hook (no constructor threading required).
         super::plugin_slot::install(Arc::clone(&plugins));
-        let provider_client =
-            ProviderRegistry::build_http_client(resolution.config.provider_http_client_config())?;
         let mut model_catalog_config = ModelCatalogConfig::for_workspace_root(workspace_root);
-        model_catalog_config.remote_url =
-            resolution.config.runtime.model_catalog.remote_url.clone();
-        model_catalog_config.fallback_url =
-            resolution.config.runtime.model_catalog.fallback_url.clone();
         model_catalog_config.cache_max_age_secs =
             resolution.config.runtime.model_catalog.cache_max_age_secs;
-        let model_catalog = Arc::new(ModelCatalogService::new(
-            provider_client,
-            ModelCatalogStore::new(model_catalog_config),
-        )?);
+        let catalog_source_providers = Arc::new(
+            resolution
+                .build_provider_registry_with_plugins_and_catalog(plugins.as_ref(), None)
+                .await?,
+        );
+        let model_catalog = Arc::new(ModelCatalogService::new(ModelCatalogStore::new(
+            model_catalog_config,
+        ))?);
         let mut catalog_snapshot = model_catalog.snapshot();
-        if let Ok(snapshot) = model_catalog.refresh_if_stale_on_startup().await {
+        if let Ok(snapshot) = model_catalog
+            .refresh_if_stale_on_startup(catalog_source_providers.as_ref(), Some(&resolution))
+            .await
+        {
             catalog_snapshot = snapshot;
         }
         let providers = Arc::new(
@@ -295,6 +299,7 @@ impl RuntimeSnapshot {
         };
         let services = RuntimeServices::new(
             providers,
+            catalog_source_providers,
             model_catalog,
             plugins,
             agents,
@@ -329,6 +334,10 @@ impl RuntimeSnapshot {
 
     pub fn provider_registry(&self) -> Arc<ProviderRegistry> {
         Arc::clone(&self.services.providers)
+    }
+
+    pub fn catalog_source_provider_registry(&self) -> Arc<ProviderRegistry> {
+        Arc::clone(&self.services.catalog_source_providers)
     }
 
     pub fn model_catalog(&self) -> Arc<ModelCatalogService> {

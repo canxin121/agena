@@ -198,8 +198,6 @@ pub struct RuntimeStatusResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogResponse {
-    pub remote_url: String,
-    pub fallback_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,8 +217,7 @@ pub enum ModelCatalogEntryKind {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelCatalogSourceKind {
-    Remote,
-    Fallback,
+    Generated,
     Cache,
     Custom,
 }

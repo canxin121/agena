@@ -103,8 +103,6 @@ fn loader_applies_model_catalog_config_from_file_env_and_cli() {
     let path = write_temp_config(
         r#"
 [runtime.model_catalog]
-remote_url = "https://example.invalid/file-catalog.json"
-fallback_url = "https://example.invalid/file-fallback.json"
 cache_max_age_secs = 60
 
 [providers.openai]
@@ -121,42 +119,19 @@ enabled = true
     );
 
     let env = TestEnvironment {
-        vars: BTreeMap::from([
-            (
-                "AGENA_MODEL_CATALOG_URL".to_owned(),
-                "https://example.invalid/env-catalog.json".to_owned(),
-            ),
-            (
-                "AGENA_MODEL_CATALOG_FALLBACK_URL".to_owned(),
-                "https://example.invalid/env-fallback.json".to_owned(),
-            ),
-            (
-                "AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS".to_owned(),
-                "120".to_owned(),
-            ),
-        ]),
+        vars: BTreeMap::from([(
+            "AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS".to_owned(),
+            "120".to_owned(),
+        )]),
     };
     let loader = ConfigLoader::new(env);
     let resolution = loader
         .load(&LoadConfigRequest {
             config_path: Some(path),
-            overrides: vec![
-                ConfigOverride::ModelCatalogRemoteUrl(
-                    "https://example.invalid/cli-catalog.json".to_owned(),
-                ),
-                ConfigOverride::ModelCatalogCacheMaxAgeSecs(180),
-            ],
+            overrides: vec![ConfigOverride::ModelCatalogCacheMaxAgeSecs(180)],
         })
         .expect("config should load");
 
-    assert_eq!(
-        resolution.config.runtime.model_catalog.remote_url,
-        "https://example.invalid/cli-catalog.json"
-    );
-    assert_eq!(
-        resolution.config.runtime.model_catalog.fallback_url,
-        "https://example.invalid/env-fallback.json"
-    );
     assert_eq!(
         resolution.config.runtime.model_catalog.cache_max_age_secs,
         180

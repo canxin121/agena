@@ -33,7 +33,7 @@ function sampleRuntimeStatus(overrides: Partial<RuntimeStatus> = {}): RuntimeSta
     watch_paths: [],
     reload: { enabled: true, interval_secs: 1 },
     janitor: { enabled: true, interval_secs: 1 },
-    model_catalog: { remote_url: '', fallback_url: '', entries: [] },
+    model_catalog: { entries: [] },
     automation: { enabled: false, job_count: 0, recent_jobs: [] },
     operator: {
       mcp: { server_count: 0, tool_count: 0, servers: [] },
@@ -230,13 +230,11 @@ describe('useRuntimeSectionLoadActions', () => {
             authProviders: [{ provider_id: 'anthropic', configured: true, credential_present: true }],
             runtime: sampleRuntimeStatus({
               model_catalog: {
-                remote_url: '',
-                fallback_url: '',
                 entries: [
                   {
                     model_id: 'claude-opus-4-7',
                     kind: 'official',
-                    source: 'remote',
+                    source: 'generated',
                   },
                 ],
               },

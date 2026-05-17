@@ -168,8 +168,6 @@ fn seed_cached_official_catalog(workspace_root: &str) {
         .expect("system time should be after unix epoch")
         .as_millis() as i64;
     let payload = serde_json::json!({
-        "remote_url": "https://example.test/catalog.json",
-        "fallback_url": "https://example.test/fallback.json",
         "fetched_at_unix_ms": fetched_at_unix_ms,
         "source": "cache",
         "document": {
@@ -336,10 +334,6 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
         .unwrap()
         .to_bytes();
     let catalog_value: serde_json::Value = serde_json::from_slice(&catalog_body).unwrap();
-    assert!(
-        catalog_value.get("remote_url").is_some(),
-        "catalog payload should include remote_url: {catalog_value:?}"
-    );
     assert!(
         catalog_value
             .get("entries")

@@ -2992,19 +2992,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bedrock_list_models_errors_when_live_fetch_and_catalog_fallback_fail() {
+    async fn bedrock_list_models_errors_when_live_fetch_fails_without_cache() {
         let _env_lock = env_lock().lock().expect("env lock should succeed");
         let dir = tempfile::tempdir().expect("tempdir should create");
         let _cache_dir =
             EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
 
         let mut server = mockito::Server::new_async().await;
-        let fallback_url = format!("{}/catalog.json", server.url());
-        let _fallback_url = EnvVarGuard::set(
-            "AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL",
-            fallback_url.as_str(),
-        );
-
         let _models = server
             .mock("GET", "/models")
             .match_header(
@@ -3022,20 +3016,12 @@ mod tests {
             .expect(1)
             .create_async()
             .await;
-        let _fallback = server
-            .mock("GET", "/catalog.json")
-            .with_status(500)
-            .with_header("content-type", "text/plain")
-            .with_body("fallback unavailable")
-            .expect(1)
-            .create_async()
-            .await;
 
         let provider = test_sigv4_provider(server.url(), "amazon.nova-pro-v1:0");
         let error = provider
             .list_models()
             .await
-            .expect_err("list_models should fail without cache or fallback catalog");
+            .expect_err("list_models should fail without cache");
         assert!(error.to_string().contains("bedrock unavailable"));
     }
 

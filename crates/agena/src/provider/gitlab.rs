@@ -3,7 +3,7 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 use serde::Deserialize;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -11,11 +11,7 @@ use std::{
 use crate::{
     error::AppError,
     model::{ModelId, ProviderId},
-    model_catalog::{
-        DEFAULT_GITHUB_FALLBACK_URL, DEFAULT_REMOTE_URL, ModelCatalogDocument,
-        ModelCatalogProviderRecord, catalog_definition_to_provider_definition,
-        curate_catalog_document,
-    },
+    model_catalog::canonical_model_catalog_id,
     provider::{
         AnthropicProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ManagedCredential, ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel,
@@ -30,8 +26,6 @@ const DEFAULT_INSTANCE_URL: &str = "https://gitlab.com";
 const DEFAULT_AI_GATEWAY_URL: &str = "https://cloud.gitlab.com";
 const DEFAULT_MODEL: &str = "claude-sonnet-4-5";
 const DIRECT_ACCESS_CACHE_TTL: Duration = Duration::from_secs(25 * 60);
-const GITLAB_MODEL_CATALOG_URL_ENV: &str = "AGENA_GITLAB_MODELS_URL";
-const GITLAB_MODEL_CATALOG_FALLBACK_URL_ENV: &str = "AGENA_GITLAB_MODELS_FALLBACK_URL";
 
 #[derive(Debug, Clone)]
 pub struct GitlabProviderConfig {
@@ -202,99 +196,137 @@ impl GitlabProvider {
         model.to_ascii_lowercase().contains("codex")
     }
 
-    fn model_catalog_remote_url() -> String {
-        std::env::var(GITLAB_MODEL_CATALOG_URL_ENV)
-            .ok()
-            .and_then(|value| utils::normalize_optional_text(Some(value)))
-            .unwrap_or_else(|| DEFAULT_REMOTE_URL.to_owned())
+    fn list_models_source(&self) -> RemoteModelCatalogSource {
+        RemoteModelCatalogSource::new(
+            PROVIDER_ID,
+            format!(
+                "{}|{}",
+                self.openai_proxy_base_url(),
+                self.anthropic_proxy_base_url()
+            ),
+            self.api_key.prompt_cache_scope(),
+        )
     }
 
-    fn model_catalog_fallback_url() -> String {
-        std::env::var(GITLAB_MODEL_CATALOG_FALLBACK_URL_ENV)
-            .ok()
-            .and_then(|value| utils::normalize_optional_text(Some(value)))
-            .unwrap_or_else(|| DEFAULT_GITHUB_FALLBACK_URL.to_owned())
+    fn listed_model_id(model_id: &str) -> String {
+        canonical_model_catalog_id(model_id.trim().trim_start_matches("gitlab/"))
     }
 
-    fn local_model_id_from_catalog(model_id: &str) -> &str {
-        model_id
-            .trim()
-            .strip_prefix("gitlab/")
-            .unwrap_or(model_id.trim())
-    }
-
-    fn models_from_catalog_record(
+    fn upsert_listed_model(
         &self,
-        catalog: ModelCatalogProviderRecord,
-    ) -> Vec<ProviderModel> {
-        catalog
-            .models
-            .into_iter()
-            .map(|(catalog_model_id, definition)| {
-                let local_model_id =
-                    ModelId::new(Self::local_model_id_from_catalog(catalog_model_id.as_str()));
-                let capability_fallback = self.model_capabilities(&local_model_id);
-                let metadata_fallback = self.model_metadata(&local_model_id);
-                let mut model = catalog_definition_to_provider_definition(&definition)
-                    .apply_to_model(
-                        ProviderModel::new(PROVIDER_ID, local_model_id.clone())
-                            .with_capabilities(capability_fallback.clone())
-                            .with_metadata(metadata_fallback.clone()),
-                        &capability_fallback,
-                        &metadata_fallback,
-                    );
-                if let Some(display_name) = definition.display_name {
-                    model.display_name = Some(display_name);
-                }
-                model
-            })
-            .collect()
+        models: &mut BTreeMap<String, ProviderModel>,
+        raw_model_id: &str,
+        display_name: Option<String>,
+    ) {
+        let model_id = Self::listed_model_id(raw_model_id);
+        if model_id.trim().is_empty() {
+            return;
+        }
+        let model_id = ModelId::new(model_id);
+        let capabilities = self.model_capabilities(&model_id);
+        let metadata = self.model_metadata(&model_id);
+        let mut model = ProviderModel::new(PROVIDER_ID, model_id.clone())
+            .with_capabilities(capabilities)
+            .with_metadata(metadata);
+        if let Some(display_name) = display_name.filter(|value| !value.trim().is_empty()) {
+            model.display_name = Some(display_name);
+        }
+        models.entry(model_id.to_string()).or_insert(model);
     }
 
-    async fn fetch_catalog_document(&self, url: &str) -> Result<ModelCatalogDocument, AppError> {
-        let response = self.client.get(url).send().await?;
-        if !response.status().is_success() {
-            return Err(AppError::Config(format!(
-                "GET {url} returned {}",
-                response.status()
+    fn apply_direct_access_headers(
+        &self,
+        request: reqwest::RequestBuilder,
+        token: &DirectAccessToken,
+    ) -> reqwest::RequestBuilder {
+        let mut request = request.header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", token.token),
+        );
+        for (key, value) in &token.headers {
+            request = request.header(key.as_str(), value.as_str());
+        }
+        request
+    }
+
+    async fn fetch_openai_proxy_models(
+        &self,
+        token: &DirectAccessToken,
+    ) -> Result<Vec<ProviderModel>, AppError> {
+        let response = self
+            .apply_direct_access_headers(
+                self.client
+                    .get(format!("{}/models", self.openai_proxy_base_url())),
+                token,
+            )
+            .send()
+            .await?;
+        let payload: OpenAiModelListResponse =
+            utils::parse_json_response(PROVIDER_ID, response).await?;
+        let mut models = BTreeMap::new();
+        for item in payload.into_items() {
+            self.upsert_listed_model(&mut models, item.id.as_str(), item.name);
+        }
+        Ok(models.into_values().collect())
+    }
+
+    async fn fetch_anthropic_proxy_models(
+        &self,
+        token: &DirectAccessToken,
+    ) -> Result<Vec<ProviderModel>, AppError> {
+        let response = self
+            .apply_direct_access_headers(
+                self.client
+                    .get(format!("{}/models", self.anthropic_proxy_base_url())),
+                token,
+            )
+            .send()
+            .await?;
+        let payload: AnthropicModelListResponse =
+            utils::parse_json_response(PROVIDER_ID, response).await?;
+        let mut models = BTreeMap::new();
+        for item in payload.into_items() {
+            let display_name = item.display_name.or(item.name);
+            self.upsert_listed_model(&mut models, item.id.as_str(), display_name);
+        }
+        Ok(models.into_values().collect())
+    }
+
+    async fn fetch_proxy_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+        let token = self.get_direct_access_token(false).await?;
+        let mut models = BTreeMap::new();
+        let mut errors = Vec::new();
+
+        match self.fetch_openai_proxy_models(&token).await {
+            Ok(openai_models) => {
+                for model in openai_models {
+                    models.entry(model.id.to_string()).or_insert(model);
+                }
+            }
+            Err(error) => errors.push(format!("openai proxy: {error}")),
+        }
+
+        match self.fetch_anthropic_proxy_models(&token).await {
+            Ok(anthropic_models) => {
+                for model in anthropic_models {
+                    models.entry(model.id.to_string()).or_insert(model);
+                }
+            }
+            Err(error) => errors.push(format!("anthropic proxy: {error}")),
+        }
+
+        if models.is_empty() {
+            let detail = if errors.is_empty() {
+                "GitLab AI Gateway returned no model lists".to_owned()
+            } else {
+                errors.join("; ")
+            };
+            return Err(AppError::Provider(format!(
+                "gitlab model discovery failed: {detail}"
             )));
         }
-        let text = response.text().await?;
-        serde_json::from_str(&text)
-            .map_err(|err| {
-                AppError::Config(format!("parse gitlab model catalog from {url}: {err}"))
-            })
-            .and_then(|document| {
-                curate_catalog_document(document).map_err(|err| {
-                    AppError::Config(format!("curate gitlab model catalog from {url}: {err}"))
-                })
-            })
-    }
 
-    async fn catalog_record(&self) -> Result<ModelCatalogProviderRecord, AppError> {
-        let remote_url = Self::model_catalog_remote_url();
-        let fallback_url = Self::model_catalog_fallback_url();
-
-        let remote_result = self.fetch_catalog_document(remote_url.as_str()).await;
-        let document = match remote_result {
-            Ok(document) => document,
-            Err(remote_error) => match self.fetch_catalog_document(fallback_url.as_str()).await {
-                Ok(document) => document,
-                Err(fallback_error) => {
-                    return Err(AppError::Config(format!(
-                        "gitlab model catalog unavailable: remote: {remote_error}; fallback: {fallback_error}"
-                    )));
-                }
-            },
-        };
-
-        let catalog = document.model_record();
-        if catalog.models.is_empty() {
-            return Err(AppError::Config(
-                "gitlab model catalog does not contain models".to_owned(),
-            ));
-        }
-        Ok(catalog)
+        Ok(models.into_values().collect())
     }
 
     async fn get_direct_access_token(
@@ -581,16 +613,9 @@ impl ModelProvider for GitlabProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let source = RemoteModelCatalogSource::new(
-            PROVIDER_ID,
-            Self::model_catalog_remote_url(),
-            self.api_key.prompt_cache_scope(),
-        );
+        let source = self.list_models_source();
         RemoteModelCatalogCache::default()
-            .get_or_fetch(&source, || async {
-                let catalog = self.catalog_record().await?;
-                Ok(self.models_from_catalog_record(catalog))
-            })
+            .get_or_fetch(&source, || async { self.fetch_proxy_models().await })
             .await
     }
 
@@ -626,6 +651,54 @@ struct DirectAccessResponse {
     expires_at: Option<serde_json::Value>,
     #[serde(default, alias = "expiresAtMs")]
     expires_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum OpenAiModelListResponse {
+    Wrapped { data: Vec<OpenAiModel> },
+    Bare(Vec<OpenAiModel>),
+}
+
+impl OpenAiModelListResponse {
+    fn into_items(self) -> Vec<OpenAiModel> {
+        match self {
+            Self::Wrapped { data } => data,
+            Self::Bare(data) => data,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiModel {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AnthropicModelListResponse {
+    Wrapped { data: Vec<AnthropicModel> },
+    Bare(Vec<AnthropicModel>),
+}
+
+impl AnthropicModelListResponse {
+    fn into_items(self) -> Vec<AnthropicModel> {
+        match self {
+            Self::Wrapped { data } => data,
+            Self::Bare(data) => data,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AnthropicModel {
+    id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 fn remap_stream_provider_id(event: CompletionStreamEvent) -> CompletionStreamEvent {
@@ -786,35 +859,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gitlab_list_models_uses_remote_catalog_and_disk_cache() {
+    async fn gitlab_list_models_uses_proxy_model_endpoints_and_disk_cache() {
         let _env_lock = env_lock().lock().expect("env lock should succeed");
         let dir = tempfile::tempdir().expect("tempdir should create");
         let _cache_dir =
             EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
 
         let mut server = mockito::Server::new_async().await;
-        let remote_url = format!("{}/catalog.json", server.url());
-        let fallback_url = format!("{}/fallback.json", server.url());
-        let _remote = EnvVarGuard::set(GITLAB_MODEL_CATALOG_URL_ENV, remote_url.as_str());
-        let _fallback =
-            EnvVarGuard::set(GITLAB_MODEL_CATALOG_FALLBACK_URL_ENV, fallback_url.as_str());
 
         {
-            let _mock = server
-                .mock("GET", "/catalog.json")
+            let _direct_access = server
+                .mock("POST", "/api/v4/ai/third_party_agents/direct_access")
+                .match_header("authorization", "Bearer gl-token")
                 .with_status(200)
                 .with_header("content-type", "application/json")
                 .with_body(
                     serde_json::json!({
-                        "models": {
-                            "duo-chat-sonnet-4-5": {
-                                "display_name": "GitLab Duo Chat Sonnet 4.5",
-                                "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
-                            },
-                            "duo-chat-gpt-5-codex": {
-                                "display_name": "GitLab Duo Chat GPT-5 Codex",
-                                "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
-                            }
+                        "token": "direct-token",
+                        "headers": {
+                            "x-request-id": "req-1",
+                            "x-api-key": "remove-me"
                         }
                     })
                     .to_string(),
@@ -822,11 +886,48 @@ mod tests {
                 .expect(1)
                 .create_async()
                 .await;
+            let _openai_models = server
+                .mock("GET", "/ai/v1/proxy/openai/v1/models")
+                .match_header("authorization", "Bearer direct-token")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "data": [
+                            { "id": "duo-chat-gpt-5-codex", "name": "GitLab Duo Chat GPT-5 Codex" },
+                            { "id": "openai.gpt-5.4", "name": "GPT-5.4 via GitLab" }
+                        ]
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
+            let _anthropic_models = server
+                .mock("GET", "/ai/v1/proxy/anthropic/v1/models")
+                .match_header("authorization", "Bearer direct-token")
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(
+                    serde_json::json!({
+                        "data": [
+                            {
+                                "id": "duo-chat-sonnet-4-5",
+                                "display_name": "GitLab Duo Chat Sonnet 4.5"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                )
+                .expect(1)
+                .create_async()
+                .await;
 
-            let provider = GitlabProvider::from_token(
+            let provider = GitlabProvider::from_token_with_urls(
                 reqwest::Client::new(),
                 "gl-token",
-                Some("https://gitlab.example.com".to_owned()),
+                Some(server.url()),
+                Some(server.url()),
             )
             .expect("gitlab provider should be created from token");
 
@@ -839,6 +940,7 @@ mod tests {
                     .iter()
                     .any(|model| model.id.as_str() == "claude-sonnet-4-5")
             );
+            assert!(models.iter().any(|model| model.id.as_str() == "gpt-5.4"));
             assert!(
                 models
                     .iter()
@@ -846,10 +948,11 @@ mod tests {
             );
         }
 
-        let provider = GitlabProvider::from_token(
+        let provider = GitlabProvider::from_token_with_urls(
             reqwest::Client::new(),
             "gl-token",
-            Some("https://gitlab.example.com".to_owned()),
+            Some(server.url()),
+            Some(server.url()),
         )
         .expect("gitlab provider should be created from token");
 
@@ -862,6 +965,7 @@ mod tests {
                 .iter()
                 .any(|model| model.id.as_str() == "claude-sonnet-4-5")
         );
+        assert!(models.iter().any(|model| model.id.as_str() == "gpt-5.4"));
         assert!(
             models
                 .iter()

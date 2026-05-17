@@ -233,11 +233,8 @@ fn model_catalog_entry_from_http(
             }
         },
         source: match value.source {
-            crate::local_api::dto::ModelCatalogSourceKind::Remote => {
-                agena_api::resource::ModelCatalogSourceKind::Remote
-            }
-            crate::local_api::dto::ModelCatalogSourceKind::Fallback => {
-                agena_api::resource::ModelCatalogSourceKind::Fallback
+            crate::local_api::dto::ModelCatalogSourceKind::Generated => {
+                agena_api::resource::ModelCatalogSourceKind::Generated
             }
             crate::local_api::dto::ModelCatalogSourceKind::Cache => {
                 agena_api::resource::ModelCatalogSourceKind::Cache
@@ -261,8 +258,6 @@ fn model_catalog_entry_from_http(
 
 fn model_catalog_from_http(value: HttpModelCatalogResponse) -> ModelCatalogResponse {
     ModelCatalogResponse {
-        remote_url: value.remote_url,
-        fallback_url: value.fallback_url,
         last_refresh_at: value.last_refresh_at,
         last_successful_source: value.last_successful_source,
         last_error: value.last_error,
@@ -364,8 +359,6 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     provider_ids.sort();
     let catalog = snapshot.model_catalog_response();
     let model_catalog = model_catalog_from_http(crate::local_api::ModelCatalogResponse {
-        remote_url: catalog.remote_url,
-        fallback_url: catalog.fallback_url,
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error,

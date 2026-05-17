@@ -35,7 +35,8 @@ pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_
 pub use cataloged_models::CatalogedModelsProvider;
 pub use configured_models::{
     ConfiguredModelDefinition, ConfiguredModelVariant, ConfiguredModelsProvider,
-    ModelCapabilityFeature, ModelCapabilityPatch,
+    FeatureCapabilityPatch, FeatureCapabilityPatchBody, InputCapabilityPatch,
+    InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch,
 };
 pub use core::{ModelProvider, StreamResumePolicy};
 pub use credential::{

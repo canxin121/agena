@@ -354,12 +354,6 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         </div>
 
         <div v-if="props.runtime?.model_catalog" class="stack" style="margin-top: 12px">
-          <div>
-            <strong>Remote:</strong> <span class="mono">{{ props.runtime.model_catalog.remote_url }}</span>
-          </div>
-          <div>
-            <strong>Fallback:</strong> <span class="mono">{{ props.runtime.model_catalog.fallback_url }}</span>
-          </div>
           <div><strong>Last Source:</strong> {{ props.runtime.model_catalog.last_successful_source || 'none' }}</div>
           <div><strong>Last Refresh:</strong> {{ props.runtime.model_catalog.last_refresh_at || 'never' }}</div>
           <div v-if="props.runtime.model_catalog.last_error" class="muted">

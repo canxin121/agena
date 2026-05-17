@@ -290,22 +290,6 @@ impl RawConfig {
                 .get_or_insert_with(RawStreamReplayConfig::default)
                 .max_tracked_events = Some(value);
         })?;
-        if let Some(remote_url) = env.var("AGENA_MODEL_CATALOG_URL") {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .model_catalog
-                .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
-                .remote_url = Some(remote_url);
-        }
-        if let Some(fallback_url) = env.var("AGENA_MODEL_CATALOG_FALLBACK_URL") {
-            config
-                .runtime
-                .get_or_insert_with(RawRuntimeConfig::default)
-                .model_catalog
-                .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
-                .fallback_url = Some(fallback_url);
-        }
         apply_env_number(env, "AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS", |value| {
             config
                 .runtime
@@ -844,14 +828,6 @@ impl RuntimeConfig {
                 max_tracked_events: stream_replay.max_tracked_events.unwrap_or(2_048),
             },
             model_catalog: RuntimeModelCatalogConfig {
-                remote_url: normalize_url_or_default(
-                    model_catalog.remote_url,
-                    crate::model_catalog::DEFAULT_REMOTE_URL,
-                ),
-                fallback_url: normalize_url_or_default(
-                    model_catalog.fallback_url,
-                    crate::model_catalog::DEFAULT_GITHUB_FALLBACK_URL,
-                ),
                 cache_max_age_secs: model_catalog_cache_max_age_secs,
             },
             reload: super::RuntimeReloadConfig {
@@ -869,13 +845,6 @@ impl RuntimeConfig {
             },
         })
     }
-}
-
-fn normalize_url_or_default(value: Option<String>, default: &str) -> String {
-    value
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default.to_owned())
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -934,15 +903,11 @@ impl Merge for RawStreamReplayConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct RawRuntimeModelCatalogConfig {
-    pub(crate) remote_url: Option<String>,
-    pub(crate) fallback_url: Option<String>,
     pub(crate) cache_max_age_secs: Option<u64>,
 }
 
 impl Merge for RawRuntimeModelCatalogConfig {
     fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.remote_url, overlay.remote_url);
-        merge_option(&mut self.fallback_url, overlay.fallback_url);
         merge_option(&mut self.cache_max_age_secs, overlay.cache_max_age_secs);
     }
 }

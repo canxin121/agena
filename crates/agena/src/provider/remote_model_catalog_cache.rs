@@ -7,22 +7,13 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    error::AppError,
-    model::{Model, ModelCapabilities},
-    model_catalog::{
-        DEFAULT_GITHUB_FALLBACK_URL, ModelCatalogDocument,
-        catalog_definition_to_provider_definition, curate_catalog_document,
-    },
-};
+use crate::{error::AppError, model::Model};
 
 use super::utils;
 
 const CACHE_DIR_ENV: &str = "AGENA_PROVIDER_MODELS_CACHE_DIR";
 const CACHE_TTL_ENV: &str = "AGENA_PROVIDER_MODELS_CACHE_TTL_SECS";
-const CATALOG_FALLBACK_URL_ENV: &str = "AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL";
 const DEFAULT_CACHE_TTL_SECS: u64 = 15 * 60;
-const DEFAULT_CATALOG_FALLBACK_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct RemoteModelCatalogSource {
@@ -136,41 +127,9 @@ impl RemoteModelCatalogCache {
                     );
                     return Ok(entry.models);
                 }
-                if let Some(models) = self.catalog_fallback_models(source).await? {
-                    if let Err(write_error) = self.write_entry(source, models.as_slice()) {
-                        tracing::warn!(
-                            provider_id = %source.provider_id,
-                            endpoint = %source.endpoint,
-                            error = %write_error,
-                            "failed to write provider model catalog fallback cache"
-                        );
-                    }
-                    return Ok(models);
-                }
                 Err(error)
             }
         }
-    }
-
-    async fn catalog_fallback_models(
-        &self,
-        source: &RemoteModelCatalogSource,
-    ) -> Result<Option<Vec<Model>>, AppError> {
-        match fetch_catalog_document(catalog_fallback_url().as_str()).await {
-            Ok(document) => {
-                if let Some(models) = catalog_models_from_document(source, &document) {
-                    return Ok(Some(models));
-                }
-            }
-            Err(error) => {
-                tracing::warn!(
-                    provider_id = %source.provider_id,
-                    error = %error,
-                    "failed to fetch model catalog fallback"
-                );
-            }
-        }
-        Ok(None)
     }
 
     fn is_fresh(&self, entry: &RemoteModelCatalogCacheEntry) -> bool {
@@ -246,14 +205,6 @@ fn default_cache_ttl() -> Duration {
     Duration::from_secs(secs)
 }
 
-fn catalog_fallback_url() -> String {
-    std::env::var(CATALOG_FALLBACK_URL_ENV)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_GITHUB_FALLBACK_URL.to_owned())
-}
-
 fn sanitize_provider_id(provider_id: &str) -> String {
     provider_id
         .chars()
@@ -272,116 +223,16 @@ fn now_ms() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
-async fn fetch_catalog_document(url: &str) -> Result<ModelCatalogDocument, AppError> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(DEFAULT_CATALOG_FALLBACK_TIMEOUT_SECS))
-        .build()
-        .map_err(|err| AppError::Provider(format!("build catalog fallback client: {err}")))?;
-    let response =
-        client.get(url).send().await.map_err(|err| {
-            AppError::Provider(format!("fetch catalog fallback from {url}: {err}"))
-        })?;
-    let status = response.status();
-    let body = response
-        .text()
-        .await
-        .map_err(|err| AppError::Provider(format!("read catalog fallback from {url}: {err}")))?;
-    if !status.is_success() {
-        return Err(AppError::Provider(format!(
-            "fetch catalog fallback from {url}: http {status}: {body}"
-        )));
-    }
-    serde_json::from_str::<ModelCatalogDocument>(&body)
-        .map_err(|err| AppError::Config(format!("parse catalog fallback from {url}: {err}")))
-        .and_then(|document| {
-            curate_catalog_document(document).map_err(|err| {
-                AppError::Config(format!("curate catalog fallback from {url}: {err}"))
-            })
-        })
-}
-
-fn catalog_models_from_document(
-    source: &RemoteModelCatalogSource,
-    document: &ModelCatalogDocument,
-) -> Option<Vec<Model>> {
-    let catalog = document.model_record();
-    if catalog.models.is_empty() {
-        return None;
-    }
-    Some(
-        catalog
-            .models
-            .iter()
-            .map(|(model_id, definition)| {
-                let mut model = Model::new(source.provider_id.as_str(), model_id.as_str());
-                if let Some(display_name) = definition.display_name.clone() {
-                    model = model.with_display_name(display_name);
-                }
-                let metadata_fallback = model.metadata.clone();
-                catalog_definition_to_provider_definition(definition).apply_to_model(
-                    model,
-                    &ModelCapabilities::default(),
-                    &metadata_fallback,
-                )
-            })
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
-        ffi::OsStr,
         sync::Arc,
         sync::atomic::{AtomicUsize, Ordering},
-        sync::{LazyLock, Mutex},
     };
 
-    use mockito::Server;
     use tempfile::tempdir;
 
     use super::*;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-        &LOCK
-    }
-
-    struct EnvVarGuard {
-        key: String,
-        original: Option<std::ffi::OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &str, value: impl AsRef<OsStr>) -> Self {
-            let key_string = key.to_owned();
-            let original = std::env::var_os(key);
-            // SAFETY: tests serialize env mutation through `env_lock()`.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self {
-                key: key_string,
-                original,
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(original) = self.original.take() {
-                // SAFETY: tests serialize env mutation through `env_lock()`.
-                unsafe {
-                    std::env::set_var(&self.key, original);
-                }
-            } else {
-                // SAFETY: tests serialize env mutation through `env_lock()`.
-                unsafe {
-                    std::env::remove_var(&self.key);
-                }
-            }
-        }
-    }
 
     fn test_source() -> RemoteModelCatalogSource {
         RemoteModelCatalogSource::new("openai", "https://api.openai.com/v1/models", "scope-a")
@@ -451,116 +302,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn falls_back_to_catalog_when_fetch_fails_without_cache() {
-        let _env_lock = env_lock().lock().expect("env lock should succeed");
+    async fn returns_fetch_error_when_refresh_fails_without_cache() {
         let dir = tempdir().expect("tempdir should create");
-        let _cache_dir = EnvVarGuard::set(CACHE_DIR_ENV, dir.path().as_os_str());
-        let mut server = Server::new_async().await;
-        let fallback_url = format!("{}/catalog.json", server.url());
-        let _fallback_url = EnvVarGuard::set(CATALOG_FALLBACK_URL_ENV, fallback_url.as_str());
-        let _mock = server
-            .mock("GET", "/catalog.json")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(
-                serde_json::json!({
-                    "models": {
-                        "gpt-5": {
-                            "display_name": "GPT-5",
-                            "context_window_tokens": 400000,
-                            "max_output_tokens": 128000
-                        }
-                    }
-                })
-                .to_string(),
-            )
-            .expect(1)
-            .create_async()
-            .await;
-
-        let cache = RemoteModelCatalogCache::default();
+        let cache = RemoteModelCatalogCache::with_root(dir.path());
         let source = RemoteModelCatalogSource::new(
             "shared-openai",
             "https://gateway.example/v1/models",
             "scope-a",
         );
 
-        let models = cache
+        let error = cache
             .get_or_fetch(&source, || async {
                 Err(AppError::Provider("boom".to_owned()))
             })
             .await
-            .expect("catalog fallback should succeed");
+            .expect_err("refresh without cache should surface fetch error");
 
-        assert_eq!(models.len(), 1);
-        assert_eq!(models[0].provider_id.as_str(), "shared-openai");
-        assert_eq!(models[0].id.as_str(), "gpt-5");
-        assert_eq!(models[0].display_name.as_deref(), Some("GPT-5"));
-        assert_eq!(
-            models[0].metadata.limits.context_window_tokens,
-            Some(400000)
-        );
-        assert_eq!(models[0].metadata.limits.max_output_tokens, Some(128000));
-
-        let cached = cache
-            .get_or_fetch(&source, || async {
-                Err(AppError::Provider(
-                    "should not refetch after fallback cache".to_owned(),
-                ))
-            })
-            .await
-            .expect("fallback-seeded cache should be reused");
-        assert_eq!(cached, models);
-    }
-
-    #[tokio::test]
-    async fn falls_back_to_catalog_when_fetch_fails_without_cache_for_global_model_ids() {
-        let _env_lock = env_lock().lock().expect("env lock should succeed");
-        let dir = tempdir().expect("tempdir should create");
-        let _cache_dir = EnvVarGuard::set(CACHE_DIR_ENV, dir.path().as_os_str());
-        let mut server = Server::new_async().await;
-        let fallback_url = format!("{}/catalog.json", server.url());
-        let _fallback_url = EnvVarGuard::set(CATALOG_FALLBACK_URL_ENV, fallback_url.as_str());
-        let _mock = server
-            .mock("GET", "/catalog.json")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(
-                serde_json::json!({
-                    "models": {
-                        "amazon.nova-pro-v1:0": {
-                            "display_name": "Amazon Nova Pro"
-                        },
-                        "anthropic.claude-sonnet-4-5": {
-                            "display_name": "Claude Sonnet 4.5"
-                        }
-                    }
-                })
-                .to_string(),
-            )
-            .expect(1)
-            .create_async()
-            .await;
-
-        let cache = RemoteModelCatalogCache::default();
-        let source = RemoteModelCatalogSource::new(
-            "amazon-bedrock",
-            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/models",
-            "scope-bedrock",
-        );
-
-        let models = cache
-            .get_or_fetch(&source, || async {
-                Err(AppError::Provider("boom".to_owned()))
-            })
-            .await
-            .expect("bedrock catalog fallback should succeed");
-
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0].provider_id.as_str(), "amazon-bedrock");
-        assert_eq!(models[0].id.as_str(), "claude-sonnet-4-5");
-        assert_eq!(models[0].display_name.as_deref(), Some("Claude Sonnet 4.5"));
-        assert_eq!(models[1].id.as_str(), "nova-pro-v1");
-        assert_eq!(models[1].display_name.as_deref(), Some("Amazon Nova Pro"));
+        assert!(matches!(error, AppError::Provider(message) if message == "boom"));
     }
 }

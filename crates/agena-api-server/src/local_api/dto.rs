@@ -116,8 +116,6 @@ pub struct RuntimeStatusResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelCatalogResponse {
-    pub remote_url: String,
-    pub fallback_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,8 +135,7 @@ pub enum ModelCatalogEntryKind {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelCatalogSourceKind {
-    Remote,
-    Fallback,
+    Generated,
     Cache,
     Custom,
 }
@@ -189,15 +186,13 @@ impl ModelCatalogEntryResource {
         let source = if value.has_local_override {
             ModelCatalogSourceKind::Custom
         } else {
-            match last_successful_source.unwrap_or(ModelCatalogEntrySourceKind::Remote) {
-                ModelCatalogEntrySourceKind::Remote => ModelCatalogSourceKind::Remote,
-                ModelCatalogEntrySourceKind::Fallback => ModelCatalogSourceKind::Fallback,
+            match last_successful_source.unwrap_or(ModelCatalogEntrySourceKind::Generated) {
+                ModelCatalogEntrySourceKind::Generated => ModelCatalogSourceKind::Generated,
                 ModelCatalogEntrySourceKind::Cache => ModelCatalogSourceKind::Cache,
             }
         };
         let source_label = Some(match source {
-            ModelCatalogSourceKind::Remote => "remote catalog",
-            ModelCatalogSourceKind::Fallback => "fallback catalog",
+            ModelCatalogSourceKind::Generated => "generated catalog",
             ModelCatalogSourceKind::Cache => "cached catalog",
             ModelCatalogSourceKind::Custom => "workspace override",
         })

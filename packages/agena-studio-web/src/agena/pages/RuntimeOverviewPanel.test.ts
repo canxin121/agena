@@ -44,7 +44,7 @@ describe('RuntimeOverviewPanel', () => {
         {
           model_id: 'gpt-5',
           kind: 'official',
-          source: 'remote',
+          source: 'generated',
           display_name: 'GPT-5 Catalog',
           origin: 'OpenAI',
         },
@@ -57,9 +57,7 @@ describe('RuntimeOverviewPanel', () => {
         watch_paths: ['src'],
         automation: { recent_jobs: [], enabled: true, job_count: 0 },
         model_catalog: {
-          remote_url: 'https://example.test/catalog.json',
-          fallback_url: 'https://example.test/fallback.json',
-          last_successful_source: 'remote',
+          last_successful_source: 'generated',
           last_refresh_at: '2026-05-15T00:00:00Z',
           entries: [],
         },
@@ -105,8 +103,8 @@ describe('RuntimeOverviewPanel', () => {
         {
           model_id: 'gpt-5',
           kind: 'official',
-          source: 'remote',
-          source_label: 'remote catalog',
+          source: 'generated',
+          source_label: 'generated catalog',
           display_name: 'GPT-5 Official',
           origin: 'OpenAI',
         },
@@ -127,9 +125,7 @@ describe('RuntimeOverviewPanel', () => {
         watch_paths: ['src'],
         automation: { recent_jobs: [], enabled: true, job_count: 0 },
         model_catalog: {
-          remote_url: 'https://example.test/catalog.json',
-          fallback_url: 'https://example.test/fallback.json',
-          last_successful_source: 'remote',
+          last_successful_source: 'generated',
           last_refresh_at: '2026-05-15T00:00:00Z',
           entries: [],
         },
@@ -156,7 +152,7 @@ describe('RuntimeOverviewPanel', () => {
     expect(html.includes('Custom only')).toBe(true)
     expect(html.includes('All origins')).toBe(true)
     expect(html.includes('2/2')).toBe(true)
-    expect(html.includes('remote catalog')).toBe(true)
+    expect(html.includes('generated catalog')).toBe(true)
     expect(html.includes('workspace override')).toBe(true)
     expect(html.includes('OpenAI')).toBe(true)
   })

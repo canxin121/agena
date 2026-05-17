@@ -236,7 +236,7 @@ export type ProviderAdapterSummary = {
   configured_model_count: number
 }
 
-export type ModelCatalogSourceKind = 'remote' | 'fallback' | 'cache' | 'custom'
+export type ModelCatalogSourceKind = 'generated' | 'cache' | 'custom'
 export type ModelCatalogEntryKind = 'official' | 'custom'
 
 export type ModelCatalogEntry = {
@@ -257,8 +257,6 @@ export type ModelCatalogEntry = {
 }
 
 export type ModelCatalogResponse = {
-  remote_url: string
-  fallback_url: string
   last_refresh_at?: string | null
   last_successful_source?: ModelCatalogSourceKind | null
   last_error?: string | null

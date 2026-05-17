@@ -178,7 +178,15 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                     .as_ref()
                     .and_then(|limits| limits.output)
                     .map(clamp_u64_to_u32),
-                description: None,
+                description: normalize_optional_string(model.description),
+                knowledge_cutoff: normalize_optional_string(model.knowledge),
+                release_date: normalize_optional_string(model.release_date),
+                last_updated: normalize_optional_string(model.last_updated),
+                open_weights: model.open_weights,
+                default_thinking_mode: None,
+                supports_parallel_tool_calls: None,
+                supports_verbosity: None,
+                default_verbosity: None,
                 display_name: normalize_optional_string(model.name),
                 origin: origin.clone(),
                 thinking_modes: BTreeMap::new(),
@@ -247,6 +255,14 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                     .or(model.output_token_limit)
                     .map(clamp_u64_to_u32),
                 description: normalize_optional_string(model.description),
+                knowledge_cutoff: None,
+                release_date: None,
+                last_updated: None,
+                open_weights: None,
+                default_thinking_mode: None,
+                supports_parallel_tool_calls: None,
+                supports_verbosity: None,
+                default_verbosity: None,
                 display_name: normalize_optional_string(model.display_name),
                 origin,
                 speed_modes: BTreeMap::new(),
@@ -286,6 +302,16 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
             context_window_tokens: model.context_window.map(clamp_u64_to_u32),
             max_output_tokens: None,
             description,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: codex_default_thinking_mode(
+                model.default_reasoning_level.as_deref(),
+            ),
+            supports_parallel_tool_calls: model.supports_parallel_tool_calls,
+            supports_verbosity: model.support_verbosity,
+            default_verbosity: normalize_optional_string(model.default_verbosity),
             display_name,
             origin: Some("OpenAI".to_owned()),
             thinking_modes,
@@ -638,6 +664,11 @@ fn codex_speed_modes(
     modes
 }
 
+fn codex_default_thinking_mode(default_reasoning_level: Option<&str>) -> Option<String> {
+    let effort = default_reasoning_level.and_then(effort_for_variant_name)?;
+    Some(format!("thinking-{}", effort.as_str()))
+}
+
 fn router_high_budget(thinking: &RouterThinking) -> Option<u32> {
     let max_budget = thinking.max?;
     let min_budget = thinking.min.unwrap_or(0);
@@ -874,6 +905,16 @@ struct ModelsDevModel {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    knowledge: Option<String>,
+    #[serde(default)]
+    release_date: Option<String>,
+    #[serde(default)]
+    last_updated: Option<String>,
+    #[serde(default)]
+    open_weights: Option<bool>,
+    #[serde(default)]
     status: Option<String>,
     #[serde(default)]
     reasoning: Option<bool>,
@@ -985,6 +1026,14 @@ struct OpenAiCodexModel {
     display_name: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    default_reasoning_level: Option<String>,
+    #[serde(default)]
+    supports_parallel_tool_calls: Option<bool>,
+    #[serde(default)]
+    support_verbosity: Option<bool>,
+    #[serde(default)]
+    default_verbosity: Option<String>,
     #[serde(default)]
     input_modalities: Option<Vec<String>>,
     #[serde(default)]

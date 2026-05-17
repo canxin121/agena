@@ -399,11 +399,37 @@ pub struct ModelMetadata {
     pub limits: ModelTokenLimits,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge_cutoff: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_weights: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_verbosity: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_verbosity: Option<String>,
 }
 
 impl ModelMetadata {
     pub fn is_empty(&self) -> bool {
-        self.lifecycle.is_none() && self.limits.is_empty() && self.description.is_none()
+        self.lifecycle.is_none()
+            && self.limits.is_empty()
+            && self.description.is_none()
+            && self.knowledge_cutoff.is_none()
+            && self.release_date.is_none()
+            && self.last_updated.is_none()
+            && self.open_weights.is_none()
+            && self.default_thinking_mode.is_none()
+            && self.supports_parallel_tool_calls.is_none()
+            && self.supports_verbosity.is_none()
+            && self.default_verbosity.is_none()
     }
 
     pub fn with_lifecycle(mut self, lifecycle: ModelLifecycle) -> Self {
@@ -413,6 +439,46 @@ impl ModelMetadata {
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_knowledge_cutoff(mut self, knowledge_cutoff: impl Into<String>) -> Self {
+        self.knowledge_cutoff = Some(knowledge_cutoff.into());
+        self
+    }
+
+    pub fn with_release_date(mut self, release_date: impl Into<String>) -> Self {
+        self.release_date = Some(release_date.into());
+        self
+    }
+
+    pub fn with_last_updated(mut self, last_updated: impl Into<String>) -> Self {
+        self.last_updated = Some(last_updated.into());
+        self
+    }
+
+    pub fn with_open_weights(mut self, open_weights: bool) -> Self {
+        self.open_weights = Some(open_weights);
+        self
+    }
+
+    pub fn with_default_thinking_mode(mut self, default_thinking_mode: impl Into<String>) -> Self {
+        self.default_thinking_mode = Some(default_thinking_mode.into());
+        self
+    }
+
+    pub fn with_supports_parallel_tool_calls(mut self, supports_parallel_tool_calls: bool) -> Self {
+        self.supports_parallel_tool_calls = Some(supports_parallel_tool_calls);
+        self
+    }
+
+    pub fn with_supports_verbosity(mut self, supports_verbosity: bool) -> Self {
+        self.supports_verbosity = Some(supports_verbosity);
+        self
+    }
+
+    pub fn with_default_verbosity(mut self, default_verbosity: impl Into<String>) -> Self {
+        self.default_verbosity = Some(default_verbosity.into());
         self
     }
 
@@ -435,6 +501,30 @@ impl ModelMetadata {
         self.limits = self.limits.with_fallbacks_from(&fallback.limits);
         if self.description.is_none() {
             self.description = fallback.description.clone();
+        }
+        if self.knowledge_cutoff.is_none() {
+            self.knowledge_cutoff = fallback.knowledge_cutoff.clone();
+        }
+        if self.release_date.is_none() {
+            self.release_date = fallback.release_date.clone();
+        }
+        if self.last_updated.is_none() {
+            self.last_updated = fallback.last_updated.clone();
+        }
+        if self.open_weights.is_none() {
+            self.open_weights = fallback.open_weights;
+        }
+        if self.default_thinking_mode.is_none() {
+            self.default_thinking_mode = fallback.default_thinking_mode.clone();
+        }
+        if self.supports_parallel_tool_calls.is_none() {
+            self.supports_parallel_tool_calls = fallback.supports_parallel_tool_calls;
+        }
+        if self.supports_verbosity.is_none() {
+            self.supports_verbosity = fallback.supports_verbosity;
+        }
+        if self.default_verbosity.is_none() {
+            self.default_verbosity = fallback.default_verbosity.clone();
         }
         self
     }
@@ -955,12 +1045,31 @@ mod tests {
         let fallback = ModelMetadata::default()
             .with_lifecycle(ModelLifecycle::Preview)
             .with_context_window_tokens(128_000)
-            .with_max_output_tokens(16_384);
+            .with_max_output_tokens(16_384)
+            .with_knowledge_cutoff("2025-04")
+            .with_release_date("2026-04-23")
+            .with_last_updated("2026-04-24")
+            .with_open_weights(false)
+            .with_default_thinking_mode("thinking-medium")
+            .with_supports_parallel_tool_calls(true)
+            .with_supports_verbosity(true)
+            .with_default_verbosity("low");
 
         let merged = base.with_fallbacks_from(&fallback);
         assert_eq!(merged.description.as_deref(), Some("GPT model"));
         assert_eq!(merged.lifecycle, Some(ModelLifecycle::Preview));
         assert_eq!(merged.limits.context_window_tokens, Some(128_000));
         assert_eq!(merged.limits.max_output_tokens, Some(16_384));
+        assert_eq!(merged.knowledge_cutoff.as_deref(), Some("2025-04"));
+        assert_eq!(merged.release_date.as_deref(), Some("2026-04-23"));
+        assert_eq!(merged.last_updated.as_deref(), Some("2026-04-24"));
+        assert_eq!(merged.open_weights, Some(false));
+        assert_eq!(
+            merged.default_thinking_mode.as_deref(),
+            Some("thinking-medium")
+        );
+        assert_eq!(merged.supports_parallel_tool_calls, Some(true));
+        assert_eq!(merged.supports_verbosity, Some(true));
+        assert_eq!(merged.default_verbosity.as_deref(), Some("low"));
     }
 }

@@ -180,6 +180,22 @@ pub struct ModelCatalogEntryResource {
     pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knowledge_cutoff: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_weights: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_thinking_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_verbosity: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub thinking_modes:
         std::collections::BTreeMap<String, agena::provider::ConfiguredModelThinkingMode>,
@@ -232,6 +248,14 @@ impl ModelCatalogEntryResource {
             context_window_tokens: value.context_window_tokens,
             max_output_tokens: value.max_output_tokens,
             description: value.description,
+            knowledge_cutoff: value.knowledge_cutoff,
+            release_date: value.release_date,
+            last_updated: value.last_updated,
+            open_weights: value.open_weights,
+            default_thinking_mode: value.default_thinking_mode,
+            supports_parallel_tool_calls: value.supports_parallel_tool_calls,
+            supports_verbosity: value.supports_verbosity,
+            default_verbosity: value.default_verbosity,
             thinking_modes: value.thinking_modes,
             speed_modes: value.speed_modes,
             capabilities: value.capabilities,

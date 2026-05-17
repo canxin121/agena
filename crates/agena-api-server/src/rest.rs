@@ -1674,6 +1674,7 @@ fn draft_discovery_adapters(
         let config = match trimmed {
             "openai" => ResolvedProviderAdapterConfig {
                 enabled: true,
+                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
                     extra_headers: BTreeMap::new(),
                     options: OpenAiProviderOptions {
@@ -1691,6 +1692,7 @@ fn draft_discovery_adapters(
             },
             "anthropic" => ResolvedProviderAdapterConfig {
                 enabled: true,
+                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
                     extra_headers: BTreeMap::new(),
                     options: agena::config::AnthropicProviderOptions {
@@ -1705,6 +1707,7 @@ fn draft_discovery_adapters(
             },
             "gemini" => ResolvedProviderAdapterConfig {
                 enabled: true,
+                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
                     extra_headers: BTreeMap::new(),
                     options: SimpleHttpProviderOptions {

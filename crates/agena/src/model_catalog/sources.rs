@@ -16,7 +16,18 @@ use super::{CatalogModelDefinition, ModelCatalogDocument, merge_catalog_definiti
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelCatalogRemoteSourceKind {
     ModelsDev,
+    OpenAiCodexModels,
     RouterForMe,
+}
+
+impl ModelCatalogRemoteSourceKind {
+    pub fn priority(self) -> u8 {
+        match self {
+            Self::ModelsDev => 3,
+            Self::OpenAiCodexModels => 2,
+            Self::RouterForMe => 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -40,12 +51,26 @@ impl ModelCatalogRemoteSource {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FetchedModelCatalogDocument {
+    pub name: String,
+    pub kind: ModelCatalogRemoteSourceKind,
+    pub document: ModelCatalogDocument,
+}
+
 pub fn default_public_sources() -> Vec<ModelCatalogRemoteSource> {
     vec![
         ModelCatalogRemoteSource::new(
             "models.dev",
             ModelCatalogRemoteSourceKind::ModelsDev,
             [String::from("https://models.dev/api.json")],
+        ),
+        ModelCatalogRemoteSource::new(
+            "openai-codex-models",
+            ModelCatalogRemoteSourceKind::OpenAiCodexModels,
+            [String::from(
+                "https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json",
+            )],
         ),
         ModelCatalogRemoteSource::new(
             "router-for-me",
@@ -63,13 +88,17 @@ pub fn default_public_sources() -> Vec<ModelCatalogRemoteSource> {
 pub async fn fetch_documents(
     client: &reqwest::Client,
     sources: &[ModelCatalogRemoteSource],
-) -> (Vec<(String, ModelCatalogDocument)>, Vec<String>) {
+) -> (Vec<FetchedModelCatalogDocument>, Vec<String>) {
     let mut documents = Vec::new();
     let mut warnings = Vec::new();
 
     for source in sources {
         match fetch_source_document(client, source).await {
-            Ok(document) => documents.push((source.name.clone(), document)),
+            Ok(document) => documents.push(FetchedModelCatalogDocument {
+                name: source.name.clone(),
+                kind: source.kind,
+                document,
+            }),
             Err(error) => warnings.push(format!("{}: {error}", source.name)),
         }
     }
@@ -106,6 +135,9 @@ async fn fetch_and_parse_source_document(
     let body = response.text().await?;
     match kind {
         ModelCatalogRemoteSourceKind::ModelsDev => parse_models_dev_document(body.as_str()),
+        ModelCatalogRemoteSourceKind::OpenAiCodexModels => {
+            parse_openai_codex_models_document(body.as_str())
+        }
         ModelCatalogRemoteSourceKind::RouterForMe => parse_router_document(body.as_str()),
     }
 }
@@ -227,6 +259,57 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
 
             merge_document_entry(&mut document, model_id, definition);
         }
+    }
+
+    Ok(document)
+}
+
+fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
+    let payload: OpenAiCodexModelsDocument = serde_json::from_str(body)?;
+    let mut document = ModelCatalogDocument::default();
+
+    for model in payload.models {
+        let model_id = normalize_optional_string(model.slug).unwrap_or_default();
+        if model_id.is_empty() {
+            continue;
+        }
+
+        let description = normalize_optional_string(model.description);
+        let display_name = normalize_optional_string(model.display_name);
+        let thinking_modes = codex_thinking_modes(model.supported_reasoning_levels.as_deref());
+        let speed_modes = codex_speed_modes(
+            model.service_tiers.as_deref(),
+            model.additional_speed_tiers.as_deref(),
+        );
+        let definition = CatalogModelDefinition {
+            lifecycle: None,
+            context_window_tokens: model.context_window.map(clamp_u64_to_u32),
+            max_output_tokens: None,
+            description,
+            display_name,
+            origin: Some("OpenAI".to_owned()),
+            thinking_modes,
+            speed_modes,
+            capabilities: model_capability_patch(
+                (
+                    codex_input_support(model.input_modalities.as_deref()),
+                    Vec::new(),
+                ),
+                (
+                    (!model
+                        .supported_reasoning_levels
+                        .as_deref()
+                        .unwrap_or(&[])
+                        .is_empty())
+                    .then_some(ModelCapabilityFeature::Reasoning)
+                    .into_iter()
+                    .collect(),
+                    Vec::new(),
+                ),
+            ),
+        };
+
+        merge_document_entry(&mut document, model_id, definition);
     }
 
     Ok(document)
@@ -480,11 +563,101 @@ fn router_thinking_modes(
     modes
 }
 
+fn codex_thinking_modes(
+    supported_reasoning_levels: Option<&[OpenAiCodexReasoningLevel]>,
+) -> BTreeMap<String, ConfiguredModelThinkingMode> {
+    let mut modes = BTreeMap::new();
+    let Some(supported_reasoning_levels) = supported_reasoning_levels else {
+        return modes;
+    };
+
+    for level in supported_reasoning_levels {
+        let Some(effort) = effort_for_variant_name(level.effort.as_str()) else {
+            continue;
+        };
+        let effort_name = effort.as_str();
+        modes.insert(
+            format!("thinking-{effort_name}"),
+            ConfiguredModelThinkingMode {
+                display_name: Some(format!("Thinking {}", title_case_tokenized(effort_name))),
+                description: normalize_optional_string(level.description.clone()),
+                thinking: Some(ThinkingRequest::Effort { effort }),
+                disabled: false,
+            },
+        );
+    }
+
+    modes
+}
+
+fn codex_speed_modes(
+    service_tiers: Option<&[OpenAiCodexServiceTier]>,
+    additional_speed_tiers: Option<&[String]>,
+) -> BTreeMap<String, ConfiguredModelSpeedMode> {
+    let mut modes = BTreeMap::new();
+    let Some(service_tiers) = service_tiers else {
+        return modes;
+    };
+
+    let aliases = additional_speed_tiers.unwrap_or(&[]);
+    for (index, tier) in service_tiers.iter().enumerate() {
+        let Some(tier_id) = normalize_optional_string(tier.id.clone()) else {
+            continue;
+        };
+        let alias = aliases
+            .get(index)
+            .and_then(|value| normalize_optional_string(Some(value.clone())));
+        let name = alias.unwrap_or_else(|| {
+            normalize_optional_string(tier.name.clone())
+                .map(|value| value.to_ascii_lowercase().replace(' ', "-"))
+                .unwrap_or_else(|| tier_id.clone())
+        });
+        if name.is_empty() {
+            continue;
+        }
+
+        modes.insert(
+            name,
+            ConfiguredModelSpeedMode {
+                display_name: normalize_optional_string(tier.name.clone())
+                    .or_else(|| Some(title_case_tokenized(tier_id.as_str()))),
+                description: normalize_optional_string(tier.description.clone()),
+                request_override: ModelSpeedModeRequestOverride {
+                    headers: BTreeMap::new(),
+                    body_patch: BTreeMap::from([(
+                        "service_tier".to_owned(),
+                        serde_json::Value::String(tier_id),
+                    )]),
+                },
+                adapter_overrides: BTreeMap::new(),
+                disabled: false,
+            },
+        );
+    }
+
+    modes
+}
+
 fn router_high_budget(thinking: &RouterThinking) -> Option<u32> {
     let max_budget = thinking.max?;
     let min_budget = thinking.min.unwrap_or(0);
     let target = max_budget.min(16_384).max(min_budget);
     Some(clamp_u64_to_u32(target))
+}
+
+fn codex_input_support(input_modalities: Option<&[String]>) -> Vec<ModelInputModality> {
+    let mut supported = Vec::new();
+    let Some(input_modalities) = input_modalities else {
+        return supported;
+    };
+    for modality in input_modalities {
+        if let Some(mapped) = map_modality_name(modality) {
+            if mapped != ModelInputModality::Text && !supported.contains(&mapped) {
+                supported.push(mapped);
+            }
+        }
+    }
+    supported
 }
 
 fn modalities_to_support(
@@ -796,4 +969,47 @@ struct RouterThinking {
     _dynamic_allowed: Option<bool>,
     #[serde(default)]
     levels: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCodexModelsDocument {
+    #[serde(default)]
+    models: Vec<OpenAiCodexModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCodexModel {
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    input_modalities: Option<Vec<String>>,
+    #[serde(default)]
+    context_window: Option<u64>,
+    #[serde(default)]
+    supported_reasoning_levels: Option<Vec<OpenAiCodexReasoningLevel>>,
+    #[serde(default)]
+    service_tiers: Option<Vec<OpenAiCodexServiceTier>>,
+    #[serde(default)]
+    additional_speed_tiers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCodexReasoningLevel {
+    effort: String,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCodexServiceTier {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }

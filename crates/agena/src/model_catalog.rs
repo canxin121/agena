@@ -484,8 +484,16 @@ impl ModelCatalogService {
         let (remote_documents, remote_warnings) =
             sources::fetch_documents(&self.client, &self.remote_sources).await;
         warnings.extend(remote_warnings);
-        for (_, document) in remote_documents {
-            merge_catalog_document(&mut merged, document);
+        let mut remote_documents = remote_documents;
+        remote_documents.sort_by(|left, right| {
+            right
+                .kind
+                .priority()
+                .cmp(&left.kind.priority())
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        for fetched in remote_documents {
+            merge_public_source_catalog_document(&mut merged, fetched.document);
             succeeded += 1;
         }
 
@@ -867,6 +875,30 @@ fn merge_catalog_speed_mode(
     current.disabled |= next.disabled;
 }
 
+fn merge_catalog_speed_mode_fill_missing(
+    current: &mut ConfiguredModelSpeedMode,
+    next: &ConfiguredModelSpeedMode,
+) {
+    if current.display_name.is_none() {
+        current.display_name = next.display_name.clone();
+    }
+    if current.description.is_none() {
+        current.description = next.description.clone();
+    }
+    merge_speed_mode_request_override_fill_missing(
+        &mut current.request_override,
+        &next.request_override,
+    );
+    for (adapter_id, override_patch) in &next.adapter_overrides {
+        let current_patch = current
+            .adapter_overrides
+            .entry(adapter_id.clone())
+            .or_default();
+        merge_speed_mode_request_override_fill_missing(current_patch, override_patch);
+    }
+    current.disabled |= next.disabled;
+}
+
 fn merge_catalog_document(current: &mut ModelCatalogDocument, next: ModelCatalogDocument) {
     for (model_id, definition) in next.models {
         current
@@ -874,6 +906,101 @@ fn merge_catalog_document(current: &mut ModelCatalogDocument, next: ModelCatalog
             .entry(model_id)
             .and_modify(|existing| merge_catalog_definition(existing, &definition))
             .or_insert(definition);
+    }
+}
+
+fn merge_public_source_catalog_document(
+    current: &mut ModelCatalogDocument,
+    next: ModelCatalogDocument,
+) {
+    for (model_id, definition) in next.models {
+        current
+            .models
+            .entry(model_id)
+            .and_modify(|existing| merge_public_source_catalog_definition(existing, &definition))
+            .or_insert(definition);
+    }
+}
+
+fn merge_public_source_catalog_definition(
+    current: &mut CatalogModelDefinition,
+    next: &CatalogModelDefinition,
+) {
+    if current.lifecycle.is_none() {
+        current.lifecycle = next.lifecycle;
+    }
+    if current.context_window_tokens.is_none() {
+        current.context_window_tokens = next.context_window_tokens;
+    }
+    if current.max_output_tokens.is_none() {
+        current.max_output_tokens = next.max_output_tokens;
+    }
+    if current.description.is_none() {
+        current.description = next.description.clone();
+    }
+    if current.display_name.is_none() {
+        current.display_name = next.display_name.clone();
+    }
+    if current.origin.is_none() {
+        current.origin = next.origin.clone();
+    }
+    for (name, mode) in &next.thinking_modes {
+        current
+            .thinking_modes
+            .entry(name.clone())
+            .and_modify(|existing| merge_catalog_thinking_mode(existing, mode))
+            .or_insert_with(|| mode.clone());
+    }
+    for (name, mode) in &next.speed_modes {
+        current
+            .speed_modes
+            .entry(name.clone())
+            .and_modify(|existing| merge_catalog_speed_mode_fill_missing(existing, mode))
+            .or_insert_with(|| mode.clone());
+    }
+    merge_capability_patch(&mut current.capabilities, &next.capabilities);
+}
+
+fn merge_speed_mode_request_override_fill_missing(
+    current: &mut crate::model::ModelSpeedModeRequestOverride,
+    next: &crate::model::ModelSpeedModeRequestOverride,
+) {
+    for (key, value) in &next.headers {
+        current
+            .headers
+            .entry(key.clone())
+            .or_insert_with(|| value.clone());
+    }
+    merge_json_patch_maps_fill_missing(&mut current.body_patch, &next.body_patch);
+}
+
+fn merge_json_patch_maps_fill_missing(
+    current: &mut BTreeMap<String, serde_json::Value>,
+    next: &BTreeMap<String, serde_json::Value>,
+) {
+    for (key, value) in next {
+        match current.get_mut(key) {
+            Some(existing) => merge_json_value_fill_missing(existing, value),
+            None => {
+                current.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
+fn merge_json_value_fill_missing(current: &mut serde_json::Value, next: &serde_json::Value) {
+    match (current, next) {
+        (serde_json::Value::Object(current_map), serde_json::Value::Object(next_map)) => {
+            for (key, value) in next_map {
+                match current_map.get_mut(key) {
+                    Some(existing) => merge_json_value_fill_missing(existing, value),
+                    None => {
+                        current_map.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1539,6 +1666,43 @@ mod tests {
             )
             .create_async()
             .await;
+        let _codex_models = server
+            .mock("GET", "/openai-codex-models.json")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "models": [{
+                        "slug": "gpt-5",
+                        "display_name": "GPT-5",
+                        "description": "Frontier coding model",
+                        "input_modalities": ["text", "image"],
+                        "context_window": 400000,
+                        "supported_reasoning_levels": [{
+                            "effort": "low",
+                            "description": "Fast responses with lighter reasoning"
+                        }, {
+                            "effort": "medium",
+                            "description": "Balanced reasoning"
+                        }, {
+                            "effort": "high",
+                            "description": "Deep reasoning for complex work"
+                        }, {
+                            "effort": "xhigh",
+                            "description": "Maximum reasoning depth"
+                        }],
+                        "service_tiers": [{
+                            "id": "turbo",
+                            "name": "Fast",
+                            "description": "Priority route"
+                        }],
+                        "additional_speed_tiers": ["fast"]
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
         let _router = server
             .mock("GET", "/router.json")
             .with_status(200)
@@ -1594,6 +1758,11 @@ mod tests {
                     sources::ModelCatalogRemoteSourceKind::RouterForMe,
                     [format!("{}/router.json", server.url())],
                 ),
+                sources::ModelCatalogRemoteSource::new(
+                    "openai-codex-models",
+                    sources::ModelCatalogRemoteSourceKind::OpenAiCodexModels,
+                    [format!("{}/openai-codex-models.json", server.url())],
+                ),
             ],
         )
         .expect("service should load");
@@ -1618,6 +1787,7 @@ mod tests {
         assert_eq!(gpt5.origin.as_deref(), Some("OpenAI"));
         assert_eq!(gpt5.context_window_tokens, Some(400_000));
         assert_eq!(gpt5.max_output_tokens, Some(128_000));
+        assert_eq!(gpt5.description.as_deref(), Some("Frontier coding model"));
         assert_eq!(
             gpt5.capabilities
                 .feature_support(ModelCapabilityFeature::Reasoning),
@@ -1647,6 +1817,26 @@ mod tests {
                     "service_tier".to_owned(),
                     serde_json::json!("priority"),
                 )]),
+            })
+        );
+        assert_eq!(
+            gpt5.speed_modes
+                .get("fast")
+                .and_then(|mode| mode.description.as_deref()),
+            Some("Priority route")
+        );
+        assert_eq!(
+            gpt5.thinking_modes
+                .get("thinking-high")
+                .and_then(|mode| mode.description.as_deref()),
+            Some("Deep reasoning for complex work")
+        );
+        assert_eq!(
+            gpt5.thinking_modes
+                .get("thinking-xhigh")
+                .and_then(|mode| mode.thinking.as_ref()),
+            Some(&ThinkingRequest::Effort {
+                effort: crate::provider::ReasoningEffort::Xhigh,
             })
         );
 
@@ -1795,6 +1985,107 @@ mod tests {
                 .and_then(|override_patch| override_patch.headers.get("openai-beta"))
                 .map(String::as_str),
             Some("fast")
+        );
+        assert_eq!(
+            current
+                .adapter_overrides
+                .get("openai")
+                .and_then(|override_patch| override_patch.body_patch.get("service_tier")),
+            Some(&serde_json::json!("priority"))
+        );
+    }
+
+    #[test]
+    fn merge_catalog_speed_mode_fill_missing_preserves_higher_priority_override_values() {
+        let mut current = ConfiguredModelSpeedMode {
+            display_name: Some("Fast".to_owned()),
+            description: None,
+            request_override: ModelSpeedModeRequestOverride {
+                headers: BTreeMap::from([("x-base".to_owned(), "one".to_owned())]),
+                body_patch: BTreeMap::from([(
+                    "service_tier".to_owned(),
+                    serde_json::json!("priority"),
+                )]),
+            },
+            adapter_overrides: BTreeMap::from([(
+                "openai".to_owned(),
+                ModelSpeedModeRequestOverride {
+                    headers: BTreeMap::from([("openai-beta".to_owned(), "fast".to_owned())]),
+                    body_patch: BTreeMap::from([(
+                        "service_tier".to_owned(),
+                        serde_json::json!("priority"),
+                    )]),
+                },
+            )]),
+            disabled: false,
+        };
+        let next = ConfiguredModelSpeedMode {
+            display_name: None,
+            description: Some("Priority route".to_owned()),
+            request_override: ModelSpeedModeRequestOverride {
+                headers: BTreeMap::from([
+                    ("x-base".to_owned(), "two".to_owned()),
+                    ("x-extra".to_owned(), "three".to_owned()),
+                ]),
+                body_patch: BTreeMap::from([(
+                    "service_tier".to_owned(),
+                    serde_json::json!("turbo"),
+                )]),
+            },
+            adapter_overrides: BTreeMap::from([(
+                "openai".to_owned(),
+                ModelSpeedModeRequestOverride {
+                    headers: BTreeMap::from([
+                        ("openai-beta".to_owned(), "slow".to_owned()),
+                        ("openai-extra".to_owned(), "tier".to_owned()),
+                    ]),
+                    body_patch: BTreeMap::from([(
+                        "service_tier".to_owned(),
+                        serde_json::json!("turbo"),
+                    )]),
+                },
+            )]),
+            disabled: false,
+        };
+
+        merge_catalog_speed_mode_fill_missing(&mut current, &next);
+
+        assert_eq!(current.description.as_deref(), Some("Priority route"));
+        assert_eq!(
+            current
+                .request_override
+                .headers
+                .get("x-base")
+                .map(String::as_str),
+            Some("one")
+        );
+        assert_eq!(
+            current
+                .request_override
+                .headers
+                .get("x-extra")
+                .map(String::as_str),
+            Some("three")
+        );
+        assert_eq!(
+            current.request_override.body_patch.get("service_tier"),
+            Some(&serde_json::json!("priority"))
+        );
+        assert_eq!(
+            current
+                .adapter_overrides
+                .get("openai")
+                .and_then(|override_patch| override_patch.headers.get("openai-beta"))
+                .map(String::as_str),
+            Some("fast")
+        );
+        assert_eq!(
+            current
+                .adapter_overrides
+                .get("openai")
+                .and_then(|override_patch| override_patch.headers.get("openai-extra"))
+                .map(String::as_str),
+            Some("tier")
         );
         assert_eq!(
             current

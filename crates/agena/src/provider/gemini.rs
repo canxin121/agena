@@ -699,7 +699,7 @@ fn gemini_thinking_config(
     if normalized.contains("gemini-2.5") {
         let thinking_budget = match thinking {
             ThinkingRequest::Budget { budget_tokens } => Some(*budget_tokens),
-            ThinkingRequest::Adaptive { effort } => Some(match effort {
+            ThinkingRequest::Adaptive { effort, .. } => Some(match effort {
                 Some(ReasoningEffort::Minimal) => 1_024,
                 Some(ReasoningEffort::Low) => 4_096,
                 Some(ReasoningEffort::Medium) => 10_240,
@@ -744,7 +744,7 @@ fn gemini_thinking_config(
                     Some("LOW")
                 }
             }
-            ThinkingRequest::Adaptive { effort } => Some(match effort {
+            ThinkingRequest::Adaptive { effort, .. } => Some(match effort {
                 Some(ReasoningEffort::High)
                 | Some(ReasoningEffort::Xhigh)
                 | Some(ReasoningEffort::Max)

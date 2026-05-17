@@ -2026,6 +2026,19 @@ fn bedrock_anthropic_effort_for_budget(
     })
 }
 
+fn bedrock_anthropic_display(
+    model: &str,
+    explicit: Option<crate::provider::ThinkingDisplay>,
+) -> Option<&'static str> {
+    explicit
+        .map(crate::provider::ThinkingDisplay::as_str)
+        .or_else(|| {
+            (model.to_ascii_lowercase().contains("claude-opus-4-7")
+                || model.to_ascii_lowercase().contains("claude-opus-4.7"))
+            .then_some("summarized")
+        })
+}
+
 fn bedrock_anthropic_thinking_body(
     model: &str,
     thinking: Option<&ThinkingRequest>,
@@ -2036,21 +2049,23 @@ fn bedrock_anthropic_thinking_body(
             if let Some(effort) = bedrock_anthropic_effort_for_budget(model, *budget_tokens) {
                 Some(BedrockAnthropicThinkingConfig::Adaptive {
                     effort: Some(effort.as_str()),
+                    display: bedrock_anthropic_display(model, None),
                 })
             } else {
                 Some(BedrockAnthropicThinkingConfig::Enabled {
-                budget_tokens: *budget_tokens,
+                    budget_tokens: *budget_tokens,
                 })
             }
         }
-        ThinkingRequest::Adaptive { effort }
+        ThinkingRequest::Adaptive { effort, display }
             if AmazonBedrockProvider::anthropic_model_uses_adaptive_thinking(model) =>
         {
             Some(BedrockAnthropicThinkingConfig::Adaptive {
                 effort: effort.map(crate::provider::ReasoningEffort::as_str),
+                display: bedrock_anthropic_display(model, *display),
             })
         }
-        ThinkingRequest::Adaptive { effort } => Some(BedrockAnthropicThinkingConfig::Enabled {
+        ThinkingRequest::Adaptive { effort, .. } => Some(BedrockAnthropicThinkingConfig::Enabled {
             budget_tokens: bedrock_anthropic_budget_for_effort(
                 effort.unwrap_or(crate::provider::ReasoningEffort::High),
             ),
@@ -2060,6 +2075,7 @@ fn bedrock_anthropic_thinking_body(
         {
             Some(BedrockAnthropicThinkingConfig::Adaptive {
                 effort: Some(effort.as_str()),
+                display: bedrock_anthropic_display(model, None),
             })
         }
         ThinkingRequest::Effort { effort } => Some(BedrockAnthropicThinkingConfig::Enabled {
@@ -2220,6 +2236,8 @@ enum BedrockAnthropicThinkingConfig {
     Adaptive {
         #[serde(skip_serializing_if = "Option::is_none")]
         effort: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        display: Option<&'static str>,
     },
 }
 
@@ -2795,6 +2813,7 @@ mod tests {
             seed: None,
             thinking: Some(crate::provider::ThinkingRequest::Adaptive {
                 effort: Some(crate::provider::ReasoningEffort::Low),
+                display: None,
             }),
             request_override: Default::default(),
             response_format: None,
@@ -2803,7 +2822,8 @@ mod tests {
         assert!(matches!(
             body.thinking,
             Some(BedrockAnthropicThinkingConfig::Adaptive {
-                effort: Some("low")
+                effort: Some("low"),
+                display: Some("summarized"),
             })
         ));
         assert_eq!(body.temperature, None);
@@ -2835,7 +2855,8 @@ mod tests {
         assert!(matches!(
             body.thinking,
             Some(BedrockAnthropicThinkingConfig::Adaptive {
-                effort: Some("max")
+                effort: Some("max"),
+                display: Some("summarized"),
             })
         ));
     }

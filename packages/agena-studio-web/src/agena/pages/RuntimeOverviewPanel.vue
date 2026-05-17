@@ -11,7 +11,6 @@ import type {
 } from '@/agena/lib/agenaApi'
 
 import {
-  MODEL_FAMILY_OPTIONS,
   MODEL_LIFECYCLE_OPTIONS,
   createEmptyModelCatalogDraft,
   createEmptyModelCatalogVariantDraft,
@@ -92,7 +91,6 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
     entry.kind,
     entry.source,
     entry.source_label,
-    entry.family,
     entry.lifecycle,
     variantText,
   ]
@@ -389,14 +387,6 @@ function isEntrySelected(entry: ModelCatalogEntry) {
             <input id="catalog-display-name" v-model="draft.display_name" class="input" placeholder="Acme Reasoner" />
           </div>
           <div class="field">
-            <label class="label" for="catalog-family">Family</label>
-            <select id="catalog-family" v-model="draft.family" class="select">
-              <option value="">Unset</option>
-              <option v-for="family in MODEL_FAMILY_OPTIONS" :key="family" :value="family">{{ family }}</option>
-            </select>
-          </div>
-
-          <div class="field">
             <label class="label" for="catalog-lifecycle">Lifecycle</label>
             <select id="catalog-lifecycle" v-model="draft.lifecycle" class="select">
               <option value="">Unset</option>
@@ -636,9 +626,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                   {{ entry.source_label || entry.source }}
                 </div>
                 <div v-if="entry.kind === 'custom'" class="muted">Custom entry saved for this model.</div>
-                <div v-if="entry.family || entry.lifecycle" class="muted">
-                  {{ entry.family || 'family unset' }} · {{ entry.lifecycle || 'lifecycle unset' }}
-                </div>
+                <div v-if="entry.lifecycle" class="muted">{{ entry.lifecycle }}</div>
                 <div v-if="entry.description" class="muted">{{ entry.description }}</div>
                 <div v-if="entry.context_window_tokens || entry.max_output_tokens" class="muted mono">
                   ctx={{ entry.context_window_tokens ?? 'n/a' }} · max_out={{ entry.max_output_tokens ?? 'n/a' }}

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AppError,
-    model::{Model, ModelFamily, ModelId, ModelLifecycle},
+    model::{Model, ModelId, ModelLifecycle},
     provider::{
         ConfiguredModelDefinition, ConfiguredModelVariant, ModelCapabilityPatch, ModelProvider,
     },
@@ -38,8 +38,6 @@ pub enum ModelCatalogEntrySourceKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct CatalogModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub family: Option<ModelFamily>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
@@ -57,8 +55,7 @@ pub struct CatalogModelDefinition {
 
 impl CatalogModelDefinition {
     pub fn is_empty(&self) -> bool {
-        self.family.is_none()
-            && self.lifecycle.is_none()
+        self.lifecycle.is_none()
             && self.context_window_tokens.is_none()
             && self.max_output_tokens.is_none()
             && self.description.is_none()
@@ -69,7 +66,7 @@ impl CatalogModelDefinition {
 
     pub fn into_configured_definition(self) -> ConfiguredModelDefinition {
         ConfiguredModelDefinition {
-            family: self.family,
+            family: None,
             lifecycle: self.lifecycle,
             context_window_tokens: self.context_window_tokens,
             max_output_tokens: self.max_output_tokens,
@@ -102,8 +99,6 @@ pub struct ModelCatalogEntryRecord {
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_local_override: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub family: Option<ModelFamily>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
@@ -120,7 +115,6 @@ pub struct ModelCatalogEntryRecord {
 impl ModelCatalogEntryRecord {
     pub fn definition(&self) -> CatalogModelDefinition {
         CatalogModelDefinition {
-            family: self.family,
             lifecycle: self.lifecycle,
             context_window_tokens: self.context_window_tokens,
             max_output_tokens: self.max_output_tokens,
@@ -234,7 +228,6 @@ impl ModelCatalogSnapshot {
             model_id: model_id.to_owned(),
             display_name: definition.display_name.clone(),
             has_local_override,
-            family: definition.family,
             lifecycle: definition.lifecycle,
             context_window_tokens: definition.context_window_tokens,
             max_output_tokens: definition.max_output_tokens,
@@ -579,16 +572,6 @@ pub fn bundled_catalog_document() -> Result<ModelCatalogDocument, AppError> {
     .map_err(|err| AppError::Config(format!("parse bundled model catalog: {err}")))
 }
 
-pub fn catalog_family_for_model(
-    provider: &ModelCatalogProviderRecord,
-    model: &ModelId,
-) -> Option<ModelFamily> {
-    provider
-        .models
-        .get(model.as_str())
-        .and_then(|entry| entry.family)
-}
-
 pub fn decorate_provider_models(
     provider: &dyn ModelProvider,
     provider_record: &ModelCatalogProviderRecord,
@@ -610,11 +593,7 @@ pub fn decorate_provider_models(
         let model_id = ModelId::new(model_id.clone());
         let base = Model::new(provider.id(), model_id.as_str())
             .with_capabilities(provider.model_capabilities(&model_id))
-            .with_metadata(provider_model_metadata(
-                provider,
-                provider_record,
-                &model_id,
-            ))
+            .with_metadata(provider_model_metadata(provider, &model_id))
             .with_variants(provider_model_variants(
                 provider,
                 provider_record,
@@ -653,7 +632,7 @@ fn decorate_provider_model(
         configured.apply_to_model(
             model,
             &provider.model_capabilities(&model_id),
-            &provider_model_metadata(provider, provider_record, &model_id),
+            &provider_model_metadata(provider, &model_id),
         )
     } else {
         model
@@ -662,18 +641,9 @@ fn decorate_provider_model(
 
 fn provider_model_metadata(
     provider: &dyn ModelProvider,
-    provider_record: &ModelCatalogProviderRecord,
     model: &ModelId,
 ) -> crate::model::ModelMetadata {
-    let mut metadata = provider.model_metadata(model);
-    if let Some(family) = provider_record
-        .models
-        .get(model.as_str())
-        .and_then(|definition| definition.family)
-    {
-        metadata.family = Some(family);
-    }
-    metadata
+    provider.model_metadata(model)
 }
 
 fn provider_model_variants(

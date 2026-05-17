@@ -34,7 +34,6 @@ const defaultDeps: RuntimeModelCatalogActionsDeps = {
 export type ModelCatalogEditableDraft = {
   adapter_id: string
   model_id: string
-  family: string
   lifecycle: string
   context_window_tokens: string
   max_output_tokens: string
@@ -55,21 +54,6 @@ export type ModelCatalogVariantEditableDraft = {
   disabled: boolean
   thinking_json: string
 }
-
-export const MODEL_FAMILY_OPTIONS = [
-  'gpt',
-  'codex',
-  'claude',
-  'gemini',
-  'llama',
-  'mistral',
-  'deepseek',
-  'qwen',
-  'nova',
-  'grok',
-  'phi',
-  'command',
-] as const
 
 export const MODEL_LIFECYCLE_OPTIONS = ['active', 'preview', 'beta', 'alpha', 'experimental', 'deprecated'] as const
 
@@ -152,7 +136,6 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
   return {
     adapter_id: adapterId,
     model_id: modelId,
-    family: '',
     lifecycle: '',
     context_window_tokens: '',
     max_output_tokens: '',
@@ -204,7 +187,6 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
   return {
     adapter_id: '',
     model_id: entry.model_id,
-    family: String(entry.family || ''),
     lifecycle: String(entry.lifecycle || ''),
     context_window_tokens: entry.context_window_tokens == null ? '' : String(entry.context_window_tokens),
     max_output_tokens: entry.max_output_tokens == null ? '' : String(entry.max_output_tokens),
@@ -225,7 +207,6 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
   return {
     adapter_id: adapterId,
     model_id: route.modelId,
-    family: String(model.metadata?.family || ''),
     lifecycle: String(model.metadata?.lifecycle || ''),
     context_window_tokens:
       model.metadata?.limits?.context_window_tokens == null ? '' : String(model.metadata.limits.context_window_tokens),
@@ -308,7 +289,6 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
 
   return {
     model_id: String(draft.model_id || '').trim(),
-    family: normalizeOptionalText(draft.family),
     lifecycle: normalizeOptionalText(draft.lifecycle),
     context_window_tokens: normalizeOptionalInteger(draft.context_window_tokens),
     max_output_tokens: normalizeOptionalInteger(draft.max_output_tokens),

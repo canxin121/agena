@@ -245,7 +245,6 @@ export type ModelCatalogEntry = {
   source: ModelCatalogSourceKind
   source_label?: string | null
   display_name?: string | null
-  family?: string | null
   lifecycle?: string | null
   context_window_tokens?: number | null
   max_output_tokens?: number | null
@@ -267,7 +266,6 @@ export type ModelCatalogResponse = {
 
 export type ModelCatalogEntryWriteRequest = {
   model_id: string
-  family?: string | null
   lifecycle?: string | null
   context_window_tokens?: number | null
   max_output_tokens?: number | null

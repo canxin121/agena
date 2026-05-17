@@ -49,7 +49,6 @@ function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCa
     source: 'remote',
     source_label: 'remote',
     display_name: 'GPT-5 Catalog',
-    family: 'gpt',
     lifecycle: 'preview',
     context_window_tokens: 256000,
     max_output_tokens: 8192,
@@ -114,7 +113,6 @@ describe('useRuntimeModelCatalogActions', () => {
     expect(draft).toEqual({
       adapter_id: 'openai',
       model_id: 'gpt-5',
-      family: 'gpt',
       lifecycle: 'active',
       context_window_tokens: '400000',
       max_output_tokens: '16384',
@@ -284,7 +282,6 @@ describe('useRuntimeModelCatalogActions', () => {
     expect(calls).toEqual(['upsert', 'load'])
     expect(capturedRequest).toEqual({
       model_id: 'gpt-5',
-      family: 'gpt',
       lifecycle: 'active',
       context_window_tokens: 400000,
       max_output_tokens: 16384,

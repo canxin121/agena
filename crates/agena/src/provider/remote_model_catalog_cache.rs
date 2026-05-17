@@ -323,9 +323,6 @@ fn catalog_models_from_document(
                 if let Some(display_name) = definition.display_name.clone() {
                     model = model.with_display_name(display_name);
                 }
-                if let Some(family) = definition.family {
-                    model = model.with_family(family);
-                }
                 let metadata_fallback = model.metadata.clone();
                 catalog_definition_to_provider_definition(definition).apply_to_model(
                     model,
@@ -476,7 +473,6 @@ mod tests {
                     "models": {
                         "gpt-5": {
                             "display_name": "GPT-5",
-                            "family": "gpt",
                             "context_window_tokens": 400000,
                             "max_output_tokens": 128000
                         }
@@ -539,12 +535,10 @@ mod tests {
                 serde_json::json!({
                     "models": {
                         "amazon.nova-pro-v1:0": {
-                            "display_name": "Amazon Nova Pro",
-                            "family": "nova"
+                            "display_name": "Amazon Nova Pro"
                         },
                         "anthropic.claude-sonnet-4-5": {
-                            "display_name": "Claude Sonnet 4.5",
-                            "family": "claude"
+                            "display_name": "Claude Sonnet 4.5"
                         }
                     }
                 })
@@ -572,15 +566,7 @@ mod tests {
         assert_eq!(models[0].provider_id.as_str(), "amazon-bedrock");
         assert_eq!(models[0].id.as_str(), "amazon.nova-pro-v1:0");
         assert_eq!(models[0].display_name.as_deref(), Some("Amazon Nova Pro"));
-        assert_eq!(
-            models[0].metadata.family,
-            Some(crate::model::ModelFamily::Nova)
-        );
         assert_eq!(models[1].id.as_str(), "anthropic.claude-sonnet-4-5");
         assert_eq!(models[1].display_name.as_deref(), Some("Claude Sonnet 4.5"));
-        assert_eq!(
-            models[1].metadata.family,
-            Some(crate::model::ModelFamily::Claude)
-        );
     }
 }

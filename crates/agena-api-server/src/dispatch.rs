@@ -246,7 +246,6 @@ fn model_catalog_entry_from_http(
         source_label: value.source_label,
         has_local_override: value.has_local_override,
         display_name: value.display_name,
-        family: value.family,
         lifecycle: value.lifecycle,
         context_window_tokens: value.context_window_tokens,
         max_output_tokens: value.max_output_tokens,

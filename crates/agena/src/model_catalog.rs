@@ -676,6 +676,83 @@ mod tests {
         if let Some(stripped) = normalized.strip_suffix("-maas") {
             normalized = stripped.to_owned();
         }
+        if let Some(stripped) = normalized.strip_suffix(":free") {
+            normalized = stripped.to_owned();
+        }
+        if normalized == "study_gpt-chatgpt-4o-latest" {
+            normalized = "gpt-4o".to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("openai.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("azure-") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("google.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("ai21-") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("cohere-command-") {
+            normalized = format!("command-{stripped}");
+        } else if normalized == "cohere-embed-v-4-0" {
+            normalized = "embed-v4.0".to_owned();
+        } else if let Some(stripped) = normalized.strip_prefix("cohere-embed-v3-") {
+            normalized = format!("embed-v3-{stripped}");
+        }
+        if let Some(stripped) = normalized.strip_prefix("moonshot-kimi-") {
+            normalized = format!("kimi-{stripped}");
+        }
+        if let Some(stripped) = normalized.strip_prefix("moonshot.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("moonshotai.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("zai.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("minimax.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("qwen.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("writer.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("nvidia.") {
+            normalized = stripped.to_owned();
+        }
+        if let Some(stripped) = normalized.strip_prefix("mistral.") {
+            normalized = stripped.to_owned();
+        }
+        normalized = match normalized.as_str() {
+            "duo-chat-haiku-4-5" => "claude-haiku-4-5".to_owned(),
+            "duo-chat-opus-4-5" => "claude-opus-4-5".to_owned(),
+            "duo-chat-opus-4-6" => "claude-opus-4-6".to_owned(),
+            "duo-chat-opus-4-7" => "claude-opus-4-7".to_owned(),
+            "duo-chat-sonnet-4-5" => "claude-sonnet-4-5".to_owned(),
+            "duo-chat-sonnet-4-6" => "claude-sonnet-4-6".to_owned(),
+            "duo-chat-gpt-5" => "gpt-5".to_owned(),
+            "duo-chat-gpt-5-mini" => "gpt-5-mini".to_owned(),
+            "duo-chat-gpt-5-codex" => "gpt-5-codex".to_owned(),
+            "duo-chat-gpt-5-1" => "gpt-5.1".to_owned(),
+            "duo-chat-gpt-5-2" => "gpt-5.2".to_owned(),
+            "duo-chat-gpt-5-2-codex" => "gpt-5.2-codex".to_owned(),
+            "duo-chat-gpt-5-3-codex" => "gpt-5.3-codex".to_owned(),
+            "duo-chat-gpt-5-4" => "gpt-5.4".to_owned(),
+            "duo-chat-gpt-5-4-mini" => "gpt-5.4-mini".to_owned(),
+            "duo-chat-gpt-5-4-nano" => "gpt-5.4-nano".to_owned(),
+            _ => normalized,
+        };
+
+        if let Some((prefix, tail)) = normalized.split_once('.')
+            && matches!(prefix, "us" | "eu" | "au" | "jp" | "global" | "apac")
+        {
+            normalized = tail.to_owned();
+        }
         normalized = normalized.replace('_', ".");
 
         if let Some((prefix, tail)) = normalized.split_once('.')
@@ -700,8 +777,28 @@ mod tests {
                     "$1$2-$3$4",
                 ),
                 (
+                    Regex::new(r"^claude-3-5-haiku-(\d{8})-v1:0$").unwrap(),
+                    "claude-haiku-3-5-$1",
+                ),
+                (
+                    Regex::new(r"^claude-3-5-sonnet-(\d{8})-v2:0$").unwrap(),
+                    "claude-sonnet-3-5-$1",
+                ),
+                (
+                    Regex::new(r"^claude-3-7-sonnet-(\d{8})-v1:0$").unwrap(),
+                    "claude-sonnet-3-7-$1",
+                ),
+                (Regex::new(r"^claude-opus-4-6-v1$").unwrap(), "claude-opus-4-6"),
+                (
                     Regex::new(r"^(deepseek-v)(\d+)[-.](\d+)(.*)$").unwrap(),
                     "$1$2.$3$4",
+                ),
+                (Regex::new(r"^deepseek\.r1-v1:0$").unwrap(), "deepseek-r1"),
+                (Regex::new(r"^deepseek\.v3-v1:0$").unwrap(), "deepseek-v3"),
+                (Regex::new(r"^devstral-2:123b$").unwrap(), "devstral-2-123b"),
+                (
+                    Regex::new(r"^devstral-small-2:24b$").unwrap(),
+                    "devstral-small-2-24b",
                 ),
                 (
                     Regex::new(r"^(gemini)-(\d+)[-.](\d+)(.*)$").unwrap(),
@@ -710,6 +807,10 @@ mod tests {
                 (
                     Regex::new(r"^(gpt)-(\d+)[-.](\d+)(.*)$").unwrap(),
                     "$1-$2.$3$4",
+                ),
+                (
+                    Regex::new(r"^gpt-oss-(120b|20b)-1:0$").unwrap(),
+                    "gpt-oss-$1",
                 ),
                 (
                     Regex::new(r"^(grok)-(\d+)(\d)(.*)$").unwrap(),
@@ -735,10 +836,26 @@ mod tests {
                     Regex::new(r"^(mistral-small)-(\d+)[-.](\d+)(.*)$").unwrap(),
                     "$1-$2.$3$4",
                 ),
+                (
+                    Regex::new(r"^ministral-3:(14b|8b|3b)$").unwrap(),
+                    "ministral-3-$1",
+                ),
                 (Regex::new(r"^(nvidia)\.(.*)$").unwrap(), "$1-$2"),
+                (
+                    Regex::new(r"^pixtral-large-2502-v1:0$").unwrap(),
+                    "pixtral-large-2502",
+                ),
                 (
                     Regex::new(r"^(qwen\d+)[-.](\d+)(.*)$").unwrap(),
                     "$1.$2$3",
+                ),
+                (
+                    Regex::new(r"^qwen3\.235b-a22b-instruct-2507$").unwrap(),
+                    "qwen3-235b-a22b-instruct-2507",
+                ),
+                (
+                    Regex::new(r"^qwen3\.5:397b$").unwrap(),
+                    "qwen3.5-397b-a17b",
                 ),
             ]
         }) {
@@ -852,12 +969,28 @@ mod tests {
         assert!(catalog.models.contains_key("claude-opus-4-7"));
         assert!(catalog.models.contains_key("claude-opus-4-6"));
         assert!(catalog.models.contains_key("gemini-3.1-flash-lite"));
-        assert!(catalog.models.contains_key("amazon.nova-pro-v1:0"));
-        assert!(catalog.models.contains_key("duo-chat-sonnet-4-5"));
+        assert!(catalog.models.contains_key("nova-pro-v1"));
+        assert!(catalog.models.contains_key("jamba-1.5-large"));
+        assert!(catalog.models.contains_key("command-a"));
+        assert!(catalog.models.contains_key("gemma-3-27b-it"));
+        assert!(catalog.models.contains_key("gpt-4o"));
+        assert!(!catalog.models.contains_key("openai.gpt-5.4"));
+        assert!(!catalog.models.contains_key("gpt-oss-120b:free"));
+        assert!(!catalog.models.contains_key("study_gpt-chatgpt-4o-latest"));
 
         let mut lowered = BTreeSet::new();
         let mut normalized = BTreeSet::new();
+        let source_alias = Regex::new(
+            r"^(?:openai\.|azure-|google\.|cohere-|ai21-|amazon\.|anthropic\.|duo-chat-|study_gpt-|meta\.|mistral\.|moonshot(?:ai)?\.|qwen\.|writer\.|zai\.|nvidia\.|minimax\.|(?:us|eu|au|jp|global|apac)\.)",
+        )
+        .unwrap();
+        let route_suffix = Regex::new(r"-v\d+:0$").unwrap();
         for model_id in catalog.models.keys() {
+            assert_eq!(
+                model_id,
+                &model_id.to_ascii_lowercase(),
+                "bundled catalog model id should be lowercase canonical text: {model_id}"
+            );
             assert!(
                 !model_id.contains('/'),
                 "bundled catalog model id should not contain '/': {model_id}"
@@ -869,6 +1002,18 @@ mod tests {
             assert!(
                 !model_id.ends_with("-maas"),
                 "bundled catalog model id should not contain provider route suffix '-maas': {model_id}"
+            );
+            assert!(
+                !model_id.ends_with(":free"),
+                "bundled catalog model id should not contain free-tier suffix ':free': {model_id}"
+            );
+            assert!(
+                !source_alias.is_match(model_id),
+                "bundled catalog model id should not contain provider/source route prefixes: {model_id}"
+            );
+            assert!(
+                !route_suffix.is_match(model_id),
+                "bundled catalog model id should not contain provider route suffix like '-v1:0': {model_id}"
             );
             assert!(
                 lowered.insert(model_id.to_ascii_lowercase()),

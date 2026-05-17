@@ -227,7 +227,6 @@ export type ProviderSummary = {
   provider_id: string
   default_model: string
   default_model_ref: string
-  catalog_default_model?: string | null
   adapters?: ProviderAdapterSummary[]
 }
 
@@ -241,14 +240,12 @@ export type ModelCatalogSourceKind = 'remote' | 'fallback' | 'cache' | 'custom'
 export type ModelCatalogEntryKind = 'official' | 'custom'
 
 export type ModelCatalogEntry = {
-  adapter_id: string
+  adapter_id?: string
   provider_id?: string
   model_id: string
   kind: ModelCatalogEntryKind
   source: ModelCatalogSourceKind
   source_label?: string | null
-  default_model_for_adapter?: string | null
-  default_model_for_provider?: string | null
   display_name?: string | null
   family?: string | null
   lifecycle?: string | null
@@ -271,11 +268,9 @@ export type ModelCatalogResponse = {
 }
 
 export type ModelCatalogEntryWriteRequest = {
-  adapter_id: string
+  adapter_id?: string
   provider_id?: string
   model_id: string
-  set_default_for_adapter?: boolean
-  set_default_for_provider?: boolean
   family?: string | null
   lifecycle?: string | null
   context_window_tokens?: number | null
@@ -286,12 +281,6 @@ export type ModelCatalogEntryWriteRequest = {
   input?: unknown
   features?: unknown
   capabilities?: Record<string, unknown>
-}
-
-export type ModelCatalogProviderDefaultRequest = {
-  adapter_id: string
-  provider_id?: string
-  model_id: string
 }
 
 export type ConfigSettingsPatchRequest = {
@@ -816,21 +805,11 @@ export async function upsertModelCatalogEntry(input: ModelCatalogEntryWriteReque
   })
 }
 
-export async function setModelCatalogProviderDefault(
-  input: ModelCatalogProviderDefaultRequest,
-): Promise<ModelCatalogResponse> {
-  return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog/default-model', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(input),
-  })
-}
-
-export async function deleteModelCatalogEntry(adapterId: string, modelId: string): Promise<ModelCatalogResponse> {
+export async function deleteModelCatalogEntry(modelId: string, adapterId = ''): Promise<ModelCatalogResponse> {
   const params = new URLSearchParams({
-    adapter_id: adapterId,
     model_id: modelId,
   })
+  if (adapterId) params.set('adapter_id', adapterId)
   return await apiJson<ModelCatalogResponse>(`/api/v1/model-catalog/entries?${params.toString()}`, {
     method: 'DELETE',
   })

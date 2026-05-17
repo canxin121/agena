@@ -39,7 +39,6 @@ const actionError = ref('')
 const actionMessage = ref('')
 const catalogEntriesState = ref<ModelCatalogEntry[]>([])
 const catalogKindFilter = ref<'all' | ModelCatalogEntryKind>('all')
-const catalogAdapterFilter = ref('')
 const catalogQuery = ref('')
 const draft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft())
 const editingEntryKey = ref('')
@@ -53,32 +52,19 @@ watch(
   { immediate: true, deep: true },
 )
 
-const { deleteCatalogEntryAction, refreshCatalogAction, saveCatalogEntryAction, setCatalogDefaultModelAction } =
-  useRuntimeModelCatalogActions({
-    actionError,
-    actionMessage,
-    catalogEntries: catalogEntriesState,
-    load: props.load,
-  })
+const { deleteCatalogEntryAction, refreshCatalogAction, saveCatalogEntryAction } = useRuntimeModelCatalogActions({
+  actionError,
+  actionMessage,
+  catalogEntries: catalogEntriesState,
+  load: props.load,
+})
 
 const sortedCatalogEntries = computed(() =>
   [...catalogEntriesState.value].sort((left, right) => {
-    const leftAdapterId = left.adapter_id || left.provider_id || ''
-    const rightAdapterId = right.adapter_id || right.provider_id || ''
-    if (leftAdapterId !== rightAdapterId) return leftAdapterId.localeCompare(rightAdapterId)
     if (left.model_id !== right.model_id) return left.model_id.localeCompare(right.model_id)
     return left.kind.localeCompare(right.kind)
   }),
 )
-
-const catalogAdapterOptions = computed(() => {
-  const adapterIds = new Set<string>()
-  for (const entry of catalogEntriesState.value) adapterIds.add(entry.adapter_id || entry.provider_id || '')
-  for (const provider of props.providers) {
-    for (const adapter of provider.adapters || []) adapterIds.add(adapter.adapter_id)
-  }
-  return [...adapterIds].filter(Boolean).sort((left, right) => left.localeCompare(right))
-})
 
 const customCatalogEntriesCount = computed(
   () => catalogEntriesState.value.filter((entry) => entry.kind === 'custom').length,
@@ -100,7 +86,6 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
     .join('\n')
 
   return [
-    entry.adapter_id || entry.provider_id,
     entry.model_id,
     entry.display_name,
     entry.description,
@@ -109,7 +94,6 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
     entry.source_label,
     entry.family,
     entry.lifecycle,
-    entry.default_model_for_adapter || entry.default_model_for_provider,
     variantText,
   ]
     .filter(Boolean)
@@ -119,18 +103,16 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
 
 const filteredCatalogEntries = computed(() => {
   const query = catalogQuery.value.trim().toLowerCase()
-  const adapterId = catalogAdapterFilter.value.trim()
   const kind = catalogKindFilter.value
 
   return sortedCatalogEntries.value.filter((entry) => {
-    if (adapterId && (entry.adapter_id || entry.provider_id || '') !== adapterId) return false
     if (kind !== 'all' && entry.kind !== kind) return false
     return !query || catalogEntrySearchText(entry).includes(query)
   })
 })
 
-function makeEntryKey(adapterId: string, modelId: string, kind: ModelCatalogEntry['kind']) {
-  return `${adapterId}/${modelId}/${kind}`
+function makeEntryKey(modelId: string, kind: ModelCatalogEntry['kind']) {
+  return `${modelId}/${kind}`
 }
 
 function resetEditor(adapterId = '', modelId = '') {
@@ -145,15 +127,13 @@ function firstProviderAdapterId(provider: ProviderSummary) {
 
 function editEntry(entry: ModelCatalogEntry) {
   draft.value = createModelCatalogDraftFromEntry(entry)
-  const adapterId = entry.adapter_id || entry.provider_id || ''
-  editingEntryKey.value = makeEntryKey(adapterId, entry.model_id, entry.kind)
+  editingEntryKey.value = makeEntryKey(entry.model_id, entry.kind)
   actionError.value = ''
-  actionMessage.value = `Loaded ${adapterId}/${entry.model_id} into the draft editor.`
+  actionMessage.value = `Loaded ${entry.model_id} into the draft editor.`
 }
 
 function clearCatalogFilters() {
   catalogQuery.value = ''
-  catalogAdapterFilter.value = ''
   catalogKindFilter.value = 'all'
 }
 
@@ -186,11 +166,7 @@ function loadProviderModelDraft(model: ProviderModel) {
   const route = splitProviderModelRoute(model.id)
   draft.value = createModelCatalogDraftFromProviderSelection(catalogEntriesState.value, model)
   editingEntryKey.value = matchingEntry
-    ? makeEntryKey(
-        matchingEntry.adapter_id || matchingEntry.provider_id || '',
-        matchingEntry.model_id,
-        matchingEntry.kind,
-      )
+    ? makeEntryKey(matchingEntry.model_id, matchingEntry.kind)
     : ''
   actionError.value = ''
   actionMessage.value = `Loaded ${model.provider_id}/${route.adapterId || 'adapter'}/${route.modelId} into the draft editor.`
@@ -200,7 +176,7 @@ async function saveDraft() {
   submitting.value = true
   try {
     await saveCatalogEntryAction(draft.value)
-    editingEntryKey.value = makeEntryKey(draft.value.adapter_id.trim(), draft.value.model_id.trim(), 'custom')
+    editingEntryKey.value = makeEntryKey(draft.value.model_id.trim(), 'custom')
   } finally {
     submitting.value = false
   }
@@ -218,27 +194,17 @@ async function refreshCatalog() {
 async function deleteEntry(entry: ModelCatalogEntry) {
   submitting.value = true
   try {
-    const adapterId = entry.adapter_id || entry.provider_id || ''
-    await deleteCatalogEntryAction(adapterId, entry.model_id)
-    if (editingEntryKey.value === makeEntryKey(adapterId, entry.model_id, entry.kind)) {
-      resetEditor(adapterId)
+    await deleteCatalogEntryAction(entry.model_id, entry.adapter_id || entry.provider_id || '')
+    if (editingEntryKey.value === makeEntryKey(entry.model_id, entry.kind)) {
+      resetEditor()
     }
   } finally {
     submitting.value = false
   }
 }
 
-async function setDefault(entry: ModelCatalogEntry) {
-  submitting.value = true
-  try {
-    await setCatalogDefaultModelAction(entry.adapter_id || entry.provider_id || '', entry.model_id)
-  } finally {
-    submitting.value = false
-  }
-}
-
 function isEntrySelected(entry: ModelCatalogEntry) {
-  return editingEntryKey.value === makeEntryKey(entry.adapter_id || entry.provider_id || '', entry.model_id, entry.kind)
+  return editingEntryKey.value === makeEntryKey(entry.model_id, entry.kind)
 }
 </script>
 
@@ -328,9 +294,6 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                   <strong>{{ provider.provider_id }}</strong>
                 </div>
                 <div class="muted">Default model: {{ provider.default_model || 'unset' }}</div>
-                <div v-if="provider.catalog_default_model" class="muted">
-                  Catalog default: {{ provider.catalog_default_model }}
-                </div>
                 <div class="muted mono">{{ provider.default_model_ref || 'n/a' }}</div>
                 <div class="muted" style="margin-top: 8px">Live models:</div>
                 <div
@@ -380,7 +343,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
             <h3>Model Catalog</h3>
             <p class="muted">
               Refresh the runtime catalog, pull a live provider model into the draft editor, save custom entries from
-              official or live metadata, delete custom entries, and set the adapter catalog default.
+              official or live metadata, and delete custom entries.
             </p>
           </div>
           <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
@@ -411,10 +374,6 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         </p>
 
         <div class="grid two" style="margin-top: 16px">
-          <div class="field">
-            <label class="label" for="catalog-adapter-id">Adapter ID</label>
-            <input id="catalog-adapter-id" v-model="draft.adapter_id" class="input mono" placeholder="openai" />
-          </div>
           <div class="field">
             <label class="label" for="catalog-model-id">Model ID</label>
             <input
@@ -466,12 +425,6 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               inputmode="numeric"
               placeholder="8192"
             />
-          </div>
-          <div class="field" style="display: flex; align-items: end">
-            <label class="muted" for="catalog-default-toggle" style="display: flex; gap: 8px; align-items: center">
-              <input id="catalog-default-toggle" v-model="draft.set_default_for_adapter" type="checkbox" />
-              Set default for adapter on save
-            </label>
           </div>
         </div>
 
@@ -601,7 +554,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
           <button class="button primary" :disabled="submitting" @click="saveDraft">
             {{ editingEntryKey ? 'Save Custom Entry' : 'Create Custom Entry' }}
           </button>
-          <button class="button" :disabled="submitting" @click="resetEditor(draft.adapter_id)">Reset Form</button>
+          <button class="button" :disabled="submitting" @click="resetEditor()">Reset Form</button>
         </div>
       </section>
 
@@ -627,8 +580,8 @@ function isEntrySelected(entry: ModelCatalogEntry) {
             <div class="summary-value">{{ customCatalogEntriesCount }}</div>
           </div>
           <div class="summary-item">
-            <div class="summary-label">Adapters</div>
-            <div class="summary-value">{{ catalogAdapterOptions.length }}</div>
+            <div class="summary-label">Models</div>
+            <div class="summary-value">{{ sortedCatalogEntries.length }}</div>
           </div>
           <div class="summary-item">
             <div class="summary-label">Showing</div>
@@ -643,17 +596,8 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               id="catalog-entry-search"
               v-model="catalogQuery"
               class="input mono"
-              placeholder="adapter, model, variant, description"
+              placeholder="model, variant, description"
             />
-          </div>
-          <div class="field">
-            <label class="label" for="catalog-entry-adapter-filter">Adapter</label>
-            <select id="catalog-entry-adapter-filter" v-model="catalogAdapterFilter" class="select">
-              <option value="">All adapters</option>
-              <option v-for="adapterId in catalogAdapterOptions" :key="adapterId" :value="adapterId">
-                {{ adapterId }}
-              </option>
-            </select>
           </div>
           <div class="field">
             <label class="label" for="catalog-entry-kind-filter">Kind</label>
@@ -668,7 +612,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
           <button
             class="button"
-            :disabled="!catalogQuery && !catalogAdapterFilter && catalogKindFilter === 'all'"
+            :disabled="!catalogQuery && catalogKindFilter === 'all'"
             @click="clearCatalogFilters"
           >
             Clear Filters
@@ -678,14 +622,14 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div v-if="filteredCatalogEntries.length" class="list" style="margin-top: 12px">
           <div
             v-for="entry in filteredCatalogEntries"
-            :key="makeEntryKey(entry.adapter_id || entry.provider_id || '', entry.model_id, entry.kind)"
+            :key="makeEntryKey(entry.model_id, entry.kind)"
             class="list-item"
             :style="isEntrySelected(entry) ? 'border-color: var(--accent-color, #444);' : ''"
           >
             <div class="page-header" style="align-items: flex-start">
               <div>
                 <div>
-                  <strong>{{ entry.adapter_id || entry.provider_id }}/{{ entry.model_id }}</strong>
+                  <strong>{{ entry.model_id }}</strong>
                 </div>
                 <div class="muted">
                   {{ entry.display_name || 'Unnamed model' }} · {{ entry.kind }} ·
@@ -694,9 +638,6 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                 <div v-if="entry.kind === 'custom'" class="muted">Custom entry saved for this model.</div>
                 <div v-if="entry.family || entry.lifecycle" class="muted">
                   {{ entry.family || 'family unset' }} · {{ entry.lifecycle || 'lifecycle unset' }}
-                </div>
-                <div v-if="entry.default_model_for_adapter || entry.default_model_for_provider" class="muted">
-                  Adapter default: {{ entry.default_model_for_adapter || entry.default_model_for_provider }}
                 </div>
                 <div v-if="entry.description" class="muted">{{ entry.description }}</div>
                 <div v-if="entry.context_window_tokens || entry.max_output_tokens" class="muted mono">
@@ -729,7 +670,6 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               <button class="button" :disabled="submitting" @click="editEntry(entry)">
                 {{ entry.kind === 'custom' ? 'Edit Custom Entry' : 'Create Custom Entry' }}
               </button>
-              <button class="button" :disabled="submitting" @click="setDefault(entry)">Set Default</button>
               <button
                 v-if="entry.kind === 'custom'"
                 class="button danger"

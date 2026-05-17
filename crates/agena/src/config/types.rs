@@ -52,6 +52,7 @@ impl ConfigResolution {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResolvedConfig {
+    pub default: DefaultConfig,
     pub tracing: TracingConfig,
     pub telemetry: agena_otel::TelemetryConfig,
     pub ui: UiConfig,
@@ -124,6 +125,39 @@ impl ResolvedConfig {
                 crate::plugins::storage::PluginKeyringSecretStore::system(root, true),
             ),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DefaultConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub agent: String,
+}
+
+impl Default for DefaultConfig {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            adapter: None,
+            model: None,
+            agent: "build".to_owned(),
+        }
+    }
+}
+
+impl DefaultConfig {
+    pub fn model_route(&self) -> Option<String> {
+        let adapter = self.adapter.as_deref()?.trim();
+        let model = self.model.as_deref()?.trim();
+        if adapter.is_empty() || model.is_empty() {
+            return None;
+        }
+        Some(format!("{adapter}/{model}"))
     }
 }
 

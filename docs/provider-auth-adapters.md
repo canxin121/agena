@@ -7,9 +7,15 @@
 当前配置结构是：
 
 ```text
+default
+├── provider
+├── adapter
+├── model
+└── agent
+
 provider
 ├── enabled
-├── default_model = "<adapter>/<model>"
+├── default_model = "<adapter>/<model>"  # optional provider-local route default
 ├── auth
 └── adapters
     └── <adapter>
@@ -24,9 +30,14 @@ provider
 对应 TOML：
 
 ```toml
+[default]
+provider = "openai"
+adapter = "openai"
+model = "gpt-5"
+agent = "build"
+
 [providers.openai]
 enabled = true
-default_model = "openai/gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -42,7 +53,8 @@ enabled = true
 
 关键约束：
 
-- `providers.<id>.default_model` 必须是 `"<adapter>/<model>"`
+- 全局默认 provider/adapter/model/agent 写在 `[default]`
+- `providers.<id>.default_model` 是 provider-local 默认路由；如果使用，必须是 `"<adapter>/<model>"`
 - adapter 不再有 `default_model`
 - model key 就是真实上游 model id，不再有 `target_model`
 - provider / adapter / model 三层都支持 `enabled`
@@ -149,7 +161,8 @@ provider 内部可见模型名统一是：
 
 因此：
 
-- provider 默认模型字段：`default_model = "openai/gpt-5"`
+- 全局默认字段：`[default] provider = "openai"`, `adapter = "openai"`, `model = "gpt-5"`
+- provider-local 默认路由：`default_model = "openai/gpt-5"`
 - CLI/API 对外默认模型 ref：`openai/openai/gpt-5`
 
 ## enabled 语义
@@ -315,6 +328,12 @@ auth 决定身份来源；adapter 决定协议。
 ### OpenAI API
 
 ```toml
+[default]
+provider = "openai"
+adapter = "openai"
+model = "gpt-5"
+agent = "build"
+
 [providers.openai]
 default_model = "openai/gpt-5"
 

@@ -2892,11 +2892,7 @@ impl AgenaCli {
         let resolution = snapshot.config_resolution();
         let mut agents = snapshot.agents().list_descriptors();
         agents.sort_by(|left, right| left.name.cmp(&right.name));
-        let default_agent = resolution
-            .config
-            .runtime
-            .default_agent
-            .clone()
+        let default_agent = Some(resolution.config.default.agent.clone())
             .filter(|name| agents.iter().any(|entry| entry.name == *name))
             .or_else(|| {
                 agents
@@ -3878,6 +3874,12 @@ fn resolve_run_options(
 fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
     let snapshot = runtime.current_snapshot();
     let registry = snapshot.provider_registry();
+    let default_config = &snapshot.config_resolution().config.default;
+    if let Some(provider_id) = default_config.provider.as_deref() {
+        let model_route = default_config.model_route();
+        return registry.resolve_model_target(provider_id, model_route.as_deref());
+    }
+
     let mut providers = registry.provider_ids();
     providers.sort();
     let provider_id = providers

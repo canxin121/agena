@@ -576,7 +576,7 @@ Provider models:
 | POST   | `/api/v1/model-catalog/refresh`       | refresh remote/fallback catalog and re-merge local overrides |
 | PUT    | `/api/v1/model-catalog/entries`       | create or update a local catalog override                    |
 | DELETE | `/api/v1/model-catalog/entries`       | delete a local catalog override                              |
-| POST   | `/api/v1/model-catalog/default-model` | set adapter default model in the local catalog               |
+| POST   | `/api/v1/model-catalog/default-model` | deprecated; returns bad request                              |
 
 Model catalog response:
 
@@ -588,13 +588,10 @@ Model catalog response:
   "last_successful_source": "remote",
   "entries": [
     {
-      "adapter_id": "openai",
-      "provider_id": "openai",
       "model_id": "gpt-5",
       "kind": "official",
       "source": "remote",
       "source_label": "remote catalog",
-      "default_model_for_adapter": "gpt-5",
       "display_name": "GPT-5",
       "family": "gpt",
       "lifecycle": "active",
@@ -618,8 +615,6 @@ Model catalog response:
       }
     },
     {
-      "adapter_id": "openai",
-      "provider_id": "openai",
       "model_id": "gpt-5",
       "kind": "custom",
       "source": "custom",
@@ -630,15 +625,13 @@ Model catalog response:
 }
 ```
 
-`entries` 同时包含官方条目和本地 override，按 `adapter_id + model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。`provider_id` 和 `default_model_for_provider` 是旧客户端兼容字段；新客户端应使用 `adapter_id` 和 `default_model_for_adapter`。
+`entries` 同时包含官方条目和本地 override，按 `model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。
 
 Create/update local override:
 
 ```json
 {
-  "adapter_id": "openai",
   "model_id": "gpt-5",
-  "set_default_for_adapter": true,
   "family": "gpt",
   "lifecycle": "active",
   "context_window_tokens": 400000,
@@ -661,20 +654,10 @@ Create/update local override:
 Delete local override query:
 
 ```text
-adapter_id=openai
 model_id=gpt-5
 ```
 
-Set adapter default:
-
-```json
-{
-  "adapter_id": "openai",
-  "model_id": "gpt-5"
-}
-```
-
-For compatibility, write/delete/default requests still accept `provider_id` and `set_default_for_provider`, but those map to the adapter id.
+For compatibility, write/delete requests may still include legacy `adapter_id` or `provider_id`, but catalog storage is model-level.
 
 ### Workspaces
 

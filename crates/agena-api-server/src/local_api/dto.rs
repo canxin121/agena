@@ -145,6 +145,7 @@ pub enum ModelCatalogSourceKind {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelCatalogEntryResource {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub adapter_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provider_id: String,
@@ -153,10 +154,6 @@ pub struct ModelCatalogEntryResource {
     pub source: ModelCatalogSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_model_for_adapter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_model_for_provider: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_local_override: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -217,8 +214,6 @@ impl ModelCatalogEntryResource {
             kind,
             source,
             source_label,
-            default_model_for_adapter: value.default_model_for_adapter.clone(),
-            default_model_for_provider: value.default_model_for_adapter,
             has_local_override: value.has_local_override,
             display_name: value.display_name,
             family: value.family,
@@ -239,10 +234,6 @@ pub struct ModelCatalogEntryWriteRequest {
     #[serde(default)]
     pub provider_id: Option<String>,
     pub model_id: String,
-    #[serde(default)]
-    pub set_default_for_adapter: bool,
-    #[serde(default)]
-    pub set_default_for_provider: bool,
     #[serde(flatten)]
     pub definition: CatalogModelDefinition,
 }
@@ -692,8 +683,6 @@ pub struct ProviderSummaryResource {
     pub provider_id: String,
     pub default_model: String,
     pub default_model_ref: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_default_model: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
 }

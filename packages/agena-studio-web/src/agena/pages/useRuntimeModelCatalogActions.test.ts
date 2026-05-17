@@ -44,8 +44,6 @@ function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderMo
 
 function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   return {
-    adapter_id: 'openai',
-    provider_id: 'openai',
     model_id: 'gpt-5',
     kind: 'official',
     source: 'remote',
@@ -117,7 +115,6 @@ describe('useRuntimeModelCatalogActions', () => {
     expect(draft).toEqual({
       adapter_id: 'openai',
       model_id: 'gpt-5',
-      set_default_for_adapter: false,
       family: 'gpt',
       lifecycle: 'active',
       context_window_tokens: '400000',
@@ -231,7 +228,6 @@ describe('useRuntimeModelCatalogActions', () => {
     const actions = useRuntimeModelCatalogActions(state, {
       deleteModelCatalogEntry: async () => emptyResponse,
       refreshModelCatalog: async () => emptyResponse,
-      setModelCatalogProviderDefault: async () => emptyResponse,
       upsertModelCatalogEntry: async () => {
         calls.push('upsert')
         return emptyResponse
@@ -272,7 +268,6 @@ describe('useRuntimeModelCatalogActions', () => {
       {
         deleteModelCatalogEntry: async () => ({ remote_url: '', fallback_url: '', entries: [] }),
         refreshModelCatalog: async () => ({ remote_url: '', fallback_url: '', entries: [] }),
-        setModelCatalogProviderDefault: async () => ({ remote_url: '', fallback_url: '', entries: [] }),
         upsertModelCatalogEntry: async (request) => {
           capturedRequest = request
           calls.push('upsert')
@@ -289,9 +284,7 @@ describe('useRuntimeModelCatalogActions', () => {
 
     expect(calls).toEqual(['upsert', 'load'])
     expect(capturedRequest).toEqual({
-      adapter_id: 'openai',
       model_id: 'gpt-5',
-      set_default_for_adapter: false,
       family: 'gpt',
       lifecycle: 'active',
       context_window_tokens: 400000,
@@ -309,6 +302,6 @@ describe('useRuntimeModelCatalogActions', () => {
       },
     })
     expect(actionError.value).toBe('')
-    expect(actionMessage.value).toBe('Saved catalog entry openai/gpt-5.')
+    expect(actionMessage.value).toBe('Saved catalog entry gpt-5.')
   })
 })

@@ -63,11 +63,13 @@ async fn run_options_to_core(
     options: &RunOptions,
 ) -> Result<agena::session::SessionRunOptions, ServerError> {
     let snapshot = state.runtime().current_snapshot();
+    let default_model = configured_default_model(&snapshot)?;
     let manager = state.session_manager()?;
     state
         .service()
         .resolve_run_options(
             snapshot.provider_registry().as_ref(),
+            default_model,
             manager.as_ref(),
             session_id,
             SessionRunOptionsRequest {
@@ -82,6 +84,21 @@ async fn run_options_to_core(
         )
         .await
         .map_err(server_error_from_http)
+}
+
+fn configured_default_model(
+    snapshot: &agena::runtime::RuntimeSnapshot,
+) -> Result<Option<agena::model::ModelRef>, ServerError> {
+    let default = &snapshot.config_resolution().config.default;
+    let Some(provider_id) = default.provider.as_deref() else {
+        return Ok(None);
+    };
+    let registry = snapshot.provider_registry();
+    let model_route = default.model_route();
+    registry
+        .resolve_model_target(provider_id, model_route.as_deref())
+        .map(Some)
+        .map_err(ServerError::Core)
 }
 
 fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
@@ -229,8 +246,6 @@ fn model_catalog_entry_from_http(
             }
         },
         source_label: value.source_label,
-        default_model_for_adapter: value.default_model_for_adapter,
-        default_model_for_provider: value.default_model_for_provider,
         has_local_override: value.has_local_override,
         display_name: value.display_name,
         family: value.family,
@@ -502,11 +517,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     let agents = {
         let mut entries = snapshot.agents().list_descriptors();
         entries.sort_by(|left, right| left.name.cmp(&right.name));
-        let default_agent = resolution
-            .config
-            .runtime
-            .default_agent
-            .clone()
+        let default_agent = Some(resolution.config.default.agent.trim().to_owned())
             .filter(|name| entries.iter().any(|entry| entry.name == *name))
             .or_else(|| {
                 entries
@@ -611,7 +622,6 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
 fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource> {
     let snapshot = state.runtime().current_snapshot();
     let registry = snapshot.provider_registry();
-    let catalog_snapshot = snapshot.model_catalog_snapshot();
     let mut providers = registry
         .provider_ids()
         .into_iter()
@@ -622,16 +632,6 @@ fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource> {
                     .config
                     .providers
                     .get(provider_id.as_str());
-                let adapter_ids = provider_config
-                    .map(|provider| {
-                        provider
-                            .adapters
-                            .iter()
-                            .filter(|(_, adapter)| adapter.enabled)
-                            .map(|(adapter_id, _)| adapter_id.clone())
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
                 let adapters = provider_config
                     .map(|provider| {
                         provider
@@ -660,9 +660,6 @@ fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource> {
                 ProviderSummaryResource {
                     default_model_ref: format!("{provider_id}/{}", provider.default_model()),
                     default_model: provider.default_model().to_string(),
-                    catalog_default_model: catalog_snapshot
-                        .merged_provider_for_adapters(provider_id.as_str(), &adapter_ids)
-                        .and_then(|catalog_provider| catalog_provider.default_model),
                     adapters,
                     provider_id,
                 }

@@ -1090,6 +1090,7 @@ impl ApiService {
     pub async fn resolve_run_options(
         &self,
         provider_registry: &ProviderRegistry,
+        default_model: Option<ModelRef>,
         manager: &SessionManager,
         session_id: i64,
         request: SessionRunOptionsRequest,
@@ -1106,7 +1107,7 @@ impl ApiService {
                     ensure_provider_exists(provider_registry, &model)?;
                     model
                 }
-                None => default_model_from_registry(provider_registry).ok_or_else(|| {
+                None => default_model.or_else(|| default_model_from_registry(provider_registry)).ok_or_else(|| {
                     ApiError::bad_request(
                         "model is required when the session has no previous model and multiple providers are configured",
                     )

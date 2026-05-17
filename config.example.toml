@@ -16,12 +16,20 @@ filter = "info"
 # the keyring is unavailable.
 store_backend = "auto"
 
-# At least one provider must be configured. Pick the LLM endpoint you
-# have credentials for and remove the others. These examples use the
-# preferred `provider + auth + adapters` layout.
+[default]
+# Global defaults for new sessions and command invocations. `model` is the
+# backend-visible model id; `adapter` only selects the protocol route used by
+# the provider.
+provider = "anthropic"
+adapter = "anthropic"
+model = "claude-sonnet-4-6"
+agent = "build"
+
+# At least one provider must be configured. Pick the LLM endpoint you have
+# credentials for and remove the others. These examples use the preferred
+# `provider + auth + adapters` layout.
 
 [providers.anthropic]
-default_model = "anthropic/claude-sonnet-4-6"
 
 [providers.anthropic.auth]
 mode = "api"
@@ -32,7 +40,6 @@ api_key_env = "ANTHROPIC_API_KEY"
 enabled = true
 
 # [providers.openai]
-# default_model = "openai/gpt-5.5"
 #
 # [providers.openai.auth]
 # mode = "api"
@@ -43,7 +50,6 @@ enabled = true
 # enabled = true
 
 # [providers.gemini]
-# default_model = "gemini/gemini-2.5-pro"
 #
 # [providers.gemini.auth]
 # mode = "api"
@@ -54,7 +60,6 @@ enabled = true
 # enabled = true
 #
 # [providers."github-copilot"]
-# default_model = "openai/gpt-4o-mini"
 #
 # [providers."github-copilot".auth]
 # mode = "credential"
@@ -70,7 +75,6 @@ enabled = true
 # enabled = true
 
 # [providers.atomgit]
-# default_model = "openai/Kimi-K2-Instruct"
 #
 # [providers.atomgit.auth]
 # mode = "credential"
@@ -90,7 +94,6 @@ enabled = true
 # Shared gateway example: one auth endpoint, multiple protocol adapters.
 #
 # [providers.shared]
-# default_model = "openai/gpt-4.1-mini"
 #
 # [providers.shared.auth]
 # mode = "api"
@@ -108,14 +111,9 @@ enabled = true
 # enabled = true
 
 [runtime]
-# Set `default_agent` explicitly when you want a different primary persona for
-# new root sessions.
-default_agent = "build"
-
-# Agena also loads an adapter-first model catalog for model picker metadata,
-# adapter defaults, and local workspace overrides. Defaults point at this
-# repository's `catalog/model-catalog.json` raw file and fall back to the
-# bundled copy.
+# Agena also loads a model-first catalog for model picker metadata and local
+# workspace overrides. Defaults point at this repository's
+# `catalog/model-catalog.json` raw file and fall back to the bundled copy.
 #
 # [runtime.model_catalog]
 # remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"

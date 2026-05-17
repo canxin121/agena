@@ -9,7 +9,6 @@ import type {
 import {
   deleteModelCatalogEntry,
   refreshModelCatalog,
-  setModelCatalogProviderDefault,
   upsertModelCatalogEntry,
 } from '../lib/agenaApi'
 
@@ -23,21 +22,18 @@ export type RuntimeModelCatalogActionsInput = {
 export type RuntimeModelCatalogActionsDeps = {
   deleteModelCatalogEntry: typeof deleteModelCatalogEntry
   refreshModelCatalog: typeof refreshModelCatalog
-  setModelCatalogProviderDefault: typeof setModelCatalogProviderDefault
   upsertModelCatalogEntry: typeof upsertModelCatalogEntry
 }
 
 const defaultDeps: RuntimeModelCatalogActionsDeps = {
   deleteModelCatalogEntry,
   refreshModelCatalog,
-  setModelCatalogProviderDefault,
   upsertModelCatalogEntry,
 }
 
 export type ModelCatalogEditableDraft = {
   adapter_id: string
   model_id: string
-  set_default_for_adapter: boolean
   family: string
   lifecycle: string
   context_window_tokens: string
@@ -156,7 +152,6 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
   return {
     adapter_id: adapterId,
     model_id: modelId,
-    set_default_for_adapter: false,
     family: '',
     lifecycle: '',
     context_window_tokens: '',
@@ -209,7 +204,6 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
   return {
     adapter_id: entry.adapter_id || entry.provider_id || '',
     model_id: entry.model_id,
-    set_default_for_adapter: (entry.default_model_for_adapter || entry.default_model_for_provider) === entry.model_id,
     family: String(entry.family || ''),
     lifecycle: String(entry.lifecycle || ''),
     context_window_tokens: entry.context_window_tokens == null ? '' : String(entry.context_window_tokens),
@@ -231,7 +225,6 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
   return {
     adapter_id: adapterId,
     model_id: route.modelId,
-    set_default_for_adapter: false,
     family: String(model.metadata?.family || ''),
     lifecycle: String(model.metadata?.lifecycle || ''),
     context_window_tokens:
@@ -254,9 +247,8 @@ export function findCatalogEntryForProviderModel(
   model: ProviderModel,
 ): ModelCatalogEntry | null {
   const route = splitProviderModelRoute(model.id)
-  const adapterId = route.adapterId || String(model.provider_id || '').trim()
   const matches = entries.filter(
-    (entry) => (entry.adapter_id || entry.provider_id) === adapterId && entry.model_id === route.modelId,
+    (entry) => entry.model_id === route.modelId,
   )
   return matches.find((entry) => entry.kind === 'custom') || matches[0] || null
 }
@@ -315,9 +307,7 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
   if (draft.temperature_supported) supportedFeatures.push('temperature')
 
   return {
-    adapter_id: String(draft.adapter_id || '').trim(),
     model_id: String(draft.model_id || '').trim(),
-    set_default_for_adapter: Boolean(draft.set_default_for_adapter),
     family: normalizeOptionalText(draft.family),
     lifecycle: normalizeOptionalText(draft.lifecycle),
     context_window_tokens: normalizeOptionalInteger(draft.context_window_tokens),
@@ -334,8 +324,6 @@ export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditabl
   delete request.adapter_id
   delete request.provider_id
   delete request.model_id
-  delete request.set_default_for_adapter
-  delete request.set_default_for_provider
 
   for (const [key, value] of Object.entries({ ...request })) {
     const isEmptyObject =
@@ -377,43 +365,27 @@ export function useRuntimeModelCatalogActions(
     input.actionError.value = ''
     try {
       const request = buildModelCatalogWriteRequest(draft)
-      if (!request.adapter_id || !request.model_id) {
-        input.actionError.value = 'adapter_id and model_id are required.'
+      if (!request.model_id) {
+        input.actionError.value = 'model_id is required.'
         return
       }
 
       const response = await deps.upsertModelCatalogEntry(request)
       replaceEntries(response.entries ?? [])
-      input.actionMessage.value = `Saved catalog entry ${request.adapter_id}/${request.model_id}.`
+      input.actionMessage.value = `Saved catalog entry ${request.model_id}.`
       await input.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     }
   }
 
-  async function deleteCatalogEntryAction(adapterId: string, modelId: string) {
+  async function deleteCatalogEntryAction(modelId: string, adapterId = '') {
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      const response = await deps.deleteModelCatalogEntry(adapterId, modelId)
+      const response = await deps.deleteModelCatalogEntry(modelId, adapterId)
       replaceEntries(response.entries ?? [])
-      input.actionMessage.value = `Deleted local catalog override ${adapterId}/${modelId}.`
-      await input.load()
-    } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
-    }
-  }
-
-  async function setCatalogDefaultModelAction(adapterId: string, modelId: string) {
-    input.actionMessage.value = ''
-    input.actionError.value = ''
-    try {
-      const response = await deps.setModelCatalogProviderDefault({
-        adapter_id: adapterId,
-        model_id: modelId,
-      })
-      replaceEntries(response.entries ?? [])
-      input.actionMessage.value = `Set catalog default for ${adapterId} to ${modelId}.`
+      input.actionMessage.value = `Deleted local catalog override ${modelId}.`
       await input.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
@@ -424,6 +396,5 @@ export function useRuntimeModelCatalogActions(
     deleteCatalogEntryAction,
     refreshCatalogAction,
     saveCatalogEntryAction,
-    setCatalogDefaultModelAction,
   }
 }

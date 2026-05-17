@@ -38,6 +38,17 @@ fn cli_override_parser_supports_provider_fields() {
 }
 
 #[test]
+fn cli_override_parser_supports_default_fields() {
+    let parsed = "default.model=gpt-5-mini"
+        .parse::<ConfigOverride>()
+        .expect("override should parse");
+    assert!(matches!(
+        parsed,
+        ConfigOverride::DefaultModel(value) if value == "gpt-5-mini"
+    ));
+}
+
+#[test]
 fn cli_override_parser_supports_provider_auth_endpoint_layout() {
     let parsed = "providers.shared.auth.endpoint_layout=provider_routed"
         .parse::<ConfigOverride>()
@@ -1924,6 +1935,7 @@ todo_write = "allow"
         resolution.config.runtime.default_agent.as_deref(),
         Some("planner")
     );
+    assert_eq!(resolution.config.default.agent, "planner");
     let planner = resolution
         .config
         .agents
@@ -2044,6 +2056,55 @@ enabled = true
     assert_eq!(
         resolution.config.runtime.default_agent.as_deref(),
         Some("build")
+    );
+    assert_eq!(resolution.config.default.agent, "build");
+}
+
+#[test]
+fn default_section_sets_global_defaults_and_provider_route() {
+    let path = write_temp_config(
+        r#"
+[default]
+provider = "openai"
+adapter = "openai"
+model = "gpt-5"
+agent = "planner"
+
+[providers.openai]
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    assert_eq!(
+        resolution.config.default.provider.as_deref(),
+        Some("openai")
+    );
+    assert_eq!(resolution.config.default.adapter.as_deref(), Some("openai"));
+    assert_eq!(resolution.config.default.model.as_deref(), Some("gpt-5"));
+    assert_eq!(resolution.config.default.agent, "planner");
+    assert_eq!(
+        resolution
+            .config
+            .providers
+            .get("openai")
+            .expect("provider should resolve")
+            .default_model,
+        "openai/gpt-5"
     );
 }
 

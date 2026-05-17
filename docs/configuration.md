@@ -17,8 +17,9 @@ agena config validate
 `config.example.toml` 展示了最小启动面：
 
 - `[tracing]`: 日志过滤。
+- `[default]`: 默认 provider、adapter、model 和 agent。
 - `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
-- `[runtime]`: 默认 agent。
+- `[runtime]`: runtime HTTP、retry、reload、cache、catalog 等行为参数。
 - `[agents.<name>]`: 自定义 agent。
 - `[permission]`: 路径、网络、tool 权限。
 
@@ -85,6 +86,10 @@ agena diagnostics
 tracing.filter
 tracing.database_level
 ui.locale
+default.provider
+default.adapter
+default.model
+default.agent
 runtime.provider_http.timeout_secs
 runtime.provider_http.connect_timeout_secs
 runtime.request_retry.max_retries
@@ -115,7 +120,9 @@ providers.<id>.enabled
 ```bash
 agena \
   --set tracing.filter=debug \
-  --set providers.openai.default_model=gpt-4.1-mini \
+  --set default.provider=openai \
+  --set default.adapter=openai \
+  --set default.model=gpt-4.1-mini \
   config resolve
 ```
 
@@ -181,7 +188,7 @@ no
 现在只支持两种方式：
 
 - 在配置文件里显式写 canonical 结构。
-- 通过 `--set providers.<id>.default_model=...` 或 `--set providers.<id>.auth.api_key_env=...` 这类 canonical override 设置。
+- 通过 `--set default.model=...`、`--set providers.<id>.default_model=...` 或 `--set providers.<id>.auth.api_key_env=...` 这类 canonical override 设置。
 
 ### 数据库、Studio、TUI
 
@@ -283,9 +290,13 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 ## Runtime
 
 ```toml
-[runtime]
-default_agent = "build"
+[default]
+provider = "openai"
+adapter = "openai"
+model = "gpt-5"
+agent = "build"
 
+[runtime]
 [runtime.provider_http]
 timeout_secs = 120
 connect_timeout_secs = 15
@@ -318,11 +329,11 @@ fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/m
 cache_max_age_secs = 86400
 ```
 
-默认 agent 是 `build`。即使省略 `runtime.default_agent`，解析后的默认值也是 `build`。
+全局默认项集中放在 `[default]`。`provider` 是默认逻辑 provider，`adapter` 是默认协议路由，`model` 是 backend-visible model id，`agent` 是新 root session 的默认 agent。默认 agent 是 `build`；旧的 `runtime.default_agent` 仍可读取作为兼容回退，但新配置应使用 `default.agent`。
 
-Model catalog 按 adapter 管理模型元数据、adapter 默认模型和本地模型覆盖；catalog 文件里的 model key 是真实 model id，例如 `adapters.openai.models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由。默认 `remote_url` 指向本仓库的 `catalog/model-catalog.json` GitHub raw 文件；`fallback_url` 是远程失败时的备用地址，也默认指向同一个本仓库 raw catalog；official catalog 会缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`，本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。
+Model catalog 按 model 管理元数据和本地模型覆盖，不再保存 default model。catalog 文件里的 model key 是真实 model id，例如 `models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由，也不再绑定某个 adapter。默认 `remote_url` 指向本仓库的 `catalog/model-catalog.json` GitHub raw 文件；`fallback_url` 是远程失败时的备用地址，也默认指向同一个本仓库 raw catalog；official catalog 会缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`，本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。
 
-运行时 provider 仍然会把启用的 adapter 模型投影成 provider-local route，例如 `openai/gpt-5`，因为一个 provider 可以同时挂多个 adapter。`providers.<id>.default_model` 也仍然使用 `"<adapter>/<model>"` 来选择 provider 内部路由。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存/删除 adapter-level 本地 override，以及设置 adapter catalog 默认模型。Studio Settings / Providers 页面可以创建 provider，查看 provider 已启用 adapter 和 live models，把 catalog model 复制到某个 provider 的 adapter 下，也可以实时手动添加或修改 provider-local adapter model。
+运行时 provider 仍然会把启用的 adapter 模型投影成 provider-local route，例如 `openai/gpt-5`，因为一个 provider 可以同时挂多个 adapter。`providers.<id>.default_model` 仍可用作 provider 内部默认路由，并且继续使用 `"<adapter>/<model>"`；如果该 provider 正好是 `default.provider` 且省略了 provider-local `default_model`，解析器会用 `default.adapter/default.model` 补出 provider 默认路由。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存/删除 model-level 本地 override。Studio Settings / Providers 页面可以创建 provider，查看 provider 已启用 adapter 和 live models，把任意 catalog model 复制到某个 provider 的目标 adapter 下，也可以实时手动添加或修改 provider-local adapter model。
 
 Provider 的 live `/models` 列表还有独立磁盘缓存，用于减少启动 UI 或打开模型选择器时的 provider API 请求。默认位置是 `~/.agena/provider-models`，默认 TTL 是 15 分钟；可以通过 `AGENA_PROVIDER_MODELS_CACHE_DIR`、`AGENA_PROVIDER_MODELS_CACHE_TTL_SECS` 覆盖。如果 live `/models` 请求失败且没有可用缓存，Agena 会尝试从 model catalog 派生列表；该回退地址可通过 `AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL` 覆盖。
 
@@ -344,9 +355,14 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是 `provider + a
 最小示例：
 
 ```toml
+[default]
+provider = "openai"
+adapter = "openai"
+model = "gpt-5"
+agent = "build"
+
 [providers.openai]
 enabled = true
-default_model = "openai/gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -369,7 +385,8 @@ enabled = true
 
 关键规则：
 
-- `providers.<id>.default_model` 必须写成 `"<adapter>/<model>"`。
+- 全局默认 provider/adapter/model/agent 写在 `[default]`。
+- `providers.<id>.default_model` 是 provider-local 默认路由；如果使用，必须写成 `"<adapter>/<model>"`。
 - adapter 不再有 `default_model`。
 - model key 就是真实 model id，不再有 `target_model`。
 - `enabled` 可挂在 provider / adapter / model 三层。

@@ -329,7 +329,7 @@ fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/m
 cache_max_age_secs = 86400
 ```
 
-全局默认项集中放在 `[default]`。`provider` 是默认逻辑 provider，`adapter` 是默认协议路由，`model` 是 backend-visible model id，`agent` 是新 root session 的默认 agent。默认 agent 是 `build`；旧的 `runtime.default_agent` 仍可读取作为兼容回退，但新配置应使用 `default.agent`。
+全局默认项集中放在 `[default]`。`provider` 是默认逻辑 provider，`adapter` 是默认协议路由，`model` 是 backend-visible model id，`agent` 是新 root session 的默认 agent；未配置时默认 agent 是 `build`。
 
 Model catalog 按 model 管理元数据和本地模型覆盖，不再保存 default model。catalog 文件里的 model key 是真实 model id，例如 `models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由，也不再绑定某个 adapter。默认 `remote_url` 指向本仓库的 `catalog/model-catalog.json` GitHub raw 文件；`fallback_url` 是远程失败时的备用地址，也默认指向同一个本仓库 raw catalog；official catalog 会缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`，本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。
 

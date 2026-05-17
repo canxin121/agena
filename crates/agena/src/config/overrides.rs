@@ -69,9 +69,7 @@ impl FromStr for ConfigOverride {
             "default.provider" => Ok(Self::DefaultProvider(raw_value.to_owned())),
             "default.adapter" => Ok(Self::DefaultAdapter(raw_value.to_owned())),
             "default.model" => Ok(Self::DefaultModel(raw_value.to_owned())),
-            "default.agent" | "runtime.default_agent" => {
-                Ok(Self::DefaultAgent(raw_value.to_owned()))
-            }
+            "default.agent" => Ok(Self::DefaultAgent(raw_value.to_owned())),
             "runtime.provider_http.timeout_secs" => Ok(Self::ProviderHttpTimeoutSecs(
                 parse_numeric(raw_value, key)?,
             )),

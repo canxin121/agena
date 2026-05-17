@@ -227,10 +227,6 @@ pub enum ModelCatalogSourceKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogEntryResource {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub adapter_id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub provider_id: String,
     pub model_id: String,
     pub kind: ModelCatalogEntryKind,
     pub source: ModelCatalogSourceKind,
@@ -258,10 +254,6 @@ pub struct ModelCatalogEntryResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogEntryWriteRequest {
-    #[serde(default)]
-    pub adapter_id: Option<String>,
-    #[serde(default)]
-    pub provider_id: Option<String>,
     pub model_id: String,
     #[serde(flatten)]
     pub definition: CatalogModelDefinition,

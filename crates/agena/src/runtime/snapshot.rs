@@ -373,7 +373,7 @@ impl RuntimeSnapshot {
         let Some(provider_record) = self
             .services
             .model_catalog
-            .effective_provider_record(provider_id, &adapter_ids)
+            .effective_provider_record(&adapter_ids)
         else {
             return Ok(models);
         };

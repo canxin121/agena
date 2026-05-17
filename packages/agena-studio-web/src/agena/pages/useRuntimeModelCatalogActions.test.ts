@@ -72,7 +72,6 @@ function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCa
 describe('useRuntimeModelCatalogActions', () => {
   test('createModelCatalogDraftFromEntry hydrates model variants for editing', () => {
     const entry = sampleCatalogEntry({
-      provider_id: 'anthropic',
       model_id: 'claude-sonnet-4-6',
       display_name: 'Claude Sonnet 4.6',
       variants: {

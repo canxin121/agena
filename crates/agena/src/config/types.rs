@@ -227,8 +227,6 @@ pub struct RuntimeConfig {
     pub reload: RuntimeReloadConfig,
     pub janitor: RuntimeJanitorConfig,
     pub session_cache: SessionCacheConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_agent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

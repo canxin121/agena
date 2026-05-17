@@ -88,31 +88,14 @@ pub struct ModelCatalogProviderRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct ModelCatalogAdapterRecord {
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub models: BTreeMap<String, CatalogModelDefinition>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ModelCatalogDocument {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, CatalogModelDefinition>,
-    /// Legacy adapter-rooted catalog shape. New catalog files should use
-    /// `models`; this stays readable so existing remote caches and local
-    /// custom catalogs can be migrated losslessly at runtime.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapters: BTreeMap<String, ModelCatalogAdapterRecord>,
-    /// Legacy provider-rooted catalog shape. New catalog files should use
-    /// `models`; this stays readable so existing remote caches and local
-    /// custom catalogs can be migrated losslessly at runtime.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub providers: BTreeMap<String, ModelCatalogProviderRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalogEntryRecord {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub adapter_id: String,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -149,113 +132,16 @@ impl ModelCatalogEntryRecord {
     }
 }
 
-impl ModelCatalogAdapterRecord {
-    fn merge_from(&mut self, other: &ModelCatalogAdapterRecord) {
-        for (model_id, model) in &other.models {
-            self.models.insert(model_id.clone(), model.clone());
-        }
-    }
-}
-
 impl ModelCatalogDocument {
     pub(crate) fn model_ids(&self) -> BTreeSet<String> {
-        let mut model_ids = BTreeSet::new();
-        model_ids.extend(self.models.keys().cloned());
-        for adapter in self.adapters.values() {
-            model_ids.extend(adapter.models.keys().cloned());
-        }
-        for (legacy_provider_id, provider) in &self.providers {
-            for model_id in provider.models.keys() {
-                let (_, model_id) = split_catalog_adapter_model_ref(legacy_provider_id, model_id);
-                if !model_id.is_empty() {
-                    model_ids.insert(model_id);
-                }
-            }
-        }
-        model_ids
+        self.models.keys().cloned().collect()
     }
 
     pub(crate) fn model_record(&self) -> ModelCatalogProviderRecord {
-        let mut record = ModelCatalogProviderRecord {
+        ModelCatalogProviderRecord {
             models: self.models.clone(),
-        };
-
-        for adapter in self.adapters.values() {
-            for (model_id, definition) in &adapter.models {
-                record
-                    .models
-                    .entry(model_id.clone())
-                    .or_insert_with(|| definition.clone());
-            }
-        }
-
-        for (legacy_provider_id, provider) in &self.providers {
-            for (legacy_model_id, definition) in &provider.models {
-                let (_, model_id) =
-                    split_catalog_adapter_model_ref(legacy_provider_id, legacy_model_id);
-                if model_id.is_empty() {
-                    continue;
-                }
-                record
-                    .models
-                    .entry(model_id)
-                    .or_insert_with(|| definition.clone());
-            }
-        }
-
-        record
-    }
-
-    pub(crate) fn adapter_ids(&self) -> BTreeSet<String> {
-        let mut adapter_ids = BTreeSet::new();
-        adapter_ids.extend(self.adapters.keys().cloned());
-        for (legacy_provider_id, provider) in &self.providers {
-            for model_id in provider.models.keys() {
-                let (adapter_id, _) = split_catalog_adapter_model_ref(legacy_provider_id, model_id);
-                if !adapter_id.is_empty() {
-                    adapter_ids.insert(adapter_id);
-                }
-            }
-        }
-        adapter_ids
-    }
-
-    pub(crate) fn adapter_record(&self, adapter_id: &str) -> Option<ModelCatalogAdapterRecord> {
-        let mut record = self.adapters.get(adapter_id).cloned().unwrap_or_default();
-
-        for (legacy_provider_id, provider) in &self.providers {
-            for (legacy_model_id, definition) in &provider.models {
-                let (model_adapter_id, model_id) =
-                    split_catalog_adapter_model_ref(legacy_provider_id, legacy_model_id);
-                if model_adapter_id != adapter_id || model_id.is_empty() {
-                    continue;
-                }
-                record
-                    .models
-                    .entry(model_id)
-                    .or_insert_with(|| definition.clone());
-            }
-        }
-
-        (!record.models.is_empty()).then_some(record)
-    }
-
-    fn legacy_provider_record(&self, provider_id: &str) -> Option<ModelCatalogProviderRecord> {
-        self.providers.get(provider_id).cloned()
-    }
-}
-
-fn split_catalog_adapter_model_ref(fallback_adapter_id: &str, value: &str) -> (String, String) {
-    let value = value.trim();
-    if let Some((adapter_id, model_id)) = value.split_once('/') {
-        let adapter_id = adapter_id.trim().to_owned();
-        let model_id = model_id.trim().to_owned();
-        if !adapter_id.is_empty() && !model_id.is_empty() {
-            return (adapter_id, model_id);
         }
     }
-
-    (fallback_adapter_id.trim().to_owned(), value.to_owned())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,23 +186,8 @@ impl ModelCatalogSnapshot {
         merged
     }
 
-    pub fn merged_adapter(&self, adapter_id: &str) -> Option<ModelCatalogAdapterRecord> {
-        let official = self.official.adapter_record(adapter_id);
-        let custom = self.custom.adapter_record(adapter_id);
-        if official.is_none() && custom.is_none() {
-            return None;
-        }
-
-        let mut merged = official.unwrap_or_default();
-        if let Some(custom) = &custom {
-            merged.merge_from(custom);
-        }
-        Some(merged)
-    }
-
     pub fn merged_provider_for_adapters(
         &self,
-        provider_id: &str,
         adapter_ids: &[String],
     ) -> Option<ModelCatalogProviderRecord> {
         let mut merged = ModelCatalogProviderRecord::default();
@@ -330,40 +201,7 @@ impl ModelCatalogSnapshot {
             }
         }
 
-        for adapter_id in adapter_ids {
-            let Some(adapter_record) = self.merged_adapter(adapter_id.as_str()) else {
-                continue;
-            };
-            for (model_id, definition) in adapter_record.models {
-                merged
-                    .models
-                    .insert(format!("{adapter_id}/{model_id}"), definition);
-            }
-        }
-
-        if let Some(legacy_provider) = self.legacy_merged_provider(provider_id) {
-            for (model_id, definition) in legacy_provider.models {
-                merged.models.insert(model_id, definition);
-            }
-        }
-
         (!merged.models.is_empty()).then_some(merged)
-    }
-
-    fn legacy_merged_provider(&self, provider_id: &str) -> Option<ModelCatalogProviderRecord> {
-        let official = self.official.legacy_provider_record(provider_id);
-        let custom = self.custom.legacy_provider_record(provider_id);
-        if official.is_none() && custom.is_none() {
-            return None;
-        }
-
-        let mut merged = official.unwrap_or_default();
-        if let Some(custom) = custom {
-            for (model_id, definition) in custom.models {
-                merged.models.insert(model_id, definition);
-            }
-        }
-        Some(merged)
     }
 
     pub fn entries(&self) -> Vec<ModelCatalogEntryRecord> {
@@ -393,7 +231,6 @@ impl ModelCatalogSnapshot {
         has_local_override: bool,
     ) -> ModelCatalogEntryRecord {
         ModelCatalogEntryRecord {
-            adapter_id: String::new(),
             model_id: model_id.to_owned(),
             display_name: definition.display_name.clone(),
             has_local_override,
@@ -405,13 +242,6 @@ impl ModelCatalogSnapshot {
             variants: definition.variants.clone(),
             capabilities: definition.capabilities.clone(),
         }
-    }
-
-    pub fn adapter_ids(&self) -> Vec<String> {
-        let mut adapter_ids = BTreeSet::new();
-        adapter_ids.extend(self.official.adapter_ids());
-        adapter_ids.extend(self.custom.adapter_ids());
-        adapter_ids.into_iter().collect()
     }
 
     pub fn model_ids(&self) -> Vec<String> {
@@ -573,11 +403,9 @@ impl ModelCatalogService {
 
     pub fn effective_provider_record(
         &self,
-        provider_id: &str,
         adapter_ids: &[String],
     ) -> Option<ModelCatalogProviderRecord> {
-        self.snapshot()
-            .merged_provider_for_adapters(provider_id, adapter_ids)
+        self.snapshot().merged_provider_for_adapters(adapter_ids)
     }
 
     pub async fn refresh_if_stale_on_startup(&self) -> Result<ModelCatalogSnapshot, AppError> {
@@ -683,40 +511,6 @@ impl ModelCatalogService {
     pub fn remove_custom_entry(&self, model_id: &str) -> Result<ModelCatalogSnapshot, AppError> {
         let mut snapshot = self.snapshot();
         snapshot.custom.models.remove(model_id);
-
-        let mut empty_adapters = Vec::new();
-        for (adapter_id, adapter) in &mut snapshot.custom.adapters {
-            adapter.models.remove(model_id);
-            if adapter.models.is_empty() {
-                empty_adapters.push(adapter_id.clone());
-            }
-        }
-        for adapter_id in empty_adapters {
-            snapshot.custom.adapters.remove(adapter_id.as_str());
-        }
-
-        let mut empty_legacy_providers = Vec::new();
-        for (legacy_provider_id, provider) in &mut snapshot.custom.providers {
-            let legacy_keys = provider
-                .models
-                .keys()
-                .filter(|legacy_model_id| {
-                    let (_, legacy_model_name) =
-                        split_catalog_adapter_model_ref(legacy_provider_id, legacy_model_id);
-                    legacy_model_name == model_id
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            for legacy_key in legacy_keys {
-                provider.models.remove(legacy_key.as_str());
-            }
-            if provider.models.is_empty() {
-                empty_legacy_providers.push(legacy_provider_id.clone());
-            }
-        }
-        for provider_id in empty_legacy_providers {
-            snapshot.custom.providers.remove(provider_id.as_str());
-        }
         self.store.write_custom(&snapshot.custom)?;
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
@@ -915,44 +709,30 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn merged_adapter_prefers_custom_models() {
+    fn merged_models_prefers_custom_models() {
         let snapshot = ModelCatalogSnapshot {
             official: ModelCatalogDocument {
-                adapters: BTreeMap::from([(
-                    "openai".to_owned(),
-                    ModelCatalogAdapterRecord {
-                        models: BTreeMap::from([(
-                            "gpt-5".to_owned(),
-                            CatalogModelDefinition {
-                                display_name: Some("GPT-5".to_owned()),
-                                ..CatalogModelDefinition::default()
-                            },
-                        )]),
+                models: BTreeMap::from([(
+                    "gpt-5".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("GPT-5".to_owned()),
+                        ..CatalogModelDefinition::default()
                     },
                 )]),
-                ..ModelCatalogDocument::default()
             },
             custom: ModelCatalogDocument {
-                adapters: BTreeMap::from([(
-                    "openai".to_owned(),
-                    ModelCatalogAdapterRecord {
-                        models: BTreeMap::from([(
-                            "gpt-5-custom".to_owned(),
-                            CatalogModelDefinition {
-                                display_name: Some("GPT-5 Custom".to_owned()),
-                                ..CatalogModelDefinition::default()
-                            },
-                        )]),
+                models: BTreeMap::from([(
+                    "gpt-5-custom".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("GPT-5 Custom".to_owned()),
+                        ..CatalogModelDefinition::default()
                     },
                 )]),
-                ..ModelCatalogDocument::default()
             },
             ..ModelCatalogSnapshot::default()
         };
 
-        let merged = snapshot
-            .merged_adapter("openai")
-            .expect("adapter should exist");
+        let merged = snapshot.merged_models();
         assert!(merged.models.contains_key("gpt-5"));
         assert!(merged.models.contains_key("gpt-5-custom"));
     }
@@ -962,58 +742,44 @@ mod tests {
         let snapshot = ModelCatalogSnapshot {
             last_successful_source: Some(ModelCatalogEntrySourceKind::Remote),
             official: ModelCatalogDocument {
-                adapters: BTreeMap::from([(
-                    "anthropic".to_owned(),
-                    ModelCatalogAdapterRecord {
-                        models: BTreeMap::from([(
-                            "claude-sonnet".to_owned(),
-                            CatalogModelDefinition {
-                                display_name: Some("Claude Sonnet".to_owned()),
-                                capabilities: ModelCapabilityPatch {
-                                    reasoning: Some(CapabilitySupport::Supported),
-                                    ..ModelCapabilityPatch::default()
-                                },
-                                ..CatalogModelDefinition::default()
-                            },
-                        )]),
+                models: BTreeMap::from([(
+                    "claude-sonnet".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("Claude Sonnet".to_owned()),
+                        capabilities: ModelCapabilityPatch {
+                            reasoning: Some(CapabilitySupport::Supported),
+                            ..ModelCapabilityPatch::default()
+                        },
+                        ..CatalogModelDefinition::default()
                     },
                 )]),
-                ..ModelCatalogDocument::default()
             },
             custom: ModelCatalogDocument {
-                adapters: BTreeMap::from([(
-                    "anthropic".to_owned(),
-                    ModelCatalogAdapterRecord {
-                        models: BTreeMap::from([(
-                            "claude-sonnet".to_owned(),
-                            CatalogModelDefinition {
-                                display_name: Some("Claude Sonnet Local".to_owned()),
-                                variants: BTreeMap::from([(
-                                    "deep".to_owned(),
-                                    ConfiguredModelVariant {
-                                        display_name: Some("Deep".to_owned()),
-                                        description: None,
-                                        thinking: None,
-                                        disabled: false,
-                                    },
-                                )]),
-                                ..CatalogModelDefinition::default()
+                models: BTreeMap::from([(
+                    "claude-sonnet".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("Claude Sonnet Local".to_owned()),
+                        variants: BTreeMap::from([(
+                            "deep".to_owned(),
+                            ConfiguredModelVariant {
+                                display_name: Some("Deep".to_owned()),
+                                description: None,
+                                thinking: None,
+                                disabled: false,
                             },
                         )]),
+                        ..CatalogModelDefinition::default()
                     },
                 )]),
-                ..ModelCatalogDocument::default()
             },
             ..ModelCatalogSnapshot::default()
         };
 
         let entries = snapshot.entries();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].adapter_id, "");
         assert_eq!(entries[0].model_id, "claude-sonnet");
         assert_eq!(entries[0].display_name.as_deref(), Some("Claude Sonnet"));
         assert!(!entries[0].has_local_override);
-        assert_eq!(entries[1].adapter_id, "");
         assert_eq!(entries[1].model_id, "claude-sonnet");
         assert_eq!(
             entries[1].display_name.as_deref(),
@@ -1047,7 +813,7 @@ mod tests {
             custom_path: dir.path().join("model-catalog-custom.json"),
             cache_max_age_secs: 60,
         });
-        let cached_document = model_catalog_document("openai", "cached-model");
+        let cached_document = model_catalog_document("cached-model");
         store
             .write_cached_official(&CachedOfficialCatalog {
                 remote_url: store.config().remote_url.clone(),
@@ -1077,7 +843,7 @@ mod tests {
     async fn startup_refresh_updates_stale_cached_catalog() {
         let dir = tempdir().expect("tempdir should create");
         let mut server = Server::new_async().await;
-        let remote_document = model_catalog_document("openai", "fresh-model");
+        let remote_document = model_catalog_document("fresh-model");
         let remote_body =
             serde_json::to_string(&remote_document).expect("remote document should serialize");
         let remote_mock = server
@@ -1100,7 +866,7 @@ mod tests {
                 fallback_url: store.config().fallback_url.clone(),
                 fetched_at_unix_ms: now_unix_ms() - 5_000,
                 source: ModelCatalogEntrySourceKind::Remote,
-                document: model_catalog_document("openai", "stale-model"),
+                document: model_catalog_document("stale-model"),
             })
             .expect("stale cache should be written");
 
@@ -1120,21 +886,15 @@ mod tests {
         );
     }
 
-    fn model_catalog_document(adapter_id: &str, model_id: &str) -> ModelCatalogDocument {
+    fn model_catalog_document(model_id: &str) -> ModelCatalogDocument {
         ModelCatalogDocument {
-            adapters: BTreeMap::from([(
-                adapter_id.to_owned(),
-                ModelCatalogAdapterRecord {
-                    models: BTreeMap::from([(
-                        model_id.to_owned(),
-                        CatalogModelDefinition {
-                            display_name: Some(model_id.to_owned()),
-                            ..CatalogModelDefinition::default()
-                        },
-                    )]),
+            models: BTreeMap::from([(
+                model_id.to_owned(),
+                CatalogModelDefinition {
+                    display_name: Some(model_id.to_owned()),
+                    ..CatalogModelDefinition::default()
                 },
             )]),
-            ..ModelCatalogDocument::default()
         }
     }
 }

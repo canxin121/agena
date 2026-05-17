@@ -30,10 +30,6 @@ pub(crate) struct RemoteModelCatalogSource {
     pub endpoint: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub auth_scope: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub catalog_provider_id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub catalog_visible_model_prefix: String,
 }
 
 impl RemoteModelCatalogSource {
@@ -46,34 +42,7 @@ impl RemoteModelCatalogSource {
             provider_id: provider_id.into().trim().to_owned(),
             endpoint: endpoint.into().trim().to_owned(),
             auth_scope: auth_scope.into().trim().to_owned(),
-            catalog_provider_id: String::new(),
-            catalog_visible_model_prefix: String::new(),
         }
-    }
-
-    pub(crate) fn with_catalog_provider_id(
-        mut self,
-        catalog_provider_id: impl Into<String>,
-    ) -> Self {
-        self.catalog_provider_id = catalog_provider_id.into().trim().to_owned();
-        self
-    }
-
-    pub(crate) fn with_catalog_visible_model_prefix(
-        mut self,
-        catalog_visible_model_prefix: impl Into<String>,
-    ) -> Self {
-        let prefix = catalog_visible_model_prefix
-            .into()
-            .trim()
-            .trim_end_matches('/')
-            .to_owned();
-        self.catalog_visible_model_prefix = if prefix.is_empty() {
-            String::new()
-        } else {
-            format!("{prefix}/")
-        };
-        self
     }
 }
 
@@ -187,11 +156,6 @@ impl RemoteModelCatalogCache {
         &self,
         source: &RemoteModelCatalogSource,
     ) -> Result<Option<Vec<Model>>, AppError> {
-        let catalog_provider_id = source.catalog_provider_id.trim();
-        if catalog_provider_id.is_empty() {
-            return Ok(None);
-        }
-
         match fetch_catalog_document(catalog_fallback_url().as_str()).await {
             Ok(document) => {
                 if let Some(models) = catalog_models_from_document(source, &document) {
@@ -201,9 +165,8 @@ impl RemoteModelCatalogCache {
             Err(error) => {
                 tracing::warn!(
                     provider_id = %source.provider_id,
-                    catalog_provider_id,
                     error = %error,
-                    "failed to fetch provider model catalog fallback; trying bundled catalog"
+                    "failed to fetch model catalog fallback; trying bundled catalog"
                 );
             }
         }
@@ -213,9 +176,8 @@ impl RemoteModelCatalogCache {
             Err(error) => {
                 tracing::warn!(
                     provider_id = %source.provider_id,
-                    catalog_provider_id,
                     error = %error,
-                    "failed to load bundled provider model catalog fallback"
+                    "failed to load bundled model catalog fallback"
                 );
                 Ok(None)
             }
@@ -357,13 +319,7 @@ fn catalog_models_from_document(
             .models
             .iter()
             .map(|(model_id, definition)| {
-                let mut model = Model::new(
-                    source.provider_id.as_str(),
-                    adapter_model_id_from_catalog(
-                        model_id.as_str(),
-                        source.catalog_visible_model_prefix.as_str(),
-                    ),
-                );
+                let mut model = Model::new(source.provider_id.as_str(), model_id.as_str());
                 if let Some(display_name) = definition.display_name.clone() {
                     model = model.with_display_name(display_name);
                 }
@@ -379,21 +335,6 @@ fn catalog_models_from_document(
             })
             .collect(),
     )
-}
-
-fn adapter_model_id_from_catalog<'a>(
-    visible_model_id: &'a str,
-    visible_model_prefix: &str,
-) -> &'a str {
-    let visible_model_id = visible_model_id.trim();
-    let visible_model_prefix = visible_model_prefix.trim();
-    if visible_model_prefix.is_empty() {
-        return visible_model_id;
-    }
-
-    visible_model_id
-        .strip_prefix(visible_model_prefix)
-        .unwrap_or(visible_model_id)
 }
 
 #[cfg(test)]
@@ -532,17 +473,12 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(
                 serde_json::json!({
-                    "providers": {
-                        "openai": {
-                            "default_model": "openai/gpt-5",
-                            "models": {
-                                "openai/gpt-5": {
-                                    "display_name": "GPT-5",
-                                    "family": "gpt",
-                                    "context_window_tokens": 400000,
-                                    "max_output_tokens": 128000
-                                }
-                            }
+                    "models": {
+                        "gpt-5": {
+                            "display_name": "GPT-5",
+                            "family": "gpt",
+                            "context_window_tokens": 400000,
+                            "max_output_tokens": 128000
                         }
                     }
                 })
@@ -557,9 +493,7 @@ mod tests {
             "shared-openai",
             "https://gateway.example/v1/models",
             "scope-a",
-        )
-        .with_catalog_provider_id("openai")
-        .with_catalog_visible_model_prefix("openai");
+        );
 
         let models = cache
             .get_or_fetch(&source, || async {
@@ -590,7 +524,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn falls_back_to_catalog_when_fetch_fails_without_cache_for_bedrock_visible_ids() {
+    async fn falls_back_to_catalog_when_fetch_fails_without_cache_for_global_model_ids() {
         let _env_lock = env_lock().lock().expect("env lock should succeed");
         let dir = tempdir().expect("tempdir should create");
         let _cache_dir = EnvVarGuard::set(CACHE_DIR_ENV, dir.path().as_os_str());
@@ -603,19 +537,14 @@ mod tests {
             .with_header("content-type", "application/json")
             .with_body(
                 serde_json::json!({
-                    "providers": {
-                        "bedrock": {
-                            "default_model": "amazon_bedrock/amazon.nova-pro-v1:0",
-                            "models": {
-                                "amazon_bedrock/amazon.nova-pro-v1:0": {
-                                    "display_name": "Amazon Nova Pro",
-                                    "family": "nova"
-                                },
-                                "amazon_bedrock/anthropic.claude-sonnet-4-5": {
-                                    "display_name": "Claude Sonnet 4.5",
-                                    "family": "claude"
-                                }
-                            }
+                    "models": {
+                        "amazon.nova-pro-v1:0": {
+                            "display_name": "Amazon Nova Pro",
+                            "family": "nova"
+                        },
+                        "anthropic.claude-sonnet-4-5": {
+                            "display_name": "Claude Sonnet 4.5",
+                            "family": "claude"
                         }
                     }
                 })
@@ -630,9 +559,7 @@ mod tests {
             "amazon-bedrock",
             "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/models",
             "scope-bedrock",
-        )
-        .with_catalog_provider_id("bedrock")
-        .with_catalog_visible_model_prefix("amazon_bedrock");
+        );
 
         let models = cache
             .get_or_fetch(&source, || async {

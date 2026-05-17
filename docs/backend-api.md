@@ -576,7 +576,6 @@ Provider models:
 | POST   | `/api/v1/model-catalog/refresh`       | refresh remote/fallback catalog and re-merge local overrides |
 | PUT    | `/api/v1/model-catalog/entries`       | create or update a local catalog override                    |
 | DELETE | `/api/v1/model-catalog/entries`       | delete a local catalog override                              |
-| POST   | `/api/v1/model-catalog/default-model` | deprecated; returns bad request                              |
 
 Model catalog response:
 
@@ -656,8 +655,6 @@ Delete local override query:
 ```text
 model_id=gpt-5
 ```
-
-For compatibility, write/delete requests may still include legacy `adapter_id` or `provider_id`, but catalog storage is model-level.
 
 ### Workspaces
 

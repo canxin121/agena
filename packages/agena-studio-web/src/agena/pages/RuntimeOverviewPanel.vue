@@ -194,7 +194,7 @@ async function refreshCatalog() {
 async function deleteEntry(entry: ModelCatalogEntry) {
   submitting.value = true
   try {
-    await deleteCatalogEntryAction(entry.model_id, entry.adapter_id || entry.provider_id || '')
+    await deleteCatalogEntryAction(entry.model_id)
     if (editingEntryKey.value === makeEntryKey(entry.model_id, entry.kind)) {
       resetEditor()
     }

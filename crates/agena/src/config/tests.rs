@@ -1871,8 +1871,8 @@ fn temp_dir(label: &str) -> PathBuf {
 fn agent_config_and_default_agent_parse() {
     let path = write_temp_config(
         r#"
-[runtime]
-default_agent = "planner"
+[default]
+agent = "planner"
 
 [permission.path]
 workspace = { read = "allow", write = "ask" }
@@ -1931,10 +1931,6 @@ todo_write = "allow"
         })
         .expect("agent config should load");
 
-    assert_eq!(
-        resolution.config.runtime.default_agent.as_deref(),
-        Some("planner")
-    );
     assert_eq!(resolution.config.default.agent, "planner");
     let planner = resolution
         .config
@@ -2029,7 +2025,7 @@ todo_write = "allow"
 }
 
 #[test]
-fn runtime_default_agent_falls_back_to_build() {
+fn default_agent_falls_back_to_build() {
     let path = write_temp_config(
         r#"
 [providers.openai]
@@ -2053,11 +2049,27 @@ enabled = true
         })
         .expect("config should load");
 
-    assert_eq!(
-        resolution.config.runtime.default_agent.as_deref(),
-        Some("build")
-    );
     assert_eq!(resolution.config.default.agent, "build");
+}
+
+#[test]
+fn runtime_default_agent_is_rejected() {
+    let path = write_temp_config(
+        r#"
+[runtime]
+default_agent = "planner"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("runtime.default_agent should be rejected");
+
+    assert!(matches!(err, ConfigError::ParseFile { .. }));
 }
 
 #[test]

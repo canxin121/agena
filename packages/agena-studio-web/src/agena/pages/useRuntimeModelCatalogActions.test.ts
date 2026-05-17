@@ -29,6 +29,7 @@ function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderMo
       },
       limits: {
         context_window_tokens: 400000,
+        max_input_tokens: 300000,
         max_output_tokens: 16384,
       },
     },
@@ -65,6 +66,7 @@ function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCa
     origin: 'OpenAI',
     lifecycle: 'preview',
     context_window_tokens: 256000,
+    max_input_tokens: 200000,
     max_output_tokens: 8192,
     description: 'Catalog metadata',
     capabilities: {
@@ -162,6 +164,7 @@ describe('useRuntimeModelCatalogActions', () => {
       model_id: 'gpt-5',
       lifecycle: 'active',
       context_window_tokens: '400000',
+      max_input_tokens: '300000',
       max_output_tokens: '16384',
       display_name: 'GPT-5',
       origin: '',
@@ -226,12 +229,14 @@ describe('useRuntimeModelCatalogActions', () => {
     expect(fromCustom.description).toBe('Local override')
     expect(fromCustom.reasoning).toBe(true)
     expect(fromCustom.context_window_tokens).toBe('256000')
+    expect(fromCustom.max_input_tokens).toBe('200000')
 
     const fromCatalog = createModelCatalogDraftFromProviderSelection([sampleCatalogEntry()], sampleProviderModel())
     expect(fromCatalog.display_name).toBe('GPT-5 Catalog')
     expect(fromCatalog.origin).toBe('OpenAI')
     expect(fromCatalog.lifecycle).toBe('preview')
     expect(fromCatalog.context_window_tokens).toBe('256000')
+    expect(fromCatalog.max_input_tokens).toBe('200000')
     expect(fromCatalog.thinking_modes[0]?.name).toBe('balanced')
     expect(fromCatalog.speed_modes[0]?.name).toBe('fast')
   })
@@ -250,6 +255,7 @@ describe('useRuntimeModelCatalogActions', () => {
   test('buildModelCatalogWriteRequest preserves split thinking and speed modes and omits them when absent', () => {
     const draft = createEmptyModelCatalogDraft('anthropic', 'claude-sonnet-4-6')
     draft.origin = 'Anthropic'
+    draft.max_input_tokens = '200000'
     draft.output_modalities_json = '["text","audio"]'
     draft.pricing_json = '{"input_usd_per_million_tokens":"3","output_usd_per_million_tokens":"15"}'
     draft.thinking_modes.push({
@@ -273,6 +279,7 @@ describe('useRuntimeModelCatalogActions', () => {
     const request = buildModelCatalogWriteRequest(draft)
 
     expect(request.origin).toBe('Anthropic')
+    expect(request.max_input_tokens).toBe(200000)
     expect(request.output_modalities).toEqual(['text', 'audio'])
     expect(request.pricing).toEqual({
       input_usd_per_million_tokens: '3',
@@ -407,6 +414,7 @@ describe('useRuntimeModelCatalogActions', () => {
       model_id: 'gpt-5',
       lifecycle: 'active',
       context_window_tokens: 400000,
+      max_input_tokens: 300000,
       max_output_tokens: 16384,
       display_name: 'GPT-5',
       origin: null,

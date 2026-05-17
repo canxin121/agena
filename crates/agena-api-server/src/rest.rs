@@ -490,6 +490,18 @@ fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryRe
         entry.description.clone().unwrap_or_default(),
         entry.output_modalities.join(","),
         entry
+            .context_window_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        entry
+            .max_input_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        entry
+            .max_output_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        entry
             .pricing
             .as_ref()
             .and_then(|value| serde_json::to_string(value).ok())

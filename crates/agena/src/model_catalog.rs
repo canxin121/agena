@@ -47,6 +47,8 @@ pub struct CatalogModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -86,6 +88,7 @@ impl CatalogModelDefinition {
     pub fn is_empty(&self) -> bool {
         self.lifecycle.is_none()
             && self.context_window_tokens.is_none()
+            && self.max_input_tokens.is_none()
             && self.max_output_tokens.is_none()
             && self.description.is_none()
             && self.knowledge_cutoff.is_none()
@@ -109,6 +112,7 @@ impl CatalogModelDefinition {
         ConfiguredModelDefinition {
             lifecycle: self.lifecycle,
             context_window_tokens: self.context_window_tokens,
+            max_input_tokens: self.max_input_tokens,
             max_output_tokens: self.max_output_tokens,
             display_name: self.display_name,
             description: self.description,
@@ -158,6 +162,8 @@ pub struct ModelCatalogEntryRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -194,6 +200,7 @@ impl ModelCatalogEntryRecord {
         CatalogModelDefinition {
             lifecycle: self.lifecycle,
             context_window_tokens: self.context_window_tokens,
+            max_input_tokens: self.max_input_tokens,
             max_output_tokens: self.max_output_tokens,
             description: self.description.clone(),
             knowledge_cutoff: self.knowledge_cutoff.clone(),
@@ -298,6 +305,7 @@ impl ModelCatalogSnapshot {
             has_local_override,
             lifecycle: definition.lifecycle,
             context_window_tokens: definition.context_window_tokens,
+            max_input_tokens: definition.max_input_tokens,
             max_output_tokens: definition.max_output_tokens,
             description: definition.description.clone(),
             knowledge_cutoff: definition.knowledge_cutoff.clone(),
@@ -776,6 +784,7 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
     CatalogModelDefinition {
         lifecycle: model.metadata.lifecycle,
         context_window_tokens: model.metadata.limits.context_window_tokens,
+        max_input_tokens: model.metadata.limits.max_input_tokens,
         max_output_tokens: model.metadata.limits.max_output_tokens,
         description: model.metadata.description.clone(),
         knowledge_cutoff: model.metadata.knowledge_cutoff.clone(),
@@ -897,6 +906,9 @@ fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &Catalog
     }
     if current.context_window_tokens.is_none() {
         current.context_window_tokens = next.context_window_tokens;
+    }
+    if current.max_input_tokens.is_none() {
+        current.max_input_tokens = next.max_input_tokens;
     }
     if current.max_output_tokens.is_none() {
         current.max_output_tokens = next.max_output_tokens;
@@ -1048,6 +1060,9 @@ fn merge_public_source_catalog_definition(
     }
     if current.context_window_tokens.is_none() {
         current.context_window_tokens = next.context_window_tokens;
+    }
+    if current.max_input_tokens.is_none() {
+        current.max_input_tokens = next.max_input_tokens;
     }
     if current.max_output_tokens.is_none() {
         current.max_output_tokens = next.max_output_tokens;
@@ -1850,6 +1865,7 @@ mod tests {
                                 },
                                 "limit": {
                                     "context": 400000,
+                                    "input": 300000,
                                     "output": 128000
                                 },
                                 "experimental": {
@@ -1998,6 +2014,7 @@ mod tests {
         assert_eq!(gpt5.display_name.as_deref(), Some("GPT-5"));
         assert_eq!(gpt5.origin.as_deref(), Some("OpenAI"));
         assert_eq!(gpt5.context_window_tokens, Some(400_000));
+        assert_eq!(gpt5.max_input_tokens, Some(300_000));
         assert_eq!(gpt5.max_output_tokens, Some(128_000));
         assert_eq!(
             gpt5.description.as_deref(),
@@ -2091,6 +2108,7 @@ mod tests {
         assert_eq!(claude.origin.as_deref(), Some("Anthropic"));
         assert_eq!(claude.description.as_deref(), Some("Anthropic route"));
         assert_eq!(claude.context_window_tokens, Some(200_000));
+        assert_eq!(claude.max_input_tokens, None);
         assert_eq!(claude.max_output_tokens, Some(64_000));
         assert_eq!(
             claude
@@ -2110,6 +2128,7 @@ mod tests {
             .expect("gemini-2.5-pro should exist");
         assert_eq!(gemini.origin.as_deref(), Some("Google"));
         assert_eq!(gemini.context_window_tokens, Some(1_048_576));
+        assert_eq!(gemini.max_input_tokens, Some(1_048_576));
         assert_eq!(gemini.max_output_tokens, Some(65_536));
         assert_eq!(
             gemini

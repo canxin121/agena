@@ -485,6 +485,17 @@ onMounted(() => {
           </div>
 
           <div class="field">
+            <label class="label" for="catalog-max-input">Max Input Tokens</label>
+            <input
+              id="catalog-max-input"
+              v-model="draft.max_input_tokens"
+              class="input mono"
+              inputmode="numeric"
+              placeholder="200000"
+            />
+          </div>
+
+          <div class="field">
             <label class="label" for="catalog-max-output">Max Output Tokens</label>
             <input
               id="catalog-max-output"
@@ -834,8 +845,12 @@ onMounted(() => {
                 <div v-if="formatPricingSummary(entry.pricing)" class="muted">
                   Pricing: {{ formatPricingSummary(entry.pricing) }}
                 </div>
-                <div v-if="entry.context_window_tokens || entry.max_output_tokens" class="muted mono">
-                  ctx={{ entry.context_window_tokens ?? 'n/a' }} · max_out={{ entry.max_output_tokens ?? 'n/a' }}
+                <div
+                  v-if="entry.context_window_tokens || entry.max_input_tokens || entry.max_output_tokens"
+                  class="muted mono"
+                >
+                  ctx={{ entry.context_window_tokens ?? 'n/a' }} · max_in={{ entry.max_input_tokens ?? 'n/a' }} ·
+                  max_out={{ entry.max_output_tokens ?? 'n/a' }}
                 </div>
                 <div v-if="entryThinkingModeItems(entry).length" class="stack" style="margin-top: 8px">
                   <div class="muted">Thinking modes:</div>

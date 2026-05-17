@@ -35,6 +35,7 @@ export type ModelCatalogEditableDraft = {
   model_id: string
   lifecycle: string
   context_window_tokens: string
+  max_input_tokens: string
   max_output_tokens: string
   display_name: string
   origin: string
@@ -184,6 +185,7 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
     model_id: modelId,
     lifecycle: '',
     context_window_tokens: '',
+    max_input_tokens: '',
     max_output_tokens: '',
     display_name: '',
     origin: '',
@@ -270,6 +272,7 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     model_id: entry.model_id,
     lifecycle: String(entry.lifecycle || ''),
     context_window_tokens: entry.context_window_tokens == null ? '' : String(entry.context_window_tokens),
+    max_input_tokens: entry.max_input_tokens == null ? '' : String(entry.max_input_tokens),
     max_output_tokens: entry.max_output_tokens == null ? '' : String(entry.max_output_tokens),
     display_name: String(entry.display_name || ''),
     origin: String(entry.origin || ''),
@@ -294,6 +297,8 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
     lifecycle: String(model.metadata?.lifecycle || ''),
     context_window_tokens:
       model.metadata?.limits?.context_window_tokens == null ? '' : String(model.metadata.limits.context_window_tokens),
+    max_input_tokens:
+      model.metadata?.limits?.max_input_tokens == null ? '' : String(model.metadata.limits.max_input_tokens),
     max_output_tokens:
       model.metadata?.limits?.max_output_tokens == null ? '' : String(model.metadata.limits.max_output_tokens),
     display_name: String(model.display_name || ''),
@@ -425,6 +430,7 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
     model_id: String(draft.model_id || '').trim(),
     lifecycle: normalizeOptionalText(draft.lifecycle),
     context_window_tokens: normalizeOptionalInteger(draft.context_window_tokens),
+    max_input_tokens: normalizeOptionalInteger(draft.max_input_tokens),
     max_output_tokens: normalizeOptionalInteger(draft.max_output_tokens),
     display_name: normalizeOptionalText(draft.display_name),
     origin: normalizeOptionalText(draft.origin),

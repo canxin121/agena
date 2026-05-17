@@ -176,6 +176,11 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                     .as_ref()
                     .and_then(|limits| limits.context.or(limits.input))
                     .map(clamp_u64_to_u32),
+                max_input_tokens: model
+                    .limit
+                    .as_ref()
+                    .and_then(|limits| limits.input)
+                    .map(clamp_u64_to_u32),
                 max_output_tokens: model
                     .limit
                     .as_ref()
@@ -255,6 +260,7 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                     .context_length
                     .or(model.input_token_limit)
                     .map(clamp_u64_to_u32),
+                max_input_tokens: model.input_token_limit.map(clamp_u64_to_u32),
                 max_output_tokens: model
                     .max_completion_tokens
                     .or(model.output_token_limit)
@@ -307,6 +313,7 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
         let definition = CatalogModelDefinition {
             lifecycle: None,
             context_window_tokens: model.context_window.map(clamp_u64_to_u32),
+            max_input_tokens: None,
             max_output_tokens: None,
             description,
             knowledge_cutoff: None,

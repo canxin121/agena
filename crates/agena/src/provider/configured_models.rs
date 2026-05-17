@@ -541,6 +541,8 @@ pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
@@ -578,6 +580,7 @@ impl ConfiguredModelDefinition {
     pub fn is_empty(&self) -> bool {
         self.lifecycle.is_none()
             && self.context_window_tokens.is_none()
+            && self.max_input_tokens.is_none()
             && self.max_output_tokens.is_none()
             && self.display_name.is_none()
             && self.description.is_none()
@@ -603,6 +606,9 @@ impl ConfiguredModelDefinition {
         }
         if let Some(context_window_tokens) = self.context_window_tokens {
             metadata = metadata.with_context_window_tokens(context_window_tokens);
+        }
+        if let Some(max_input_tokens) = self.max_input_tokens {
+            metadata = metadata.with_max_input_tokens(max_input_tokens);
         }
         if let Some(max_output_tokens) = self.max_output_tokens {
             metadata = metadata.with_max_output_tokens(max_output_tokens);

@@ -177,6 +177,8 @@ pub struct ModelCatalogEntryResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -250,6 +252,7 @@ impl ModelCatalogEntryResource {
             origin: value.origin,
             lifecycle: value.lifecycle,
             context_window_tokens: value.context_window_tokens,
+            max_input_tokens: value.max_input_tokens,
             max_output_tokens: value.max_output_tokens,
             description: value.description,
             knowledge_cutoff: value.knowledge_cutoff,

@@ -22,7 +22,7 @@ impl IdentifierError {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ModelRefParseError {
-    #[error("model reference must be in `provider/adapter/model` format")]
+    #[error("model reference must be in `provider/model` format")]
     MissingSeparator,
     #[error(transparent)]
     InvalidProviderId(#[from] IdentifierError),
@@ -102,6 +102,64 @@ impl From<ProviderId> for String {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
+pub struct AdapterId(String);
+
+impl AdapterId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self::try_new(value).expect("adapter id cannot be empty")
+    }
+
+    pub fn try_new(value: impl Into<String>) -> Result<Self, IdentifierError> {
+        Ok(Self(normalize_non_empty(value, "adapter id")?))
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl Borrow<str> for AdapterId {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for AdapterId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl fmt::Display for AdapterId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AdapterId {
+    type Err = IdentifierError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::try_new(value)
+    }
+}
+
+impl TryFrom<String> for AdapterId {
+    type Error = IdentifierError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_new(value)
+    }
+}
+
+impl From<AdapterId> for String {
+    fn from(value: AdapterId) -> Self {
+        value.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct ModelId(String);
 
 impl ModelId {
@@ -161,6 +219,8 @@ impl From<ModelId> for String {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelRef {
     pub provider_id: ProviderId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<AdapterId>,
     pub model_id: ModelId,
 }
 
@@ -175,14 +235,49 @@ impl ModelRef {
     ) -> Result<Self, IdentifierError> {
         Ok(Self {
             provider_id: ProviderId::try_new(provider_id)?,
+            adapter_id: None,
             model_id: ModelId::try_new(model_id)?,
         })
+    }
+
+    pub fn new_with_adapter(
+        provider_id: impl Into<String>,
+        adapter_id: impl Into<String>,
+        model_id: impl Into<String>,
+    ) -> Self {
+        Self::try_new_with_adapter(provider_id, adapter_id, model_id)
+            .expect("model reference must be valid")
+    }
+
+    pub fn try_new_with_adapter(
+        provider_id: impl Into<String>,
+        adapter_id: impl Into<String>,
+        model_id: impl Into<String>,
+    ) -> Result<Self, IdentifierError> {
+        Ok(Self {
+            provider_id: ProviderId::try_new(provider_id)?,
+            adapter_id: Some(AdapterId::try_new(adapter_id)?),
+            model_id: ModelId::try_new(model_id)?,
+        })
+    }
+
+    pub fn with_adapter_id(mut self, adapter_id: impl Into<String>) -> Self {
+        self.adapter_id = Some(AdapterId::new(adapter_id));
+        self
     }
 }
 
 impl fmt::Display for ModelRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.provider_id, self.model_id)
+        if let Some(adapter_id) = &self.adapter_id {
+            write!(
+                f,
+                "provider={} adapter={} model={}",
+                self.provider_id, adapter_id, self.model_id
+            )
+        } else {
+            write!(f, "{}/{}", self.provider_id, self.model_id)
+        }
     }
 }
 
@@ -193,14 +288,12 @@ impl FromStr for ModelRef {
         let Some((provider_id, model_id)) = value.split_once('/') else {
             return Err(ModelRefParseError::MissingSeparator);
         };
-        if !model_id.contains('/') {
-            return Err(ModelRefParseError::MissingSeparator);
-        }
         let provider_id = ProviderId::try_new(provider_id)?;
         let model_id = ModelId::try_new(model_id)
             .map_err(|err| ModelRefParseError::InvalidModelId(err.to_string()))?;
         Ok(Self {
             provider_id,
+            adapter_id: None,
             model_id,
         })
     }
@@ -255,23 +348,6 @@ impl ModelInputModality {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ModelFamily {
-    Gpt,
-    Codex,
-    Claude,
-    Gemini,
-    Llama,
-    Mistral,
-    Deepseek,
-    Qwen,
-    Nova,
-    Grok,
-    Phi,
-    Command,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum ModelLifecycle {
     Active,
     Preview,
@@ -318,8 +394,6 @@ impl ModelTokenLimits {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ModelMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub family: Option<ModelFamily>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
     #[serde(default, skip_serializing_if = "ModelTokenLimits::is_empty")]
     pub limits: ModelTokenLimits,
@@ -329,15 +403,7 @@ pub struct ModelMetadata {
 
 impl ModelMetadata {
     pub fn is_empty(&self) -> bool {
-        self.family.is_none()
-            && self.lifecycle.is_none()
-            && self.limits.is_empty()
-            && self.description.is_none()
-    }
-
-    pub fn with_family(mut self, family: ModelFamily) -> Self {
-        self.family = Some(family);
-        self
+        self.lifecycle.is_none() && self.limits.is_empty() && self.description.is_none()
     }
 
     pub fn with_lifecycle(mut self, lifecycle: ModelLifecycle) -> Self {
@@ -363,9 +429,6 @@ impl ModelMetadata {
     }
 
     pub fn with_fallbacks_from(mut self, fallback: &Self) -> Self {
-        if self.family.is_none() {
-            self.family = fallback.family;
-        }
         if self.lifecycle.is_none() {
             self.lifecycle = fallback.lifecycle;
         }
@@ -584,6 +647,8 @@ impl Default for ModelVariant {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Model {
     pub provider_id: ProviderId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<AdapterId>,
     pub id: ModelId,
     pub display_name: Option<String>,
     #[serde(default)]
@@ -598,6 +663,7 @@ impl Model {
     pub fn new(provider_id: impl Into<String>, id: impl Into<String>) -> Self {
         Self {
             provider_id: ProviderId::new(provider_id),
+            adapter_id: None,
             id: ModelId::new(id),
             display_name: None,
             capabilities: ModelCapabilities::default(),
@@ -609,12 +675,18 @@ impl Model {
     pub fn reference(&self) -> ModelRef {
         ModelRef {
             provider_id: self.provider_id.clone(),
+            adapter_id: self.adapter_id.clone(),
             model_id: self.id.clone(),
         }
     }
 
     pub fn with_provider_id(mut self, provider_id: impl Into<String>) -> Self {
         self.provider_id = ProviderId::new(provider_id);
+        self
+    }
+
+    pub fn with_adapter_id(mut self, adapter_id: impl Into<String>) -> Self {
+        self.adapter_id = Some(AdapterId::new(adapter_id));
         self
     }
 
@@ -645,11 +717,6 @@ impl Model {
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.metadata = self.metadata.with_description(description);
-        self
-    }
-
-    pub fn with_family(mut self, family: ModelFamily) -> Self {
-        self.metadata = self.metadata.with_family(family);
         self
     }
 
@@ -709,16 +776,25 @@ mod tests {
 
     #[test]
     fn model_ref_parses_provider_and_model() {
+        let parsed: ModelRef = "openai/gpt-5".parse().expect("model ref should parse");
+        assert_eq!(parsed.provider_id.as_str(), "openai");
+        assert_eq!(parsed.adapter_id, None);
+        assert_eq!(parsed.model_id.as_str(), "gpt-5");
+    }
+
+    #[test]
+    fn model_ref_preserves_slashful_model_ids_without_adapter_parsing() {
         let parsed: ModelRef = "openai/openai/gpt-5"
             .parse()
             .expect("model ref should parse");
         assert_eq!(parsed.provider_id.as_str(), "openai");
+        assert_eq!(parsed.adapter_id, None);
         assert_eq!(parsed.model_id.as_str(), "openai/gpt-5");
     }
 
     #[test]
     fn model_ref_rejects_missing_separator() {
-        let err = "openai/gpt-5"
+        let err = "gpt-5"
             .parse::<ModelRef>()
             .expect_err("missing provider should fail");
         assert!(matches!(err, ModelRefParseError::MissingSeparator));
@@ -726,14 +802,14 @@ mod tests {
 
     #[test]
     fn model_metadata_fallbacks_fill_missing_fields() {
-        let base = ModelMetadata::default().with_family(ModelFamily::Gpt);
+        let base = ModelMetadata::default().with_description("GPT model");
         let fallback = ModelMetadata::default()
             .with_lifecycle(ModelLifecycle::Preview)
             .with_context_window_tokens(128_000)
             .with_max_output_tokens(16_384);
 
         let merged = base.with_fallbacks_from(&fallback);
-        assert_eq!(merged.family, Some(ModelFamily::Gpt));
+        assert_eq!(merged.description.as_deref(), Some("GPT model"));
         assert_eq!(merged.lifecycle, Some(ModelLifecycle::Preview));
         assert_eq!(merged.limits.context_window_tokens, Some(128_000));
         assert_eq!(merged.limits.max_output_tokens, Some(16_384));

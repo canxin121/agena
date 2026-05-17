@@ -2290,9 +2290,12 @@ fn configured_default_model(
         return Ok(None);
     };
     let registry = snapshot.provider_registry();
-    let model_route = default.model_route();
     registry
-        .resolve_model_target(provider_id, model_route.as_deref())
+        .resolve_model_selection(
+            provider_id,
+            default.adapter.as_deref(),
+            default.model.as_deref(),
+        )
         .map(Some)
         .map_err(ServerError::Core)
 }

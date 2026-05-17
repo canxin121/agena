@@ -1125,8 +1125,8 @@ struct ProviderListOutput {
 #[derive(Debug, Serialize)]
 struct ProviderSummary {
     provider_id: String,
+    default_adapter: Option<String>,
     default_model: String,
-    default_model_ref: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -2845,10 +2845,9 @@ impl AgenaCli {
                         registry
                             .get(provider_id.as_str())
                             .map(|provider| ProviderSummary {
-                                default_model_ref: format!(
-                                    "{provider_id}/{}",
-                                    provider.default_model()
-                                ),
+                                default_adapter: provider
+                                    .default_adapter()
+                                    .map(ToString::to_string),
                                 default_model: provider.default_model().to_string(),
                                 provider_id,
                             })
@@ -3818,8 +3817,11 @@ fn resolve_continue_options(
         session.runtime.turn.model_provider_id.as_deref(),
         session.runtime.turn.model_id.as_deref(),
     ) {
-        ModelRef::try_new(provider_id, model_id)
-            .map_err(|err| AppError::Config(format!("invalid persisted model reference: {err}")))?
+        match session.runtime.turn.model_adapter_id.as_deref() {
+            Some(adapter_id) => ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id),
+            None => ModelRef::try_new(provider_id, model_id),
+        }
+        .map_err(|err| AppError::Config(format!("invalid persisted model reference: {err}")))?
     } else {
         default_model(runtime)?
     };
@@ -3876,8 +3878,11 @@ fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
     let registry = snapshot.provider_registry();
     let default_config = &snapshot.config_resolution().config.default;
     if let Some(provider_id) = default_config.provider.as_deref() {
-        let model_route = default_config.model_route();
-        return registry.resolve_model_target(provider_id, model_route.as_deref());
+        return registry.resolve_model_selection(
+            provider_id,
+            default_config.adapter.as_deref(),
+            default_config.model.as_deref(),
+        );
     }
 
     let mut providers = registry.provider_ids();
@@ -5083,7 +5088,8 @@ enabled = true
         let path = write_temp_config(
             r#"
 [providers.openai]
-default_model = "openai/gpt-5"
+default_adapter = "openai"
+default_model = "gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -5120,7 +5126,7 @@ input = { unsupported = ["image"] }
                 &loader,
                 ProviderCommand {
                     command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
-                        target: "openai/openai/gpt-5".to_owned(),
+                        target: "openai/gpt-5".to_owned(),
                         model: None,
                         format: ConfigOutputFormat::Json,
                     })),
@@ -5131,11 +5137,13 @@ input = { unsupported = ["image"] }
         let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
 
         assert_eq!(value["provider_id"], "openai");
-        assert_eq!(value["model"], "openai/gpt-5");
-        assert_eq!(value["model_ref"], "openai/openai/gpt-5");
+        assert_eq!(value["model"], "gpt-5");
+        assert_eq!(
+            value["model_ref"],
+            "provider=openai adapter=openai model=gpt-5"
+        );
         assert_eq!(value["capabilities"]["image_input"], "unsupported");
         assert_eq!(value["capabilities"]["document_input"], "supported");
-        assert_eq!(value["metadata"]["family"], "gpt");
     }
 
     #[tokio::test]
@@ -5143,7 +5151,8 @@ input = { unsupported = ["image"] }
         let path = write_temp_config(
             r#"
 [providers.gitlab]
-default_model = "gitlab/claude-sonnet-4-5"
+default_adapter = "gitlab"
+default_model = "claude-sonnet-4-5"
 
 [providers.gitlab.auth]
 mode = "api"
@@ -5152,6 +5161,8 @@ api_key = "glpat-test"
 
 [providers.gitlab.adapters.gitlab]
 enabled = true
+
+[providers.gitlab.adapters.gitlab.models."claude-sonnet-4-5"]
 "#,
         );
         let loader = ConfigLoader::new(TestEnvironment {
@@ -5180,12 +5191,14 @@ enabled = true
         let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
 
         assert_eq!(value["provider_id"], "gitlab");
-        assert_eq!(value["models"][0]["id"], "gitlab/claude-sonnet-4-5");
-        assert_eq!(value["models"][0]["metadata"]["family"], "claude");
-        assert_eq!(
-            value["models"][0]["capabilities"]["tool_calling"],
-            "supported"
-        );
+        let model = value["models"]
+            .as_array()
+            .expect("models should be an array")
+            .iter()
+            .find(|model| model["id"] == "claude-sonnet-4-5")
+            .expect("gitlab claude model should be listed");
+        assert_eq!(model["adapter_id"], "gitlab");
+        assert_eq!(model["capabilities"]["tool_calling"], "supported");
     }
 
     #[tokio::test]
@@ -5193,7 +5206,8 @@ enabled = true
         let path = write_temp_config(
             r#"
 [providers.openai]
-default_model = "openai/gpt-5"
+default_adapter = "openai"
+default_model = "gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -5234,8 +5248,8 @@ enabled = true
 
         assert!(providers.iter().any(|item| {
             item["provider_id"] == "openai"
-                && item["default_model"] == "openai/gpt-5"
-                && item["default_model_ref"] == "openai/openai/gpt-5"
+                && item["default_adapter"] == "openai"
+                && item["default_model"] == "gpt-5"
         }));
     }
 

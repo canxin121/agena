@@ -13,7 +13,7 @@ use tracing::Instrument;
 
 use crate::error::{AppError, ProviderErrorKind};
 use crate::model::{
-    Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ModelVariant, ProviderId,
+    AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ModelVariant, ProviderId,
 };
 use crate::plugin::ProviderDescriptor;
 
@@ -128,16 +128,45 @@ impl ModelProvider for NamedProvider {
         self.target.default_model()
     }
 
+    fn default_adapter(&self) -> Option<&AdapterId> {
+        self.target.default_adapter()
+    }
+
     fn model_capabilities(&self, model: &ModelId) -> super::ModelCapabilities {
         self.target.model_capabilities(model)
+    }
+
+    fn model_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> super::ModelCapabilities {
+        self.target
+            .model_capabilities_for_adapter(adapter_id, model)
     }
 
     fn model_metadata(&self, model: &ModelId) -> super::ModelMetadata {
         self.target.model_metadata(model)
     }
 
+    fn model_metadata_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> super::ModelMetadata {
+        self.target.model_metadata_for_adapter(adapter_id, model)
+    }
+
     fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
         self.target.model_variants(model)
+    }
+
+    fn model_variants_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelVariant> {
+        self.target.model_variants_for_adapter(adapter_id, model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -148,23 +177,47 @@ impl ModelProvider for NamedProvider {
         self.target.supports_prompt_continuation(model)
     }
 
+    fn supports_prompt_continuation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> bool {
+        self.target
+            .supports_prompt_continuation_for_adapter(adapter_id, model)
+    }
+
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<super::PromptCacheShape> {
         self.target.prompt_cache_shape(model)
+    }
+
+    fn prompt_cache_shape_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<super::PromptCacheShape> {
+        self.target
+            .prompt_cache_shape_for_adapter(adapter_id, model)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut models = self.target.list_models().await?;
         for model in &mut models {
             model.provider_id = ProviderId::new(self.provider_id.clone());
-            let fallback = self.target.model_capabilities(&model.id);
+            let fallback = self
+                .target
+                .model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.id);
             model.capabilities = model.capabilities.clone().with_fallbacks_from(&fallback);
-            let metadata_fallback = self.target.model_metadata(&model.id);
+            let metadata_fallback = self
+                .target
+                .model_metadata_for_adapter(model.adapter_id.as_ref(), &model.id);
             model.metadata = model
                 .metadata
                 .clone()
                 .with_fallbacks_from(&metadata_fallback);
             if model.variants.is_empty() {
-                model.variants = self.target.model_variants(&model.id);
+                model.variants = self
+                    .target
+                    .model_variants_for_adapter(model.adapter_id.as_ref(), &model.id);
             }
         }
         Ok(models)
@@ -172,6 +225,19 @@ impl ModelProvider for NamedProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let mut response = self.target.complete(request).await?;
+        response.provider_id = ProviderId::new(self.provider_id.clone());
+        Ok(response)
+    }
+
+    async fn complete_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        let mut response = self
+            .target
+            .complete_for_adapter(adapter_id, request)
+            .await?;
         response.provider_id = ProviderId::new(self.provider_id.clone());
         Ok(response)
     }
@@ -185,6 +251,69 @@ impl ModelProvider for NamedProvider {
     > {
         let provider_id = self.provider_id.clone();
         let stream = self.target.complete_stream(request).await?;
+        let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
+            Box::pin(stream.map(move |item| {
+                item.map(|event| match event {
+                    CompletionStreamEvent::TextDelta { model, delta, .. } => {
+                        CompletionStreamEvent::TextDelta {
+                            provider_id: ProviderId::new(provider_id.clone()),
+                            model,
+                            delta,
+                        }
+                    }
+                    CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
+                        CompletionStreamEvent::ThinkingDelta {
+                            provider_id: ProviderId::new(provider_id.clone()),
+                            model,
+                            delta,
+                        }
+                    }
+                    CompletionStreamEvent::ToolCallDelta {
+                        model,
+                        stream_key,
+                        id,
+                        name,
+                        arguments_delta,
+                        ..
+                    } => CompletionStreamEvent::ToolCallDelta {
+                        provider_id: ProviderId::new(provider_id.clone()),
+                        model,
+                        stream_key,
+                        id,
+                        name,
+                        arguments_delta,
+                    },
+                    CompletionStreamEvent::Completed {
+                        model,
+                        finish_reason,
+                        usage,
+                        provider_metadata,
+                        ..
+                    } => CompletionStreamEvent::Completed {
+                        provider_id: ProviderId::new(provider_id.clone()),
+                        model,
+                        finish_reason,
+                        usage,
+                        provider_metadata,
+                    },
+                })
+            }));
+        Ok(Box::pin(stream))
+    }
+
+    async fn complete_stream_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+        AppError,
+    > {
+        let provider_id = self.provider_id.clone();
+        let stream = self
+            .target
+            .complete_stream_for_adapter(adapter_id, request)
+            .await?;
         let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
             Box::pin(stream.map(move |item| {
                 item.map(|event| match event {
@@ -355,7 +484,8 @@ impl ProviderRegistry {
         let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
             AppError::Config(format!("provider not found: {}", model.provider_id))
         })?;
-        Ok(provider.supports_prompt_continuation(&model.model_id))
+        Ok(provider
+            .supports_prompt_continuation_for_adapter(model.adapter_id.as_ref(), &model.model_id))
     }
 
     pub fn prompt_cache_shape_fingerprint(
@@ -374,7 +504,7 @@ impl ProviderRegistry {
         let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
             AppError::Config(format!("provider not found: {}", model.provider_id))
         })?;
-        Ok(provider.prompt_cache_shape(&model.model_id))
+        Ok(provider.prompt_cache_shape_for_adapter(model.adapter_id.as_ref(), &model.model_id))
     }
 
     pub fn provider_ids(&self) -> Vec<String> {
@@ -400,9 +530,15 @@ impl ProviderRegistry {
                     "model reference `{target}` already includes a model; omit `--model`"
                 )));
             }
-            return target.parse::<ModelRef>().map_err(|err| {
+            let mut parsed = target.parse::<ModelRef>().map_err(|err| {
                 AppError::Config(format!("invalid model reference `{target}`: {err}"))
-            });
+            })?;
+            if parsed.adapter_id.is_none()
+                && let Some(provider) = self.get(parsed.provider_id.as_str())
+            {
+                parsed.adapter_id = provider.default_adapter().cloned();
+            }
+            return Ok(parsed);
         }
 
         let provider = self
@@ -411,26 +547,50 @@ impl ProviderRegistry {
         let provider_id = ProviderId::try_new(target)
             .map_err(|err| AppError::Config(format!("invalid provider id `{target}`: {err}")))?;
         let model_id = match requested_model {
-            Some(requested_model) => {
-                let Some((adapter_id, model_name)) = requested_model.split_once('/') else {
-                    return Err(AppError::Config(format!(
-                        "model override `{requested_model}` must be in `<adapter>/<model>` format"
-                    )));
-                };
-                if adapter_id.trim().is_empty() || model_name.trim().is_empty() {
-                    return Err(AppError::Config(format!(
-                        "model override `{requested_model}` must be in `<adapter>/<model>` format"
-                    )));
-                }
-                ModelId::try_new(requested_model).map_err(|err| {
-                    AppError::Config(format!("invalid model id `{requested_model}`: {err}"))
-                })?
-            }
+            Some(requested_model) => ModelId::try_new(requested_model).map_err(|err| {
+                AppError::Config(format!("invalid model id `{requested_model}`: {err}"))
+            })?,
             None => provider.default_model().clone(),
         };
 
         Ok(ModelRef {
             provider_id,
+            adapter_id: provider.default_adapter().cloned(),
+            model_id,
+        })
+    }
+
+    pub fn resolve_model_selection(
+        &self,
+        provider_id: &str,
+        adapter_id: Option<&str>,
+        model_id: Option<&str>,
+    ) -> Result<ModelRef, AppError> {
+        let provider_id = provider_id.trim();
+        if provider_id.is_empty() {
+            return Err(AppError::Config("provider id cannot be empty".to_owned()));
+        }
+        let provider = self
+            .get(provider_id)
+            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
+        let provider_id = ProviderId::try_new(provider_id).map_err(|err| {
+            AppError::Config(format!("invalid provider id `{provider_id}`: {err}"))
+        })?;
+        let adapter_id = match adapter_id.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(adapter_id) => Some(AdapterId::try_new(adapter_id).map_err(|err| {
+                AppError::Config(format!("invalid adapter id `{adapter_id}`: {err}"))
+            })?),
+            None => provider.default_adapter().cloned(),
+        };
+        let model_id = match model_id.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(model_id) => ModelId::try_new(model_id)
+                .map_err(|err| AppError::Config(format!("invalid model id `{model_id}`: {err}")))?,
+            None => provider.default_model().clone(),
+        };
+
+        Ok(ModelRef {
+            provider_id,
+            adapter_id,
             model_id,
         })
     }
@@ -528,16 +688,19 @@ impl ProviderRegistry {
                     let mut models = provider.list_models().await?;
                     for model in &mut models {
                         model.provider_id = ProviderId::new(provider_id.clone());
-                        let fallback = provider.model_capabilities(&model.id);
+                        let fallback = provider
+                            .model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.id);
                         model.capabilities =
                             model.capabilities.clone().with_fallbacks_from(&fallback);
-                        let metadata_fallback = provider.model_metadata(&model.id);
+                        let metadata_fallback = provider
+                            .model_metadata_for_adapter(model.adapter_id.as_ref(), &model.id);
                         model.metadata = model
                             .metadata
                             .clone()
                             .with_fallbacks_from(&metadata_fallback);
                         if model.variants.is_empty() {
-                            model.variants = provider.model_variants(&model.id);
+                            model.variants = provider
+                                .model_variants_for_adapter(model.adapter_id.as_ref(), &model.id);
                         }
                     }
                     Ok(models)
@@ -551,14 +714,14 @@ impl ProviderRegistry {
         let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
             AppError::Config(format!("provider not found: {}", model.provider_id))
         })?;
-        Ok(provider.model_capabilities(&model.model_id))
+        Ok(provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id))
     }
 
     pub fn model_metadata(&self, model: &ModelRef) -> Result<ModelMetadata, AppError> {
         let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
             AppError::Config(format!("provider not found: {}", model.provider_id))
         })?;
-        Ok(provider.model_metadata(&model.model_id))
+        Ok(provider.model_metadata_for_adapter(model.adapter_id.as_ref(), &model.model_id))
     }
 
     pub fn model_variants(
@@ -568,7 +731,7 @@ impl ProviderRegistry {
         let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
             AppError::Config(format!("provider not found: {}", model.provider_id))
         })?;
-        Ok(provider.model_variants(&model.model_id))
+        Ok(provider.model_variants_for_adapter(model.adapter_id.as_ref(), &model.model_id))
     }
 
     pub async fn resolve_model(&self, model: &ModelRef) -> Result<Model, AppError> {
@@ -577,10 +740,18 @@ impl ProviderRegistry {
         })?;
 
         let listed = self.list_models(model.provider_id.as_str()).await?;
-        if let Some(entry) = listed.into_iter().find(|entry| entry.id == model.model_id) {
-            let fallback = provider.model_capabilities(&entry.id);
-            let metadata_fallback = provider.model_metadata(&entry.id);
-            let variants = provider.model_variants(&entry.id);
+        if let Some(entry) = listed.into_iter().find(|entry| {
+            entry.id == model.model_id
+                && model
+                    .adapter_id
+                    .as_ref()
+                    .map(|adapter_id| entry.adapter_id.as_ref() == Some(adapter_id))
+                    .unwrap_or(true)
+        }) {
+            let adapter_id = model.adapter_id.as_ref().or(entry.adapter_id.as_ref());
+            let fallback = provider.model_capabilities_for_adapter(adapter_id, &entry.id);
+            let metadata_fallback = provider.model_metadata_for_adapter(adapter_id, &entry.id);
+            let variants = provider.model_variants_for_adapter(adapter_id, &entry.id);
             let mut resolved = entry
                 .with_capability_fallbacks(&fallback)
                 .with_metadata_fallbacks(&metadata_fallback);
@@ -590,12 +761,21 @@ impl ProviderRegistry {
             return Ok(resolved);
         }
 
-        Ok(
-            Model::new(model.provider_id.as_str(), model.model_id.as_str())
-                .with_capabilities(provider.model_capabilities(&model.model_id))
-                .with_metadata(provider.model_metadata(&model.model_id))
-                .with_variants(provider.model_variants(&model.model_id)),
+        Ok({
+            let mut fallback_model =
+                Model::new(model.provider_id.as_str(), model.model_id.as_str());
+            fallback_model.adapter_id = model.adapter_id.clone();
+            fallback_model
+        }
+        .with_capabilities(
+            provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id),
         )
+        .with_metadata(
+            provider.model_metadata_for_adapter(model.adapter_id.as_ref(), &model.model_id),
+        )
+        .with_variants(
+            provider.model_variants_for_adapter(model.adapter_id.as_ref(), &model.model_id),
+        ))
     }
 
     pub async fn complete(
@@ -611,10 +791,16 @@ impl ProviderRegistry {
         self.call_with_retry(model.provider_id.as_str(), "complete", {
             let provider = provider.clone();
             let request = request.clone();
+            let adapter_id = model.adapter_id.clone();
             move || {
                 let provider = provider.clone();
                 let request = request.clone();
-                async move { provider.complete(request).await }
+                let adapter_id = adapter_id.clone();
+                async move {
+                    provider
+                        .complete_for_adapter(adapter_id.as_ref(), request)
+                        .await
+                }
             }
         })
         .await
@@ -635,6 +821,7 @@ impl ProviderRegistry {
         request.model = model.model_id.clone();
         let provider_id = model.provider_id.to_string();
         let model_id = model.model_id.to_string();
+        let adapter_id = model.adapter_id.clone();
         let retry_policy = self.retry_policy;
         let replay_policy = self.stream_replay_policy;
         let provider_resume_policy = provider.stream_resume_policy();
@@ -669,7 +856,10 @@ impl ProviderRegistry {
                     "provider stream attempt started"
                 );
 
-                let mut inner_stream = match provider.complete_stream(request.clone()).await {
+                let mut inner_stream = match provider
+                    .complete_stream_for_adapter(adapter_id.as_ref(), request.clone())
+                    .await
+                {
                     Ok(stream) => {
                         tracing::debug!(
                             provider_id = provider_id.as_str(),
@@ -924,7 +1114,8 @@ fn validate_request_capabilities(
     provider: &dyn ModelProvider,
     request: &CompletionRequest,
 ) -> Result<(), AppError> {
-    let capabilities = provider.model_capabilities(&model.model_id);
+    let capabilities =
+        provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id);
 
     let mut unsupported = Vec::new();
     for message in &request.messages {

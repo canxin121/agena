@@ -54,11 +54,11 @@ enabled = true
 关键约束：
 
 - 全局默认 provider/adapter/model/agent 写在 `[default]`
-- `providers.<id>.default_model` 是 provider-local 默认路由；如果使用，必须是 `"<adapter>/<model>"`
+- `providers.<id>.default_adapter` 和 `providers.<id>.default_model` 是 provider-local 默认选择；`default_model` 必须是真实上游 model id
 - adapter 不再有 `default_model`
 - model key 就是真实上游 model id，不再有 `target_model`
 - provider / adapter / model 三层都支持 `enabled`
-- 对外完整 model ref 统一是 `"<provider>/<adapter>/<model>"`
+- 运行时模型选择由 `provider_id`、`adapter_id`、`model_id` 三个字段共同决定，不使用三段字符串编码
 
 ## 四层职责
 
@@ -147,23 +147,11 @@ provider 内部可见模型名统一是：
 - `anthropic/claude-sonnet-4`
 - `gemini/google/gemini-2.5-flash`
 
-外部完整 model ref 统一是：
-
-```text
-<provider>/<adapter>/<model>
-```
-
-例如：
-
-- `openai/openai/gpt-5`
-- `shared/anthropic/claude-sonnet-4`
-- `vertex/openai/google/gemini-2.5-flash`
-
-因此：
+运行时选择模型时始终拆成三个字段：
 
 - 全局默认字段：`[default] provider = "openai"`, `adapter = "openai"`, `model = "gpt-5"`
-- provider-local 默认路由：`default_model = "openai/gpt-5"`
-- CLI/API 对外默认模型 ref：`openai/openai/gpt-5`
+- provider-local 默认选择：`default_adapter = "openai"`, `default_model = "gpt-5"`
+- 真实包含 `/` 的模型名保留在 `model`/`model_id` 字段里，例如 `model = "google/gemini-2.5-flash"`
 
 ## enabled 语义
 
@@ -172,7 +160,8 @@ provider 内部可见模型名统一是：
 ```toml
 [providers.shared]
 enabled = true
-default_model = "openai/gpt-4.1-mini"
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
 
 [providers.shared.adapters.openai]
 enabled = true
@@ -185,7 +174,7 @@ enabled = true
 
 - provider disabled：整个 provider 不注册
 - adapter disabled：该 adapter 不可选，也不会暴露其模型
-- model disabled：该具体 `adapter/model` 路由不可选
+- model disabled：该 adapter 下的具体 model 不可选
 
 这三个开关都用于快速下线 provider、adapter 或单个模型，而不需要删配置。
 
@@ -335,7 +324,8 @@ model = "gpt-5"
 agent = "build"
 
 [providers.openai]
-default_model = "openai/gpt-5"
+default_adapter = "openai"
+default_model = "gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -353,7 +343,8 @@ enabled = true
 
 ```toml
 [providers.chatgpt]
-default_model = "openai/gpt-5.3-codex"
+default_adapter = "openai"
+default_model = "gpt-5.3-codex"
 
 [providers.chatgpt.auth]
 mode = "credential"
@@ -372,7 +363,8 @@ enabled = true
 
 ```toml
 [providers."github-copilot"]
-default_model = "openai/gpt-4o-mini"
+default_adapter = "openai"
+default_model = "gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
@@ -390,7 +382,8 @@ enabled = true
 
 ```toml
 [providers.atomgit]
-default_model = "openai/Kimi-K2-Instruct"
+default_adapter = "openai"
+default_model = "Kimi-K2-Instruct"
 
 [providers.atomgit.auth]
 mode = "credential"
@@ -408,7 +401,8 @@ enabled = true
 
 ```toml
 [providers."github-copilot-claude"]
-default_model = "anthropic/claude-sonnet-4"
+default_adapter = "anthropic"
+default_model = "claude-sonnet-4"
 
 [providers."github-copilot-claude".auth]
 mode = "credential"
@@ -429,7 +423,8 @@ enabled = true
 
 ```toml
 [providers.shared]
-default_model = "openai/gpt-4.1-mini"
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
@@ -463,7 +458,8 @@ enabled = true
 
 ```toml
 [providers.provider_gateway]
-default_model = "openai/gpt-4.1-mini"
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
 
 [providers.provider_gateway.auth]
 mode = "api"
@@ -505,7 +501,8 @@ enabled = true
 
 ```toml
 [providers.bedrock]
-default_model = "amazon_bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"
+default_adapter = "amazon_bedrock"
+default_model = "anthropic.claude-3-7-sonnet-20250219-v1:0"
 
 [providers.bedrock.auth]
 mode = "bedrock_sigv4"
@@ -528,5 +525,5 @@ enabled = true
 - auth 只管身份与认证
 - adapter 是协议实现
 - model key 是真实上游模型名
-- provider 默认模型必须显式包含 adapter
-- 外部使用时永远写完整的 `<provider>/<adapter>/<model>`
+- provider 默认模型由 `default_adapter` 和 `default_model` 分别指定
+- 外部运行请求也应分别传 `provider_id`、`adapter_id`、`model_id`

@@ -4,7 +4,7 @@ use futures_util::stream;
 use std::collections::BTreeMap;
 
 use crate::error::AppError;
-use crate::model::{Model, ModelCapabilities, ModelId, ModelMetadata, ModelVariant};
+use crate::model::{AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelVariant};
 
 use super::{
     CapabilityFamily, CompletionRequest, CompletionResponse, CompletionStreamEvent,
@@ -15,6 +15,9 @@ use super::{
 pub trait ModelProvider: Send + Sync {
     fn id(&self) -> &str;
     fn default_model(&self) -> &ModelId;
+    fn default_adapter(&self) -> Option<&AdapterId> {
+        None
+    }
 
     /// Return the capability family used to look up model capabilities and
     /// metadata from the global registries.  Providers that use the standard
@@ -36,6 +39,15 @@ pub trait ModelProvider: Send + Sync {
         }
     }
 
+    fn model_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> ModelCapabilities {
+        let _ = adapter_id;
+        self.model_capabilities(model)
+    }
+
     fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
         match self.capability_family() {
             Some(family) => {
@@ -45,9 +57,27 @@ pub trait ModelProvider: Send + Sync {
         }
     }
 
+    fn model_metadata_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> ModelMetadata {
+        let _ = adapter_id;
+        self.model_metadata(model)
+    }
+
     fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
         let _ = model;
         BTreeMap::new()
+    }
+
+    fn model_variants_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelVariant> {
+        let _ = adapter_id;
+        self.model_variants(model)
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -59,9 +89,27 @@ pub trait ModelProvider: Send + Sync {
         false
     }
 
+    fn supports_prompt_continuation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> bool {
+        let _ = adapter_id;
+        self.supports_prompt_continuation(model)
+    }
+
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
         let _ = model;
         None
+    }
+
+    fn prompt_cache_shape_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<PromptCacheShape> {
+        let _ = adapter_id;
+        self.prompt_cache_shape(model)
     }
 
     fn prompt_cache_shape_fingerprint(&self, model: &ModelId) -> Option<String> {
@@ -72,6 +120,15 @@ pub trait ModelProvider: Send + Sync {
     async fn list_models(&self) -> Result<Vec<Model>, AppError>;
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError>;
+
+    async fn complete_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        let _ = adapter_id;
+        self.complete(request).await
+    }
 
     async fn complete_stream(
         &self,
@@ -104,6 +161,18 @@ pub trait ModelProvider: Send + Sync {
             provider_metadata: response.provider_metadata,
         }));
         Ok(Box::pin(stream::iter(events)))
+    }
+
+    async fn complete_stream_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+        AppError,
+    > {
+        let _ = adapter_id;
+        self.complete_stream(request).await
     }
 }
 

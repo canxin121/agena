@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 use crate::model::{
-    CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality, ModelLifecycle,
-    ModelMetadata, ModelVariant,
+    AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
+    ModelLifecycle, ModelMetadata, ModelVariant,
 };
 
 use super::{
@@ -482,8 +482,6 @@ impl ConfiguredModelVariant {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub family: Option<crate::model::ModelFamily>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
@@ -501,8 +499,7 @@ pub struct ConfiguredModelDefinition {
 
 impl ConfiguredModelDefinition {
     pub fn is_empty(&self) -> bool {
-        self.family.is_none()
-            && self.lifecycle.is_none()
+        self.lifecycle.is_none()
             && self.context_window_tokens.is_none()
             && self.max_output_tokens.is_none()
             && self.display_name.is_none()
@@ -513,9 +510,6 @@ impl ConfiguredModelDefinition {
 
     pub fn metadata(&self) -> ModelMetadata {
         let mut metadata = ModelMetadata::default();
-        if let Some(family) = self.family {
-            metadata = metadata.with_family(family);
-        }
         if let Some(lifecycle) = self.lifecycle {
             metadata = metadata.with_lifecycle(lifecycle);
         }
@@ -633,7 +627,20 @@ impl ModelProvider for ConfiguredModelsProvider {
         self.target.default_model()
     }
 
+    fn default_adapter(&self) -> Option<&AdapterId> {
+        self.target.default_adapter()
+    }
+
     fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
+        self.configured_capabilities(model)
+    }
+
+    fn model_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> ModelCapabilities {
+        let _ = adapter_id;
         self.configured_capabilities(model)
     }
 
@@ -641,7 +648,25 @@ impl ModelProvider for ConfiguredModelsProvider {
         self.configured_metadata(model)
     }
 
+    fn model_metadata_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> ModelMetadata {
+        let _ = adapter_id;
+        self.configured_metadata(model)
+    }
+
     fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
+        self.configured_variants(model)
+    }
+
+    fn model_variants_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelVariant> {
+        let _ = adapter_id;
         self.configured_variants(model)
     }
 
@@ -653,8 +678,26 @@ impl ModelProvider for ConfiguredModelsProvider {
         self.target.supports_prompt_continuation(model)
     }
 
+    fn supports_prompt_continuation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> bool {
+        self.target
+            .supports_prompt_continuation_for_adapter(adapter_id, model)
+    }
+
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
         self.target.prompt_cache_shape(model)
+    }
+
+    fn prompt_cache_shape_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<PromptCacheShape> {
+        self.target
+            .prompt_cache_shape_for_adapter(adapter_id, model)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
@@ -699,6 +742,14 @@ impl ModelProvider for ConfiguredModelsProvider {
         self.target.complete(request).await
     }
 
+    async fn complete_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        self.target.complete_for_adapter(adapter_id, request).await
+    }
+
     async fn complete_stream(
         &self,
         request: CompletionRequest,
@@ -708,12 +759,24 @@ impl ModelProvider for ConfiguredModelsProvider {
     > {
         self.target.complete_stream(request).await
     }
+
+    async fn complete_stream_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+        AppError,
+    > {
+        self.target
+            .complete_stream_for_adapter(adapter_id, request)
+            .await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::ModelFamily;
 
     #[derive(Clone)]
     struct StaticProvider {
@@ -798,12 +861,11 @@ mod tests {
                     .with_display_name("Base Model")
                     .with_capabilities(
                         ModelCapabilities::default().with_streaming(CapabilitySupport::Supported),
-                    )
-                    .with_metadata(ModelMetadata::default().with_family(ModelFamily::Gpt)),
+                    ),
             ],
             fallback_capabilities: ModelCapabilities::default()
                 .with_streaming(CapabilitySupport::Supported),
-            fallback_metadata: ModelMetadata::default().with_family(ModelFamily::Gpt),
+            fallback_metadata: ModelMetadata::default().with_description("fallback metadata"),
         });
 
         let provider = ConfiguredModelsProvider::new(
@@ -843,7 +905,10 @@ mod tests {
             configured.capabilities.streaming,
             CapabilitySupport::Supported
         );
-        assert_eq!(configured.metadata.family, Some(ModelFamily::Gpt));
+        assert_eq!(
+            configured.metadata.description.as_deref(),
+            Some("fallback metadata")
+        );
         assert_eq!(configured.metadata.lifecycle, Some(ModelLifecycle::Preview));
     }
 

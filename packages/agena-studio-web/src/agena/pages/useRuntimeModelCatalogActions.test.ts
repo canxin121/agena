@@ -14,10 +14,10 @@ import {
 function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderModel {
   return {
     provider_id: 'openai',
+    adapter_id: 'openai',
     id: 'gpt-5',
     display_name: 'GPT-5',
     metadata: {
-      family: 'gpt',
       lifecycle: 'active',
       description: 'Latest flagship model',
       limits: {

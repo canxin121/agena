@@ -1,11 +1,22 @@
 <script setup lang="ts">
 import { useRoute, useRouter } from 'vue-router'
 
-import { permissionActionView, permissionExplainability, permissionReplyPreview, permissionRiskLabel } from '@/agena/lib/permissionFormatting'
+import {
+  permissionActionView,
+  permissionExplainability,
+  permissionReplyPreview,
+  permissionRiskLabel,
+} from '@/agena/lib/permissionFormatting'
 import { openGlobalCommandPalette } from '@/agena/lib/commandPaletteRegistry'
 import ChatPageContent from './ChatPageContent.vue'
 import { createChatPageContentState } from './chatPageContentModel'
-import { messageBlocks, messageTags, messageUsageFacts, readPayloadMessageId, readPayloadPartId } from './chatRenderModel'
+import {
+  messageBlocks,
+  messageTags,
+  messageUsageFacts,
+  readPayloadMessageId,
+  readPayloadPartId,
+} from './chatRenderModel'
 import { useChatCommandState } from './useChatCommandState'
 import { useChatDerivedState } from './useChatDerivedState'
 import { useChatSessionActions } from './useChatSessionActions'
@@ -32,6 +43,7 @@ const {
   providers,
   rewindCheckpoints,
   runtime,
+  selectedAdapterId,
   selectedModelId,
   selectedProviderId,
   selectedVariant,
@@ -54,6 +66,8 @@ const {
   formatMessageTime,
   openRuntimeSection,
   openWorkspaceBrowser,
+  providerAdapterOptions,
+  providerDefaultAdapter,
   providerDefaultModel,
   providerModelLabel,
   providerModelOptions,
@@ -67,6 +81,7 @@ const {
     localCommandNotice,
     providerModels,
     providers,
+    selectedAdapterId,
     selectedModelId,
     selectedProviderId,
     selectedVariant,
@@ -98,6 +113,7 @@ const {
   rewindCheckpoints,
   route,
   runtime,
+  selectedAdapterId,
   selectedModelId,
   selectedProviderId,
   selectedSessionId,
@@ -175,6 +191,7 @@ const {
   newSessionTitle,
   refreshConversation,
   runSlashCommand: (inputText) => commandPalette.runSlashCommand(inputText),
+  selectedAdapterId,
   selectedModelId,
   selectedProviderId,
   selectedVariant,
@@ -294,6 +311,7 @@ const pageContent = createChatPageContentState({
   rewindCheckpoints,
   rewindToMessage,
   scrollToMessage,
+  selectedAdapterId,
   selectedModelId,
   selectedProviderId,
   selectedVariant,
@@ -313,6 +331,8 @@ const pageContent = createChatPageContentState({
   siblingSessions,
   slashSuggestions,
   submitUserAnswers,
+  providerAdapterOptions,
+  providerDefaultAdapter,
   timelineEvents,
   unrewindToMessage,
   updateUserAnswer,

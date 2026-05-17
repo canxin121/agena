@@ -166,6 +166,7 @@ mod tests {
             parent_message_id: None,
             generated_by_call_id: None,
             model_provider_id: provider.to_string(),
+            model_adapter_id: None,
             model_id: model.to_string(),
             model_variant: None,
             provider_metadata: None,

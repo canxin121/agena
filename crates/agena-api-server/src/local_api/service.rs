@@ -1177,6 +1177,7 @@ impl ApiService {
                 allowed_tools: session.runtime().execution.allowed_tools.clone(),
                 agent_permission: session.runtime().execution.agent_permission.clone(),
                 model_provider_id: session.runtime().execution.model_provider_id.clone(),
+                model_adapter_id: session.runtime().execution.model_adapter_id.clone(),
                 model_id: session.runtime().execution.model_id.clone(),
                 model_variant: session.runtime().execution.model_variant.clone(),
                 agent_run: session.runtime().execution.agent_run.clone(),
@@ -1257,17 +1258,22 @@ impl ApiService {
         });
         for m in sorted {
             let provider_id = m.metadata.model_provider_id.trim();
+            let adapter_id = m.metadata.model_adapter_id.as_deref().map(str::trim);
             let model_id = m.metadata.model_id.trim();
             if provider_id.is_empty() || model_id.is_empty() {
                 continue;
             }
-            return ModelRef::try_new(provider_id, model_id)
-                .map(Some)
-                .map_err(|error| {
-                    ApiError::bad_request(format!(
-                        "session {session_id} contains invalid persisted model metadata: {error}"
-                    ))
-                });
+            let model = match adapter_id.filter(|value| !value.is_empty()) {
+                Some(adapter_id) => {
+                    ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
+                }
+                None => ModelRef::try_new(provider_id, model_id),
+            };
+            return model.map(Some).map_err(|error| {
+                ApiError::bad_request(format!(
+                    "session {session_id} contains invalid persisted model metadata: {error}"
+                ))
+            });
         }
         Ok(None)
     }
@@ -2227,10 +2233,9 @@ fn default_model_from_registry(provider_registry: &ProviderRegistry) -> Option<M
 
     let provider_id = provider_ids.into_iter().next()?;
     let provider = provider_registry.get(provider_id.as_str())?;
-    Some(ModelRef::new(
-        provider_id,
-        provider.default_model().to_string(),
-    ))
+    let mut model = ModelRef::new(provider_id, provider.default_model().to_string());
+    model.adapter_id = provider.default_adapter().cloned();
+    Some(model)
 }
 
 pub async fn list_scheduled_jobs(manager: &SessionManager) -> Vec<agena_scheduler::ScheduledJob> {

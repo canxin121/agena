@@ -150,17 +150,6 @@ impl Default for DefaultConfig {
     }
 }
 
-impl DefaultConfig {
-    pub fn model_route(&self) -> Option<String> {
-        let adapter = self.adapter.as_deref()?.trim();
-        let model = self.model.as_deref()?.trim();
-        if adapter.is_empty() || model.is_empty() {
-            return None;
-        }
-        Some(format!("{adapter}/{model}"))
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TracingConfig {
     pub filter: String,
@@ -341,6 +330,7 @@ impl Default for ProjectInstructionsConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderConfig {
     pub enabled: bool,
+    pub default_adapter: String,
     pub default_model: String,
     pub auth: ProviderAuthConfig,
     pub adapters: BTreeMap<String, ResolvedProviderAdapterConfig>,

@@ -17,7 +17,6 @@ import {
   createModelCatalogDraftFromEntry,
   createModelCatalogDraftFromProviderSelection,
   findCatalogEntryForProviderModel,
-  splitProviderModelRoute,
   useRuntimeModelCatalogActions,
   type ModelCatalogEditableDraft,
 } from './useRuntimeModelCatalogActions'
@@ -119,8 +118,7 @@ function resetEditor(adapterId = '', modelId = '') {
 }
 
 function firstProviderAdapterId(provider: ProviderSummary) {
-  const defaultRoute = splitProviderModelRoute(provider.default_model || '')
-  return defaultRoute.adapterId || provider.adapters?.find((adapter) => adapter.enabled)?.adapter_id || ''
+  return provider.default_adapter || provider.adapters?.find((adapter) => adapter.enabled)?.adapter_id || ''
 }
 
 function editEntry(entry: ModelCatalogEntry) {
@@ -161,13 +159,10 @@ function formatVariantThinking(value: Record<string, unknown> | null | undefined
 
 function loadProviderModelDraft(model: ProviderModel) {
   const matchingEntry = findCatalogEntryForProviderModel(catalogEntriesState.value, model)
-  const route = splitProviderModelRoute(model.id)
   draft.value = createModelCatalogDraftFromProviderSelection(catalogEntriesState.value, model)
-  editingEntryKey.value = matchingEntry
-    ? makeEntryKey(matchingEntry.model_id, matchingEntry.kind)
-    : ''
+  editingEntryKey.value = matchingEntry ? makeEntryKey(matchingEntry.model_id, matchingEntry.kind) : ''
   actionError.value = ''
-  actionMessage.value = `Loaded ${model.provider_id}/${route.adapterId || 'adapter'}/${route.modelId} into the draft editor.`
+  actionMessage.value = `Loaded ${model.provider_id}/${model.adapter_id || 'adapter'}/${model.id} into the draft editor.`
 }
 
 async function saveDraft() {
@@ -278,10 +273,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         <div class="page-header" style="align-items: flex-start">
           <div>
             <h3>Provider Defaults</h3>
-            <p class="muted">
-              Provider-visible models usually follow the runtime adapter routing, often as
-              <span class="mono">&lt;adapter&gt;/&lt;model&gt;</span>.
-            </p>
+            <p class="muted">Provider defaults keep adapter and model as separate runtime fields.</p>
           </div>
         </div>
         <div v-if="props.providers.length" class="list">
@@ -291,8 +283,8 @@ function isEntrySelected(entry: ModelCatalogEntry) {
                 <div>
                   <strong>{{ provider.provider_id }}</strong>
                 </div>
+                <div class="muted">Default adapter: {{ provider.default_adapter || 'auto' }}</div>
                 <div class="muted">Default model: {{ provider.default_model || 'unset' }}</div>
-                <div class="muted mono">{{ provider.default_model_ref || 'n/a' }}</div>
                 <div class="muted" style="margin-top: 8px">Live models:</div>
                 <div
                   v-if="(props.providerModels[provider.provider_id] || []).length"
@@ -600,11 +592,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         </div>
 
         <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
-          <button
-            class="button"
-            :disabled="!catalogQuery && catalogKindFilter === 'all'"
-            @click="clearCatalogFilters"
-          >
+          <button class="button" :disabled="!catalogQuery && catalogKindFilter === 'all'" @click="clearCatalogFilters">
             Clear Filters
           </button>
         </div>

@@ -9,7 +9,7 @@ use futures_util::{StreamExt, stream::BoxStream};
 
 use crate::{
     error::AppError,
-    model::{Model, ModelId, ModelMetadata, ModelVariant, ProviderId},
+    model::{AdapterId, Model, ModelId, ModelMetadata, ModelVariant, ProviderId},
 };
 
 use super::{
@@ -23,23 +23,28 @@ pub struct ProviderModelRoute {
     pub definition: ConfiguredModelDefinition,
 }
 
+pub type ProviderModelRouteKey = (String, String);
+
 #[derive(Clone)]
 pub struct MultiAdapterProvider {
     id: String,
+    default_adapter: AdapterId,
     default_model: ModelId,
     adapters: BTreeMap<String, Arc<dyn ModelProvider>>,
-    routes: BTreeMap<String, ProviderModelRoute>,
+    routes: BTreeMap<ProviderModelRouteKey, ProviderModelRoute>,
 }
 
 impl MultiAdapterProvider {
     pub fn new(
         id: impl Into<String>,
+        default_adapter: impl Into<String>,
         default_model: impl Into<String>,
         adapters: BTreeMap<String, Arc<dyn ModelProvider>>,
-        routes: BTreeMap<String, ProviderModelRoute>,
+        routes: BTreeMap<ProviderModelRouteKey, ProviderModelRoute>,
     ) -> Self {
         Self {
             id: id.into(),
+            default_adapter: AdapterId::new(default_adapter),
             default_model: ModelId::new(default_model),
             adapters,
             routes,
@@ -55,38 +60,24 @@ impl MultiAdapterProvider {
         })
     }
 
-    fn parse_visible_model_id(
-        &self,
-        visible_model_id: &str,
-    ) -> Result<(String, ModelId), AppError> {
-        let Some((adapter_id, model_id)) = visible_model_id.split_once('/') else {
-            return Err(AppError::Config(format!(
-                "provider `{}` model `{visible_model_id}` must be in `<adapter>/<model>` format",
-                self.id
-            )));
-        };
-
-        let adapter_id = adapter_id.trim();
-        let model_id = model_id.trim();
-        if adapter_id.is_empty() || model_id.is_empty() {
-            return Err(AppError::Config(format!(
-                "provider `{}` model `{visible_model_id}` must be in `<adapter>/<model>` format",
-                self.id
-            )));
-        }
-
-        Ok((adapter_id.to_owned(), ModelId::new(model_id)))
+    fn selected_adapter(&self, adapter_id: Option<&AdapterId>) -> AdapterId {
+        adapter_id
+            .cloned()
+            .unwrap_or_else(|| self.default_adapter.clone())
     }
 
     fn resolve_route(
         &self,
+        adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> Result<(String, ModelId, ConfiguredModelDefinition), AppError> {
-        let (adapter_id, target_model) = self.parse_visible_model_id(model.as_str())?;
-        if let Some(route) = self.routes.get(model.as_str()) {
+    ) -> Result<(AdapterId, ModelId, ConfiguredModelDefinition), AppError> {
+        let adapter_id = self.selected_adapter(adapter_id);
+        let target_model = model.clone();
+        let key = (adapter_id.to_string(), target_model.to_string());
+        if let Some(route) = self.routes.get(&key) {
             if !route.enabled {
                 return Err(AppError::Config(format!(
-                    "provider `{}` model `{}` is disabled",
+                    "provider `{}` adapter `{adapter_id}` model `{}` is disabled",
                     self.id, model
                 )));
             }
@@ -103,14 +94,15 @@ impl MultiAdapterProvider {
 
     fn rewrite_model(
         &self,
-        visible_model: &ModelId,
         target_model: &ModelId,
         mut model: Model,
+        adapter_id: &AdapterId,
         adapter: &dyn ModelProvider,
         definition: &ConfiguredModelDefinition,
     ) -> Model {
         model.provider_id = ProviderId::new(self.id.clone());
-        model.id = visible_model.clone();
+        model.adapter_id = Some(adapter_id.clone());
+        model.id = target_model.clone();
         definition.apply_to_model(
             model,
             &adapter.model_capabilities(target_model),
@@ -120,13 +112,14 @@ impl MultiAdapterProvider {
 
     fn synthesize_model(
         &self,
-        visible_model: &ModelId,
         target_model: &ModelId,
+        adapter_id: &AdapterId,
         adapter: &dyn ModelProvider,
         definition: &ConfiguredModelDefinition,
     ) -> Model {
         definition.apply_to_model(
-            Model::new(self.id.as_str(), visible_model.as_str()),
+            Model::new(self.id.as_str(), target_model.as_str())
+                .with_adapter_id(adapter_id.as_str()),
             &adapter.model_capabilities(target_model),
             &adapter.model_metadata(target_model),
         )
@@ -143,8 +136,20 @@ impl ModelProvider for MultiAdapterProvider {
         &self.default_model
     }
 
+    fn default_adapter(&self) -> Option<&AdapterId> {
+        Some(&self.default_adapter)
+    }
+
     fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
-        self.resolve_route(model)
+        self.model_capabilities_for_adapter(None, model)
+    }
+
+    fn model_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> ModelCapabilities {
+        self.resolve_route(adapter_id, model)
             .ok()
             .and_then(|(adapter_id, target_model, definition)| {
                 self.adapter(adapter_id.as_str()).ok().map(|adapter| {
@@ -157,7 +162,15 @@ impl ModelProvider for MultiAdapterProvider {
     }
 
     fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
-        self.resolve_route(model)
+        self.model_metadata_for_adapter(None, model)
+    }
+
+    fn model_metadata_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> ModelMetadata {
+        self.resolve_route(adapter_id, model)
             .ok()
             .and_then(|(adapter_id, target_model, definition)| {
                 self.adapter(adapter_id.as_str()).ok().map(|adapter| {
@@ -170,7 +183,15 @@ impl ModelProvider for MultiAdapterProvider {
     }
 
     fn model_variants(&self, model: &ModelId) -> BTreeMap<String, ModelVariant> {
-        self.resolve_route(model)
+        self.model_variants_for_adapter(None, model)
+    }
+
+    fn model_variants_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelVariant> {
+        self.resolve_route(adapter_id, model)
             .ok()
             .and_then(|(adapter_id, target_model, definition)| {
                 self.adapter(adapter_id.as_str()).ok().map(|adapter| {
@@ -200,7 +221,15 @@ impl ModelProvider for MultiAdapterProvider {
     }
 
     fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
-        self.resolve_route(model)
+        self.supports_prompt_continuation_for_adapter(None, model)
+    }
+
+    fn supports_prompt_continuation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> bool {
+        self.resolve_route(adapter_id, model)
             .ok()
             .and_then(|(adapter_id, target_model, _)| {
                 self.adapter(adapter_id.as_str())
@@ -211,7 +240,15 @@ impl ModelProvider for MultiAdapterProvider {
     }
 
     fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
-        self.resolve_route(model)
+        self.prompt_cache_shape_for_adapter(None, model)
+    }
+
+    fn prompt_cache_shape_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<PromptCacheShape> {
+        self.resolve_route(adapter_id, model)
             .ok()
             .and_then(|(adapter_id, target_model, _)| {
                 self.adapter(adapter_id.as_str())
@@ -225,39 +262,40 @@ impl ModelProvider for MultiAdapterProvider {
         let mut seen = BTreeSet::new();
 
         for (adapter_id, adapter) in &self.adapters {
+            let adapter_id = AdapterId::new(adapter_id.clone());
             let listed = adapter.list_models().await?;
             for model in listed {
                 let target_model = model.id.clone();
-                let visible_model = ModelId::new(format!("{adapter_id}/{}", target_model.as_str()));
-                let route = self.routes.get(visible_model.as_str());
+                let route_key = (adapter_id.to_string(), target_model.to_string());
+                let route = self.routes.get(&route_key);
                 if matches!(route, Some(route) if !route.enabled) {
                     continue;
                 }
                 let definition = route
                     .map(|route| route.definition.clone())
                     .unwrap_or_default();
-                seen.insert(visible_model.to_string());
+                seen.insert(route_key);
                 visible.push(self.rewrite_model(
-                    &visible_model,
                     &target_model,
                     model,
+                    &adapter_id,
                     adapter.as_ref(),
                     &definition,
                 ));
             }
         }
 
-        for (visible_model_id, route) in &self.routes {
-            if !route.enabled || seen.contains(visible_model_id) {
+        for ((adapter_id, target_model), route) in &self.routes {
+            if !route.enabled || seen.contains(&(adapter_id.clone(), target_model.clone())) {
                 continue;
             }
 
-            let (adapter_id, target_model) = self.parse_visible_model_id(visible_model_id)?;
+            let adapter_id = AdapterId::new(adapter_id.clone());
+            let target_model = ModelId::new(target_model.clone());
             let adapter = self.adapter(adapter_id.as_str())?;
-            let visible_model = ModelId::new(visible_model_id.clone());
             visible.push(self.synthesize_model(
-                &visible_model,
                 &target_model,
+                &adapter_id,
                 adapter.as_ref(),
                 &route.definition,
             ));
@@ -266,12 +304,17 @@ impl ModelProvider for MultiAdapterProvider {
         Ok(visible)
     }
 
-    async fn complete(
+    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        self.complete_for_adapter(None, request).await
+    }
+
+    async fn complete_for_adapter(
         &self,
+        adapter_id: Option<&AdapterId>,
         mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
         let visible_model = request.model.clone();
-        let (adapter_id, target_model, _) = self.resolve_route(&visible_model)?;
+        let (adapter_id, target_model, _) = self.resolve_route(adapter_id, &visible_model)?;
         let adapter = self.adapter(adapter_id.as_str())?;
         request.model = target_model;
         let mut response = adapter.complete(request).await?;
@@ -282,13 +325,24 @@ impl ModelProvider for MultiAdapterProvider {
 
     async fn complete_stream(
         &self,
+        request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+        AppError,
+    > {
+        self.complete_stream_for_adapter(None, request).await
+    }
+
+    async fn complete_stream_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
         mut request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
         let visible_model = request.model.clone();
-        let (adapter_id, target_model, _) = self.resolve_route(&visible_model)?;
+        let (adapter_id, target_model, _) = self.resolve_route(adapter_id, &visible_model)?;
         let adapter = self.adapter(adapter_id.as_str())?;
         request.model = target_model;
         let provider_id = self.id.clone();
@@ -397,7 +451,8 @@ mod tests {
     async fn multi_adapter_provider_routes_explicit_models() {
         let provider = MultiAdapterProvider::new(
             "shared",
-            "api/gpt-4.1-mini",
+            "api",
+            "gpt-4.1-mini",
             BTreeMap::from([
                 (
                     "api".to_owned(),
@@ -418,14 +473,14 @@ mod tests {
             ]),
             BTreeMap::from([
                 (
-                    "api/gpt-4.1-mini".to_owned(),
+                    ("api".to_owned(), "gpt-4.1-mini".to_owned()),
                     ProviderModelRoute {
                         enabled: true,
                         definition: ConfiguredModelDefinition::default(),
                     },
                 ),
                 (
-                    "codex/gpt-5-codex".to_owned(),
+                    ("codex".to_owned(), "gpt-5-codex".to_owned()),
                     ProviderModelRoute {
                         enabled: true,
                         definition: ConfiguredModelDefinition::default(),
@@ -440,31 +495,48 @@ mod tests {
             .map(|model| model.id.to_string())
             .collect::<Vec<_>>();
         assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == "api/gpt-4.1-mini"));
-        assert!(ids.iter().any(|id| id == "codex/gpt-5-codex"));
+        assert!(
+            models
+                .iter()
+                .any(
+                    |model| model.adapter_id.as_ref().map(AdapterId::as_str) == Some("api")
+                        && model.id.as_str() == "gpt-4.1-mini"
+                )
+        );
+        assert!(
+            models
+                .iter()
+                .any(
+                    |model| model.adapter_id.as_ref().map(AdapterId::as_str) == Some("codex")
+                        && model.id.as_str() == "gpt-5-codex"
+                )
+        );
 
         let response = provider
-            .complete(CompletionRequest {
-                model: ModelId::new("codex/gpt-5-codex"),
-                system: None,
-                messages: Vec::new(),
-                tools: Vec::new(),
-                temperature: None,
-                max_output_tokens: None,
-                prompt_cache_key: None,
-                previous_response_id: None,
-                prompt_window_generation: None,
-                stop_sequences: Vec::new(),
-                top_p: None,
-                top_k: None,
-                seed: None,
-                thinking: None,
-                response_format: None,
-            })
+            .complete_for_adapter(
+                Some(&AdapterId::new("codex")),
+                CompletionRequest {
+                    model: ModelId::new("gpt-5-codex"),
+                    system: None,
+                    messages: Vec::new(),
+                    tools: Vec::new(),
+                    temperature: None,
+                    max_output_tokens: None,
+                    prompt_cache_key: None,
+                    previous_response_id: None,
+                    prompt_window_generation: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    response_format: None,
+                },
+            )
             .await
             .expect("completion should route");
         assert_eq!(response.provider_id.as_str(), "shared");
-        assert_eq!(response.model.as_str(), "codex/gpt-5-codex");
+        assert_eq!(response.model.as_str(), "gpt-5-codex");
         assert_eq!(response.text, "shared::codex:gpt-5-codex");
     }
 
@@ -472,7 +544,8 @@ mod tests {
     async fn multi_adapter_provider_supports_single_adapter_passthrough() {
         let provider = MultiAdapterProvider::new(
             "openai",
-            "default/gpt-4.1",
+            "default",
+            "gpt-4.1",
             BTreeMap::from([(
                 "default".to_owned(),
                 Arc::new(StaticProvider {
@@ -487,11 +560,15 @@ mod tests {
         let models = provider.list_models().await.expect("models should list");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].provider_id.as_str(), "openai");
-        assert_eq!(models[0].id.as_str(), "default/gpt-4.1");
+        assert_eq!(
+            models[0].adapter_id.as_ref().map(AdapterId::as_str),
+            Some("default")
+        );
+        assert_eq!(models[0].id.as_str(), "gpt-4.1");
 
         let response = provider
             .complete(CompletionRequest {
-                model: ModelId::new("default/gpt-4.1"),
+                model: ModelId::new("gpt-4.1"),
                 system: None,
                 messages: Vec::new(),
                 tools: Vec::new(),
@@ -510,7 +587,7 @@ mod tests {
             .await
             .expect("completion should pass through");
         assert_eq!(response.provider_id.as_str(), "openai");
-        assert_eq!(response.model.as_str(), "default/gpt-4.1");
+        assert_eq!(response.model.as_str(), "gpt-4.1");
         assert_eq!(response.text, "openai:gpt-4.1");
     }
 }

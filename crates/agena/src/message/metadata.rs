@@ -40,6 +40,8 @@ pub struct MessageMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated_by_call_id: Option<i64>,
     pub model_provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_adapter_id: Option<String>,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_variant: Option<String>,
@@ -56,6 +58,7 @@ impl Default for MessageMetadata {
             parent_message_id: None,
             generated_by_call_id: None,
             model_provider_id: String::new(),
+            model_adapter_id: None,
             model_id: String::new(),
             model_variant: None,
             provider_metadata: None,

@@ -94,9 +94,12 @@ fn configured_default_model(
         return Ok(None);
     };
     let registry = snapshot.provider_registry();
-    let model_route = default.model_route();
     registry
-        .resolve_model_target(provider_id, model_route.as_deref())
+        .resolve_model_selection(
+            provider_id,
+            default.adapter.as_deref(),
+            default.model.as_deref(),
+        )
         .map(Some)
         .map_err(ServerError::Core)
 }
@@ -283,6 +286,7 @@ fn execution_context_from_http(
         allowed_tools: value.allowed_tools,
         agent_permission: value.agent_permission,
         model_provider_id: value.model_provider_id,
+        model_adapter_id: value.model_adapter_id,
         model_id: value.model_id,
         model_variant: value.model_variant,
         agent_run: value.agent_run,
@@ -655,7 +659,7 @@ fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource> {
                     .unwrap_or_default();
 
                 ProviderSummaryResource {
-                    default_model_ref: format!("{provider_id}/{}", provider.default_model()),
+                    default_adapter: provider.default_adapter().map(ToString::to_string),
                     default_model: provider.default_model().to_string(),
                     adapters,
                     provider_id,

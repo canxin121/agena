@@ -94,6 +94,7 @@ function createInput(query: Record<string, unknown> = {}): ChatSessionLifecycleI
     rewindCheckpoints: ref<RewindCheckpointResource[]>([]),
     route: { query } as ChatSessionLifecycleInput['route'],
     runtime: ref<RuntimeStatus | null>(null),
+    selectedAdapterId: ref(''),
     selectedModelId: ref(''),
     selectedProviderId: ref(''),
     selectedSessionId: ref<number | null>(null),
@@ -155,7 +156,11 @@ function createDeps() {
     listProviders: async () => {
       calls.push('listProviders')
       return [
-        { provider_id: 'anthropic', default_model: 'claude-opus-4-7', default_model_ref: 'anthropic/claude-opus-4-7' },
+        {
+          provider_id: 'anthropic',
+          default_adapter: 'anthropic',
+          default_model: 'claude-opus-4-7',
+        },
       ]
     },
     listRewindCheckpoints: async (sessionId) => {
@@ -223,6 +228,7 @@ describe('useChatSessionLifecycle', () => {
     expect(input.providers.value.map((item) => item.provider_id)).toEqual(['anthropic'])
     expect(input.providerModels.anthropic?.map((item) => item.id)).toEqual(['claude-opus-4-7'])
     expect(input.selectedProviderId.value).toBe('anthropic')
+    expect(input.selectedAdapterId.value).toBe('anthropic')
     expect(input.selectedModelId.value).toBe('claude-opus-4-7')
     expect(input.composer.value).toBe('/continue')
     expect(input.localCommandNotice.value).toBe('Prepared /continue from runtime inspector.')

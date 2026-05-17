@@ -50,6 +50,7 @@ export type ChatSessionActionsInput = {
       source?: 'navigation' | 'runtime-skill' | 'runtime-command' | 'chat-action' | 'workspace-action'
     }
   }>
+  selectedAdapterId: Ref<string>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
   selectedVariant: Ref<string>
@@ -404,6 +405,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         sessionId,
         text,
         providerId: input.selectedProviderId.value || undefined,
+        adapterId:
+          input.selectedProviderId.value && input.selectedAdapterId.value ? input.selectedAdapterId.value : undefined,
         modelId:
           input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
         variant:
@@ -432,6 +435,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.sessionState.value = await deps.continueSession({
         sessionId,
         providerId: input.selectedProviderId.value || undefined,
+        adapterId:
+          input.selectedProviderId.value && input.selectedAdapterId.value ? input.selectedAdapterId.value : undefined,
         modelId:
           input.selectedProviderId.value && input.selectedModelId.value ? input.selectedModelId.value : undefined,
         variant:

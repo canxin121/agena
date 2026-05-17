@@ -333,7 +333,7 @@ cache_max_age_secs = 86400
 
 Model catalog 按 model 管理元数据和本地模型覆盖，不再保存 default model。catalog 文件里的 model key 是真实 model id，例如 `models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由，也不再绑定某个 adapter。默认 `remote_url` 指向本仓库的 `catalog/model-catalog.json` GitHub raw 文件；`fallback_url` 是远程失败时的备用地址，也默认指向同一个本仓库 raw catalog；official catalog 会缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`，本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。
 
-运行时 provider 仍然会把启用的 adapter 模型投影成 provider-local route，例如 `openai/gpt-5`，因为一个 provider 可以同时挂多个 adapter。`providers.<id>.default_model` 仍可用作 provider 内部默认路由，并且继续使用 `"<adapter>/<model>"`；如果该 provider 正好是 `default.provider` 且省略了 provider-local `default_model`，解析器会用 `default.adapter/default.model` 补出 provider 默认路由。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存/删除 model-level 本地 override。Studio Settings / Providers 页面可以创建 provider，查看 provider 已启用 adapter 和 live models，把任意 catalog model 复制到某个 provider 的目标 adapter 下，也可以实时手动添加或修改 provider-local adapter model。
+运行时 provider 会在 live model 列表里返回独立的 `adapter_id` 和真实 `model_id`，不会把二者拼成 provider-local route。`providers.<id>.default_adapter` 和 `providers.<id>.default_model` 可用作 provider 内部默认选择；如果该 provider 正好是 `default.provider` 且省略了 provider-local 默认值，解析器会分别使用 `default.adapter` 和 `default.model`。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存/删除 model-level 本地 override。Studio Settings / Providers 页面可以创建 provider，查看 provider 已启用 adapter 和 live models，把任意 catalog model 复制到某个 provider 的目标 adapter 下，也可以实时手动添加或修改 provider-local adapter model。
 
 Provider 的 live `/models` 列表还有独立磁盘缓存，用于减少启动 UI 或打开模型选择器时的 provider API 请求。默认位置是 `~/.agena/provider-models`，默认 TTL 是 15 分钟；可以通过 `AGENA_PROVIDER_MODELS_CACHE_DIR`、`AGENA_PROVIDER_MODELS_CACHE_TTL_SECS` 覆盖。如果 live `/models` 请求失败且没有可用缓存，Agena 会尝试从 model catalog 派生列表；该回退地址可通过 `AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL` 覆盖。
 
@@ -386,11 +386,11 @@ enabled = true
 关键规则：
 
 - 全局默认 provider/adapter/model/agent 写在 `[default]`。
-- `providers.<id>.default_model` 是 provider-local 默认路由；如果使用，必须写成 `"<adapter>/<model>"`。
+- `providers.<id>.default_adapter` 和 `providers.<id>.default_model` 是 provider-local 默认选择；`default_model` 必须是真实上游 model id。
 - adapter 不再有 `default_model`。
 - model key 就是真实 model id，不再有 `target_model`。
 - `enabled` 可挂在 provider / adapter / model 三层。
-- 外部完整 model ref 统一为 `"<provider>/<adapter>/<model>"`。
+- 运行时模型选择由 `provider_id`、`adapter_id`、`model_id` 三个字段共同决定，不使用三段字符串编码。
 
 默认值：
 
@@ -431,7 +431,8 @@ adapter 常见额外字段：
 
 ```toml
 [providers.openai_chatgpt]
-default_model = "openai/gpt-5.3-codex"
+default_adapter = "openai"
+default_model = "gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
 mode = "credential"
@@ -448,7 +449,8 @@ enabled = true
 
 ```toml
 [providers."github-copilot"]
-default_model = "openai/gpt-4o-mini"
+default_adapter = "openai"
+default_model = "gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
@@ -464,7 +466,8 @@ enabled = true
 
 ```toml
 [providers.atomgit]
-default_model = "openai/Kimi-K2-Instruct"
+default_adapter = "openai"
+default_model = "Kimi-K2-Instruct"
 
 [providers.atomgit.auth]
 mode = "credential"
@@ -480,7 +483,8 @@ enabled = true
 
 ```toml
 [providers.shared]
-default_model = "openai/gpt-4.1-mini"
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"

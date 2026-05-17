@@ -76,8 +76,10 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`cancelUserInput:${sessionId}:${requestId}`)
       return sessionState()
     },
-    continueSession: async ({ sessionId, providerId, modelId, variant }) => {
-      calls.push(`continueSession:${sessionId}:${providerId || ''}:${modelId || ''}:${variant || ''}`)
+    continueSession: async ({ sessionId, providerId, adapterId, modelId, variant }) => {
+      calls.push(
+        `continueSession:${sessionId}:${providerId || ''}:${adapterId || ''}:${modelId || ''}:${variant || ''}`,
+      )
       return sessionState({ run_state: 'awaiting_model' })
     },
     createSession: async ({ workspaceId, title, parentId }) => {
@@ -203,8 +205,10 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`setSessionGoal:${sessionId}:${objective || ''}:${tokenBudget ?? ''}`)
       return goal({ objective: objective || 'ship refactor', token_budget: tokenBudget })
     },
-    submitTurn: async ({ sessionId, text, providerId, modelId, variant }) => {
-      calls.push(`submitTurn:${sessionId}:${text}:${providerId || ''}:${modelId || ''}:${variant || ''}`)
+    submitTurn: async ({ sessionId, text, providerId, adapterId, modelId, variant }) => {
+      calls.push(
+        `submitTurn:${sessionId}:${text}:${providerId || ''}:${adapterId || ''}:${modelId || ''}:${variant || ''}`,
+      )
       return sessionState({ run_state: 'awaiting_model' })
     },
     unrewindSession: async ({ sessionId, messageId }) => {
@@ -268,6 +272,7 @@ function createInput() {
       refreshCalls.push(foreground)
     },
     runSlashCommand: async (_inputText: string) => ({ matched: false, command: undefined }),
+    selectedAdapterId: ref('anthropic'),
     selectedModelId: ref('claude-opus-4-7'),
     selectedProviderId: ref('anthropic'),
     selectedVariant: ref(''),
@@ -335,7 +340,7 @@ describe('useChatSessionActions', () => {
     const actions = useChatSessionActions(input, deps)
     await actions.sendPrompt()
 
-    expect(deps.calls.includes('submitTurn:3:hello world:anthropic:claude-opus-4-7:')).toBe(true)
+    expect(deps.calls.includes('submitTurn:3:hello world:anthropic:anthropic:claude-opus-4-7:')).toBe(true)
     expect(input.sessionState.value?.run_state).toBe('awaiting_model')
     expect(input.composer.value).toBe('')
     expect(syncCalls).toEqual(['sync'])

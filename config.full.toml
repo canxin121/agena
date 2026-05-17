@@ -235,8 +235,9 @@ include_global = true
 # backend = "duck_duck_go_html"
 
 [providers.openai]
-# Provider-local default route. The global session default lives in [default].
-default_model = "openai/gpt-5.5"
+# Provider-local default selection. The global session default lives in [default].
+default_adapter = "openai"
+default_model = "gpt-5.5"
 
 [providers.openai.auth]
 mode = "api"
@@ -264,7 +265,8 @@ stream_mode = "sse"
 # Example — OpenAI GPT-5.x with named reasoning levels:
 #
 # [providers.openai-reasoning]
-# default_model = "openai/gpt-5.5"
+# default_adapter = "openai"
+# default_model = "gpt-5.5"
 #
 # [providers.openai-reasoning.auth]
 # mode = "api"
@@ -285,7 +287,8 @@ stream_mode = "sse"
 # Example — Anthropic with named thinking levels:
 #
 # [providers.anthropic]
-# default_model = "anthropic/claude-sonnet-4-5"
+# default_adapter = "anthropic"
+# default_model = "claude-sonnet-4-5"
 #
 # [providers.anthropic.auth]
 # mode = "api"
@@ -307,14 +310,16 @@ stream_mode = "sse"
 # structure:
 #
 # [providers.ollama]
-# default_model = "ollama/qwen3:14b"
+# default_adapter = "ollama"
+# default_model = "qwen3:14b"
 #
 # [providers.ollama.adapters.ollama]
 # enabled = true
 # base_url = "http://localhost:11434"
 #
 # [providers.lmstudio]
-# default_model = "openai/local-model"
+# default_adapter = "openai"
+# default_model = "local-model"
 #
 # [providers.lmstudio.auth]
 # mode = "api"
@@ -326,7 +331,8 @@ stream_mode = "sse"
 # api_mode = "chat"
 #
 # [providers.openrouter]
-# default_model = "openai/gpt-4o-mini"
+# default_adapter = "openai"
+# default_model = "gpt-4o-mini"
 #
 # [providers.openrouter.auth]
 # mode = "api"
@@ -338,7 +344,8 @@ stream_mode = "sse"
 # api_mode = "chat"
 #
 # [providers."github-copilot"]
-# default_model = "openai/gpt-4o-mini"
+# default_adapter = "openai"
+# default_model = "gpt-4o-mini"
 #
 # [providers."github-copilot".auth]
 # mode = "credential"
@@ -363,7 +370,8 @@ stream_mode = "sse"
 # 
 #
 # [providers."google-vertex"]
-# default_model = "openai/google/gemini-2.5-pro"
+# default_adapter = "openai"
+# default_model = "google/gemini-2.5-pro"
 #
 # [providers."google-vertex".auth]
 # mode = "api"
@@ -375,7 +383,8 @@ stream_mode = "sse"
 # capability_family = "gemini"
 
 [providers.openai_chatgpt]
-default_model = "openai/gpt-5.3-codex"
+default_adapter = "openai"
+default_model = "gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
 mode = "credential"
@@ -387,7 +396,8 @@ enabled = true
 backend = "chatgpt_codex"
 
 [providers.atomgit]
-default_model = "openai/Kimi-K2-Instruct"
+default_adapter = "openai"
+default_model = "Kimi-K2-Instruct"
 
 [providers.atomgit.auth]
 mode = "credential"
@@ -401,7 +411,8 @@ enabled = true
 enabled = true
 
 [providers."github-copilot"]
-default_model = "openai/gpt-4o-mini"
+default_adapter = "openai"
+default_model = "gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
@@ -424,14 +435,16 @@ enabled = true
 
 
 [providers.ollama]
-default_model = "ollama/qwen3:14b"
+default_adapter = "ollama"
+default_model = "qwen3:14b"
 
 [providers.ollama.adapters.ollama]
 enabled = true
 base_url = "http://localhost:11434"
 
 [providers.gitlab]
-default_model = "gitlab/claude-sonnet-4-5"
+default_adapter = "gitlab"
+default_model = "claude-sonnet-4-5"
 
 [providers.gitlab.auth]
 mode = "credential"
@@ -444,7 +457,8 @@ instance_url = "https://gitlab.com"
 ai_gateway_url = "https://cloud.gitlab.com"
 
 [providers.shared-gateway]
-default_model = "openai/gpt-4.1-mini"
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
 
 [providers.shared-gateway.auth]
 mode = "api"
@@ -468,7 +482,8 @@ enabled = true
 [providers.shared-gateway.adapters.gemini.models."gemini-2.5-pro"]
 
 [providers."google-vertex"]
-default_model = "openai/google/gemini-2.5-flash"
+default_adapter = "openai"
+default_model = "google/gemini-2.5-flash"
 
 [providers."google-vertex".auth]
 mode = "api"

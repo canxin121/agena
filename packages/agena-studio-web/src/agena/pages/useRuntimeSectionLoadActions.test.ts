@@ -188,7 +188,6 @@ describe('useRuntimeSectionLoadActions', () => {
             {
               provider_id: 'anthropic',
               default_model: 'claude-opus-4-7',
-              default_model_ref: 'anthropic/claude-opus-4-7',
             },
           ],
           providerModels: { anthropic: [] },
@@ -246,7 +245,6 @@ describe('useRuntimeSectionLoadActions', () => {
               {
                 provider_id: 'anthropic',
                 default_model: 'claude-opus-4-7',
-                default_model_ref: 'anthropic/claude-opus-4-7',
               },
             ],
             providerModels: { anthropic: [] },

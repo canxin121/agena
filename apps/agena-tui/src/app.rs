@@ -2720,7 +2720,11 @@ impl App {
                     .into_iter()
                     .map(|provider| PickerItem {
                         label: provider.provider_id.clone(),
-                        detail: format!("default {}", provider.default_model_ref),
+                        detail: format!(
+                            "default {} / {}",
+                            provider.default_adapter.as_deref().unwrap_or("adapter"),
+                            provider.default_model
+                        ),
                         value: PickerValue::Provider(provider),
                     })
                     .collect();
@@ -4390,10 +4394,14 @@ impl App {
     }
 
     fn apply_provider_override(&mut self, provider: ProviderSummaryResource) {
-        self.run_options.model = Some(ModelRef::new(
-            provider.provider_id.clone(),
-            provider.default_model.clone(),
-        ));
+        self.run_options.model = Some(match provider.default_adapter.clone() {
+            Some(adapter_id) => ModelRef::new_with_adapter(
+                provider.provider_id.clone(),
+                adapter_id,
+                provider.default_model.clone(),
+            ),
+            None => ModelRef::new(provider.provider_id.clone(), provider.default_model.clone()),
+        });
         self.run_options.variant = None;
         self.focus = Focus::Composer;
         self.flash_success(self.i18n.text_args(

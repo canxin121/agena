@@ -39,6 +39,7 @@ export type ChatSessionLifecycleInput = {
   rewindCheckpoints: Ref<RewindCheckpointResource[]>
   route: RouteLocationNormalizedLoaded
   runtime: Ref<RuntimeStatus | null>
+  selectedAdapterId: Ref<string>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
   selectedSessionId: Ref<number | null>
@@ -147,6 +148,7 @@ export function useChatSessionLifecycle(
 
     if (!input.selectedProviderId.value && providerData.length === 1) {
       input.selectedProviderId.value = providerData[0]?.provider_id || ''
+      input.selectedAdapterId.value = providerData[0]?.default_adapter || ''
       input.selectedModelId.value = providerData[0]?.default_model || ''
     }
 
@@ -205,7 +207,8 @@ export function useChatSessionLifecycle(
     }
 
     const routeSessionId = readChatRouteSessionId(input.route.query.session)
-    const routeSession = routeSessionId !== null ? input.sessions.value.find((session) => session.id === routeSessionId) : null
+    const routeSession =
+      routeSessionId !== null ? input.sessions.value.find((session) => session.id === routeSessionId) : null
     if (routeSession) {
       input.selectedSessionId.value = routeSession.id
       await refreshConversation(true)

@@ -659,8 +659,9 @@ pub struct ProviderAdapterSummaryResource {
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderSummaryResource {
     pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_adapter: Option<String>,
     pub default_model: String,
-    pub default_model_ref: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
 }
@@ -940,6 +941,8 @@ pub struct SessionExecutionContextResource {
     pub agent_permission: PermissionConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_adapter_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -201,19 +201,23 @@ function createChatPageContentState() {
     formatUsageUsd: (value: number) => `$${value.toFixed(4)}`,
     copySessionUsageSummary: () => {},
     selectedProviderId: ref('openai'),
+    selectedAdapterId: ref('openai'),
     selectedModelId: ref('gpt-5'),
     selectedVariant: ref('high'),
     providers: ref([
       {
         provider_id: 'openai',
+        default_adapter: 'openai',
         default_model: 'gpt-5',
-        default_model_ref: 'openai/gpt-5',
       },
     ]),
+    providerDefaultAdapter: () => 'openai',
     providerDefaultModel: () => 'gpt-5',
+    providerAdapterOptions: () => ['openai'],
     providerModelOptions: () => [
       {
         provider_id: 'openai',
+        adapter_id: 'openai',
         id: 'gpt-5',
         display_name: 'GPT-5',
       },
@@ -243,7 +247,8 @@ function createChatPageContentState() {
     ]),
     readPayloadMessageId: (payload: Record<string, unknown>) =>
       typeof payload.message_id === 'number' ? payload.message_id : null,
-    readPayloadPartId: (payload: Record<string, unknown>) => (typeof payload.part_id === 'number' ? payload.part_id : null),
+    readPayloadPartId: (payload: Record<string, unknown>) =>
+      typeof payload.part_id === 'number' ? payload.part_id : null,
     scrollToMessage: () => {},
     permissionActionView: () => ({ title: 'bash · git status *', details: ['kind=tool'] }),
     permissionRiskLabel: () => 'mutable tool execution',
@@ -251,8 +256,7 @@ function createChatPageContentState() {
       summary: 'Matched a remembered permission reply · scope=workspace · operator=assistant',
       details: ['source=permission_reply', 'scope=workspace', 'operator=assistant'],
     }),
-    permissionReplyPreview: (scope?: 'session' | 'workspace' | 'global') =>
-      scope ? `remembered:${scope}` : 'once',
+    permissionReplyPreview: (scope?: 'session' | 'workspace' | 'global') => (scope ? `remembered:${scope}` : 'once'),
     approvePermission: () => {},
     readUserAnswer: () => 'main',
     updateUserAnswer: () => {},

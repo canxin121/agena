@@ -20,7 +20,12 @@ function createInput() {
     ],
   }
   const providers = ref<ProviderSummary[]>([
-    { provider_id: 'anthropic', default_model: 'claude-opus-4-7', default_model_ref: 'anthropic/claude-opus-4-7' },
+    {
+      provider_id: 'anthropic',
+      default_adapter: 'anthropic',
+      default_model: 'claude-opus-4-7',
+      adapters: [{ adapter_id: 'anthropic', enabled: true, configured_model_count: 2 }],
+    },
   ])
   const workspaces = ref<WorkspaceResource[]>([
     { id: 1, path: '/repo-a', created_at: '2026-05-10T00:00:00Z', updated_at: '2026-05-10T00:00:00Z' },
@@ -30,6 +35,7 @@ function createInput() {
     localCommandNotice: ref(''),
     providerModels,
     providers,
+    selectedAdapterId: ref(''),
     selectedModelId: ref(''),
     selectedProviderId: ref(''),
     selectedVariant: ref(''),
@@ -54,10 +60,15 @@ describe('useChatPageUiState', () => {
     const { ui } = createInput()
 
     expect(ui.providerDefaultModel('anthropic')).toBe('claude-opus-4-7')
-    expect(ui.providerModelOptions('anthropic').map((item) => item.id)).toEqual(['claude-opus-4-7', 'claude-sonnet-4-6'])
-    expect(ui.providerModelLabel({ provider_id: 'anthropic', id: 'claude-opus-4-7', display_name: ' Claude Opus 4.7 ' })).toBe(
-      'Claude Opus 4.7',
-    )
+    expect(ui.providerDefaultAdapter('anthropic')).toBe('anthropic')
+    expect(ui.providerAdapterOptions('anthropic')).toEqual(['anthropic'])
+    expect(ui.providerModelOptions('anthropic').map((item) => item.id)).toEqual([
+      'claude-opus-4-7',
+      'claude-sonnet-4-6',
+    ])
+    expect(
+      ui.providerModelLabel({ provider_id: 'anthropic', id: 'claude-opus-4-7', display_name: ' Claude Opus 4.7 ' }),
+    ).toBe('Claude Opus 4.7')
     expect(ui.providerModelLabel({ provider_id: 'anthropic', id: 'claude-sonnet-4-6' })).toBe('claude-sonnet-4-6')
   })
 
@@ -85,6 +96,7 @@ describe('useChatPageUiState', () => {
     await Promise.resolve()
 
     expect(input.selectedModelId.value).toBe('claude-opus-4-7')
+    expect(input.selectedAdapterId.value).toBe('anthropic')
     expect(ui.providerModelOptions('anthropic').length).toBe(2)
   })
 

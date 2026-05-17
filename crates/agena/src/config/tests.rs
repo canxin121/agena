@@ -718,7 +718,8 @@ fn multi_adapter_provider_loads_shared_auth_and_routes_models() {
     let path = write_temp_config(
         r#"
 [providers.shared]
-default_model = "openai/gpt-4.1-mini"
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
@@ -752,7 +753,8 @@ enabled = true
         .get("shared")
         .expect("shared provider should exist");
 
-    assert_eq!(provider.default_model, "openai/gpt-4.1-mini");
+    assert_eq!(provider.default_adapter, "openai");
+    assert_eq!(provider.default_model, "gpt-4.1-mini");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
             assert_eq!(api.base_url, "https://gateway.example.com/v1");
@@ -783,7 +785,8 @@ fn multi_adapter_provider_supports_shared_endpoint_layout() {
     let path = write_temp_config(
         r#"
 [providers.shared]
-default_model = "openai/gpt-4.1-mini"
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
@@ -832,7 +835,8 @@ fn multi_adapter_provider_allows_passthrough_models_without_explicit_routes() {
     let path = write_temp_config(
         r#"
 [providers.shared]
-default_model = "openai/gpt-4.1"
+default_adapter = "openai"
+default_model = "gpt-4.1"
 
 [providers.shared.auth]
 mode = "api"
@@ -862,7 +866,8 @@ enabled = true
         .providers
         .get("shared")
         .expect("shared provider should exist");
-    assert_eq!(provider.default_model, "openai/gpt-4.1");
+    assert_eq!(provider.default_adapter, "openai");
+    assert_eq!(provider.default_model, "gpt-4.1");
     assert!(provider.models.contains_key("anthropic/claude-sonnet-4"));
 }
 
@@ -2116,7 +2121,7 @@ enabled = true
             .get("openai")
             .expect("provider should resolve")
             .default_model,
-        "openai/gpt-5"
+        "gpt-5"
     );
 }
 

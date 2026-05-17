@@ -6,11 +6,7 @@ import type {
   ProviderModel,
   ProviderModelVariant,
 } from '../lib/agenaApi'
-import {
-  deleteModelCatalogEntry,
-  refreshModelCatalog,
-  upsertModelCatalogEntry,
-} from '../lib/agenaApi'
+import { deleteModelCatalogEntry, refreshModelCatalog, upsertModelCatalogEntry } from '../lib/agenaApi'
 
 export type RuntimeModelCatalogActionsInput = {
   actionError: Ref<string>
@@ -91,18 +87,6 @@ function normalizeOptionalJsonObject(value: string, fieldLabel: string): Record<
 function stringifyJson(value: Record<string, unknown> | null | undefined): string {
   if (!value) return ''
   return JSON.stringify(value, null, 2)
-}
-
-export function splitProviderModelRoute(modelId: string): { adapterId: string; modelId: string } {
-  const normalized = String(modelId || '').trim()
-  const slashIndex = normalized.indexOf('/')
-  if (slashIndex > 0 && slashIndex < normalized.length - 1) {
-    return {
-      adapterId: normalized.slice(0, slashIndex).trim(),
-      modelId: normalized.slice(slashIndex + 1).trim(),
-    }
-  }
-  return { adapterId: '', modelId: normalized }
 }
 
 function readCapabilityFlag(
@@ -202,11 +186,10 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
 }
 
 export function createModelCatalogDraftFromProviderModel(model: ProviderModel): ModelCatalogEditableDraft {
-  const route = splitProviderModelRoute(model.id)
-  const adapterId = route.adapterId || String(model.provider_id || '').trim()
+  const adapterId = String(model.adapter_id || '').trim()
   return {
     adapter_id: adapterId,
-    model_id: route.modelId,
+    model_id: model.id,
     lifecycle: String(model.metadata?.lifecycle || ''),
     context_window_tokens:
       model.metadata?.limits?.context_window_tokens == null ? '' : String(model.metadata.limits.context_window_tokens),
@@ -227,10 +210,7 @@ export function findCatalogEntryForProviderModel(
   entries: ModelCatalogEntry[],
   model: ProviderModel,
 ): ModelCatalogEntry | null {
-  const route = splitProviderModelRoute(model.id)
-  const matches = entries.filter(
-    (entry) => entry.model_id === route.modelId,
-  )
+  const matches = entries.filter((entry) => entry.model_id === model.id)
   return matches.find((entry) => entry.kind === 'custom') || matches[0] || null
 }
 

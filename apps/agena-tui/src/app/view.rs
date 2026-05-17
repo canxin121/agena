@@ -803,6 +803,9 @@ impl App {
             Overlay::PluginInspector(dialog) => {
                 self.render_plugin_inspector_overlay(frame, area, dialog);
             }
+            Overlay::ProviderStudio(dialog) => {
+                self.render_provider_studio_overlay(frame, area, dialog);
+            }
         }
     }
 
@@ -1547,6 +1550,498 @@ impl App {
                 .saturating_add(1)
                 .saturating_add(input_view.cursor_y),
         ));
+    }
+
+    fn render_provider_studio_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &ProviderStudioOverlay,
+    ) {
+        let area = centered_rect(area, 112, 34);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(18),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+
+        let summary = format!(
+            "draft {}  ·  auth {}  ·  adapters {}  ·  catalog {}  ·  {}{}",
+            if dialog.draft.provider_id.trim().is_empty() {
+                "<new>"
+            } else {
+                dialog.draft.provider_id.trim()
+            },
+            dialog.draft.auth_kind.label(),
+            dialog.selected_adapter_ids.len(),
+            dialog.catalog_total,
+            if dialog.discovering {
+                "discovering "
+            } else {
+                ""
+            },
+            if dialog.saving { "saving" } else { "" }
+        );
+        self.render_header_row(
+            frame,
+            rows[0],
+            ui_text::t(&self.i18n, "overlay-provider-studio-header"),
+            summary,
+            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::DarkGray),
+        );
+
+        let content = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(28), Constraint::Min(54)])
+            .split(rows[1]);
+        let providers_area = content[0];
+        let right_area = content[1];
+        let right_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(10),
+                Constraint::Length(10),
+                Constraint::Min(8),
+            ])
+            .split(right_area);
+
+        let provider_items = dialog
+            .providers
+            .iter()
+            .map(|row| {
+                ListItem::new(vec![
+                    Line::from(sanitize_display_text(row.label.as_str())),
+                    Line::from(Span::styled(
+                        sanitize_display_text(row.detail.as_str()),
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let provider_list = List::new(provider_items)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(format!(
+                        " {} ",
+                        ui_text::t(&self.i18n, "overlay-provider-studio-providers")
+                    )))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(if dialog.focus == ProviderStudioFocus::Providers {
+                selection_highlight_style()
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            })
+            .highlight_symbol(">> ");
+        let mut provider_state = ListState::default();
+        provider_state.select((!dialog.providers.is_empty()).then_some(dialog.selected_provider));
+        frame.render_stateful_widget(provider_list, providers_area, &mut provider_state);
+
+        let draft_lines = ProviderStudioField::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let value = provider_studio_field_value(&dialog.draft, *field);
+                let display = match field {
+                    ProviderStudioField::ApiKey if !value.trim().is_empty() => {
+                        "********".to_owned()
+                    }
+                    _ if value.trim().is_empty() => "unset".to_owned(),
+                    _ => value,
+                };
+                let label_style = if dialog.focus == ProviderStudioFocus::Fields
+                    && dialog.selected_field == index
+                {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else if provider_studio_field_editable(dialog, *field) {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:>16}", provider_studio_field_label(*field)),
+                        label_style,
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        sanitize_display_text(display),
+                        if provider_studio_field_editable(dialog, *field) {
+                            Style::default()
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let mut draft_header = vec![Line::from(Span::styled(
+            format!("auth_kind  {}", dialog.draft.auth_kind.label()),
+            Style::default().fg(Color::DarkGray),
+        ))];
+        draft_header.extend(draft_lines);
+        frame.render_widget(
+            Paragraph::new(Text::from(draft_header))
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(format!(
+                            " {} ",
+                            ui_text::t(&self.i18n, "overlay-provider-studio-draft")
+                        )))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right_rows[0],
+        );
+
+        let discovery_split = if should_stack_detail_layout(right_rows[1].width, 24, 28) {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .split(right_rows[1])
+        } else {
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(adaptive_detail_split(right_rows[1].width, 24, 28))
+                .split(right_rows[1])
+        };
+        let adapters_area = discovery_split[0];
+        let models_area = discovery_split[1];
+
+        let adapter_items = if dialog.discoveries.is_empty() {
+            vec![ListItem::new(Line::from(Span::styled(
+                ui_text::t(&self.i18n, "overlay-provider-studio-discovery-empty"),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else {
+            dialog
+                .discoveries
+                .iter()
+                .map(|adapter| {
+                    let enabled = if dialog
+                        .selected_adapter_ids
+                        .contains(adapter.adapter_id.as_str())
+                    {
+                        "[x]"
+                    } else {
+                        "[ ]"
+                    };
+                    let detail = if adapter.supported {
+                        format!(
+                            "{} models · {}",
+                            adapter.models.len(),
+                            adapter
+                                .resolved_base_url
+                                .as_deref()
+                                .map(|value| truncate_display_text(value, 28))
+                                .unwrap_or_else(|| "supported".to_owned())
+                        )
+                    } else {
+                        truncate_display_text(adapter.error.as_deref().unwrap_or("unsupported"), 32)
+                    };
+                    ListItem::new(vec![
+                        Line::from(sanitize_display_text(format!(
+                            "{enabled} {}",
+                            adapter.adapter_id
+                        ))),
+                        Line::from(Span::styled(
+                            sanitize_display_text(detail),
+                            if adapter.supported {
+                                Style::default().fg(Color::DarkGray)
+                            } else {
+                                Style::default().fg(Color::Red)
+                            },
+                        )),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        };
+        let adapter_list = List::new(adapter_items)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(format!(
+                        " {} ",
+                        ui_text::t(&self.i18n, "overlay-provider-studio-adapters")
+                    )))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(if dialog.focus == ProviderStudioFocus::Adapters {
+                selection_highlight_style()
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            })
+            .highlight_symbol(">> ");
+        let mut adapter_state = ListState::default();
+        adapter_state.select((!dialog.discoveries.is_empty()).then_some(dialog.selected_adapter));
+        frame.render_stateful_widget(adapter_list, adapters_area, &mut adapter_state);
+
+        let model_items = provider_studio_selected_discovery(dialog)
+            .map(|discovery| {
+                if discovery.models.is_empty() {
+                    vec![ListItem::new(Line::from(Span::styled(
+                        ui_text::t(&self.i18n, "overlay-provider-studio-models-empty"),
+                        Style::default().fg(Color::DarkGray),
+                    )))]
+                } else {
+                    discovery
+                        .models
+                        .iter()
+                        .map(|model| {
+                            let detail = format!(
+                                "{}{}",
+                                model
+                                    .display_name
+                                    .clone()
+                                    .unwrap_or_else(|| model.id.to_string()),
+                                if dialog
+                                    .catalog_resolved_model_ids
+                                    .contains(model.id.as_str())
+                                {
+                                    " · catalog"
+                                } else {
+                                    ""
+                                }
+                            );
+                            ListItem::new(vec![
+                                Line::from(sanitize_display_text(model.id.to_string())),
+                                Line::from(Span::styled(
+                                    sanitize_display_text(detail),
+                                    Style::default().fg(Color::DarkGray),
+                                )),
+                            ])
+                        })
+                        .collect::<Vec<_>>()
+                }
+            })
+            .unwrap_or_else(|| {
+                vec![ListItem::new(Line::from(Span::styled(
+                    ui_text::t(&self.i18n, "overlay-provider-studio-models-empty"),
+                    Style::default().fg(Color::DarkGray),
+                )))]
+            });
+        let model_list = List::new(model_items)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(format!(
+                        " {} ",
+                        ui_text::t(&self.i18n, "overlay-provider-studio-models")
+                    )))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(if dialog.focus == ProviderStudioFocus::Models {
+                selection_highlight_style()
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            })
+            .highlight_symbol(">> ");
+        let mut model_state = ListState::default();
+        let has_models = provider_studio_selected_discovery(dialog)
+            .map(|discovery| !discovery.models.is_empty())
+            .unwrap_or(false);
+        model_state.select(has_models.then_some(dialog.selected_model));
+        frame.render_stateful_widget(model_list, models_area, &mut model_state);
+
+        let catalog_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(5)])
+            .split(right_rows[2]);
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(format!(
+                "query: {}  ·  page {}-{} / {}",
+                if dialog.catalog_query.trim().is_empty() {
+                    "<all>".to_owned()
+                } else {
+                    dialog.catalog_query.clone()
+                },
+                dialog.catalog_offset.saturating_add(1),
+                dialog
+                    .catalog_offset
+                    .saturating_add(dialog.catalog_items.len()),
+                dialog.catalog_total
+            )))
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(format!(
+                        " {} ",
+                        ui_text::t(&self.i18n, "overlay-provider-studio-catalog")
+                    )))
+                    .borders(Borders::ALL),
+            ),
+            catalog_rows[0],
+        );
+
+        let catalog_split = if should_stack_detail_layout(catalog_rows[1].width, 34, 28) {
+            Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+                .split(catalog_rows[1])
+        } else {
+            Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(adaptive_detail_split(catalog_rows[1].width, 34, 28))
+                .split(catalog_rows[1])
+        };
+        let catalog_list_items = if dialog.catalog_loading {
+            vec![ListItem::new(Line::from(Span::styled(
+                ui_text::t(&self.i18n, "overlay-picker-loading"),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else if dialog.catalog_items.is_empty() {
+            vec![ListItem::new(Line::from(Span::styled(
+                ui_text::t(&self.i18n, "overlay-provider-studio-catalog-empty"),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else {
+            dialog
+                .catalog_items
+                .iter()
+                .map(|entry| {
+                    ListItem::new(vec![
+                        Line::from(sanitize_display_text(entry.model_id.as_str())),
+                        Line::from(Span::styled(
+                            sanitize_display_text(format!(
+                                "{}{}",
+                                entry.origin.clone().unwrap_or_else(|| "unknown".to_owned()),
+                                if entry.kind
+                                    == agena_api_server::local_api::ModelCatalogEntryKind::Custom
+                                {
+                                    " · custom"
+                                } else {
+                                    ""
+                                }
+                            )),
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        };
+        let catalog_list = List::new(catalog_list_items)
+            .block(Block::default().borders(Borders::ALL))
+            .highlight_style(if dialog.focus == ProviderStudioFocus::Catalog {
+                selection_highlight_style()
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            })
+            .highlight_symbol(">> ");
+        let mut catalog_state = ListState::default();
+        catalog_state.select(
+            (!dialog.catalog_loading && !dialog.catalog_items.is_empty())
+                .then_some(dialog.selected_catalog),
+        );
+        frame.render_stateful_widget(catalog_list, catalog_split[0], &mut catalog_state);
+
+        let detail = dialog
+            .catalog_items
+            .get(dialog.selected_catalog)
+            .map(|entry| {
+                [
+                    format!("model_id: {}", entry.model_id),
+                    format!(
+                        "display: {}",
+                        entry
+                            .display_name
+                            .clone()
+                            .unwrap_or_else(|| "unset".to_owned())
+                    ),
+                    format!(
+                        "origin: {}",
+                        entry.origin.clone().unwrap_or_else(|| "unset".to_owned())
+                    ),
+                    format!(
+                        "limits: ctx {} · out {}",
+                        entry
+                            .context_window_tokens
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "?".to_owned()),
+                        entry
+                            .max_output_tokens
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| "?".to_owned())
+                    ),
+                    entry.description.clone().unwrap_or_default(),
+                ]
+                .join("\n")
+            })
+            .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-provider-studio-catalog-empty"));
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(detail))
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(format!(
+                            " {} ",
+                            ui_text::t(&self.i18n, "overlay-provider-studio-detail")
+                        )))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            catalog_split[1],
+        );
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[2],
+        );
+
+        if let Some(editor) = dialog.editor.as_ref() {
+            let area = centered_rect(area, 78, 7);
+            frame.render_widget(Clear, area);
+            let block = Block::default()
+                .title(sanitize_display_text(format!(" {} ", editor.title)))
+                .borders(Borders::ALL);
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            let editor_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Length(3),
+                    Constraint::Length(1),
+                ])
+                .split(inner);
+            frame.render_widget(
+                Paragraph::new(sanitize_display_text(editor.prompt.as_str())),
+                editor_rows[0],
+            );
+            let input_view = editor
+                .input
+                .render_view(editor_rows[1].width.saturating_sub(2), 1);
+            frame.render_widget(
+                Paragraph::new(Text::from(input_view.lines.clone()))
+                    .block(Block::default().borders(Borders::ALL)),
+                editor_rows[1],
+            );
+            frame.render_widget(
+                Paragraph::new(sanitize_display_text(ui_text::t(
+                    &self.i18n,
+                    "overlay-provider-studio-edit-footer",
+                ))),
+                editor_rows[2],
+            );
+            frame.set_cursor_position((
+                editor_rows[1]
+                    .x
+                    .saturating_add(1)
+                    .saturating_add(input_view.cursor_x),
+                editor_rows[1]
+                    .y
+                    .saturating_add(1)
+                    .saturating_add(input_view.cursor_y),
+            ));
+        }
     }
 
     fn composer_height(&self) -> u16 {

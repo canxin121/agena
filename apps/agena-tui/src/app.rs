@@ -49,7 +49,7 @@ use tokio::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::backend::{Backend, SessionRefresh};
+use crate::backend::{Backend, ProviderConfigDraft, ProviderDraftAuthKind, SessionRefresh};
 use crate::clipboard::{
     normalize_pasted_path, paste_image_to_temp_png, pasted_image_format, set_clipboard_text,
 };
@@ -62,6 +62,10 @@ use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::ui_text;
+use agena_api_server::local_api::{
+    ModelCatalogEntryResource, ModelCatalogListResponse, ProviderAdapterDiscoveryResource,
+    ProviderAdapterDiscoveryResponse,
+};
 
 mod transcript_view;
 mod view;
@@ -293,6 +297,22 @@ enum AppMessage {
         provider_id: String,
         result: UiResult<Vec<ProviderModel>>,
     },
+    ProviderStudioCatalogLoaded {
+        query: String,
+        offset: usize,
+        result: UiResult<ModelCatalogListResponse>,
+    },
+    ProviderStudioDiscoveryLoaded {
+        request_key: String,
+        result: UiResult<ProviderAdapterDiscoveryResponse>,
+    },
+    ProviderStudioSaved {
+        provider_id: String,
+        result: UiResult<String>,
+    },
+    ProviderStudioCatalogRefreshed {
+        result: UiResult<()>,
+    },
     ChildSessionsLoaded {
         parent_session_id: i64,
         result: UiResult<Vec<SessionResource>>,
@@ -359,6 +379,7 @@ enum Overlay {
     Picker(PickerOverlay),
     Timeline(TimelineOverlay),
     PluginInspector(PluginInspectorOverlay),
+    ProviderStudio(ProviderStudioOverlay),
 }
 
 #[derive(Debug, Clone)]
@@ -497,6 +518,73 @@ struct PluginInspectorItem {
     search_text: String,
     copy_text: String,
     state: agena::plugin::status::PluginRunState,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderStudioOverlay {
+    title: String,
+    footer: String,
+    providers: Vec<ProviderStudioProviderRow>,
+    selected_provider: usize,
+    focus: ProviderStudioFocus,
+    selected_field: usize,
+    draft: ProviderConfigDraft,
+    discoveries: Vec<ProviderAdapterDiscoveryResource>,
+    selected_adapter: usize,
+    selected_model: usize,
+    selected_adapter_ids: BTreeSet<String>,
+    catalog_resolved_model_ids: BTreeSet<String>,
+    catalog_query: String,
+    catalog_items: Vec<ModelCatalogEntryResource>,
+    catalog_total: usize,
+    catalog_offset: usize,
+    catalog_limit: usize,
+    catalog_loading: bool,
+    selected_catalog: usize,
+    discovering: bool,
+    saving: bool,
+    pending_discovery_key: Option<String>,
+    editor: Option<ProviderStudioEditor>,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderStudioProviderRow {
+    provider_id: Option<String>,
+    label: String,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderStudioFocus {
+    Providers,
+    Fields,
+    Adapters,
+    Models,
+    Catalog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderStudioField {
+    ProviderId,
+    BaseUrl,
+    ApiKeyEnv,
+    ApiKey,
+    DefaultAdapter,
+    DefaultModel,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderStudioEditor {
+    title: String,
+    prompt: String,
+    input: Editor,
+    action: ProviderStudioEditorAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderStudioEditorAction {
+    Field(ProviderStudioField),
+    CatalogQuery,
 }
 
 #[derive(Debug, Clone)]
@@ -1253,6 +1341,7 @@ impl App {
             Overlay::PluginInspector(dialog) => {
                 self.handle_plugin_inspector_overlay_key(key, dialog)
             }
+            Overlay::ProviderStudio(dialog) => self.handle_provider_studio_overlay_key(key, dialog),
         };
 
         if !close {
@@ -1730,6 +1819,149 @@ impl App {
         }
     }
 
+    fn handle_provider_studio_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut ProviderStudioOverlay,
+    ) -> bool {
+        if let Some(editor) = dialog.editor.as_mut() {
+            return match key.code {
+                KeyCode::Esc => {
+                    dialog.editor = None;
+                    false
+                }
+                KeyCode::Enter => {
+                    editor.input.flush_all_pending_input();
+                    let value = editor.input.text().trim().to_string();
+                    match editor.action {
+                        ProviderStudioEditorAction::Field(field) => {
+                            self.commit_provider_studio_field(dialog, field, value);
+                        }
+                        ProviderStudioEditorAction::CatalogQuery => {
+                            dialog.catalog_query = value.clone();
+                            dialog.catalog_offset = 0;
+                            dialog.selected_catalog = 0;
+                            dialog.editor = None;
+                            self.request_provider_studio_catalog_page(value, 0);
+                            dialog.catalog_loading = true;
+                            return false;
+                        }
+                    }
+                    dialog.editor = None;
+                    false
+                }
+                _ => {
+                    editor.input.handle_line_input_key(key);
+                    false
+                }
+            };
+        }
+
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Tab => {
+                dialog.focus = dialog.focus.next();
+                false
+            }
+            KeyCode::BackTab => {
+                dialog.focus = dialog.focus.prev();
+                false
+            }
+            KeyCode::Char('n') => {
+                self.load_provider_studio_draft(dialog, None, Some(String::new()));
+                false
+            }
+            KeyCode::Char('/') => {
+                dialog.editor = Some(ProviderStudioEditor {
+                    title: ui_text::t(&self.i18n, "overlay-provider-studio-search-title"),
+                    prompt: ui_text::t(&self.i18n, "overlay-provider-studio-search-prompt"),
+                    input: Editor::from_text(dialog.catalog_query.clone()),
+                    action: ProviderStudioEditorAction::CatalogQuery,
+                });
+                false
+            }
+            KeyCode::Char('r') => {
+                self.request_provider_studio_discovery(dialog);
+                false
+            }
+            KeyCode::Char('R') => {
+                dialog.catalog_loading = true;
+                self.request_provider_studio_catalog_refresh();
+                false
+            }
+            KeyCode::Char('s') | KeyCode::Char('S') => {
+                dialog.saving = true;
+                self.request_provider_studio_save_draft(dialog.clone());
+                false
+            }
+            KeyCode::Char('a') | KeyCode::Char('A') => {
+                if dialog.discoveries.get(dialog.selected_adapter).is_none() {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-provider-studio-adapter-required",
+                    ));
+                    return false;
+                }
+                dialog.saving = true;
+                self.request_provider_studio_save_selected_adapter(dialog.clone());
+                false
+            }
+            KeyCode::Char('m') | KeyCode::Char('M') => {
+                if provider_studio_selected_model_target(dialog).is_none() {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-provider-studio-model-required",
+                    ));
+                    return false;
+                }
+                dialog.saving = true;
+                self.request_provider_studio_save_selected_model(dialog.clone());
+                false
+            }
+            KeyCode::Char(' ') if dialog.focus == ProviderStudioFocus::Adapters => {
+                self.toggle_provider_studio_selected_adapter(dialog);
+                false
+            }
+            KeyCode::Left | KeyCode::Char('h') if dialog.focus == ProviderStudioFocus::Catalog => {
+                self.request_provider_studio_catalog_previous_page(dialog);
+                false
+            }
+            KeyCode::Right | KeyCode::Char('l') if dialog.focus == ProviderStudioFocus::Catalog => {
+                self.request_provider_studio_catalog_next_page(dialog);
+                false
+            }
+            KeyCode::PageUp => {
+                self.move_provider_studio_selection(dialog, -10);
+                false
+            }
+            KeyCode::PageDown => {
+                self.move_provider_studio_selection(dialog, 10);
+                false
+            }
+            KeyCode::Home => {
+                self.set_provider_studio_selection(dialog, 0);
+                false
+            }
+            KeyCode::End => {
+                self.set_provider_studio_selection(dialog, usize::MAX);
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.move_provider_studio_selection(dialog, -1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.move_provider_studio_selection(dialog, 1);
+                false
+            }
+            KeyCode::Enter => {
+                self.activate_provider_studio_focus(dialog);
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn handle_paste(&mut self, text: String) {
         let backend = self.backend.clone();
         if let Some(overlay) = &mut self.overlay {
@@ -1760,6 +1992,12 @@ impl App {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_picker_overlay(dialog);
+                }
+                Overlay::ProviderStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_all_pending_input();
+                        editor.input.insert_str(text.as_str());
+                    }
                 }
                 Overlay::Timeline(dialog) => {
                     dialog.input.flush_all_pending_input();
@@ -2263,6 +2501,22 @@ impl App {
                 provider_id,
                 result,
             } => self.handle_models_loaded(purpose, provider_id, result),
+            AppMessage::ProviderStudioCatalogLoaded {
+                query,
+                offset,
+                result,
+            } => self.handle_provider_studio_catalog_loaded(query, offset, result),
+            AppMessage::ProviderStudioDiscoveryLoaded {
+                request_key,
+                result,
+            } => self.handle_provider_studio_discovery_loaded(request_key, result),
+            AppMessage::ProviderStudioSaved {
+                provider_id,
+                result,
+            } => self.handle_provider_studio_saved(provider_id, result),
+            AppMessage::ProviderStudioCatalogRefreshed { result } => {
+                self.handle_provider_studio_catalog_refreshed(result)
+            }
             AppMessage::ChildSessionsLoaded {
                 parent_session_id,
                 result,
@@ -2905,6 +3159,146 @@ impl App {
             Err(error) => self.flash_error(error),
         }
         self.overlay = Some(Overlay::Picker(dialog));
+    }
+
+    fn handle_provider_studio_catalog_loaded(
+        &mut self,
+        query: String,
+        offset: usize,
+        result: UiResult<ModelCatalogListResponse>,
+    ) {
+        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+            return;
+        };
+        if dialog.catalog_query != query || dialog.catalog_offset != offset {
+            self.overlay = Some(Overlay::ProviderStudio(dialog));
+            return;
+        }
+
+        dialog.catalog_loading = false;
+        match result {
+            Ok(response) => {
+                dialog
+                    .catalog_resolved_model_ids
+                    .extend(response.items.iter().map(|entry| entry.model_id.clone()));
+                dialog.catalog_items = response.items;
+                dialog.catalog_total = response.total;
+                dialog.catalog_offset = response.offset;
+                dialog.catalog_limit = response.limit;
+                dialog.selected_catalog = min(
+                    dialog.selected_catalog,
+                    dialog.catalog_items.len().saturating_sub(1),
+                );
+            }
+            Err(error) => self.flash_error(error),
+        }
+        self.overlay = Some(Overlay::ProviderStudio(dialog));
+    }
+
+    fn handle_provider_studio_discovery_loaded(
+        &mut self,
+        request_key: String,
+        result: UiResult<ProviderAdapterDiscoveryResponse>,
+    ) {
+        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+            return;
+        };
+        if dialog.pending_discovery_key.as_deref() != Some(request_key.as_str()) {
+            self.overlay = Some(Overlay::ProviderStudio(dialog));
+            return;
+        }
+
+        dialog.discovering = false;
+        dialog.pending_discovery_key = None;
+        match result {
+            Ok(response) => {
+                dialog.discoveries = response.adapters;
+                dialog.selected_adapter = min(
+                    dialog.selected_adapter,
+                    dialog.discoveries.len().saturating_sub(1),
+                );
+                dialog.selected_model = 0;
+                let lookup_ids = dialog
+                    .discoveries
+                    .iter()
+                    .flat_map(|adapter| adapter.models.iter().map(|model| model.id.to_string()))
+                    .collect::<Vec<_>>();
+                dialog.catalog_resolved_model_ids.extend(
+                    self.backend
+                        .lookup_model_catalog_entries(&lookup_ids)
+                        .into_iter()
+                        .map(|entry| entry.model_id),
+                );
+                dialog.selected_adapter_ids = dialog
+                    .discoveries
+                    .iter()
+                    .filter(|adapter| adapter.supported)
+                    .map(|adapter| adapter.adapter_id.clone())
+                    .collect();
+            }
+            Err(error) => self.flash_error(error),
+        }
+        self.overlay = Some(Overlay::ProviderStudio(dialog));
+    }
+
+    fn handle_provider_studio_saved(&mut self, provider_id: String, result: UiResult<String>) {
+        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+            match result {
+                Ok(message) => self.flash_success(message),
+                Err(error) => self.flash_error(error),
+            }
+            return;
+        };
+        dialog.saving = false;
+        match result {
+            Ok(message) => {
+                self.flash_success(message);
+                let providers = self.backend.list_configured_providers();
+                dialog.providers = provider_studio_provider_rows(providers.as_slice());
+                dialog.selected_provider = dialog
+                    .providers
+                    .iter()
+                    .position(|row| row.provider_id.as_deref() == Some(provider_id.as_str()))
+                    .unwrap_or(0);
+                self.load_provider_studio_draft(&mut dialog, Some(provider_id.as_str()), None);
+                if dialog.draft.auth_kind.is_api() || dialog.draft.source_provider_id.is_some() {
+                    self.request_provider_studio_discovery(&mut dialog);
+                }
+            }
+            Err(error) => self.flash_error(error),
+        }
+        self.overlay = Some(Overlay::ProviderStudio(dialog));
+    }
+
+    fn handle_provider_studio_catalog_refreshed(&mut self, result: UiResult<()>) {
+        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+            match result {
+                Ok(()) => self.flash_success(ui_text::t(
+                    &self.i18n,
+                    "flash-provider-studio-catalog-refreshed",
+                )),
+                Err(error) => self.flash_error(error),
+            }
+            return;
+        };
+
+        match result {
+            Ok(()) => {
+                self.flash_success(ui_text::t(
+                    &self.i18n,
+                    "flash-provider-studio-catalog-refreshed",
+                ));
+                dialog.catalog_loading = true;
+                dialog.catalog_offset = 0;
+                dialog.selected_catalog = 0;
+                self.request_provider_studio_catalog_page(dialog.catalog_query.clone(), 0);
+            }
+            Err(error) => {
+                dialog.catalog_loading = false;
+                self.flash_error(error);
+            }
+        }
+        self.overlay = Some(Overlay::ProviderStudio(dialog));
     }
 
     fn handle_child_sessions_loaded(
@@ -4089,6 +4483,426 @@ impl App {
         self.request_models(provider_id, ModelLoadPurpose::SetModel);
     }
 
+    fn open_provider_studio(&mut self, initial_provider: Option<&str>) {
+        let providers = self.backend.list_configured_providers();
+        let provider_rows = provider_studio_provider_rows(providers.as_slice());
+        let selected_provider = initial_provider
+            .and_then(|provider_id| {
+                provider_rows
+                    .iter()
+                    .position(|row| row.provider_id.as_deref() == Some(provider_id.trim()))
+            })
+            .unwrap_or(0);
+        let draft_prefill = initial_provider
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .filter(|provider_id| {
+                !providers
+                    .iter()
+                    .any(|provider| provider.provider_id == *provider_id)
+            })
+            .map(str::to_owned);
+        let mut overlay = ProviderStudioOverlay {
+            title: ui_text::t(&self.i18n, "overlay-provider-studio-title"),
+            footer: ui_text::t(&self.i18n, "overlay-provider-studio-footer"),
+            providers: provider_rows,
+            selected_provider,
+            focus: ProviderStudioFocus::Fields,
+            selected_field: 0,
+            draft: self
+                .backend
+                .provider_config_draft(None)
+                .unwrap_or_else(|_| ProviderConfigDraft {
+                    source_provider_id: None,
+                    provider_id: String::new(),
+                    auth_kind: ProviderDraftAuthKind::Api,
+                    base_url: String::new(),
+                    api_key_env: String::new(),
+                    api_key: String::new(),
+                    default_adapter: "openai".to_owned(),
+                    default_model: String::new(),
+                }),
+            discoveries: Vec::new(),
+            selected_adapter: 0,
+            selected_model: 0,
+            selected_adapter_ids: BTreeSet::new(),
+            catalog_resolved_model_ids: BTreeSet::new(),
+            catalog_query: String::new(),
+            catalog_items: Vec::new(),
+            catalog_total: 0,
+            catalog_offset: 0,
+            catalog_limit: 50,
+            catalog_loading: true,
+            selected_catalog: 0,
+            discovering: false,
+            saving: false,
+            pending_discovery_key: None,
+            editor: None,
+        };
+        let selected_id = overlay
+            .providers
+            .get(overlay.selected_provider)
+            .and_then(|row| row.provider_id.clone());
+        self.load_provider_studio_draft(&mut overlay, selected_id.as_deref(), draft_prefill);
+        self.overlay = Some(Overlay::ProviderStudio(overlay));
+        self.request_provider_studio_catalog_page(String::new(), 0);
+    }
+
+    fn load_provider_studio_draft(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        provider_id: Option<&str>,
+        prefill_new_id: Option<String>,
+    ) {
+        match self.backend.provider_config_draft(provider_id) {
+            Ok(mut draft) => {
+                if provider_id.is_none()
+                    && let Some(prefill) = prefill_new_id
+                {
+                    draft.provider_id = prefill;
+                }
+                dialog.draft = draft;
+                dialog.selected_field = 0;
+                dialog.discoveries.clear();
+                dialog.selected_adapter = 0;
+                dialog.selected_model = 0;
+                dialog.pending_discovery_key = None;
+                dialog.discovering = false;
+                dialog.selected_adapter_ids = provider_id
+                    .and_then(|id| {
+                        self.backend
+                            .list_configured_providers()
+                            .into_iter()
+                            .find(|provider| provider.provider_id == id)
+                    })
+                    .map(|provider| {
+                        provider
+                            .adapters
+                            .into_iter()
+                            .filter(|adapter| adapter.enabled)
+                            .map(|adapter| adapter.adapter_id)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+            }
+            Err(error) => self.flash_error(error.to_string()),
+        }
+    }
+
+    fn request_provider_studio_catalog_page(&mut self, query: String, offset: usize) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .list_model_catalog_entries(query.as_str(), offset, 50)
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::ProviderStudioCatalogLoaded {
+                query,
+                offset,
+                result,
+            });
+        });
+    }
+
+    fn request_provider_studio_catalog_refresh(&mut self) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .refresh_model_catalog()
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::ProviderStudioCatalogRefreshed { result });
+        });
+    }
+
+    fn request_provider_studio_discovery(&mut self, dialog: &mut ProviderStudioOverlay) {
+        let request_key = provider_studio_request_key(&dialog.draft);
+        dialog.pending_discovery_key = Some(request_key.clone());
+        dialog.discovering = true;
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        let draft = dialog.draft.clone();
+        tokio::spawn(async move {
+            let result = if draft.auth_kind.is_api() {
+                backend
+                    .discover_draft_provider_adapters(&draft)
+                    .await
+                    .map_err(|error| error.to_string())
+            } else if let Some(provider_id) = draft.source_provider_id.as_deref() {
+                backend
+                    .discover_saved_provider_adapters(provider_id)
+                    .await
+                    .map_err(|error| error.to_string())
+            } else {
+                Err(format!(
+                    "provider discovery requires api auth or an existing saved provider; current auth is {}",
+                    draft.auth_kind.label()
+                ))
+            };
+            let _ = tx.send(AppMessage::ProviderStudioDiscoveryLoaded {
+                request_key,
+                result,
+            });
+        });
+    }
+
+    fn request_provider_studio_save_draft(&mut self, dialog: ProviderStudioOverlay) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .save_provider_draft(
+                    dialog.draft.clone(),
+                    dialog.discoveries.as_slice(),
+                    &dialog
+                        .selected_adapter_ids
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::ProviderStudioSaved {
+                provider_id: dialog.draft.provider_id.clone(),
+                result,
+            });
+        });
+    }
+
+    fn request_provider_studio_save_selected_adapter(&mut self, dialog: ProviderStudioOverlay) {
+        let Some(discovery) = dialog.discoveries.get(dialog.selected_adapter).cloned() else {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-adapter-required",
+            ));
+            return;
+        };
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .save_provider_adapter_matches(dialog.draft.clone(), discovery)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::ProviderStudioSaved {
+                provider_id: dialog.draft.provider_id.clone(),
+                result,
+            });
+        });
+    }
+
+    fn request_provider_studio_save_selected_model(&mut self, dialog: ProviderStudioOverlay) {
+        let Some((adapter_id, model_id, provider_model)) =
+            provider_studio_selected_model_target(&dialog)
+        else {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-model-required",
+            ));
+            return;
+        };
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .save_provider_model(
+                    dialog.draft.clone(),
+                    adapter_id.as_str(),
+                    model_id.as_str(),
+                    provider_model,
+                    true,
+                )
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::ProviderStudioSaved {
+                provider_id: dialog.draft.provider_id.clone(),
+                result,
+            });
+        });
+    }
+
+    fn move_provider_studio_selection(&mut self, dialog: &mut ProviderStudioOverlay, delta: isize) {
+        let current = self.current_provider_studio_selection(dialog);
+        let next = if delta.is_negative() {
+            current.saturating_sub(delta.unsigned_abs())
+        } else {
+            current.saturating_add(delta as usize)
+        };
+        self.set_provider_studio_selection(dialog, next);
+    }
+
+    fn set_provider_studio_selection(&mut self, dialog: &mut ProviderStudioOverlay, target: usize) {
+        match dialog.focus {
+            ProviderStudioFocus::Providers => {
+                let next = min(target, dialog.providers.len().saturating_sub(1));
+                if next != dialog.selected_provider {
+                    dialog.selected_provider = next;
+                    let provider_id = dialog
+                        .providers
+                        .get(next)
+                        .and_then(|row| row.provider_id.clone());
+                    self.load_provider_studio_draft(dialog, provider_id.as_deref(), None);
+                }
+            }
+            ProviderStudioFocus::Fields => {
+                dialog.selected_field =
+                    min(target, ProviderStudioField::ALL.len().saturating_sub(1));
+            }
+            ProviderStudioFocus::Adapters => {
+                dialog.selected_adapter = min(target, dialog.discoveries.len().saturating_sub(1));
+                dialog.selected_model = min(
+                    dialog.selected_model,
+                    provider_studio_selected_discovery(dialog)
+                        .map(|adapter| adapter.models.len().saturating_sub(1))
+                        .unwrap_or_default(),
+                );
+            }
+            ProviderStudioFocus::Models => {
+                let max_index = provider_studio_selected_discovery(dialog)
+                    .map(|adapter| adapter.models.len().saturating_sub(1))
+                    .unwrap_or_default();
+                dialog.selected_model = min(target, max_index);
+            }
+            ProviderStudioFocus::Catalog => {
+                dialog.selected_catalog = min(target, dialog.catalog_items.len().saturating_sub(1));
+            }
+        }
+    }
+
+    fn current_provider_studio_selection(&self, dialog: &ProviderStudioOverlay) -> usize {
+        match dialog.focus {
+            ProviderStudioFocus::Providers => dialog.selected_provider,
+            ProviderStudioFocus::Fields => dialog.selected_field,
+            ProviderStudioFocus::Adapters => dialog.selected_adapter,
+            ProviderStudioFocus::Models => dialog.selected_model,
+            ProviderStudioFocus::Catalog => dialog.selected_catalog,
+        }
+    }
+
+    fn activate_provider_studio_focus(&mut self, dialog: &mut ProviderStudioOverlay) {
+        match dialog.focus {
+            ProviderStudioFocus::Providers => {}
+            ProviderStudioFocus::Fields => {
+                let field = ProviderStudioField::ALL[dialog.selected_field];
+                if !provider_studio_field_editable(dialog, field) {
+                    return;
+                }
+                dialog.editor = Some(ProviderStudioEditor {
+                    title: ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
+                    prompt: provider_studio_field_prompt(&self.i18n, field),
+                    input: Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
+                    action: ProviderStudioEditorAction::Field(field),
+                });
+            }
+            ProviderStudioFocus::Adapters => {
+                if let Some(adapter_id) = provider_studio_selected_discovery(dialog)
+                    .map(|discovery| discovery.adapter_id.clone())
+                {
+                    dialog.draft.default_adapter = adapter_id.clone();
+                    dialog.selected_adapter_ids.insert(adapter_id);
+                }
+            }
+            ProviderStudioFocus::Models => {
+                if let Some(discovery) = provider_studio_selected_discovery(dialog)
+                    && let Some(model) = discovery.models.get(dialog.selected_model).cloned()
+                {
+                    let adapter_id = discovery.adapter_id.clone();
+                    dialog.draft.default_adapter = adapter_id.clone();
+                    dialog.draft.default_model = model.id.to_string();
+                    dialog.selected_adapter_ids.insert(adapter_id);
+                }
+            }
+            ProviderStudioFocus::Catalog => {
+                if let Some(model_id) = dialog
+                    .catalog_items
+                    .get(dialog.selected_catalog)
+                    .map(|entry| entry.model_id.clone())
+                {
+                    if dialog.draft.default_adapter.trim().is_empty() {
+                        if let Some(adapter_id) = provider_studio_selected_discovery(dialog)
+                            .map(|discovery| discovery.adapter_id.clone())
+                        {
+                            dialog.draft.default_adapter = adapter_id.clone();
+                            dialog.selected_adapter_ids.insert(adapter_id);
+                        } else {
+                            dialog.draft.default_adapter = "openai".to_owned();
+                        }
+                    }
+                    dialog.draft.default_model = model_id;
+                }
+            }
+        }
+    }
+
+    fn commit_provider_studio_field(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        field: ProviderStudioField,
+        value: String,
+    ) {
+        match field {
+            ProviderStudioField::ProviderId => {
+                dialog.draft.provider_id = value;
+            }
+            ProviderStudioField::BaseUrl => {
+                dialog.draft.base_url = value;
+            }
+            ProviderStudioField::ApiKeyEnv => {
+                dialog.draft.api_key_env = value;
+            }
+            ProviderStudioField::ApiKey => {
+                dialog.draft.api_key = value;
+            }
+            ProviderStudioField::DefaultAdapter => {
+                dialog.draft.default_adapter = value;
+            }
+            ProviderStudioField::DefaultModel => {
+                dialog.draft.default_model = value;
+            }
+        }
+    }
+
+    fn toggle_provider_studio_selected_adapter(&mut self, dialog: &mut ProviderStudioOverlay) {
+        let Some(adapter_id) = provider_studio_selected_discovery(dialog)
+            .map(|discovery| discovery.adapter_id.clone())
+        else {
+            return;
+        };
+        if !dialog.selected_adapter_ids.remove(adapter_id.as_str()) {
+            dialog.selected_adapter_ids.insert(adapter_id);
+        }
+    }
+
+    fn request_provider_studio_catalog_previous_page(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+    ) {
+        if dialog.catalog_offset == 0 {
+            return;
+        }
+        let offset = dialog
+            .catalog_offset
+            .saturating_sub(dialog.catalog_limit.max(1));
+        dialog.catalog_offset = offset;
+        dialog.selected_catalog = 0;
+        dialog.catalog_loading = true;
+        self.request_provider_studio_catalog_page(dialog.catalog_query.clone(), offset);
+    }
+
+    fn request_provider_studio_catalog_next_page(&mut self, dialog: &mut ProviderStudioOverlay) {
+        if dialog.catalog_offset + dialog.catalog_items.len() >= dialog.catalog_total {
+            return;
+        }
+        dialog.catalog_offset += dialog.catalog_limit.max(1);
+        dialog.selected_catalog = 0;
+        dialog.catalog_loading = true;
+        self.request_provider_studio_catalog_page(
+            dialog.catalog_query.clone(),
+            dialog.catalog_offset,
+        );
+    }
+
     fn open_child_sessions_picker(&mut self) {
         let Some(parent_session_id) = self.transcript.session_id else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
@@ -4642,6 +5456,10 @@ impl App {
             CommandId::CopyVisible => self.copy_visible_transcript(),
             CommandId::Providers => self.open_provider_picker(ProviderPickerPurpose::SetProvider),
             CommandId::Provider => self.handle_provider_command(args),
+            CommandId::ProviderConfig => {
+                let initial = args.trim();
+                self.open_provider_studio((!initial.is_empty()).then_some(initial));
+            }
             CommandId::Models => self.handle_models_command(args),
             CommandId::Model => self.handle_model_command(args),
             CommandId::Variant => self.handle_variant_command(args),
@@ -5540,6 +6358,11 @@ impl App {
                 Overlay::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::PluginInspector(dialog) => dialog.input.flush_pending_input_if_due(now),
+                Overlay::ProviderStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_pending_input_if_due(now);
+                    }
+                }
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
                 Overlay::Help => {}
@@ -6256,6 +7079,146 @@ impl App {
 enum OverlayCommit {
     SessionSearch,
     TranscriptSearch,
+}
+
+impl ProviderStudioFocus {
+    fn next(self) -> Self {
+        match self {
+            Self::Providers => Self::Fields,
+            Self::Fields => Self::Adapters,
+            Self::Adapters => Self::Models,
+            Self::Models => Self::Catalog,
+            Self::Catalog => Self::Providers,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Providers => Self::Catalog,
+            Self::Fields => Self::Providers,
+            Self::Adapters => Self::Fields,
+            Self::Models => Self::Adapters,
+            Self::Catalog => Self::Models,
+        }
+    }
+}
+
+impl ProviderStudioField {
+    const ALL: [Self; 6] = [
+        Self::ProviderId,
+        Self::BaseUrl,
+        Self::ApiKeyEnv,
+        Self::ApiKey,
+        Self::DefaultAdapter,
+        Self::DefaultModel,
+    ];
+}
+
+fn provider_studio_provider_rows(
+    providers: &[ProviderSummaryResource],
+) -> Vec<ProviderStudioProviderRow> {
+    let mut rows = vec![ProviderStudioProviderRow {
+        provider_id: None,
+        label: "+ New provider".to_owned(),
+        detail: "API provider draft".to_owned(),
+    }];
+    rows.extend(providers.iter().map(|provider| ProviderStudioProviderRow {
+        provider_id: Some(provider.provider_id.clone()),
+        label: provider.provider_id.clone(),
+        detail: format!(
+            "{} / {} · {} adapter{}",
+            provider.default_adapter.as_deref().unwrap_or("adapter"),
+            provider.default_model,
+            provider.adapters.len(),
+            if provider.adapters.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ),
+    }));
+    rows
+}
+
+fn provider_studio_request_key(draft: &ProviderConfigDraft) -> String {
+    format!(
+        "{}|{}|{}",
+        draft.source_provider_id.as_deref().unwrap_or("<new>"),
+        draft.provider_id.trim(),
+        draft.base_url.trim()
+    )
+}
+
+fn provider_studio_selected_discovery(
+    dialog: &ProviderStudioOverlay,
+) -> Option<&ProviderAdapterDiscoveryResource> {
+    dialog.discoveries.get(dialog.selected_adapter)
+}
+
+fn provider_studio_selected_model_target(
+    dialog: &ProviderStudioOverlay,
+) -> Option<(String, String, Option<ProviderModel>)> {
+    if dialog.focus == ProviderStudioFocus::Catalog {
+        let entry = dialog.catalog_items.get(dialog.selected_catalog)?;
+        let adapter_id = if dialog.draft.default_adapter.trim().is_empty() {
+            provider_studio_selected_discovery(dialog)
+                .map(|adapter| adapter.adapter_id.clone())
+                .unwrap_or_else(|| "openai".to_owned())
+        } else {
+            dialog.draft.default_adapter.clone()
+        };
+        return Some((adapter_id, entry.model_id.clone(), None));
+    }
+
+    let discovery = provider_studio_selected_discovery(dialog)?;
+    let model = discovery.models.get(dialog.selected_model)?.clone();
+    Some((
+        discovery.adapter_id.clone(),
+        model.id.to_string(),
+        Some(model),
+    ))
+}
+
+fn provider_studio_field_label(field: ProviderStudioField) -> &'static str {
+    match field {
+        ProviderStudioField::ProviderId => "provider_id",
+        ProviderStudioField::BaseUrl => "base_url",
+        ProviderStudioField::ApiKeyEnv => "api_key_env",
+        ProviderStudioField::ApiKey => "api_key",
+        ProviderStudioField::DefaultAdapter => "default_adapter",
+        ProviderStudioField::DefaultModel => "default_model",
+    }
+}
+
+fn provider_studio_field_prompt(i18n: &I18n, field: ProviderStudioField) -> String {
+    i18n.text_args(
+        "overlay-provider-studio-edit-prompt",
+        &crate::fl_args!("field" => provider_studio_field_label(field)),
+    )
+}
+
+fn provider_studio_field_value(draft: &ProviderConfigDraft, field: ProviderStudioField) -> String {
+    match field {
+        ProviderStudioField::ProviderId => draft.provider_id.clone(),
+        ProviderStudioField::BaseUrl => draft.base_url.clone(),
+        ProviderStudioField::ApiKeyEnv => draft.api_key_env.clone(),
+        ProviderStudioField::ApiKey => draft.api_key.clone(),
+        ProviderStudioField::DefaultAdapter => draft.default_adapter.clone(),
+        ProviderStudioField::DefaultModel => draft.default_model.clone(),
+    }
+}
+
+fn provider_studio_field_editable(
+    dialog: &ProviderStudioOverlay,
+    field: ProviderStudioField,
+) -> bool {
+    match field {
+        ProviderStudioField::ProviderId => dialog.draft.source_provider_id.is_none(),
+        ProviderStudioField::BaseUrl
+        | ProviderStudioField::ApiKeyEnv
+        | ProviderStudioField::ApiKey => dialog.draft.auth_kind.is_api(),
+        ProviderStudioField::DefaultAdapter | ProviderStudioField::DefaultModel => true,
+    }
 }
 
 impl SessionViewMode {

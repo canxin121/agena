@@ -41,6 +41,7 @@ pub enum CommandId {
     CopyVisible,
     Providers,
     Provider,
+    ProviderConfig,
     Models,
     Model,
     Variant,
@@ -370,6 +371,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-provider-summary",
     },
     CommandSpec {
+        id: CommandId::ProviderConfig,
+        name: "provider-config",
+        aliases: &["providers-config", "provider-manager"],
+        arguments: "[provider_id]",
+        summary_key: "command-provider-config-summary",
+    },
+    CommandSpec {
         id: CommandId::Models,
         name: "models",
         aliases: &[],
@@ -568,6 +576,13 @@ mod tests {
         let spec = find_command("model").expect("model command should exist");
         assert!(command_matches_query(spec, "models"));
         assert!(command_matches_query(spec, "provider_id"));
+    }
+
+    #[test]
+    fn provider_config_command_matches_aliases() {
+        let spec = find_command("provider-config").expect("provider-config command should exist");
+        assert!(command_matches_query(spec, "providers-config"));
+        assert!(command_matches_query(spec, "provider-manager"));
     }
 
     #[test]

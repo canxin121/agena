@@ -19,6 +19,39 @@ import type {
 import type { PluginsTab, RuntimeRouteSection, SettingsTab } from './runtimePageStateModel'
 import { useRuntimeSectionLoadActions } from './useRuntimeSectionLoadActions'
 
+function sampleRuntimeStatus(overrides: Partial<RuntimeStatus> = {}): RuntimeStatus {
+  return {
+    generation: 1,
+    loaded_at: '',
+    workspace_root: '/repo',
+    config_path: '/repo/.agena/config.json',
+    config_found: true,
+    auth_store_path: '/repo/.agena/auth.json',
+    provider_ids: [],
+    plugin_count: 0,
+    session_runtime_available: true,
+    watch_paths: [],
+    reload: { enabled: true, interval_secs: 1 },
+    janitor: { enabled: true, interval_secs: 1 },
+    model_catalog: { remote_url: '', fallback_url: '', entries: [] },
+    automation: { enabled: false, job_count: 0, recent_jobs: [] },
+    operator: {
+      mcp: { server_count: 0, tool_count: 0, servers: [] },
+      lsp: { server_count: 0, diagnostics_count: 0, files_with_diagnostics: 0, servers: [] },
+      agents: {
+        default_agent: 'build',
+        total_count: 0,
+        primary_count: 0,
+        subagent_count: 0,
+        hidden_count: 0,
+        agents: [],
+      },
+      skills: { skill_count: 0, command_count: 0, skills: [], commands: [] },
+    },
+    ...overrides,
+  }
+}
+
 function createDeps(overrides: Partial<Parameters<typeof useRuntimeSectionLoadActions>[1]> = {}) {
   return {
     loadPluginsSectionData: async () => ({
@@ -38,6 +71,9 @@ function createDeps(overrides: Partial<Parameters<typeof useRuntimeSectionLoadAc
     }),
     loadSettingsSectionData: async () => ({
       authProviders: [],
+      runtime: sampleRuntimeStatus(),
+      providers: [],
+      providerModels: {},
       permissionRules: [],
     }),
     ...overrides,
@@ -193,6 +229,28 @@ describe('useRuntimeSectionLoadActions', () => {
           calls.push(`loadSettingsSectionData:${search}`)
           return {
             authProviders: [{ provider_id: 'anthropic', configured: true, credential_present: true }],
+            runtime: sampleRuntimeStatus({
+              model_catalog: {
+                remote_url: '',
+                fallback_url: '',
+                entries: [
+                  {
+                    adapter_id: 'anthropic',
+                    model_id: 'claude-opus-4-7',
+                    kind: 'official',
+                    source: 'remote',
+                  },
+                ],
+              },
+            }),
+            providers: [
+              {
+                provider_id: 'anthropic',
+                default_model: 'claude-opus-4-7',
+                default_model_ref: 'anthropic/claude-opus-4-7',
+              },
+            ],
+            providerModels: { anthropic: [] },
             permissionRules: [
               {
                 id: 1,
@@ -214,8 +272,9 @@ describe('useRuntimeSectionLoadActions', () => {
 
     await actions.loadSettingsSection()
 
-    expect(calls).toEqual(['loadSettingsSectionData:bash', 'loadDesktopPanel'])
+    expect(calls).toEqual(['loadSettingsSectionData:bash', 'replaceProviderModels:anthropic', 'loadDesktopPanel'])
     expect(state.authProviders.value.map((provider) => provider.provider_id)).toEqual(['anthropic'])
+    expect(state.catalogEntries.value.map((entry) => entry.adapter_id)).toEqual(['anthropic'])
     expect(state.permissionRules.value.map((rule) => rule.id)).toEqual([1])
   })
 

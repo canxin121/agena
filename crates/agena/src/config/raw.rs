@@ -112,7 +112,7 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
                             let Some(model) = model.as_table() else {
                                 continue;
                             };
-                            for field in ["target_model", "display_name", "family"] {
+                            for field in ["target_model"] {
                                 if model.contains_key(field) {
                                     return Err(ConfigError::Validation(format!(
                                         "provider `{provider_id}` adapter `{adapter_id}` model `{model_id}` does not support `{field}`"
@@ -1553,6 +1553,7 @@ fn validate_provider_auth<'a>(
             ) => match (config.issuer, options.options.backend) {
                 (CredentialIssuer::OpenaiChatgpt, super::OpenAiBackendConfig::ChatgptCodex) => {}
                 (CredentialIssuer::GithubCopilot, super::OpenAiBackendConfig::Api) => {}
+                (CredentialIssuer::AtomGit, super::OpenAiBackendConfig::Api) => {}
                 _ => {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),

@@ -99,6 +99,7 @@ pub async fn poll_copilot_device_code(
             access: token,
             expires_at_ms: 0,
             account_id: None,
+            user: None,
         }));
     }
 

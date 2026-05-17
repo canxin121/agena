@@ -444,6 +444,22 @@ enabled = true
 ```
 
 ```toml
+[providers.atomgit]
+default_model = "openai/Kimi-K2-Instruct"
+
+[providers.atomgit.auth]
+mode = "credential"
+issuer = "atomgit"
+credential = { type = "oauth", issuer = "atomgit", refresh = "...", access = "...", expires_at_ms = 4102444800000, account_id = "atomgit-user" }
+
+[providers.atomgit.adapters.openai]
+enabled = true
+
+[providers.atomgit.adapters.openai.models."Kimi-K2-Instruct"]
+enabled = true
+```
+
+```toml
 [providers.shared]
 default_model = "openai/gpt-4.1-mini"
 

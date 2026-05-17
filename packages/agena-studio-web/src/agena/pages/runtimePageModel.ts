@@ -86,6 +86,9 @@ export function buildAuthProviderFacts(provider: AuthProvider): SessionExecution
     { label: 'Expires At', value: provider.expires_at || 'n/a' },
     { label: 'Expired', value: provider.expired == null ? 'unknown' : provider.expired ? 'yes' : 'no' },
     { label: 'Account', value: provider.account_id || 'n/a' },
+    { label: 'Username', value: provider.username || 'n/a' },
+    { label: 'Display Name', value: provider.display_name || 'n/a' },
+    { label: 'Email', value: provider.email || 'n/a' },
     { label: 'Enterprise URL', value: provider.enterprise_url || 'n/a', mono: Boolean(provider.enterprise_url) },
   ]
 }

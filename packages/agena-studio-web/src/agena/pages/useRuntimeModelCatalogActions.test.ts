@@ -44,6 +44,7 @@ function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderMo
 
 function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCatalogEntry {
   return {
+    adapter_id: 'openai',
     provider_id: 'openai',
     model_id: 'gpt-5',
     kind: 'official',
@@ -114,9 +115,9 @@ describe('useRuntimeModelCatalogActions', () => {
     const draft = createModelCatalogDraftFromProviderModel(sampleProviderModel())
 
     expect(draft).toEqual({
-      provider_id: 'openai',
+      adapter_id: 'openai',
       model_id: 'gpt-5',
-      set_default_for_provider: false,
+      set_default_for_adapter: false,
       family: 'gpt',
       lifecycle: 'active',
       context_window_tokens: '400000',
@@ -207,7 +208,9 @@ describe('useRuntimeModelCatalogActions', () => {
       },
     })
 
-    expect(buildModelCatalogWriteRequest(createEmptyModelCatalogDraft('shared', 'openai/gpt-5')).variants).toBe(undefined)
+    expect(buildModelCatalogWriteRequest(createEmptyModelCatalogDraft('shared', 'openai/gpt-5')).variants).toBe(
+      undefined,
+    )
   })
 
   test('saveCatalogEntryAction reports local variant validation errors before submitting', async () => {
@@ -286,20 +289,17 @@ describe('useRuntimeModelCatalogActions', () => {
 
     expect(calls).toEqual(['upsert', 'load'])
     expect(capturedRequest).toEqual({
-      provider_id: 'openai',
+      adapter_id: 'openai',
       model_id: 'gpt-5',
-      set_default_for_provider: false,
+      set_default_for_adapter: false,
       family: 'gpt',
       lifecycle: 'active',
       context_window_tokens: 400000,
       max_output_tokens: 16384,
       display_name: 'GPT-5',
       description: 'Latest flagship model',
-      capabilities: {
-        tool_calling: 'supported',
-        streaming: 'supported',
-        reasoning: 'supported',
-        structured_output: 'supported',
+      features: {
+        supported: ['tool_calling', 'streaming', 'reasoning', 'structured_output'],
       },
       variants: {
         high: {

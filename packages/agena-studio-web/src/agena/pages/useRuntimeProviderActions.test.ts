@@ -10,9 +10,27 @@ function createState() {
     actionMessage: ref(''),
     browserAuthCodeDrafts: {} as Record<string, string>,
     browserAuthInstanceDrafts: {} as Record<string, string>,
-    browserAuthStartState: {} as Record<string, { provider_id: string; authorize_url: string; state: string; pkce_verifier: string; instance_url?: string | null } | null>,
+    browserAuthStartState: {} as Record<
+      string,
+      {
+        provider_id: string
+        authorize_url: string
+        state: string
+        pkce_verifier: string
+        instance_url?: string | null
+      } | null
+    >,
     deviceAuthEnterpriseDrafts: {} as Record<string, string>,
-    deviceAuthStartState: {} as Record<string, { provider_id: string; verification_url: string; user_code: string; device_code: string; interval_seconds: number } | null>,
+    deviceAuthStartState: {} as Record<
+      string,
+      {
+        provider_id: string
+        verification_url: string
+        user_code: string
+        device_code: string
+        interval_seconds: number
+      } | null
+    >,
     drafts: {
       anthropic: ' sk-ant-123 ',
       openai: ' ',
@@ -36,12 +54,19 @@ describe('useRuntimeProviderActions', () => {
       deleteProviderCredential: async () => {},
       finishGitLabBrowserAuth: async () => ({ completed: true, provider: null }),
       finishOpenAiBrowserAuth: async () => ({ completed: true, provider: null }),
+      pollAtomGitBrowserAuth: async () => ({ completed: true, provider: null }),
       pollCopilotDeviceAuth: async () => ({ completed: true, provider: null }),
       pollOpenAiDeviceAuth: async () => ({ completed: true, provider: null }),
       refreshProviderCredential: async () => {},
       setProviderApiKey: async (providerId, apiKey) => {
         calls.push(`setProviderApiKey:${providerId}:${apiKey}`)
       },
+      startAtomGitBrowserAuth: async () => ({
+        provider_id: 'atomgit',
+        authorize_url: 'https://atomgit.com/oauth/authorize',
+        state: 'atomgit-state',
+        pkce_verifier: '',
+      }),
       startCopilotDeviceAuth: async () => ({
         provider_id: 'github-copilot',
         verification_url: 'https://github.com/login/device',
@@ -74,10 +99,7 @@ describe('useRuntimeProviderActions', () => {
     await actions.saveApiKey('anthropic')
     await actions.saveApiKey('openai')
 
-    expect(calls).toEqual([
-      'setProviderApiKey:anthropic:sk-ant-123',
-      'load',
-    ])
+    expect(calls).toEqual(['setProviderApiKey:anthropic:sk-ant-123', 'load'])
     expect(state.drafts.anthropic).toBe('')
     expect(state.actionMessage.value).toBe('Saved API key for anthropic.')
   })
@@ -90,12 +112,19 @@ describe('useRuntimeProviderActions', () => {
       },
       finishGitLabBrowserAuth: async () => ({ completed: true, provider: null }),
       finishOpenAiBrowserAuth: async () => ({ completed: true, provider: null }),
+      pollAtomGitBrowserAuth: async () => ({ completed: true, provider: null }),
       pollCopilotDeviceAuth: async () => ({ completed: true, provider: null }),
       pollOpenAiDeviceAuth: async () => ({ completed: true, provider: null }),
       refreshProviderCredential: async (providerId) => {
         calls.push(`refreshProviderCredential:${providerId}`)
       },
       setProviderApiKey: async () => {},
+      startAtomGitBrowserAuth: async () => ({
+        provider_id: 'atomgit',
+        authorize_url: 'https://atomgit.com/oauth/authorize',
+        state: 'atomgit-state',
+        pkce_verifier: '',
+      }),
       startCopilotDeviceAuth: async () => ({
         provider_id: 'github-copilot',
         verification_url: 'https://github.com/login/device',
@@ -128,12 +157,7 @@ describe('useRuntimeProviderActions', () => {
     await actions.clearCredential('anthropic')
     await actions.refreshCredential('openai')
 
-    expect(calls).toEqual([
-      'deleteProviderCredential:anthropic',
-      'load',
-      'refreshProviderCredential:openai',
-      'load',
-    ])
+    expect(calls).toEqual(['deleteProviderCredential:anthropic', 'load', 'refreshProviderCredential:openai', 'load'])
     expect(state.actionMessage.value).toBe('Requested credential refresh for openai.')
   })
 
@@ -149,6 +173,10 @@ describe('useRuntimeProviderActions', () => {
         calls.push(`finishOpenAiBrowserAuth:${code}:${pkceVerifier}:${redirectUri}`)
         return { completed: true, provider: null }
       },
+      pollAtomGitBrowserAuth: async ({ providerId, state }) => {
+        calls.push(`pollAtomGitBrowserAuth:${providerId}:${state}`)
+        return { completed: true, provider: null }
+      },
       pollCopilotDeviceAuth: async ({ deviceCode, enterpriseDomain }) => {
         calls.push(`pollCopilotDeviceAuth:${deviceCode}:${enterpriseDomain || ''}`)
         return { completed: true, provider: null }
@@ -159,6 +187,15 @@ describe('useRuntimeProviderActions', () => {
       },
       refreshProviderCredential: async () => {},
       setProviderApiKey: async () => {},
+      startAtomGitBrowserAuth: async (providerId) => {
+        calls.push(`startAtomGitBrowserAuth:${providerId}`)
+        return {
+          provider_id: providerId,
+          authorize_url: 'https://atomgit.com/oauth/authorize',
+          state: 'atomgit-state',
+          pkce_verifier: '',
+        }
+      },
       startCopilotDeviceAuth: async (enterpriseDomain) => {
         calls.push(`startCopilotDeviceAuth:${enterpriseDomain || ''}`)
         return {
@@ -203,13 +240,16 @@ describe('useRuntimeProviderActions', () => {
     state.browserAuthInstanceDrafts.gitlab = 'https://gitlab.example.com'
     await actions.startBrowserAuth('openai')
     await actions.startBrowserAuth('gitlab')
+    await actions.startBrowserAuth('atomgit')
     expect(state.browserAuthStartState.openai?.pkce_verifier).toBe('openai-pkce')
     expect(state.browserAuthStartState.gitlab?.instance_url).toBe('https://gitlab.example.com')
+    expect(state.browserAuthStartState.atomgit?.state).toBe('atomgit-state')
 
     state.browserAuthCodeDrafts.openai = 'openai-code'
     state.browserAuthCodeDrafts.gitlab = 'gitlab-code'
     await actions.finishBrowserAuth('openai')
     await actions.finishBrowserAuth('gitlab')
+    await actions.finishBrowserAuth('atomgit')
 
     await actions.startDeviceAuth('openai')
     state.deviceAuthEnterpriseDrafts['github-copilot'] = 'github.example.com'
@@ -225,9 +265,13 @@ describe('useRuntimeProviderActions', () => {
       'openUrl:https://auth.openai.com/oauth/authorize',
       'startGitLabBrowserAuth:https://gitlab.example.com:http://localhost:3210/auth/callback',
       'openUrl:https://gitlab.com/oauth/authorize',
+      'startAtomGitBrowserAuth:atomgit',
+      'openUrl:https://atomgit.com/oauth/authorize',
       'finishOpenAiBrowserAuth:openai-code:openai-pkce:http://localhost:3210/auth/callback',
       'load',
       'finishGitLabBrowserAuth:https://gitlab.example.com:gitlab-code:gitlab-pkce',
+      'load',
+      'pollAtomGitBrowserAuth:atomgit:atomgit-state',
       'load',
       'startOpenAiDeviceAuth',
       'startCopilotDeviceAuth:github.example.com',
@@ -247,10 +291,17 @@ describe('useRuntimeProviderActions', () => {
         calls.push(`finishOpenAiBrowserAuth:${code}:${pkceVerifier}:${redirectUri}`)
         return { completed: true, provider: null }
       },
+      pollAtomGitBrowserAuth: async () => ({ completed: true, provider: null }),
       pollCopilotDeviceAuth: async () => ({ completed: true, provider: null }),
       pollOpenAiDeviceAuth: async () => ({ completed: true, provider: null }),
       refreshProviderCredential: async () => {},
       setProviderApiKey: async () => {},
+      startAtomGitBrowserAuth: async () => ({
+        provider_id: 'atomgit',
+        authorize_url: 'https://atomgit.com/oauth/authorize',
+        state: 'atomgit-state',
+        pkce_verifier: '',
+      }),
       startCopilotDeviceAuth: async () => ({
         provider_id: 'github-copilot',
         verification_url: '',

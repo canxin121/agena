@@ -69,9 +69,11 @@ impl CatalogModelDefinition {
 
     pub fn into_configured_definition(self) -> ConfiguredModelDefinition {
         ConfiguredModelDefinition {
+            family: self.family,
             lifecycle: self.lifecycle,
             context_window_tokens: self.context_window_tokens,
             max_output_tokens: self.max_output_tokens,
+            display_name: self.display_name,
             description: self.description,
             variants: self.variants,
             capabilities: self.capabilities,
@@ -88,17 +90,30 @@ pub struct ModelCatalogProviderRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ModelCatalogAdapterRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub models: BTreeMap<String, CatalogModelDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ModelCatalogDocument {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub adapters: BTreeMap<String, ModelCatalogAdapterRecord>,
+    /// Legacy provider-rooted catalog shape. New catalog files should use
+    /// `adapters`; this stays readable so existing remote caches and local
+    /// custom catalogs can be migrated losslessly at runtime.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, ModelCatalogProviderRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalogEntryRecord {
-    pub provider_id: String,
+    pub adapter_id: String,
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_model_for_provider: Option<String>,
+    pub default_model_for_adapter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -134,6 +149,85 @@ impl ModelCatalogEntryRecord {
     }
 }
 
+impl ModelCatalogAdapterRecord {
+    fn merge_from(&mut self, other: &ModelCatalogAdapterRecord) {
+        if let Some(default_model) = other.default_model.clone() {
+            self.default_model = Some(default_model);
+        }
+        for (model_id, model) in &other.models {
+            self.models.insert(model_id.clone(), model.clone());
+        }
+    }
+}
+
+impl ModelCatalogDocument {
+    pub(crate) fn adapter_ids(&self) -> BTreeSet<String> {
+        let mut adapter_ids = BTreeSet::new();
+        adapter_ids.extend(self.adapters.keys().cloned());
+        for (legacy_provider_id, provider) in &self.providers {
+            if let Some(default_model) = provider.default_model.as_deref() {
+                let (adapter_id, _) =
+                    split_catalog_adapter_model_ref(legacy_provider_id, default_model);
+                if !adapter_id.is_empty() {
+                    adapter_ids.insert(adapter_id);
+                }
+            }
+            for model_id in provider.models.keys() {
+                let (adapter_id, _) = split_catalog_adapter_model_ref(legacy_provider_id, model_id);
+                if !adapter_id.is_empty() {
+                    adapter_ids.insert(adapter_id);
+                }
+            }
+        }
+        adapter_ids
+    }
+
+    pub(crate) fn adapter_record(&self, adapter_id: &str) -> Option<ModelCatalogAdapterRecord> {
+        let mut record = self.adapters.get(adapter_id).cloned().unwrap_or_default();
+
+        for (legacy_provider_id, provider) in &self.providers {
+            if let Some(default_model) = provider.default_model.as_deref() {
+                let (default_adapter_id, default_model_id) =
+                    split_catalog_adapter_model_ref(legacy_provider_id, default_model);
+                if default_adapter_id == adapter_id && !default_model_id.is_empty() {
+                    record.default_model.get_or_insert(default_model_id);
+                }
+            }
+
+            for (legacy_model_id, definition) in &provider.models {
+                let (model_adapter_id, model_id) =
+                    split_catalog_adapter_model_ref(legacy_provider_id, legacy_model_id);
+                if model_adapter_id != adapter_id || model_id.is_empty() {
+                    continue;
+                }
+                record
+                    .models
+                    .entry(model_id)
+                    .or_insert_with(|| definition.clone());
+            }
+        }
+
+        (!record.models.is_empty() || record.default_model.is_some()).then_some(record)
+    }
+
+    fn legacy_provider_record(&self, provider_id: &str) -> Option<ModelCatalogProviderRecord> {
+        self.providers.get(provider_id).cloned()
+    }
+}
+
+fn split_catalog_adapter_model_ref(fallback_adapter_id: &str, value: &str) -> (String, String) {
+    let value = value.trim();
+    if let Some((adapter_id, model_id)) = value.split_once('/') {
+        let adapter_id = adapter_id.trim().to_owned();
+        let model_id = model_id.trim().to_owned();
+        if !adapter_id.is_empty() && !model_id.is_empty() {
+            return (adapter_id, model_id);
+        }
+    }
+
+    (fallback_adapter_id.trim().to_owned(), value.to_owned())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalogSnapshot {
     #[serde(default)]
@@ -167,20 +261,64 @@ impl Default for ModelCatalogSnapshot {
 }
 
 impl ModelCatalogSnapshot {
-    pub fn merged_provider(&self, provider_id: &str) -> Option<ModelCatalogProviderRecord> {
-        let official = self.official.providers.get(provider_id);
-        let custom = self.custom.providers.get(provider_id);
+    pub fn merged_adapter(&self, adapter_id: &str) -> Option<ModelCatalogAdapterRecord> {
+        let official = self.official.adapter_record(adapter_id);
+        let custom = self.custom.adapter_record(adapter_id);
         if official.is_none() && custom.is_none() {
             return None;
         }
 
-        let mut merged = official.cloned().unwrap_or_default();
-        if let Some(custom) = custom {
-            if let Some(default_model) = custom.default_model.clone() {
+        let mut merged = official.unwrap_or_default();
+        if let Some(custom) = &custom {
+            merged.merge_from(custom);
+        }
+        Some(merged)
+    }
+
+    pub fn merged_provider_for_adapters(
+        &self,
+        provider_id: &str,
+        adapter_ids: &[String],
+    ) -> Option<ModelCatalogProviderRecord> {
+        let mut merged = ModelCatalogProviderRecord::default();
+
+        for adapter_id in adapter_ids {
+            let Some(adapter_record) = self.merged_adapter(adapter_id.as_str()) else {
+                continue;
+            };
+            for (model_id, definition) in adapter_record.models {
+                merged
+                    .models
+                    .insert(format!("{adapter_id}/{model_id}"), definition);
+            }
+        }
+
+        if let Some(legacy_provider) = self.legacy_merged_provider(provider_id) {
+            if let Some(default_model) = legacy_provider.default_model {
                 merged.default_model = Some(default_model);
             }
-            for (model_id, model) in &custom.models {
-                merged.models.insert(model_id.clone(), model.clone());
+            for (model_id, definition) in legacy_provider.models {
+                merged.models.insert(model_id, definition);
+            }
+        }
+
+        (!merged.models.is_empty() || merged.default_model.is_some()).then_some(merged)
+    }
+
+    fn legacy_merged_provider(&self, provider_id: &str) -> Option<ModelCatalogProviderRecord> {
+        let official = self.official.legacy_provider_record(provider_id);
+        let custom = self.custom.legacy_provider_record(provider_id);
+        if official.is_none() && custom.is_none() {
+            return None;
+        }
+
+        let mut merged = official.unwrap_or_default();
+        if let Some(custom) = custom {
+            if let Some(default_model) = custom.default_model {
+                merged.default_model = Some(default_model);
+            }
+            for (model_id, definition) in custom.models {
+                merged.models.insert(model_id, definition);
             }
         }
         Some(merged)
@@ -188,19 +326,19 @@ impl ModelCatalogSnapshot {
 
     pub fn entries(&self) -> Vec<ModelCatalogEntryRecord> {
         let mut entries = Vec::new();
-        let mut provider_ids = BTreeSet::new();
-        provider_ids.extend(self.official.providers.keys().cloned());
-        provider_ids.extend(self.custom.providers.keys().cloned());
+        let mut adapter_ids = BTreeSet::new();
+        adapter_ids.extend(self.official.adapter_ids());
+        adapter_ids.extend(self.custom.adapter_ids());
 
-        for provider_id in provider_ids {
+        for adapter_id in adapter_ids {
             let merged_default = self
-                .merged_provider(provider_id.as_str())
-                .and_then(|provider| provider.default_model);
+                .merged_adapter(adapter_id.as_str())
+                .and_then(|adapter| adapter.default_model);
 
-            if let Some(official_provider) = self.official.providers.get(provider_id.as_str()) {
-                for (model_id, definition) in &official_provider.models {
+            if let Some(official_adapter) = self.official.adapter_record(adapter_id.as_str()) {
+                for (model_id, definition) in &official_adapter.models {
                     entries.push(Self::entry_record(
-                        provider_id.as_str(),
+                        adapter_id.as_str(),
                         model_id.as_str(),
                         definition,
                         merged_default.clone(),
@@ -209,10 +347,10 @@ impl ModelCatalogSnapshot {
                 }
             }
 
-            if let Some(custom_provider) = self.custom.providers.get(provider_id.as_str()) {
-                for (model_id, definition) in &custom_provider.models {
+            if let Some(custom_adapter) = self.custom.adapter_record(adapter_id.as_str()) {
+                for (model_id, definition) in &custom_adapter.models {
                     entries.push(Self::entry_record(
-                        provider_id.as_str(),
+                        adapter_id.as_str(),
                         model_id.as_str(),
                         definition,
                         merged_default.clone(),
@@ -223,8 +361,8 @@ impl ModelCatalogSnapshot {
         }
 
         entries.sort_by(|left, right| {
-            left.provider_id
-                .cmp(&right.provider_id)
+            left.adapter_id
+                .cmp(&right.adapter_id)
                 .then(left.model_id.cmp(&right.model_id))
                 .then(left.has_local_override.cmp(&right.has_local_override))
         });
@@ -232,16 +370,16 @@ impl ModelCatalogSnapshot {
     }
 
     fn entry_record(
-        provider_id: &str,
+        adapter_id: &str,
         model_id: &str,
         definition: &CatalogModelDefinition,
-        default_model_for_provider: Option<String>,
+        default_model_for_adapter: Option<String>,
         has_local_override: bool,
     ) -> ModelCatalogEntryRecord {
         ModelCatalogEntryRecord {
-            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
             model_id: model_id.to_owned(),
-            default_model_for_provider,
+            default_model_for_adapter,
             display_name: definition.display_name.clone(),
             has_local_override,
             family: definition.family,
@@ -254,11 +392,11 @@ impl ModelCatalogSnapshot {
         }
     }
 
-    pub fn provider_ids(&self) -> Vec<String> {
-        let mut provider_ids = BTreeSet::new();
-        provider_ids.extend(self.official.providers.keys().cloned());
-        provider_ids.extend(self.custom.providers.keys().cloned());
-        provider_ids.into_iter().collect()
+    pub fn adapter_ids(&self) -> Vec<String> {
+        let mut adapter_ids = BTreeSet::new();
+        adapter_ids.extend(self.official.adapter_ids());
+        adapter_ids.extend(self.custom.adapter_ids());
+        adapter_ids.into_iter().collect()
     }
 
     pub fn to_response(&self) -> ModelCatalogResponse {
@@ -414,8 +552,10 @@ impl ModelCatalogService {
     pub fn effective_provider_record(
         &self,
         provider_id: &str,
+        adapter_ids: &[String],
     ) -> Option<ModelCatalogProviderRecord> {
-        self.snapshot().merged_provider(provider_id)
+        self.snapshot()
+            .merged_provider_for_adapters(provider_id, adapter_ids)
     }
 
     pub async fn refresh_if_stale_on_startup(&self) -> Result<ModelCatalogSnapshot, AppError> {
@@ -507,34 +647,34 @@ impl ModelCatalogService {
 
     pub fn upsert_custom_entry(
         &self,
-        provider_id: impl Into<String>,
+        adapter_id: impl Into<String>,
         model_id: impl Into<String>,
         definition: CatalogModelDefinition,
-        set_default_for_provider: bool,
+        set_default_for_adapter: bool,
     ) -> Result<ModelCatalogSnapshot, AppError> {
-        let provider_id = provider_id.into();
+        let adapter_id = adapter_id.into();
         let model_id = model_id.into();
         let mut snapshot = self.snapshot();
-        let provider = snapshot.custom.providers.entry(provider_id).or_default();
-        provider.models.insert(model_id.clone(), definition);
-        if set_default_for_provider {
-            provider.default_model = Some(model_id);
+        let adapter = snapshot.custom.adapters.entry(adapter_id).or_default();
+        adapter.models.insert(model_id.clone(), definition);
+        if set_default_for_adapter {
+            adapter.default_model = Some(model_id);
         }
         self.store.write_custom(&snapshot.custom)?;
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
     }
 
-    pub fn set_provider_default_model(
+    pub fn set_adapter_default_model(
         &self,
-        provider_id: impl Into<String>,
+        adapter_id: impl Into<String>,
         model_id: impl Into<String>,
     ) -> Result<ModelCatalogSnapshot, AppError> {
-        let provider_id = provider_id.into();
+        let adapter_id = adapter_id.into();
         let model_id = model_id.into();
         let mut snapshot = self.snapshot();
-        let provider = snapshot.custom.providers.entry(provider_id).or_default();
-        provider.default_model = Some(model_id);
+        let adapter = snapshot.custom.adapters.entry(adapter_id).or_default();
+        adapter.default_model = Some(model_id);
         self.store.write_custom(&snapshot.custom)?;
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
@@ -542,18 +682,47 @@ impl ModelCatalogService {
 
     pub fn remove_custom_entry(
         &self,
-        provider_id: &str,
+        adapter_id: &str,
         model_id: &str,
     ) -> Result<ModelCatalogSnapshot, AppError> {
         let mut snapshot = self.snapshot();
-        if let Some(provider) = snapshot.custom.providers.get_mut(provider_id) {
-            provider.models.remove(model_id);
-            if provider.default_model.as_deref() == Some(model_id) {
-                provider.default_model = None;
+        if let Some(adapter) = snapshot.custom.adapters.get_mut(adapter_id) {
+            adapter.models.remove(model_id);
+            if adapter.default_model.as_deref() == Some(model_id) {
+                adapter.default_model = None;
+            }
+            if adapter.default_model.is_none() && adapter.models.is_empty() {
+                snapshot.custom.adapters.remove(adapter_id);
+            }
+        }
+        let mut empty_legacy_providers = Vec::new();
+        for (legacy_provider_id, provider) in &mut snapshot.custom.providers {
+            let legacy_keys = provider
+                .models
+                .keys()
+                .filter(|legacy_model_id| {
+                    let (legacy_adapter_id, legacy_model_name) =
+                        split_catalog_adapter_model_ref(legacy_provider_id, legacy_model_id);
+                    legacy_adapter_id == adapter_id && legacy_model_name == model_id
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for legacy_key in legacy_keys {
+                provider.models.remove(legacy_key.as_str());
+            }
+            if let Some(default_model) = provider.default_model.as_deref() {
+                let (default_adapter_id, default_model_id) =
+                    split_catalog_adapter_model_ref(legacy_provider_id, default_model);
+                if default_adapter_id == adapter_id && default_model_id == model_id {
+                    provider.default_model = None;
+                }
             }
             if provider.default_model.is_none() && provider.models.is_empty() {
-                snapshot.custom.providers.remove(provider_id);
+                empty_legacy_providers.push(legacy_provider_id.clone());
             }
+        }
+        for provider_id in empty_legacy_providers {
+            snapshot.custom.providers.remove(provider_id.as_str());
         }
         self.store.write_custom(&snapshot.custom)?;
         self.replace_snapshot(snapshot.clone());
@@ -582,7 +751,7 @@ impl ModelCatalogService {
     }
 
     fn snapshot_needs_startup_refresh(&self, snapshot: &ModelCatalogSnapshot) -> bool {
-        if snapshot.official.providers.is_empty() {
+        if snapshot.official.adapter_ids().is_empty() {
             return true;
         }
 
@@ -753,12 +922,12 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn merged_provider_prefers_custom_default_and_models() {
+    fn merged_adapter_prefers_custom_default_and_models() {
         let snapshot = ModelCatalogSnapshot {
             official: ModelCatalogDocument {
-                providers: BTreeMap::from([(
+                adapters: BTreeMap::from([(
                     "openai".to_owned(),
-                    ModelCatalogProviderRecord {
+                    ModelCatalogAdapterRecord {
                         default_model: Some("gpt-5".to_owned()),
                         models: BTreeMap::from([(
                             "gpt-5".to_owned(),
@@ -769,11 +938,12 @@ mod tests {
                         )]),
                     },
                 )]),
+                ..ModelCatalogDocument::default()
             },
             custom: ModelCatalogDocument {
-                providers: BTreeMap::from([(
+                adapters: BTreeMap::from([(
                     "openai".to_owned(),
-                    ModelCatalogProviderRecord {
+                    ModelCatalogAdapterRecord {
                         default_model: Some("gpt-5-custom".to_owned()),
                         models: BTreeMap::from([(
                             "gpt-5-custom".to_owned(),
@@ -784,13 +954,14 @@ mod tests {
                         )]),
                     },
                 )]),
+                ..ModelCatalogDocument::default()
             },
             ..ModelCatalogSnapshot::default()
         };
 
         let merged = snapshot
-            .merged_provider("openai")
-            .expect("provider should exist");
+            .merged_adapter("openai")
+            .expect("adapter should exist");
         assert_eq!(merged.default_model.as_deref(), Some("gpt-5-custom"));
         assert!(merged.models.contains_key("gpt-5"));
         assert!(merged.models.contains_key("gpt-5-custom"));
@@ -801,9 +972,9 @@ mod tests {
         let snapshot = ModelCatalogSnapshot {
             last_successful_source: Some(ModelCatalogEntrySourceKind::Remote),
             official: ModelCatalogDocument {
-                providers: BTreeMap::from([(
+                adapters: BTreeMap::from([(
                     "anthropic".to_owned(),
-                    ModelCatalogProviderRecord {
+                    ModelCatalogAdapterRecord {
                         default_model: Some("claude-sonnet".to_owned()),
                         models: BTreeMap::from([(
                             "claude-sonnet".to_owned(),
@@ -818,11 +989,12 @@ mod tests {
                         )]),
                     },
                 )]),
+                ..ModelCatalogDocument::default()
             },
             custom: ModelCatalogDocument {
-                providers: BTreeMap::from([(
+                adapters: BTreeMap::from([(
                     "anthropic".to_owned(),
-                    ModelCatalogProviderRecord {
+                    ModelCatalogAdapterRecord {
                         default_model: None,
                         models: BTreeMap::from([(
                             "claude-sonnet".to_owned(),
@@ -842,21 +1014,22 @@ mod tests {
                         )]),
                     },
                 )]),
+                ..ModelCatalogDocument::default()
             },
             ..ModelCatalogSnapshot::default()
         };
 
         let entries = snapshot.entries();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].provider_id, "anthropic");
+        assert_eq!(entries[0].adapter_id, "anthropic");
         assert_eq!(entries[0].model_id, "claude-sonnet");
         assert_eq!(entries[0].display_name.as_deref(), Some("Claude Sonnet"));
         assert!(!entries[0].has_local_override);
         assert_eq!(
-            entries[0].default_model_for_provider.as_deref(),
+            entries[0].default_model_for_adapter.as_deref(),
             Some("claude-sonnet")
         );
-        assert_eq!(entries[1].provider_id, "anthropic");
+        assert_eq!(entries[1].adapter_id, "anthropic");
         assert_eq!(entries[1].model_id, "claude-sonnet");
         assert_eq!(
             entries[1].display_name.as_deref(),
@@ -864,71 +1037,59 @@ mod tests {
         );
         assert!(entries[1].has_local_override);
         assert_eq!(
-            entries[1].default_model_for_provider.as_deref(),
+            entries[1].default_model_for_adapter.as_deref(),
             Some("claude-sonnet")
         );
         assert!(entries[1].variants.contains_key("deep"));
     }
 
     #[test]
-    fn bundled_fallback_catalog_file_parses_and_seeds_known_providers() {
+    fn bundled_fallback_catalog_file_parses_and_seeds_known_adapters() {
         let document = bundled_catalog_document().expect("bundled fallback catalog should parse");
 
-        let provider_ids = document.providers.keys().cloned().collect::<Vec<_>>();
-        assert!(provider_ids.iter().any(|id| id == "openai"));
-        assert!(provider_ids.iter().any(|id| id == "anthropic"));
-        assert!(provider_ids.iter().any(|id| id == "gemini"));
-        assert!(provider_ids.iter().any(|id| id == "bedrock"));
-        assert!(provider_ids.iter().any(|id| id == "gitlab"));
+        let adapter_ids = document.adapter_ids().into_iter().collect::<Vec<_>>();
+        assert!(adapter_ids.iter().any(|id| id == "openai"));
+        assert!(adapter_ids.iter().any(|id| id == "anthropic"));
+        assert!(adapter_ids.iter().any(|id| id == "gemini"));
+        assert!(adapter_ids.iter().any(|id| id == "amazon_bedrock"));
+        assert!(adapter_ids.iter().any(|id| id == "gitlab"));
 
         let openai = document
-            .providers
-            .get("openai")
-            .expect("openai provider should exist");
-        assert_eq!(openai.default_model.as_deref(), Some("openai/gpt-5.5"));
-        assert!(openai.models.contains_key("openai/gpt-5.5"));
-        assert!(openai.models.contains_key("openai/gpt-5.5-pro"));
+            .adapter_record("openai")
+            .expect("openai adapter should exist");
+        assert_eq!(openai.default_model.as_deref(), Some("gpt-5.5"));
+        assert!(openai.models.contains_key("gpt-5.5"));
+        assert!(openai.models.contains_key("gpt-5.5-pro"));
 
         let anthropic = document
-            .providers
-            .get("anthropic")
-            .expect("anthropic provider should exist");
-        assert_eq!(
-            anthropic.default_model.as_deref(),
-            Some("anthropic/claude-opus-4-7")
-        );
-        assert!(anthropic.models.contains_key("anthropic/claude-opus-4-7"));
-        assert!(anthropic.models.contains_key("anthropic/claude-opus-4-6"));
+            .adapter_record("anthropic")
+            .expect("anthropic adapter should exist");
+        assert_eq!(anthropic.default_model.as_deref(), Some("claude-opus-4-7"));
+        assert!(anthropic.models.contains_key("claude-opus-4-7"));
+        assert!(anthropic.models.contains_key("claude-opus-4-6"));
 
         let gemini = document
-            .providers
-            .get("gemini")
-            .expect("gemini provider should exist");
+            .adapter_record("gemini")
+            .expect("gemini adapter should exist");
         assert_eq!(
             gemini.default_model.as_deref(),
-            Some("gemini/gemini-3.1-pro-preview")
+            Some("gemini-3.1-pro-preview")
         );
-        assert!(gemini.models.contains_key("gemini/gemini-3.1-flash-lite"));
+        assert!(gemini.models.contains_key("gemini-3.1-flash-lite"));
 
         let bedrock = document
-            .providers
-            .get("bedrock")
-            .expect("bedrock provider should exist");
+            .adapter_record("amazon_bedrock")
+            .expect("amazon_bedrock adapter should exist");
         assert_eq!(
             bedrock.default_model.as_deref(),
-            Some("amazon_bedrock/amazon.nova-pro-v1:0")
+            Some("amazon.nova-pro-v1:0")
         );
-        assert!(
-            bedrock
-                .models
-                .contains_key("amazon_bedrock/amazon.nova-pro-v1:0")
-        );
+        assert!(bedrock.models.contains_key("amazon.nova-pro-v1:0"));
 
         let gitlab = document
-            .providers
-            .get("gitlab")
-            .expect("gitlab provider should exist");
-        assert!(gitlab.models.contains_key("gitlab/duo-chat-sonnet-4-5"));
+            .adapter_record("gitlab")
+            .expect("gitlab adapter should exist");
+        assert!(gitlab.models.contains_key("duo-chat-sonnet-4-5"));
     }
 
     #[tokio::test]
@@ -1014,11 +1175,11 @@ mod tests {
         );
     }
 
-    fn model_catalog_document(provider_id: &str, model_id: &str) -> ModelCatalogDocument {
+    fn model_catalog_document(adapter_id: &str, model_id: &str) -> ModelCatalogDocument {
         ModelCatalogDocument {
-            providers: BTreeMap::from([(
-                provider_id.to_owned(),
-                ModelCatalogProviderRecord {
+            adapters: BTreeMap::from([(
+                adapter_id.to_owned(),
+                ModelCatalogAdapterRecord {
                     default_model: Some(model_id.to_owned()),
                     models: BTreeMap::from([(
                         model_id.to_owned(),
@@ -1029,6 +1190,7 @@ mod tests {
                     )]),
                 },
             )]),
+            ..ModelCatalogDocument::default()
         }
     }
 }

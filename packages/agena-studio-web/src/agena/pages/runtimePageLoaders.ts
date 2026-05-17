@@ -33,6 +33,9 @@ export type RuntimeSectionData = {
 
 export type SettingsSectionData = {
   authProviders: AuthProvider[]
+  runtime: RuntimeStatus
+  providers: ProviderSummary[]
+  providerModels: Record<string, ProviderModel[]>
   permissionRules: PermissionRuleResource[]
 }
 
@@ -47,15 +50,13 @@ export async function loadRuntimeSectionData(input: {
   selectedWorkspaceId: number | null
   selectedSessionId: number | null
 }): Promise<RuntimeSectionData> {
-  const [runtime, providers, workspaces] = await Promise.all([
-    fetchRuntimeStatus(),
-    listProviders(),
-    listWorkspaces(),
-  ])
+  const [runtime, providers, workspaces] = await Promise.all([fetchRuntimeStatus(), listProviders(), listWorkspaces()])
 
   const providerModels = Object.fromEntries(
     await Promise.all(
-      providers.map(async (provider) => [provider.provider_id, await listProviderModels(provider.provider_id)] as const),
+      providers.map(
+        async (provider) => [provider.provider_id, await listProviderModels(provider.provider_id)] as const,
+      ),
     ),
   ) as Record<string, ProviderModel[]>
 
@@ -75,13 +76,25 @@ export async function loadRuntimeSectionData(input: {
 }
 
 export async function loadSettingsSectionData(permissionSearch: string): Promise<SettingsSectionData> {
-  const [authProviders, permissionRules] = await Promise.all([
+  const [authProviders, permissionRules, runtime, providers] = await Promise.all([
     listAuthProviders(),
     listPermissionRules(permissionSearch),
+    fetchRuntimeStatus(),
+    listProviders(),
   ])
+  const providerModels = Object.fromEntries(
+    await Promise.all(
+      providers.map(
+        async (provider) => [provider.provider_id, await listProviderModels(provider.provider_id)] as const,
+      ),
+    ),
+  ) as Record<string, ProviderModel[]>
 
   return {
     authProviders,
+    runtime,
+    providers,
+    providerModels,
     permissionRules,
   }
 }
@@ -90,10 +103,7 @@ export async function loadPluginsSectionData(input: {
   selectedPluginId: string
   selectedWorkspaceId: number | null
 }): Promise<PluginsSectionData> {
-  const [plugins, workspaces] = await Promise.all([
-    listPlugins(),
-    listWorkspaces(),
-  ])
+  const [plugins, workspaces] = await Promise.all([listPlugins(), listWorkspaces()])
 
   return {
     plugins,

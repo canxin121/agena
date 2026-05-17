@@ -861,6 +861,12 @@ struct AuthSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     enterprise_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     issuer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_at_ms: Option<i64>,
@@ -1610,6 +1616,27 @@ impl AgenaCli {
                             redirect_uri,
                         )
                         .await?;
+                }
+                ProviderAuthConfig::Credential(config)
+                    if matches!(
+                        config.issuer,
+                        crate::provider::auth::CredentialIssuer::AtomGit
+                    ) =>
+                {
+                    let start = manager.start_atomgit_login().await?;
+                    println!("open this URL to continue: {}", start.authorize_url);
+                    io::stdout().flush()?;
+                    let auth = poll_until(
+                        Duration::from_secs(args.timeout_secs),
+                        Duration::from_secs(2),
+                        || manager.poll_atomgit_login(provider_id.as_str(), start.state.clone()),
+                    )
+                    .await?;
+                    if auth.is_none() {
+                        return Err(AppError::Config(
+                            "atomgit browser login timed out".to_owned(),
+                        ));
+                    }
                 }
                 _ => {
                     return Err(AppError::Config(format!(
@@ -3508,6 +3535,9 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
             kind: "api_key".to_owned(),
             account_id: None,
             enterprise_url: None,
+            username: None,
+            display_name: None,
+            email: None,
             issuer: None,
             expires_at_ms: None,
         },
@@ -3516,28 +3546,39 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
             expires_at_ms,
             account_id,
             enterprise_url,
+            user,
             ..
-        } => AuthSummary {
-            provider_id,
-            kind: "oauth".to_owned(),
-            account_id,
-            enterprise_url,
-            issuer: issuer.map(|issuer| match issuer {
-                crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
-                    "openai_chatgpt".to_owned()
-                }
-                crate::provider::auth::CredentialIssuer::GithubCopilot => {
-                    "github_copilot".to_owned()
-                }
-                crate::provider::auth::CredentialIssuer::Gitlab => "gitlab".to_owned(),
-            }),
-            expires_at_ms: Some(expires_at_ms),
-        },
+        } => {
+            let account_id = account_id.or_else(|| user.as_ref().map(|user| user.id.clone()));
+            AuthSummary {
+                provider_id,
+                kind: "oauth".to_owned(),
+                account_id,
+                enterprise_url,
+                username: user.as_ref().map(|user| user.username.clone()),
+                display_name: user.as_ref().and_then(|user| user.name.clone()),
+                email: user.as_ref().and_then(|user| user.email.clone()),
+                issuer: issuer.map(|issuer| match issuer {
+                    crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
+                        "openai_chatgpt".to_owned()
+                    }
+                    crate::provider::auth::CredentialIssuer::GithubCopilot => {
+                        "github_copilot".to_owned()
+                    }
+                    crate::provider::auth::CredentialIssuer::Gitlab => "gitlab".to_owned(),
+                    crate::provider::auth::CredentialIssuer::AtomGit => "atomgit".to_owned(),
+                }),
+                expires_at_ms: Some(expires_at_ms),
+            }
+        }
         AuthData::WellKnown { .. } => AuthSummary {
             provider_id,
             kind: "well_known".to_owned(),
             account_id: None,
             enterprise_url: None,
+            username: None,
+            display_name: None,
+            email: None,
             issuer: None,
             expires_at_ms: None,
         },

@@ -10,6 +10,8 @@ const props = defineProps<{
 
 <template>
   <ProvidersSettingsPanel
+    :action-error="props.providers.actionError"
+    :action-message="props.providers.actionMessage"
     :auth-providers="props.providers.authProviders"
     :browser-auth-code-drafts="props.providers.browserAuthCodeDrafts"
     :browser-auth-instance-drafts="props.providers.browserAuthInstanceDrafts"
@@ -17,6 +19,10 @@ const props = defineProps<{
     :device-auth-enterprise-drafts="props.providers.deviceAuthEnterpriseDrafts"
     :device-auth-start-state="props.providers.deviceAuthStartState"
     :drafts="props.providers.drafts"
+    :catalog-entries="props.providers.catalogEntries"
+    :load="props.providers.load"
+    :provider-models="props.providers.providerModels"
+    :providers="props.providers.providers"
     :finish-browser-auth="props.providers.finishBrowserAuth"
     :poll-device-auth="props.providers.pollDeviceAuth"
     :save-api-key="props.providers.saveApiKey"

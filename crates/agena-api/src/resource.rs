@@ -227,12 +227,16 @@ pub enum ModelCatalogSourceKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogEntryResource {
+    pub adapter_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub provider_id: String,
     pub model_id: String,
     pub kind: ModelCatalogEntryKind,
     pub source: ModelCatalogSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model_for_adapter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_model_for_provider: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -257,8 +261,13 @@ pub struct ModelCatalogEntryResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogEntryWriteRequest {
-    pub provider_id: String,
+    #[serde(default)]
+    pub adapter_id: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub model_id: String,
+    #[serde(default)]
+    pub set_default_for_adapter: bool,
     #[serde(default)]
     pub set_default_for_provider: bool,
     #[serde(flatten)]
@@ -267,7 +276,10 @@ pub struct ModelCatalogEntryWriteRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogProviderDefaultRequest {
-    pub provider_id: String,
+    #[serde(default)]
+    pub adapter_id: Option<String>,
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub model_id: String,
 }
 
@@ -551,6 +563,21 @@ pub struct AuthProviderResource {
     pub account_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enterprise_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderAdapterSummaryResource {
+    pub adapter_id: String,
+    pub enabled: bool,
+    pub configured_model_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -560,6 +587,8 @@ pub struct ProviderSummaryResource {
     pub default_model_ref: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_default_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adapters: Vec<ProviderAdapterSummaryResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -35,9 +35,9 @@ const defaultDeps: RuntimeModelCatalogActionsDeps = {
 }
 
 export type ModelCatalogEditableDraft = {
-  provider_id: string
+  adapter_id: string
   model_id: string
-  set_default_for_provider: boolean
+  set_default_for_adapter: boolean
   family: string
   lifecycle: string
   context_window_tokens: string
@@ -113,15 +113,27 @@ function stringifyJson(value: Record<string, unknown> | null | undefined): strin
   return JSON.stringify(value, null, 2)
 }
 
+export function splitProviderModelRoute(modelId: string): { adapterId: string; modelId: string } {
+  const normalized = String(modelId || '').trim()
+  const slashIndex = normalized.indexOf('/')
+  if (slashIndex > 0 && slashIndex < normalized.length - 1) {
+    return {
+      adapterId: normalized.slice(0, slashIndex).trim(),
+      modelId: normalized.slice(slashIndex + 1).trim(),
+    }
+  }
+  return { adapterId: '', modelId: normalized }
+}
+
 function readCapabilityFlag(
-  entry: { capabilities?: Record<string, unknown> | null },
+  entry: { capabilities?: Record<string, unknown> | null; features?: unknown; [key: string]: unknown },
   key: 'tool_calling' | 'streaming' | 'reasoning' | 'structured_output' | 'temperature_supported',
 ): boolean {
-  const value = entry.capabilities?.[key]
+  const value = entry[key] ?? entry.capabilities?.[key]
   if (value === 'supported' || value === true) return true
 
   const compactKey = key === 'temperature_supported' ? 'temperature' : key
-  const features = entry.capabilities?.features
+  const features = entry.features ?? entry.capabilities?.features
   if (Array.isArray(features)) {
     return features.includes(compactKey)
   }
@@ -140,11 +152,11 @@ type ProviderModelVariantWriteValue = ProviderModelVariant & {
   disabled?: boolean
 }
 
-export function createEmptyModelCatalogDraft(providerId = '', modelId = ''): ModelCatalogEditableDraft {
+export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): ModelCatalogEditableDraft {
   return {
-    provider_id: providerId,
+    adapter_id: adapterId,
     model_id: modelId,
-    set_default_for_provider: false,
+    set_default_for_adapter: false,
     family: '',
     lifecycle: '',
     context_window_tokens: '',
@@ -188,14 +200,16 @@ function createModelCatalogVariantDrafts(
 ): ModelCatalogVariantEditableDraft[] {
   return Object.entries(variants || {})
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([name, variant]) => createModelCatalogVariantDraftFromEntry(name, variant as ProviderModelVariantWithDisabled))
+    .map(([name, variant]) =>
+      createModelCatalogVariantDraftFromEntry(name, variant as ProviderModelVariantWithDisabled),
+    )
 }
 
 export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): ModelCatalogEditableDraft {
   return {
-    provider_id: entry.provider_id,
+    adapter_id: entry.adapter_id || entry.provider_id || '',
     model_id: entry.model_id,
-    set_default_for_provider: entry.default_model_for_provider === entry.model_id,
+    set_default_for_adapter: (entry.default_model_for_adapter || entry.default_model_for_provider) === entry.model_id,
     family: String(entry.family || ''),
     lifecycle: String(entry.lifecycle || ''),
     context_window_tokens: entry.context_window_tokens == null ? '' : String(entry.context_window_tokens),
@@ -212,10 +226,12 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
 }
 
 export function createModelCatalogDraftFromProviderModel(model: ProviderModel): ModelCatalogEditableDraft {
+  const route = splitProviderModelRoute(model.id)
+  const adapterId = route.adapterId || String(model.provider_id || '').trim()
   return {
-    provider_id: model.provider_id,
-    model_id: model.id,
-    set_default_for_provider: false,
+    adapter_id: adapterId,
+    model_id: route.modelId,
+    set_default_for_adapter: false,
     family: String(model.metadata?.family || ''),
     lifecycle: String(model.metadata?.lifecycle || ''),
     context_window_tokens:
@@ -237,7 +253,11 @@ export function findCatalogEntryForProviderModel(
   entries: ModelCatalogEntry[],
   model: ProviderModel,
 ): ModelCatalogEntry | null {
-  const matches = entries.filter((entry) => entry.provider_id === model.provider_id && entry.model_id === model.id)
+  const route = splitProviderModelRoute(model.id)
+  const adapterId = route.adapterId || String(model.provider_id || '').trim()
+  const matches = entries.filter(
+    (entry) => (entry.adapter_id || entry.provider_id) === adapterId && entry.model_id === route.modelId,
+  )
   return matches.find((entry) => entry.kind === 'custom') || matches[0] || null
 }
 
@@ -287,17 +307,17 @@ function buildModelCatalogVariants(
 }
 
 export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft): ModelCatalogEntryWriteRequest {
-  const capabilities: Record<string, unknown> = {}
-  if (draft.tool_calling) capabilities.tool_calling = 'supported'
-  if (draft.streaming) capabilities.streaming = 'supported'
-  if (draft.reasoning) capabilities.reasoning = 'supported'
-  if (draft.structured_output) capabilities.structured_output = 'supported'
-  if (draft.temperature_supported) capabilities.temperature_supported = 'supported'
+  const supportedFeatures: string[] = []
+  if (draft.tool_calling) supportedFeatures.push('tool_calling')
+  if (draft.streaming) supportedFeatures.push('streaming')
+  if (draft.reasoning) supportedFeatures.push('reasoning')
+  if (draft.structured_output) supportedFeatures.push('structured_output')
+  if (draft.temperature_supported) supportedFeatures.push('temperature')
 
   return {
-    provider_id: String(draft.provider_id || '').trim(),
+    adapter_id: String(draft.adapter_id || '').trim(),
     model_id: String(draft.model_id || '').trim(),
-    set_default_for_provider: Boolean(draft.set_default_for_provider),
+    set_default_for_adapter: Boolean(draft.set_default_for_adapter),
     family: normalizeOptionalText(draft.family),
     lifecycle: normalizeOptionalText(draft.lifecycle),
     context_window_tokens: normalizeOptionalInteger(draft.context_window_tokens),
@@ -305,8 +325,30 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
     display_name: normalizeOptionalText(draft.display_name),
     description: normalizeOptionalText(draft.description),
     variants: buildModelCatalogVariants(draft.variants),
-    capabilities,
+    features: supportedFeatures.length ? { supported: supportedFeatures } : undefined,
   }
+}
+
+export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditableDraft): Record<string, unknown> {
+  const request = buildModelCatalogWriteRequest(draft) as Record<string, unknown>
+  delete request.adapter_id
+  delete request.provider_id
+  delete request.model_id
+  delete request.set_default_for_adapter
+  delete request.set_default_for_provider
+
+  for (const [key, value] of Object.entries({ ...request })) {
+    const isEmptyObject =
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      Object.keys(value as Record<string, unknown>).length === 0
+    if (value == null || value === '' || isEmptyObject) {
+      delete request[key]
+    }
+  }
+
+  return request
 }
 
 export function useRuntimeModelCatalogActions(
@@ -335,43 +377,43 @@ export function useRuntimeModelCatalogActions(
     input.actionError.value = ''
     try {
       const request = buildModelCatalogWriteRequest(draft)
-      if (!request.provider_id || !request.model_id) {
-        input.actionError.value = 'provider_id and model_id are required.'
+      if (!request.adapter_id || !request.model_id) {
+        input.actionError.value = 'adapter_id and model_id are required.'
         return
       }
 
       const response = await deps.upsertModelCatalogEntry(request)
       replaceEntries(response.entries ?? [])
-      input.actionMessage.value = `Saved catalog entry ${request.provider_id}/${request.model_id}.`
+      input.actionMessage.value = `Saved catalog entry ${request.adapter_id}/${request.model_id}.`
       await input.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     }
   }
 
-  async function deleteCatalogEntryAction(providerId: string, modelId: string) {
+  async function deleteCatalogEntryAction(adapterId: string, modelId: string) {
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      const response = await deps.deleteModelCatalogEntry(providerId, modelId)
+      const response = await deps.deleteModelCatalogEntry(adapterId, modelId)
       replaceEntries(response.entries ?? [])
-      input.actionMessage.value = `Deleted local catalog override ${providerId}/${modelId}.`
+      input.actionMessage.value = `Deleted local catalog override ${adapterId}/${modelId}.`
       await input.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     }
   }
 
-  async function setCatalogDefaultModelAction(providerId: string, modelId: string) {
+  async function setCatalogDefaultModelAction(adapterId: string, modelId: string) {
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
       const response = await deps.setModelCatalogProviderDefault({
-        provider_id: providerId,
+        adapter_id: adapterId,
         model_id: modelId,
       })
       replaceEntries(response.entries ?? [])
-      input.actionMessage.value = `Set catalog default for ${providerId} to ${modelId}.`
+      input.actionMessage.value = `Set catalog default for ${adapterId} to ${modelId}.`
       await input.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)

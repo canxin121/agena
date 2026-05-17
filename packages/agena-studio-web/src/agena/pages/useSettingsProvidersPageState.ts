@@ -4,6 +4,7 @@ import { useRuntimeSectionState, type RuntimeSectionSharedState } from './useRun
 import { useSettingsProvidersState } from './useSettingsProvidersState'
 
 export type SettingsProvidersPageStateSource = {
+  catalogEntries: Parameters<typeof useSettingsProvidersState>[0]['catalogEntries']
   authProviders: Parameters<typeof useSettingsProvidersState>[0]['authProviders']
   browserAuthCodeDrafts: Parameters<typeof useSettingsProvidersState>[0]['browserAuthCodeDrafts']
   browserAuthInstanceDrafts: Parameters<typeof useSettingsProvidersState>[0]['browserAuthInstanceDrafts']
@@ -11,6 +12,8 @@ export type SettingsProvidersPageStateSource = {
   deviceAuthEnterpriseDrafts: Parameters<typeof useSettingsProvidersState>[0]['deviceAuthEnterpriseDrafts']
   deviceAuthStartState: Parameters<typeof useSettingsProvidersState>[0]['deviceAuthStartState']
   drafts: Parameters<typeof useSettingsProvidersState>[0]['drafts']
+  providerModels: Parameters<typeof useSettingsProvidersState>[0]['providerModels']
+  providers: Parameters<typeof useSettingsProvidersState>[0]['providers']
   finishBrowserAuth: Parameters<typeof useSettingsProvidersState>[0]['finishBrowserAuth']
   pollDeviceAuth: Parameters<typeof useSettingsProvidersState>[0]['pollDeviceAuth']
   saveApiKey: Parameters<typeof useSettingsProvidersState>[0]['saveApiKey']
@@ -20,12 +23,14 @@ export type SettingsProvidersPageStateSource = {
   startDeviceAuth: Parameters<typeof useSettingsProvidersState>[0]['startDeviceAuth']
 }
 
+export type SettingsProvidersPanelStateSource = Pick<
+  RuntimeSectionSharedState,
+  'actionError' | 'actionMessage' | 'load'
+> &
+  SettingsProvidersPageStateSource
+
 export type SettingsProvidersPageStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'settings'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'settings' }) => {
     shared: RuntimeSectionSharedState
     state: SettingsProvidersPageStateSource
   }
@@ -33,14 +38,18 @@ export type SettingsProvidersPageStateDeps = {
 
 const defaultDeps: SettingsProvidersPageStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsProvidersPageStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & SettingsProvidersPageStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: SettingsProvidersPageStateSource
     },
 }
 
-export function createSettingsProvidersPanelState(state: SettingsProvidersPageStateSource) {
+export function createSettingsProvidersPanelState(state: SettingsProvidersPanelStateSource) {
   return useSettingsProvidersState({
+    actionError: state.actionError,
+    actionMessage: state.actionMessage,
     authProviders: state.authProviders,
     browserAuthCodeDrafts: state.browserAuthCodeDrafts,
     browserAuthInstanceDrafts: state.browserAuthInstanceDrafts,
@@ -48,6 +57,10 @@ export function createSettingsProvidersPanelState(state: SettingsProvidersPageSt
     deviceAuthEnterpriseDrafts: state.deviceAuthEnterpriseDrafts,
     deviceAuthStartState: state.deviceAuthStartState,
     drafts: state.drafts,
+    catalogEntries: state.catalogEntries,
+    load: state.load,
+    providerModels: state.providerModels,
+    providers: state.providers,
     finishBrowserAuth: state.finishBrowserAuth,
     pollDeviceAuth: state.pollDeviceAuth,
     saveApiKey: state.saveApiKey,
@@ -66,7 +79,7 @@ export function useSettingsProvidersPageState(
   deps: SettingsProvidersPageStateDeps = defaultDeps,
 ) {
   const { shared, state } = deps.useRuntimeSectionState({ ...input, section: 'settings' })
-  const providers = createSettingsProvidersPanelState(state)
+  const providers = createSettingsProvidersPanelState({ ...shared, ...state })
 
   return {
     actionError: shared.actionError,

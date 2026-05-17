@@ -5,9 +5,10 @@ use crate::error::AppError;
 
 use super::{
     AuthData, AuthStore, CopilotDeployment, CredentialIssuer, DeviceCodeStart, OAuthAuthorizeStart,
-    OAuthTokenResponse, exchange_gitlab_oauth_code, exchange_openai_oauth_code,
-    poll_copilot_device_code, poll_openai_headless_device_code, refresh_gitlab_token,
-    refresh_openai_token, start_copilot_device_code, start_gitlab_oauth,
+    OAuthTokenResponse, OAuthUserInfo, exchange_atomgit_oauth_state, exchange_gitlab_oauth_code,
+    exchange_openai_oauth_code, poll_atomgit_oauth_state, poll_copilot_device_code,
+    poll_openai_headless_device_code, refresh_atomgit_token, refresh_gitlab_token,
+    refresh_openai_token, start_atomgit_oauth, start_copilot_device_code, start_gitlab_oauth,
     start_openai_browser_oauth, start_openai_headless_device_code, wait_for_oauth_callback,
 };
 
@@ -153,6 +154,7 @@ impl<S: AuthStore> AuthManager<S> {
         let Some(AuthData::OAuth {
             refresh,
             enterprise_url,
+            user,
             ..
         }) = self.store.get(provider_id)?
         else {
@@ -162,7 +164,7 @@ impl<S: AuthStore> AuthManager<S> {
         };
 
         let token = refresh_openai_token(refresh.as_str()).await?;
-        let auth = oauth_auth_data(
+        let auth = oauth_auth_data_with_user(
             provider_id,
             CredentialIssuer::OpenaiChatgpt,
             token.refresh,
@@ -170,6 +172,7 @@ impl<S: AuthStore> AuthManager<S> {
             token.expires_at_ms,
             token.account_id,
             enterprise_url,
+            user,
         )?;
         self.store.set(provider_id, auth.clone())?;
         Ok(auth)
@@ -217,6 +220,63 @@ impl<S: AuthStore> AuthManager<S> {
         )?;
         self.store.set(provider_id, auth.clone())?;
         Ok(Some(auth))
+    }
+
+    pub async fn start_atomgit_login(&self) -> Result<OAuthAuthorizeStart, AppError> {
+        start_atomgit_oauth().await
+    }
+
+    pub async fn poll_atomgit_login(
+        &self,
+        provider_id: &str,
+        state: impl Into<String>,
+    ) -> Result<Option<AuthData>, AppError> {
+        let state = state.into();
+        if !poll_atomgit_oauth_state(state.as_str()).await? {
+            return Ok(None);
+        }
+
+        let token = exchange_atomgit_oauth_state(state.as_str()).await?;
+        let auth = oauth_auth_data_with_user(
+            provider_id,
+            CredentialIssuer::AtomGit,
+            token.refresh,
+            token.access,
+            token.expires_at_ms,
+            token.account_id,
+            None,
+            token.user,
+        )?;
+        self.store.set(provider_id, auth.clone())?;
+        Ok(Some(auth))
+    }
+
+    pub async fn refresh_atomgit_login(&self, provider_id: &str) -> Result<AuthData, AppError> {
+        let Some(AuthData::OAuth {
+            refresh,
+            account_id,
+            user,
+            ..
+        }) = self.store.get(provider_id)?
+        else {
+            return Err(AppError::Config(format!(
+                "{provider_id} oauth credential not found"
+            )));
+        };
+
+        let token = refresh_atomgit_token(refresh.as_str()).await?;
+        let auth = oauth_auth_data_with_user(
+            provider_id,
+            CredentialIssuer::AtomGit,
+            token.refresh,
+            token.access,
+            token.expires_at_ms,
+            token.account_id.or(account_id),
+            None,
+            token.user.or(user),
+        )?;
+        self.store.set(provider_id, auth.clone())?;
+        Ok(auth)
     }
 
     pub fn start_gitlab_login(
@@ -269,6 +329,7 @@ impl<S: AuthStore> AuthManager<S> {
         let Some(AuthData::OAuth {
             refresh,
             account_id,
+            user,
             ..
         }) = self.store.get(provider_id)?
         else {
@@ -280,7 +341,7 @@ impl<S: AuthStore> AuthManager<S> {
         let instance_url = instance_url.into();
 
         let token = refresh_gitlab_token(instance_url.as_str(), refresh.as_str()).await?;
-        let auth = oauth_auth_data(
+        let auth = oauth_auth_data_with_user(
             provider_id,
             CredentialIssuer::Gitlab,
             token.refresh,
@@ -288,6 +349,7 @@ impl<S: AuthStore> AuthManager<S> {
             token.expires_at_ms,
             account_id,
             None,
+            user,
         )?;
         self.store.set(provider_id, auth.clone())?;
         Ok(auth)
@@ -326,6 +388,28 @@ fn oauth_auth_data(
     account_id: Option<String>,
     enterprise_url: Option<String>,
 ) -> Result<AuthData, AppError> {
+    oauth_auth_data_with_user(
+        provider_id,
+        issuer,
+        refresh,
+        access,
+        expires_at_ms,
+        account_id,
+        enterprise_url,
+        None,
+    )
+}
+
+fn oauth_auth_data_with_user(
+    provider_id: &str,
+    issuer: CredentialIssuer,
+    refresh: String,
+    access: String,
+    expires_at_ms: i64,
+    account_id: Option<String>,
+    enterprise_url: Option<String>,
+    user: Option<OAuthUserInfo>,
+) -> Result<AuthData, AppError> {
     let auth = AuthData::OAuth {
         issuer: Some(issuer),
         refresh,
@@ -333,6 +417,7 @@ fn oauth_auth_data(
         expires_at_ms,
         account_id,
         enterprise_url,
+        user,
     };
     validate_auth_data(provider_id, &auth)?;
     Ok(auth)
@@ -351,6 +436,7 @@ fn validate_auth_data(provider_id: &str, auth: &AuthData) -> Result<(), AppError
             issuer,
             refresh,
             access,
+            user,
             ..
         } => {
             if issuer.is_none() {
@@ -367,6 +453,18 @@ fn validate_auth_data(provider_id: &str, auth: &AuthData) -> Result<(), AppError
                 return Err(AppError::Config(format!(
                     "{provider_id} oauth access token cannot be empty"
                 )));
+            }
+            if let Some(user) = user {
+                if user.id.trim().is_empty() {
+                    return Err(AppError::Config(format!(
+                        "{provider_id} oauth user id cannot be empty"
+                    )));
+                }
+                if user.username.trim().is_empty() {
+                    return Err(AppError::Config(format!(
+                        "{provider_id} oauth username cannot be empty"
+                    )));
+                }
             }
         }
         AuthData::WellKnown { key, token } => {
@@ -485,6 +583,7 @@ mod tests {
                     expires_at_ms: 1,
                     account_id: None,
                     enterprise_url: None,
+                    user: None,
                 },
             )
             .expect_err("empty oauth refresh token should be rejected");
@@ -504,6 +603,7 @@ mod tests {
                     expires_at_ms: 1,
                     account_id: None,
                     enterprise_url: None,
+                    user: None,
                 },
             )
             .expect_err("empty oauth access token should be rejected");

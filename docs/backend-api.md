@@ -466,6 +466,8 @@ Marketplace search/install 请求示例：
 | POST   | `/api/v1/auth/providers/openai/device/poll`          | OpenAI device flow poll                    |
 | POST   | `/api/v1/auth/providers/gitlab/browser/start`        | GitLab browser OAuth start                 |
 | POST   | `/api/v1/auth/providers/gitlab/browser/finish`       | GitLab browser OAuth finish                |
+| POST   | `/api/v1/auth/providers/atomgit/browser/start`       | AtomGit broker OAuth start                 |
+| POST   | `/api/v1/auth/providers/atomgit/browser/poll`        | AtomGit broker OAuth poll                  |
 | POST   | `/api/v1/auth/providers/github-copilot/device/start` | GitHub Copilot device flow start           |
 | POST   | `/api/v1/auth/providers/github-copilot/device/poll`  | GitHub Copilot device flow poll            |
 
@@ -491,6 +493,15 @@ GitLab browser start additionally requires:
 {
   "instance_url": "https://gitlab.com",
   "redirect_uri": "http://127.0.0.1:1455/callback"
+}
+```
+
+AtomGit browser poll:
+
+```json
+{
+  "provider_id": "atomgit",
+  "state": "..."
 }
 ```
 

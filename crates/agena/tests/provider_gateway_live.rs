@@ -29,9 +29,9 @@ use agena::{
 use futures_util::StreamExt;
 use sea_orm::{Database, DatabaseConnection};
 
-const LIVE_BASE_URL: &str = "https://api.cxits.cn";
+const LIVE_BASE_URL: &str = "https://api.cxits.cn/";
 const LIVE_MODEL: &str = "gpt-5.4";
-const LIVE_KEY_ENV: &str = "AGENA_PROVIDER_GATEWAY_API_KEY";
+const LIVE_KEY_ENV: &str = "CX-API-KEY";
 const CACHE_PROBE_ATTEMPTS: usize = 8;
 const CACHE_PROBE_PREFIX_REPETITIONS: usize = 4000;
 const CACHE_PROBE_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -87,7 +87,11 @@ fn live_key() -> String {
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .expect("AGENA_PROVIDER_GATEWAY_API_KEY must be set for provider gateway live tests")
+        .expect("CX-API-KEY must be set for provider gateway live tests")
+}
+
+fn live_base_root() -> &'static str {
+    LIVE_BASE_URL.trim_end_matches('/')
 }
 
 fn env_usize_or(key: &str, default: usize) -> usize {
@@ -246,7 +250,7 @@ api_key_env = "{key_env}"
 [providers.gemini_live.adapters.gemini]
 enabled = true
 "#,
-        base_url = LIVE_BASE_URL,
+        base_url = live_base_root(),
         model = LIVE_MODEL,
         key_env = LIVE_KEY_ENV,
         request_retry_max_retries = request_retry_max_retries,

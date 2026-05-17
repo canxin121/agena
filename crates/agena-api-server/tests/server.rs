@@ -52,8 +52,8 @@ use tower::ServiceExt;
 
 struct TestProvider;
 
-const LIVE_PROVIDER_GATEWAY_BASE_URL: &str = "https://api.cxits.cn";
-const LIVE_PROVIDER_GATEWAY_KEY_ENV: &str = "AGENA_PROVIDER_GATEWAY_API_KEY";
+const LIVE_PROVIDER_GATEWAY_BASE_URL: &str = "https://api.cxits.cn/";
+const LIVE_PROVIDER_GATEWAY_KEY_ENV: &str = "CX-API-KEY";
 
 #[async_trait::async_trait]
 impl ModelProvider for TestProvider {
@@ -247,7 +247,7 @@ fn live_provider_gateway_key() -> String {
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .expect("AGENA_PROVIDER_GATEWAY_API_KEY must be set for cxits live provider creation tests")
+        .expect("CX-API-KEY must be set for cxits live provider creation tests")
 }
 
 fn live_provider_id(prefix: &str) -> String {

@@ -5,6 +5,7 @@ import type { ModelCatalogEntry, ModelCatalogEntryWriteRequest, ProviderModel } 
 import {
   buildConfiguredProviderModelFromDraft,
   buildModelCatalogWriteRequest,
+  catalogLookupIdForProviderModel,
   createEmptyModelCatalogDraft,
   createModelCatalogDraftFromEntry,
   createModelCatalogDraftFromProviderModel,
@@ -177,6 +178,38 @@ describe('useRuntimeModelCatalogActions', () => {
         thinking_json: '',
       },
     ])
+  })
+
+  test('catalogLookupIdForProviderModel prefers canonical ids when provided', () => {
+    expect(
+      catalogLookupIdForProviderModel(
+        sampleProviderModel({
+          id: 'openai/gpt-oss-120b',
+          catalog_model_id: 'gpt-oss-120b',
+        }),
+      ),
+    ).toBe('gpt-oss-120b')
+  })
+
+  test('createModelCatalogDraftFromProviderSelection matches canonical catalog entries for vendor-prefixed model ids', () => {
+    const draft = createModelCatalogDraftFromProviderSelection(
+      [
+        sampleCatalogEntry({
+          model_id: 'gpt-oss-120b',
+          display_name: 'GPT OSS 120B Catalog',
+          origin: 'OpenAI',
+        }),
+      ],
+      sampleProviderModel({
+        id: 'openai/gpt-oss-120b',
+        catalog_model_id: 'gpt-oss-120b',
+        display_name: 'Gateway GPT OSS 120B',
+      }),
+    )
+
+    expect(draft.model_id).toBe('gpt-oss-120b')
+    expect(draft.display_name).toBe('GPT OSS 120B Catalog')
+    expect(draft.origin).toBe('OpenAI')
   })
 
   test('buildModelCatalogWriteRequest preserves variants and omits them when absent', () => {

@@ -650,6 +650,8 @@ pub struct Model {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter_id: Option<AdapterId>,
     pub id: ModelId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_model_id: Option<ModelId>,
     pub display_name: Option<String>,
     #[serde(default)]
     pub capabilities: ModelCapabilities,
@@ -665,6 +667,7 @@ impl Model {
             provider_id: ProviderId::new(provider_id),
             adapter_id: None,
             id: ModelId::new(id),
+            catalog_model_id: None,
             display_name: None,
             capabilities: ModelCapabilities::default(),
             metadata: ModelMetadata::default(),
@@ -692,6 +695,11 @@ impl Model {
 
     pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
         self.display_name = Some(display_name.into());
+        self
+    }
+
+    pub fn with_catalog_model_id(mut self, catalog_model_id: impl Into<String>) -> Self {
+        self.catalog_model_id = Some(ModelId::new(catalog_model_id));
         self
     }
 

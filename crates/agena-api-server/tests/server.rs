@@ -377,6 +377,19 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             },
         )
         .expect("custom catalog entry should be written");
+    state
+        .runtime()
+        .current_snapshot()
+        .model_catalog()
+        .upsert_custom_entry(
+            "gpt-oss-120b",
+            CatalogModelDefinition {
+                display_name: Some("GPT OSS 120B".to_owned()),
+                origin: Some("OpenAI".to_owned()),
+                ..CatalogModelDefinition::default()
+            },
+        )
+        .expect("slash alias catalog entry should be written");
     let app = router(state);
 
     let runtime_response = app
@@ -403,7 +416,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
     );
     assert_eq!(
         runtime_value.pointer("/model_catalog/entry_count"),
-        Some(&serde_json::json!(2))
+        Some(&serde_json::json!(3))
     );
     assert_eq!(
         runtime_value.pointer("/model_catalog/official_entry_count"),
@@ -411,7 +424,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
     );
     assert_eq!(
         runtime_value.pointer("/model_catalog/custom_entry_count"),
-        Some(&serde_json::json!(1))
+        Some(&serde_json::json!(2))
     );
 
     let catalog_response = app
@@ -441,7 +454,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
     );
     assert_eq!(
         catalog_value.pointer("/summary/entry_count"),
-        Some(&serde_json::json!(2))
+        Some(&serde_json::json!(3))
     );
     assert_eq!(catalog_value.pointer("/limit"), Some(&serde_json::json!(2)));
     assert_eq!(
@@ -467,7 +480,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
-                        "model_ids": ["gpt-5-mini"]
+                        "model_ids": ["gpt-5-mini", "openai/gpt-oss-120b"]
                     })
                     .to_string(),
                 ))
@@ -494,6 +507,10 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
             && entry.get("source_label").and_then(|value| value.as_str())
                 == Some("workspace override")
             && entry.get("origin").and_then(|value| value.as_str()) == Some("OpenAI")
+    }));
+    assert!(lookup_entries.iter().any(|entry| {
+        entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-oss-120b")
+            && entry.get("display_name").and_then(|value| value.as_str()) == Some("GPT OSS 120B")
     }));
 }
 
@@ -768,6 +785,113 @@ enabled = true
     assert!(
         model.get("origin").is_none(),
         "provider model payload should not expose catalog-only origin metadata: {model:?}"
+    );
+}
+
+#[tokio::test]
+async fn provider_models_endpoint_matches_vendor_prefixed_ids_to_catalog_entries() {
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/v1/models")
+        .match_header("authorization", "Bearer sk-test")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!({
+                "data": [{ "id": "openai/gpt-5.4" }]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let config = format!(
+        r#"
+[providers.gateway]
+default_adapter = "openai"
+default_model = "openai/gpt-5.4"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "{base_url}"
+api_key = "sk-test"
+
+[providers.gateway.adapters.openai]
+enabled = true
+"#,
+        base_url = server.url()
+    );
+
+    let (state, _, _) = build_state_with_config(config.as_str()).await;
+    state
+        .runtime()
+        .current_snapshot()
+        .model_catalog()
+        .upsert_custom_entry(
+            "gpt-5.4",
+            CatalogModelDefinition {
+                display_name: Some("GPT-5.4 Catalog".to_owned()),
+                description: Some("Canonical catalog match".to_owned()),
+                lifecycle: Some(ModelLifecycle::Preview),
+                ..CatalogModelDefinition::default()
+            },
+        )
+        .expect("canonical catalog entry should be written");
+
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/providers/gateway/models")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let models = value
+        .get("models")
+        .and_then(|models| models.as_array())
+        .expect("provider models response should include models");
+    let model = models
+        .iter()
+        .find(|model| {
+            model.get("id").and_then(|value| value.as_str()) == Some("openai/gpt-5.4")
+                && model.get("adapter_id").and_then(|value| value.as_str()) == Some("openai")
+        })
+        .expect("decorated vendor-prefixed model should be present");
+
+    assert_eq!(
+        model
+            .get("catalog_model_id")
+            .and_then(|value| value.as_str()),
+        Some("gpt-5.4")
+    );
+    assert_eq!(
+        model.get("display_name").and_then(|value| value.as_str()),
+        Some("GPT-5.4 Catalog")
+    );
+    assert_eq!(
+        model
+            .pointer("/metadata/description")
+            .and_then(|value| value.as_str()),
+        Some("Canonical catalog match")
+    );
+    assert_eq!(
+        models
+            .iter()
+            .filter(|model| {
+                matches!(
+                    model.get("id").and_then(|value| value.as_str()),
+                    Some("openai/gpt-5.4" | "gpt-5.4")
+                )
+            })
+            .count(),
+        1,
+        "catalog alias should decorate the raw model instead of appending a duplicate canonical entry: {value:?}"
     );
 }
 

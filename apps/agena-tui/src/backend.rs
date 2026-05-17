@@ -432,8 +432,18 @@ impl Backend {
     ) -> Vec<ModelCatalogEntryResource> {
         let requested = model_ids
             .iter()
-            .map(|model_id| model_id.trim().to_owned())
-            .filter(|model_id| !model_id.is_empty())
+            .flat_map(|model_id| {
+                let raw = model_id.trim().to_owned();
+                if raw.is_empty() {
+                    return Vec::new();
+                }
+                let canonical = agena::model_catalog::canonical_model_catalog_id(raw.as_str());
+                if canonical.is_empty() || canonical == raw {
+                    vec![raw]
+                } else {
+                    vec![raw, canonical]
+                }
+            })
             .collect::<std::collections::BTreeSet<_>>();
         let snapshot = self.runtime.current_snapshot();
         let catalog = snapshot.model_catalog_response();
@@ -598,21 +608,19 @@ impl Backend {
             &discovery
                 .models
                 .iter()
-                .map(|model| model.id.to_string())
+                .map(catalog_lookup_id_for_provider_model)
                 .collect::<Vec<_>>(),
         );
         let matched_models = discovery
             .models
             .iter()
             .filter_map(|model| {
-                preferred_catalog_entry_for_model_id(&catalog_entries, model.id.as_str()).map(
-                    |entry| {
-                        (
-                            model.id.to_string(),
-                            catalog_entry_to_provider_model_value(&entry),
-                        )
-                    },
-                )
+                preferred_catalog_entry_for_provider_model(&catalog_entries, model).map(|entry| {
+                    (
+                        model.id.to_string(),
+                        catalog_entry_to_provider_model_value(&entry),
+                    )
+                })
             })
             .collect::<JsonMap<_, _>>();
         let provider_patch = build_provider_patch_value(
@@ -646,7 +654,8 @@ impl Backend {
         let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
         let adapter_id = required_trimmed(adapter_id, "adapter_id")?;
         let model_id = required_trimmed(model_id, "model_id")?;
-        let catalog_entries = self.lookup_model_catalog_entries(&[model_id.to_owned()]);
+        let catalog_entries =
+            self.lookup_model_catalog_entries(&[catalog_lookup_id_for_model_id(model_id)]);
         let model_value =
             provider_model_json_for_model_id(&catalog_entries, model_id, provider_model.as_ref());
         let default_adapter = if set_default {
@@ -2305,13 +2314,55 @@ fn preferred_catalog_entry_for_model_id<'a>(
     entries: &'a [ModelCatalogEntryResource],
     model_id: &str,
 ) -> Option<&'a ModelCatalogEntryResource> {
+    preferred_catalog_entry_for_lookup_ids(entries, &[model_id.to_owned()])
+}
+
+fn preferred_catalog_entry_for_lookup_ids<'a>(
+    entries: &'a [ModelCatalogEntryResource],
+    model_ids: &[String],
+) -> Option<&'a ModelCatalogEntryResource> {
+    let lookup_ids = model_ids
+        .iter()
+        .map(|model_id| model_id.trim())
+        .filter(|model_id| !model_id.is_empty())
+        .collect::<Vec<_>>();
     entries
         .iter()
-        .filter(|entry| entry.model_id == model_id)
+        .filter(|entry| {
+            lookup_ids
+                .iter()
+                .any(|model_id| entry.model_id == *model_id)
+        })
         .min_by_key(|entry| match entry.kind {
             ModelCatalogEntryKind::Custom => 0,
             ModelCatalogEntryKind::Official => 1,
         })
+}
+
+fn preferred_catalog_entry_for_provider_model<'a>(
+    entries: &'a [ModelCatalogEntryResource],
+    provider_model: &ProviderModel,
+) -> Option<&'a ModelCatalogEntryResource> {
+    preferred_catalog_entry_for_lookup_ids(
+        entries,
+        &[
+            provider_model.id.to_string(),
+            catalog_lookup_id_for_provider_model(provider_model),
+        ],
+    )
+}
+
+fn catalog_lookup_id_for_model_id(model_id: &str) -> String {
+    agena::model_catalog::canonical_model_catalog_id(model_id)
+}
+
+fn catalog_lookup_id_for_provider_model(provider_model: &ProviderModel) -> String {
+    provider_model
+        .catalog_model_id
+        .as_ref()
+        .map(ToString::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| catalog_lookup_id_for_model_id(provider_model.id.as_str()))
 }
 
 fn provider_model_json_for_model_id(
@@ -2320,8 +2371,20 @@ fn provider_model_json_for_model_id(
     provider_model: Option<&ProviderModel>,
 ) -> JsonValue {
     preferred_catalog_entry_for_model_id(catalog_entries, model_id)
+        .or_else(|| {
+            let lookup_id = catalog_lookup_id_for_model_id(model_id);
+            (lookup_id != model_id)
+                .then(|| preferred_catalog_entry_for_model_id(catalog_entries, lookup_id.as_str()))
+                .flatten()
+        })
         .map(catalog_entry_to_provider_model_value)
-        .or_else(|| provider_model.map(provider_model_to_provider_model_value))
+        .or_else(|| {
+            provider_model.and_then(|provider_model| {
+                preferred_catalog_entry_for_provider_model(catalog_entries, provider_model)
+                    .map(catalog_entry_to_provider_model_value)
+                    .or_else(|| Some(provider_model_to_provider_model_value(provider_model)))
+            })
+        })
         .unwrap_or_else(|| JsonValue::Object(JsonMap::new()))
 }
 

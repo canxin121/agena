@@ -685,6 +685,11 @@ pub async fn probe_provider_adapters(
                 for model in &mut models {
                     model.provider_id = ProviderId::new(provider_id.to_owned());
                     model.adapter_id = Some(AdapterId::new(adapter_id.clone()));
+                    let catalog_model_id =
+                        crate::model_catalog::canonical_model_catalog_id(model.id.as_str());
+                    if !catalog_model_id.is_empty() {
+                        model.catalog_model_id = Some(crate::model::ModelId::new(catalog_model_id));
+                    }
                     let fallback = provider.model_capabilities_for_adapter(None, &model.id);
                     model.capabilities = model.capabilities.clone().with_fallbacks_from(&fallback);
                     let metadata_fallback = provider.model_metadata_for_adapter(None, &model.id);

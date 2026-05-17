@@ -17,6 +17,7 @@ import {
 import { buildAuthProviderFacts } from './runtimePageModel'
 import {
   buildConfiguredProviderModelFromDraft,
+  catalogLookupIdForProviderModel,
   createEmptyModelCatalogDraft,
   createModelCatalogDraftFromEntry,
   createModelCatalogDraftFromProviderSelection,
@@ -96,6 +97,7 @@ const providerCreateDraft = reactive({
   api_key: '',
   adapter_id: 'openai',
   model_id: '',
+  catalog_model_id: '',
 })
 
 const connectedCount = computed(
@@ -186,8 +188,9 @@ function modelDefinitionFromEntry(entry: ModelCatalogEntry) {
   return buildConfiguredProviderModelFromDraft(createModelCatalogDraftFromEntry(entry))
 }
 
-function modelIsCatalogMatched(modelId: string) {
-  return cachedCatalogEntries.value.some((entry) => entry.model_id === modelId)
+function modelIsCatalogMatched(modelId: string, catalogModelId = '') {
+  const lookupIds = [...new Set([String(modelId || '').trim(), String(catalogModelId || '').trim()].filter(Boolean))]
+  return cachedCatalogEntries.value.some((entry) => lookupIds.includes(entry.model_id))
 }
 
 async function loadCatalogPage(offset = 0) {
@@ -257,7 +260,9 @@ async function discoverCreateProviderAdapters() {
       .filter((discovery) => discovery.supported)
       .map((discovery) => discovery.adapter_id)
     await ensureCatalogEntriesForModelIds(
-      draftAdapterDiscoveries.value.flatMap((discovery) => discovery.models.map((model) => model.id)),
+      draftAdapterDiscoveries.value.flatMap((discovery) =>
+        discovery.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
+      ),
     )
     setConfigMessage(`Discovered ${draftAdapterDiscoveries.value.length} draft adapters.`)
   } catch (err) {
@@ -272,6 +277,7 @@ async function discoverCreateProviderAdapters() {
 function useDiscoveredCreateModel(adapterId: string, model: ProviderModel) {
   providerCreateDraft.adapter_id = adapterId
   providerCreateDraft.model_id = model.id
+  providerCreateDraft.catalog_model_id = catalogLookupIdForProviderModel(model)
   setConfigMessage(`Loaded ${adapterId}/${model.id} into provider create draft.`)
 }
 
@@ -280,7 +286,9 @@ async function discoverExistingProviderAdapters(providerId: string) {
   try {
     providerAdapterDiscoveries[providerId] = await discoverSavedProviderAdapters(providerId)
     await ensureCatalogEntriesForModelIds(
-      providerAdapterDiscoveries[providerId].flatMap((discovery) => discovery.models.map((model) => model.id)),
+      providerAdapterDiscoveries[providerId].flatMap((discovery) =>
+        discovery.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
+      ),
     )
     setConfigMessage(`Refreshed adapter discovery for ${providerId}.`)
   } catch (err) {
@@ -411,8 +419,10 @@ async function createProvider() {
   }
 
   await ensureCatalogEntriesForModelIds([
-    modelId,
-    ...draftAdapterDiscoveries.value.flatMap((discovery) => discovery.models.map((model) => model.id)),
+    providerCreateDraft.catalog_model_id.trim() || modelId,
+    ...draftAdapterDiscoveries.value.flatMap((discovery) =>
+      discovery.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
+    ),
   ])
 
   const adaptersPatch = buildAdaptersPatchFromDraftSelection({
@@ -421,6 +431,7 @@ async function createProvider() {
     selectedAdapterIds: draftSelectedAdapterIds.value,
     defaultAdapterId: adapterId,
     defaultModelId: modelId,
+    defaultCatalogModelId: providerCreateDraft.catalog_model_id.trim(),
   })
 
   submittingConfig.value = true
@@ -458,7 +469,7 @@ function loadCatalogEntryIntoProviderDraft(entry: ModelCatalogEntry) {
 }
 
 async function loadLiveModelIntoProviderDraft(model: ProviderModel) {
-  await ensureCatalogEntriesForModelIds([model.id])
+  await ensureCatalogEntriesForModelIds([catalogLookupIdForProviderModel(model) || model.id])
   providerModelProviderId.value = model.provider_id
   providerModelDraft.value = createModelCatalogDraftFromProviderSelection(cachedCatalogEntries.value, model)
   providerModelDraft.value.adapter_id = providerModelDraft.value.adapter_id || String(model.adapter_id || '')
@@ -586,6 +597,7 @@ onMounted(() => {
           <input
             id="provider-create-model"
             v-model="providerCreateDraft.model_id"
+            @input="providerCreateDraft.catalog_model_id = ''"
             class="input mono"
             placeholder="gpt-4.1-mini"
           />
@@ -650,9 +662,9 @@ onMounted(() => {
               v-for="model in adapter.models"
               :key="`${adapter.adapter_id}-${model.id}-catalog`"
               class="badge"
-              :class="modelIsCatalogMatched(model.id) ? 'success' : 'warn'"
+              :class="modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'success' : 'warn'"
             >
-              {{ model.id }} · {{ modelIsCatalogMatched(model.id) ? 'catalog' : 'unmatched' }}
+              {{ model.id }} · {{ modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'catalog' : 'unmatched' }}
             </span>
           </div>
           <p v-if="discoveryUnmatchedModels(cachedCatalogEntries, adapter).length" class="muted" style="margin-top: 10px">
@@ -766,9 +778,9 @@ onMounted(() => {
                 v-for="model in adapter.models"
                 :key="`${provider.provider_id}-${adapter.adapter_id}-${model.id}-catalog`"
                 class="badge"
-                :class="modelIsCatalogMatched(model.id) ? 'success' : 'warn'"
+                :class="modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'success' : 'warn'"
               >
-                {{ model.id }} · {{ modelIsCatalogMatched(model.id) ? 'catalog' : 'unmatched' }}
+                {{ model.id }} · {{ modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'catalog' : 'unmatched' }}
               </span>
             </div>
             <p

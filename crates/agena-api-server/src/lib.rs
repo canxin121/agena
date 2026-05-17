@@ -89,6 +89,10 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/settings/validate", post(rest::validate_settings))
             .route("/api/v1/model-catalog", get(rest::get_model_catalog))
             .route(
+                "/api/v1/model-catalog/lookup",
+                post(rest::lookup_model_catalog),
+            )
+            .route(
                 "/api/v1/model-catalog/refresh",
                 post(rest::refresh_model_catalog),
             )

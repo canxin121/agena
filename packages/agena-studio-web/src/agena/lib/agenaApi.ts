@@ -83,7 +83,7 @@ export type RuntimeStatus = {
     inserts: number
     evictions: number
   } | null
-  model_catalog?: ModelCatalogResponse | null
+  model_catalog?: ModelCatalogSummary | null
   automation: RuntimeAutomationResource
   operator: {
     mcp: {
@@ -260,7 +260,32 @@ export type ModelCatalogResponse = {
   last_refresh_at?: string | null
   last_successful_source?: ModelCatalogSourceKind | null
   last_error?: string | null
-  entries: ModelCatalogEntry[]
+  entry_count: number
+  official_entry_count: number
+  custom_entry_count: number
+}
+
+export type ModelCatalogSummary = ModelCatalogResponse
+
+export type ModelCatalogListResponse = {
+  summary: ModelCatalogSummary
+  total: number
+  offset: number
+  limit: number
+  available_origins: string[]
+  items: ModelCatalogEntry[]
+}
+
+export type ModelCatalogLookupResponse = {
+  items: ModelCatalogEntry[]
+}
+
+export type ModelCatalogListQuery = {
+  q?: string
+  kind?: 'official' | 'custom' | 'all'
+  origin?: string
+  offset?: number
+  limit?: number
 }
 
 export type ModelCatalogEntryWriteRequest = {
@@ -796,8 +821,24 @@ export async function patchSettings(input: ConfigSettingsPatchRequest): Promise<
   })
 }
 
-export async function fetchModelCatalog(): Promise<ModelCatalogResponse> {
-  return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog')
+export async function listModelCatalogEntries(query: ModelCatalogListQuery = {}): Promise<ModelCatalogListResponse> {
+  const params = new URLSearchParams()
+  if (query.q?.trim()) params.set('q', query.q.trim())
+  if (query.kind && query.kind !== 'all') params.set('kind', query.kind)
+  if (query.origin?.trim()) params.set('origin', query.origin.trim())
+  if (query.offset !== undefined) params.set('offset', String(query.offset))
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  const suffix = params.toString()
+  return await apiJson<ModelCatalogListResponse>(`/api/v1/model-catalog${suffix ? `?${suffix}` : ''}`)
+}
+
+export async function lookupModelCatalogEntries(modelIds: string[]): Promise<ModelCatalogEntry[]> {
+  const response = await apiJson<ModelCatalogLookupResponse>('/api/v1/model-catalog/lookup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model_ids: modelIds }),
+  })
+  return response.items ?? []
 }
 
 export async function refreshModelCatalog(): Promise<ModelCatalogResponse> {

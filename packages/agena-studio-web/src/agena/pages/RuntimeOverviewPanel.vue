@@ -1,21 +1,23 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import type {
   ModelCatalogEntry,
   ModelCatalogEntryKind,
+  ModelCatalogSummary,
   ProviderModel,
   ProviderModelVariant,
   ProviderSummary,
   RuntimeStatus,
 } from '@/agena/lib/agenaApi'
+import { listModelCatalogEntries, lookupModelCatalogEntries } from '@/agena/lib/agenaApi'
 
 import {
   MODEL_LIFECYCLE_OPTIONS,
   createEmptyModelCatalogDraft,
   createEmptyModelCatalogVariantDraft,
   createModelCatalogDraftFromEntry,
-  createModelCatalogDraftFromProviderSelection,
+  createModelCatalogDraftFromProviderModel,
   findCatalogEntryForProviderModel,
   useRuntimeModelCatalogActions,
   type ModelCatalogEditableDraft,
@@ -33,50 +35,52 @@ const props = defineProps<{
   load: () => Promise<void>
 }>()
 
+function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSummary {
+  return {
+    entry_count: entries.length,
+    official_entry_count: entries.filter((entry) => entry.kind !== 'custom').length,
+    custom_entry_count: entries.filter((entry) => entry.kind === 'custom').length,
+  }
+}
+
 const actionError = ref('')
 const actionMessage = ref('')
-const catalogEntriesState = ref<ModelCatalogEntry[]>([])
+const catalogEntriesState = ref<ModelCatalogEntry[]>(props.catalogEntries.map((entry) => ({ ...entry })))
+const catalogSummaryState = ref<ModelCatalogSummary | null>(
+  props.catalogEntries.length ? summarizeCatalogEntries(props.catalogEntries) : null,
+)
 const catalogKindFilter = ref<'all' | ModelCatalogEntryKind>('all')
 const catalogOriginFilter = ref('all')
 const catalogQuery = ref('')
+const catalogOriginOptions = ref<string[]>([])
+const catalogTotal = ref(props.catalogEntries.length)
+const catalogOffset = ref(0)
+const catalogLimit = ref(50)
 const draft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft())
 const editingEntryKey = ref('')
 const submitting = ref(false)
 
-watch(
-  () => props.catalogEntries,
-  (entries) => {
-    catalogEntriesState.value = entries.map((entry) => ({ ...entry }))
-  },
-  { immediate: true, deep: true },
-)
-
 const { deleteCatalogEntryAction, refreshCatalogAction, saveCatalogEntryAction } = useRuntimeModelCatalogActions({
   actionError,
   actionMessage,
-  catalogEntries: catalogEntriesState,
   load: props.load,
+  reloadCatalogEntries: async () => {
+    await loadCatalogPage(catalogOffset.value)
+  },
 })
 
-const sortedCatalogEntries = computed(() =>
-  [...catalogEntriesState.value].sort((left, right) => {
-    if (left.model_id !== right.model_id) return left.model_id.localeCompare(right.model_id)
-    return left.kind.localeCompare(right.kind)
-  }),
-)
+const sortedCatalogEntries = computed(() => catalogEntriesState.value)
 
 const customCatalogEntriesCount = computed(
-  () => catalogEntriesState.value.filter((entry) => entry.kind === 'custom').length,
+  () => catalogSummaryState.value?.custom_entry_count ?? 0,
 )
 
 const officialCatalogEntriesCount = computed(
-  () => catalogEntriesState.value.filter((entry) => entry.kind === 'official').length,
+  () => catalogSummaryState.value?.official_entry_count ?? 0,
 )
 
-const catalogOriginOptions = computed(() =>
-  [...new Set(catalogEntriesState.value.map((entry) => String(entry.origin || '').trim()).filter(Boolean))].sort(
-    (left, right) => left.localeCompare(right),
-  ),
+const hasCatalogFilters = computed(
+  () => Boolean(catalogQuery.value.trim()) || catalogKindFilter.value !== 'all' || catalogOriginFilter.value !== 'all',
 )
 
 function catalogEntrySearchText(entry: ModelCatalogEntry) {
@@ -106,17 +110,7 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
     .toLowerCase()
 }
 
-const filteredCatalogEntries = computed(() => {
-  const query = catalogQuery.value.trim().toLowerCase()
-  const kind = catalogKindFilter.value
-  const origin = catalogOriginFilter.value
-
-  return sortedCatalogEntries.value.filter((entry) => {
-    if (kind !== 'all' && entry.kind !== kind) return false
-    if (origin !== 'all' && String(entry.origin || '').trim() !== origin) return false
-    return !query || catalogEntrySearchText(entry).includes(query)
-  })
-})
+const filteredCatalogEntries = computed(() => sortedCatalogEntries.value)
 
 function makeEntryKey(modelId: string, kind: ModelCatalogEntry['kind']) {
   return `${modelId}/${kind}`
@@ -142,6 +136,7 @@ function clearCatalogFilters() {
   catalogQuery.value = ''
   catalogKindFilter.value = 'all'
   catalogOriginFilter.value = 'all'
+  void loadCatalogPage(0)
 }
 
 type ProviderModelVariantWithDisabled = ProviderModelVariant & {
@@ -168,9 +163,42 @@ function formatVariantThinking(value: Record<string, unknown> | null | undefined
   return text.length > 96 ? `${text.slice(0, 93)}...` : text
 }
 
-function loadProviderModelDraft(model: ProviderModel) {
-  const matchingEntry = findCatalogEntryForProviderModel(catalogEntriesState.value, model)
-  draft.value = createModelCatalogDraftFromProviderSelection(catalogEntriesState.value, model)
+async function loadCatalogPage(offset = 0) {
+  const response = await listModelCatalogEntries({
+    q: catalogQuery.value,
+    kind: catalogKindFilter.value,
+    origin: catalogOriginFilter.value,
+    offset,
+    limit: catalogLimit.value,
+  })
+  catalogEntriesState.value = response.items ?? []
+  catalogSummaryState.value = response.summary
+  catalogOriginOptions.value = response.available_origins ?? []
+  catalogTotal.value = response.total ?? 0
+  catalogOffset.value = response.offset ?? offset
+  catalogLimit.value = response.limit ?? catalogLimit.value
+}
+
+function previousCatalogPage() {
+  if (catalogOffset.value <= 0) return
+  void loadCatalogPage(Math.max(0, catalogOffset.value - catalogLimit.value))
+}
+
+function nextCatalogPage() {
+  if (catalogOffset.value + catalogEntriesState.value.length >= catalogTotal.value) return
+  void loadCatalogPage(catalogOffset.value + catalogLimit.value)
+}
+
+async function runCatalogSearch() {
+  await loadCatalogPage(0)
+}
+
+async function loadProviderModelDraft(model: ProviderModel) {
+  const exactEntries = await lookupModelCatalogEntries([model.id])
+  const matchingEntry = findCatalogEntryForProviderModel(exactEntries, model)
+  draft.value = matchingEntry
+    ? createModelCatalogDraftFromEntry(matchingEntry)
+    : createModelCatalogDraftFromProviderModel(model)
   editingEntryKey.value = matchingEntry ? makeEntryKey(matchingEntry.model_id, matchingEntry.kind) : ''
   actionError.value = ''
   actionMessage.value = `Loaded ${model.provider_id}/${model.adapter_id || 'adapter'}/${model.id} into the draft editor.`
@@ -180,6 +208,10 @@ async function saveDraft() {
   submitting.value = true
   try {
     await saveCatalogEntryAction(draft.value)
+    catalogQuery.value = draft.value.model_id.trim()
+    catalogKindFilter.value = 'all'
+    catalogOriginFilter.value = 'all'
+    await loadCatalogPage(0)
     editingEntryKey.value = makeEntryKey(draft.value.model_id.trim(), 'custom')
   } finally {
     submitting.value = false
@@ -199,6 +231,7 @@ async function deleteEntry(entry: ModelCatalogEntry) {
   submitting.value = true
   try {
     await deleteCatalogEntryAction(entry.model_id)
+    await loadCatalogPage(catalogOffset.value)
     if (editingEntryKey.value === makeEntryKey(entry.model_id, entry.kind)) {
       resetEditor()
     }
@@ -210,6 +243,10 @@ async function deleteEntry(entry: ModelCatalogEntry) {
 function isEntrySelected(entry: ModelCatalogEntry) {
   return editingEntryKey.value === makeEntryKey(entry.model_id, entry.kind)
 }
+
+onMounted(() => {
+  void loadCatalogPage(0)
+})
 </script>
 
 <template>
@@ -558,7 +595,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
               the only entries you can delete.
             </p>
           </div>
-          <span class="badge">{{ filteredCatalogEntries.length }}/{{ sortedCatalogEntries.length }}</span>
+          <span class="badge">{{ catalogEntriesState.length }}/{{ catalogTotal }}</span>
         </div>
 
         <div class="settings-summary" style="margin-top: 12px">
@@ -572,11 +609,11 @@ function isEntrySelected(entry: ModelCatalogEntry) {
           </div>
           <div class="summary-item">
             <div class="summary-label">Models</div>
-            <div class="summary-value">{{ sortedCatalogEntries.length }}</div>
+            <div class="summary-value">{{ catalogTotal }}</div>
           </div>
           <div class="summary-item">
             <div class="summary-label">Showing</div>
-            <div class="summary-value">{{ filteredCatalogEntries.length }}</div>
+            <div class="summary-value">{{ catalogEntriesState.length }}</div>
           </div>
         </div>
 
@@ -610,12 +647,23 @@ function isEntrySelected(entry: ModelCatalogEntry) {
         </div>
 
         <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+          <button class="button primary" :disabled="submitting" @click="runCatalogSearch">Search</button>
           <button
             class="button"
-            :disabled="!catalogQuery && catalogKindFilter === 'all' && catalogOriginFilter === 'all'"
+            :disabled="!hasCatalogFilters"
             @click="clearCatalogFilters"
           >
             Clear Filters
+          </button>
+          <button class="button" :disabled="submitting || catalogOffset <= 0" @click="previousCatalogPage">
+            Previous
+          </button>
+          <button
+            class="button"
+            :disabled="submitting || catalogOffset + catalogEntriesState.length >= catalogTotal"
+            @click="nextCatalogPage"
+          >
+            Next
           </button>
         </div>
 
@@ -679,7 +727,7 @@ function isEntrySelected(entry: ModelCatalogEntry) {
             </div>
           </div>
         </div>
-        <p v-else-if="sortedCatalogEntries.length" class="muted" style="margin-top: 12px">
+        <p v-else-if="catalogTotal" class="muted" style="margin-top: 12px">
           No catalog entries match the current filters.
         </p>
         <p v-else class="muted" style="margin-top: 12px">No catalog entries loaded.</p>

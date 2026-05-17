@@ -75,7 +75,7 @@ export function useRuntimeSectionLoadActions(
       selectedSessionId: input.selectedSessionId.value,
     })
     input.runtime.value = data.runtime
-    input.catalogEntries.value = data.runtime.model_catalog?.entries ?? []
+    input.catalogEntries.value = []
     input.providers.value = data.providers
     input.workspaces.value = data.workspaces
     input.replaceProviderModels(data.providerModels)
@@ -95,7 +95,7 @@ export function useRuntimeSectionLoadActions(
     const data = await deps.loadSettingsSectionData(input.permissionSearch.value)
     input.authProviders.value = data.authProviders
     input.runtime.value = data.runtime
-    input.catalogEntries.value = data.runtime.model_catalog?.entries ?? []
+    input.catalogEntries.value = []
     input.providers.value = data.providers
     input.replaceProviderModels(data.providerModels)
     input.permissionRules.value = data.permissionRules

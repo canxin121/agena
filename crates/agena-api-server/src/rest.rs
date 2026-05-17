@@ -22,6 +22,7 @@ use crate::local_api::{
     MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
     MarketplaceUninstallResponse, MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
     MarketplaceUpgradeResponse, MessageListQuery, ModelCatalogEntryWriteRequest,
+    ModelCatalogListResponse, ModelCatalogLookupRequest, ModelCatalogLookupResponse,
     ModelCatalogResponse, PartLoadMode, PermissionRuleListQuery, PermissionRuleRevokeRequest,
     PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
     PluginStatusListResponse, ProviderAdapterDiscoveryRequest, ProviderAdapterDiscoveryResource,
@@ -81,6 +82,20 @@ pub struct SessionEventListCompatQuery {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelCatalogEntryDeleteQuery {
     pub model_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ModelCatalogListQuery {
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub origin: Option<String>,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -397,26 +412,205 @@ pub async fn validate_settings(
     Ok(Json(response))
 }
 
+fn model_catalog_summary(
+    catalog: &agena::model_catalog::ModelCatalogResponse,
+) -> ModelCatalogResponse {
+    let official_entry_count = catalog
+        .entries
+        .iter()
+        .filter(|entry| !entry.has_local_override)
+        .count();
+    let custom_entry_count = catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.has_local_override)
+        .count();
+    ModelCatalogResponse {
+        last_refresh_at: catalog.last_refresh_at,
+        last_successful_source: catalog.last_successful_source,
+        last_error: catalog.last_error.clone(),
+        entry_count: catalog.entries.len(),
+        official_entry_count,
+        custom_entry_count,
+    }
+}
+
+fn model_catalog_entry_resources(
+    catalog: &agena::model_catalog::ModelCatalogResponse,
+) -> Vec<crate::local_api::ModelCatalogEntryResource> {
+    catalog
+        .entries
+        .iter()
+        .cloned()
+        .map(|entry| {
+            crate::local_api::ModelCatalogEntryResource::from_record(
+                entry,
+                catalog.last_successful_source,
+            )
+        })
+        .collect()
+}
+
+fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryResource) -> String {
+    let variant_text = entry
+        .variants
+        .iter()
+        .flat_map(|(name, variant)| {
+            [
+                name.clone(),
+                variant.display_name.clone().unwrap_or_default(),
+                variant.description.clone().unwrap_or_default(),
+                variant
+                    .thinking
+                    .as_ref()
+                    .and_then(|value| serde_json::to_string(value).ok())
+                    .unwrap_or_default(),
+            ]
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    [
+        entry.model_id.clone(),
+        entry.display_name.clone().unwrap_or_default(),
+        entry.origin.clone().unwrap_or_default(),
+        entry.description.clone().unwrap_or_default(),
+        match entry.kind {
+            crate::local_api::ModelCatalogEntryKind::Official => "official".to_owned(),
+            crate::local_api::ModelCatalogEntryKind::Custom => "custom".to_owned(),
+        },
+        match entry.source {
+            crate::local_api::ModelCatalogSourceKind::Generated => "generated".to_owned(),
+            crate::local_api::ModelCatalogSourceKind::Cache => "cache".to_owned(),
+            crate::local_api::ModelCatalogSourceKind::Custom => "custom".to_owned(),
+        },
+        entry.source_label.clone().unwrap_or_default(),
+        entry
+            .lifecycle
+            .map(|value| match value {
+                agena::model::ModelLifecycle::Active => "active",
+                agena::model::ModelLifecycle::Preview => "preview",
+                agena::model::ModelLifecycle::Beta => "beta",
+                agena::model::ModelLifecycle::Alpha => "alpha",
+                agena::model::ModelLifecycle::Experimental => "experimental",
+                agena::model::ModelLifecycle::Deprecated => "deprecated",
+            })
+            .unwrap_or_default()
+            .to_owned(),
+        variant_text,
+    ]
+    .into_iter()
+    .filter(|value| !value.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+    .to_lowercase()
+}
+
+fn parse_model_catalog_kind_filter(
+    value: Option<&str>,
+) -> Result<Option<crate::local_api::ModelCatalogEntryKind>, ServerError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    match value {
+        "official" => Ok(Some(crate::local_api::ModelCatalogEntryKind::Official)),
+        "custom" => Ok(Some(crate::local_api::ModelCatalogEntryKind::Custom)),
+        other => Err(ServerError::BadRequest(format!(
+            "invalid model catalog kind filter: {other}"
+        ))),
+    }
+}
+
 pub async fn get_model_catalog(
     State(state): State<AppState>,
+    AxumQuery(query): AxumQuery<ModelCatalogListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     let snapshot = state.runtime().current_snapshot();
     let catalog = snapshot.model_catalog_response();
-    Ok(Json(ModelCatalogResponse {
-        last_refresh_at: catalog.last_refresh_at,
-        last_successful_source: catalog.last_successful_source,
-        last_error: catalog.last_error,
-        entries: catalog
-            .entries
+    let summary = model_catalog_summary(&catalog);
+    let available_origins = {
+        let mut origins = model_catalog_entry_resources(&catalog)
             .into_iter()
-            .map(|entry| {
-                crate::local_api::ModelCatalogEntryResource::from_record(
-                    entry,
-                    catalog.last_successful_source,
-                )
+            .filter_map(|entry| {
+                let origin = entry.origin.unwrap_or_default();
+                let trimmed = origin.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_owned())
             })
-            .collect(),
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        origins.sort();
+        origins
+    };
+
+    let kind_filter = parse_model_catalog_kind_filter(query.kind.as_deref())?;
+    let search = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_lowercase());
+    let origin_filter = query
+        .origin
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "all");
+    let offset = query.offset.unwrap_or(0);
+    let limit = crate::local_api::normalize_limit(query.limit.map(|value| value as u64)) as usize;
+
+    let filtered = model_catalog_entry_resources(&catalog)
+        .into_iter()
+        .filter(|entry| {
+            if let Some(kind_filter) = kind_filter
+                && entry.kind != kind_filter
+            {
+                return false;
+            }
+            if let Some(origin_filter) = origin_filter
+                && entry.origin.as_deref().map(str::trim) != Some(origin_filter)
+            {
+                return false;
+            }
+            if let Some(search) = search.as_deref() {
+                return model_catalog_entry_search_text(entry).contains(search);
+            }
+            true
+        })
+        .collect::<Vec<_>>();
+    let total = filtered.len();
+    let items = filtered
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+
+    Ok(Json(ModelCatalogListResponse {
+        summary,
+        total,
+        offset,
+        limit,
+        available_origins,
+        items,
     }))
+}
+
+pub async fn lookup_model_catalog(
+    State(state): State<AppState>,
+    Json(request): Json<ModelCatalogLookupRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    let requested = request
+        .model_ids
+        .into_iter()
+        .map(|model_id| model_id.trim().to_owned())
+        .filter(|model_id| !model_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    let snapshot = state.runtime().current_snapshot();
+    let catalog = snapshot.model_catalog_response();
+    let items = model_catalog_entry_resources(&catalog)
+        .into_iter()
+        .filter(|entry| requested.contains(entry.model_id.as_str()))
+        .collect::<Vec<_>>();
+    Ok(Json(ModelCatalogLookupResponse { items }))
 }
 
 pub async fn refresh_model_catalog(
@@ -433,7 +627,9 @@ pub async fn refresh_model_catalog(
         .await
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
-    get_model_catalog(State(state)).await
+    let snapshot = state.runtime().current_snapshot();
+    let catalog = snapshot.model_catalog_response();
+    Ok(Json(model_catalog_summary(&catalog)))
 }
 
 pub async fn upsert_model_catalog_entry(
@@ -446,7 +642,9 @@ pub async fn upsert_model_catalog_entry(
         .upsert_custom_entry(request.model_id, request.definition)
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
-    get_model_catalog(State(state)).await
+    let snapshot = state.runtime().current_snapshot();
+    let catalog = snapshot.model_catalog_response();
+    Ok(Json(model_catalog_summary(&catalog)))
 }
 
 pub async fn delete_model_catalog_entry(
@@ -459,7 +657,9 @@ pub async fn delete_model_catalog_entry(
         .remove_custom_entry(query.model_id.as_str())
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
-    get_model_catalog(State(state)).await
+    let snapshot = state.runtime().current_snapshot();
+    let catalog = snapshot.model_catalog_response();
+    Ok(Json(model_catalog_summary(&catalog)))
 }
 
 pub async fn get_git_status(

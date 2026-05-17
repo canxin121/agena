@@ -125,7 +125,9 @@ const sharedPanels = {
       model_catalog: {
         last_successful_source: 'generated',
         last_refresh_at: '2026-05-15T00:00:00Z',
-        entries: [],
+        entry_count: 0,
+        official_entry_count: 0,
+        custom_entry_count: 0,
       },
     },
     providers: [

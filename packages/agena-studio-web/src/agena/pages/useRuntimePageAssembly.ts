@@ -122,7 +122,6 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
   const modelCatalogActions = useRuntimeModelCatalogActions({
     actionError: input.actionError,
     actionMessage: input.actionMessage,
-    catalogEntries: input.catalogEntries,
     load: loadPageState,
   })
 

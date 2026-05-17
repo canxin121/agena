@@ -229,13 +229,14 @@ describe('useRuntimeModelCatalogActions', () => {
     const state = {
       actionError: ref(''),
       actionMessage: ref(''),
-      catalogEntries: ref<ModelCatalogEntry[]>([]),
       load: async () => {
         calls.push('load')
       },
     }
     const emptyResponse = {
-      entries: [],
+      entry_count: 0,
+      official_entry_count: 0,
+      custom_entry_count: 0,
     }
     const actions = useRuntimeModelCatalogActions(state, {
       deleteModelCatalogEntry: async () => emptyResponse,
@@ -265,26 +266,26 @@ describe('useRuntimeModelCatalogActions', () => {
     const calls: string[] = []
     const actionError = ref('')
     const actionMessage = ref('')
-    const catalogEntries = ref<ModelCatalogEntry[]>([])
     let capturedRequest: ModelCatalogEntryWriteRequest | null = null
 
     const actions = useRuntimeModelCatalogActions(
       {
         actionError,
         actionMessage,
-        catalogEntries,
         load: async () => {
           calls.push('load')
         },
       },
       {
-        deleteModelCatalogEntry: async () => ({ entries: [] }),
-        refreshModelCatalog: async () => ({ entries: [] }),
+        deleteModelCatalogEntry: async () => ({ entry_count: 0, official_entry_count: 0, custom_entry_count: 0 }),
+        refreshModelCatalog: async () => ({ entry_count: 0, official_entry_count: 0, custom_entry_count: 0 }),
         upsertModelCatalogEntry: async (request) => {
           capturedRequest = request
           calls.push('upsert')
           return {
-            entries: [sampleCatalogEntry({ kind: 'custom', source: 'custom' })],
+            entry_count: 1,
+            official_entry_count: 0,
+            custom_entry_count: 1,
           }
         },
       },

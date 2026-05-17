@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { computed, reactive, ref, type Ref } from 'vue'
+import { computed, onMounted, reactive, ref, type Ref } from 'vue'
 
-import { discoverDraftProviderAdapters, discoverSavedProviderAdapters, patchSettings } from '../lib/agenaApi'
+import {
+  discoverDraftProviderAdapters,
+  discoverSavedProviderAdapters,
+  listModelCatalogEntries,
+  lookupModelCatalogEntries,
+  patchSettings,
+} from '../lib/agenaApi'
 import {
   buildAdaptersPatchFromDraftSelection,
   discoveryMatchedModels,
@@ -21,6 +27,7 @@ import type {
   AuthDeviceStartResponse,
   AuthProvider,
   ModelCatalogEntry,
+  ModelCatalogSummary,
   ProviderAdapterDiscovery,
   ProviderModel,
   ProviderSummary,
@@ -49,6 +56,14 @@ const props = defineProps<{
   startDeviceAuth: (providerId: string) => void | Promise<void>
 }>()
 
+function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSummary {
+  return {
+    entry_count: entries.length,
+    official_entry_count: entries.filter((entry) => entry.kind !== 'custom').length,
+    custom_entry_count: entries.filter((entry) => entry.kind === 'custom').length,
+  }
+}
+
 const ADAPTER_OPTIONS = ['openai', 'anthropic', 'gemini', 'ollama', 'gitlab', 'amazon_bedrock'] as const
 const submittingConfig = ref(false)
 const catalogCopyProviderId = ref('')
@@ -62,6 +77,17 @@ const providerAdapterDiscoveries = reactive<Record<string, ProviderAdapterDiscov
 const discoveringDraftAdapters = ref(false)
 const discoveringSavedProviderIds = reactive<Record<string, boolean>>({})
 const draftSelectedAdapterIds = ref<string[]>([])
+const catalogSearchEntries = ref<ModelCatalogEntry[]>(props.catalogEntries.map((entry) => ({ ...entry })))
+const catalogLookupEntries = ref<ModelCatalogEntry[]>([])
+const catalogSummary = ref<ModelCatalogSummary | null>(
+  props.catalogEntries.length ? summarizeCatalogEntries(props.catalogEntries) : null,
+)
+const catalogSearchQuery = ref('')
+const catalogSearchOffset = ref(0)
+const catalogSearchLimit = ref(50)
+const catalogSearchTotal = ref(props.catalogEntries.length)
+const catalogSearchOrigins = ref<string[]>([])
+const catalogResolvedModelIds = reactive<Record<string, boolean>>({})
 const providerCreateDraft = reactive({
   provider_id: '',
   auth_mode: 'api' as 'api' | 'none',
@@ -83,13 +109,22 @@ const deviceFlowCount = computed(
   () => props.authProviders.filter((provider) => supportsDeviceLogin(provider.provider_id)).length,
 )
 const providerConfigCount = computed(() => props.providers.length)
-const sortedCatalogEntries = computed(() =>
-  [...props.catalogEntries].sort((left, right) => {
+function mergeCatalogEntries(existing: ModelCatalogEntry[], incoming: ModelCatalogEntry[]) {
+  const merged = new Map<string, ModelCatalogEntry>()
+  for (const entry of existing) {
+    merged.set(`${entry.model_id}/${entry.kind}`, entry)
+  }
+  for (const entry of incoming) {
+    merged.set(`${entry.model_id}/${entry.kind}`, entry)
+  }
+  return [...merged.values()].sort((left, right) => {
     if (left.model_id !== right.model_id) return left.model_id.localeCompare(right.model_id)
     return left.kind.localeCompare(right.kind)
-  }),
-)
-const catalogModelIdSet = computed(() => new Set(props.catalogEntries.map((entry) => entry.model_id)))
+  })
+}
+
+const cachedCatalogEntries = computed(() => mergeCatalogEntries(catalogLookupEntries.value, catalogSearchEntries.value))
+const sortedCatalogEntries = computed(() => catalogSearchEntries.value)
 const catalogCopyAdapterOptions = computed(() => {
   const adapterIds = new Set<string>(ADAPTER_OPTIONS)
   const provider = props.providers.find((provider) => provider.provider_id === catalogCopyProviderId.value)
@@ -152,7 +187,53 @@ function modelDefinitionFromEntry(entry: ModelCatalogEntry) {
 }
 
 function modelIsCatalogMatched(modelId: string) {
-  return catalogModelIdSet.value.has(modelId)
+  return cachedCatalogEntries.value.some((entry) => entry.model_id === modelId)
+}
+
+async function loadCatalogPage(offset = 0) {
+  const response = await listModelCatalogEntries({
+    q: catalogSearchQuery.value,
+    offset,
+    limit: catalogSearchLimit.value,
+  })
+  catalogSearchEntries.value = response.items ?? []
+  catalogSummary.value = response.summary
+  catalogSearchOffset.value = response.offset ?? offset
+  catalogSearchLimit.value = response.limit ?? catalogSearchLimit.value
+  catalogSearchTotal.value = response.total ?? 0
+  catalogSearchOrigins.value = response.available_origins ?? []
+}
+
+function previousCatalogPage() {
+  if (catalogSearchOffset.value <= 0) return
+  void loadCatalogPage(Math.max(0, catalogSearchOffset.value - catalogSearchLimit.value))
+}
+
+function nextCatalogPage() {
+  if (catalogSearchOffset.value + catalogSearchEntries.value.length >= catalogSearchTotal.value) return
+  void loadCatalogPage(catalogSearchOffset.value + catalogSearchLimit.value)
+}
+
+async function searchCatalogPage() {
+  await loadCatalogPage(0)
+}
+
+async function ensureCatalogEntriesForModelIds(modelIds: string[]) {
+  const requested = [...new Set(modelIds.map((value) => String(value || '').trim()).filter(Boolean))]
+  if (!requested.length) return
+
+  for (const entry of cachedCatalogEntries.value) {
+    catalogResolvedModelIds[entry.model_id] = true
+  }
+
+  const missing = requested.filter((modelId) => !catalogResolvedModelIds[modelId])
+  if (!missing.length) return
+
+  const items = await lookupModelCatalogEntries(missing)
+  catalogLookupEntries.value = mergeCatalogEntries(catalogLookupEntries.value, items)
+  for (const modelId of missing) {
+    catalogResolvedModelIds[modelId] = true
+  }
 }
 
 async function discoverCreateProviderAdapters() {
@@ -175,6 +256,9 @@ async function discoverCreateProviderAdapters() {
     draftSelectedAdapterIds.value = draftAdapterDiscoveries.value
       .filter((discovery) => discovery.supported)
       .map((discovery) => discovery.adapter_id)
+    await ensureCatalogEntriesForModelIds(
+      draftAdapterDiscoveries.value.flatMap((discovery) => discovery.models.map((model) => model.id)),
+    )
     setConfigMessage(`Discovered ${draftAdapterDiscoveries.value.length} draft adapters.`)
   } catch (err) {
     draftAdapterDiscoveries.value = []
@@ -195,6 +279,9 @@ async function discoverExistingProviderAdapters(providerId: string) {
   discoveringSavedProviderIds[providerId] = true
   try {
     providerAdapterDiscoveries[providerId] = await discoverSavedProviderAdapters(providerId)
+    await ensureCatalogEntriesForModelIds(
+      providerAdapterDiscoveries[providerId].flatMap((discovery) => discovery.models.map((model) => model.id)),
+    )
     setConfigMessage(`Refreshed adapter discovery for ${providerId}.`)
   } catch (err) {
     providerAdapterDiscoveries[providerId] = []
@@ -206,7 +293,7 @@ async function discoverExistingProviderAdapters(providerId: string) {
 
 function loadDiscoveredProviderModel(providerId: string, adapterId: string, model: ProviderModel) {
   providerModelProviderId.value = providerId
-  providerModelDraft.value = createModelCatalogDraftFromProviderSelection(props.catalogEntries, {
+  providerModelDraft.value = createModelCatalogDraftFromProviderSelection(cachedCatalogEntries.value, {
     ...model,
     provider_id: providerId,
     adapter_id: adapterId,
@@ -219,7 +306,7 @@ function loadDiscoveredProviderModel(providerId: string, adapterId: string, mode
 }
 
 async function addDiscoveredAdapterCatalogMatches(providerId: string, discovery: ProviderAdapterDiscovery) {
-  const matchedModels = matchedCatalogModelDefinitions(props.catalogEntries, discovery.models)
+  const matchedModels = matchedCatalogModelDefinitions(cachedCatalogEntries.value, discovery.models)
   const providerPatch: Record<string, unknown> = {
     adapters: {
       [discovery.adapter_id]: {
@@ -323,8 +410,13 @@ async function createProvider() {
           ...(optionalText(providerCreateDraft.api_key) ? { api_key: optionalText(providerCreateDraft.api_key) } : {}),
   }
 
+  await ensureCatalogEntriesForModelIds([
+    modelId,
+    ...draftAdapterDiscoveries.value.flatMap((discovery) => discovery.models.map((model) => model.id)),
+  ])
+
   const adaptersPatch = buildAdaptersPatchFromDraftSelection({
-    catalogEntries: props.catalogEntries,
+    catalogEntries: cachedCatalogEntries.value,
     discoveries: draftAdapterDiscoveries.value,
     selectedAdapterIds: draftSelectedAdapterIds.value,
     defaultAdapterId: adapterId,
@@ -365,9 +457,10 @@ function loadCatalogEntryIntoProviderDraft(entry: ModelCatalogEntry) {
   setConfigMessage(`Loaded ${entry.model_id} into provider model draft.`)
 }
 
-function loadLiveModelIntoProviderDraft(model: ProviderModel) {
+async function loadLiveModelIntoProviderDraft(model: ProviderModel) {
+  await ensureCatalogEntriesForModelIds([model.id])
   providerModelProviderId.value = model.provider_id
-  providerModelDraft.value = createModelCatalogDraftFromProviderSelection(props.catalogEntries, model)
+  providerModelDraft.value = createModelCatalogDraftFromProviderSelection(cachedCatalogEntries.value, model)
   providerModelDraft.value.adapter_id = providerModelDraft.value.adapter_id || String(model.adapter_id || '')
   providerModelSetDefault.value = false
   setConfigMessage(
@@ -394,6 +487,10 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
     setDefault: catalogCopySetDefault.value,
   })
 }
+
+onMounted(() => {
+  void loadCatalogPage(0)
+})
 </script>
 
 <template>
@@ -413,7 +510,7 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
         </div>
         <div class="summary-item">
           <div class="summary-label">Catalog Entries</div>
-          <div class="summary-value">{{ props.catalogEntries.length }}</div>
+          <div class="summary-value">{{ catalogSummary?.entry_count ?? 0 }}</div>
         </div>
         <div class="summary-item">
           <div class="summary-label">Copy Target</div>
@@ -534,8 +631,8 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
           </label>
           <p v-if="adapter.error" class="muted">{{ adapter.error }}</p>
           <p v-if="adapter.supported" class="muted">
-            Catalog matched: {{ discoveryMatchedModels(props.catalogEntries, adapter).length }} · unmatched:
-            {{ discoveryUnmatchedModels(props.catalogEntries, adapter).length }}
+            Catalog matched: {{ discoveryMatchedModels(cachedCatalogEntries, adapter).length }} · unmatched:
+            {{ discoveryUnmatchedModels(cachedCatalogEntries, adapter).length }}
           </p>
           <div v-if="adapter.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
             <button
@@ -558,8 +655,8 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
               {{ model.id }} · {{ modelIsCatalogMatched(model.id) ? 'catalog' : 'unmatched' }}
             </span>
           </div>
-          <p v-if="discoveryUnmatchedModels(props.catalogEntries, adapter).length" class="muted" style="margin-top: 10px">
-            Unmatched: {{ discoveryUnmatchedModels(props.catalogEntries, adapter).map((model) => model.id).join(', ') }}
+          <p v-if="discoveryUnmatchedModels(cachedCatalogEntries, adapter).length" class="muted" style="margin-top: 10px">
+            Unmatched: {{ discoveryUnmatchedModels(cachedCatalogEntries, adapter).map((model) => model.id).join(', ') }}
           </p>
           <p v-else-if="adapter.supported" class="muted" style="margin-top: 10px">No models returned.</p>
         </article>
@@ -641,13 +738,13 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
             </div>
             <p v-if="adapter.error" class="muted">{{ adapter.error }}</p>
             <p v-if="adapter.supported" class="muted">
-              Catalog matched: {{ discoveryMatchedModels(props.catalogEntries, adapter).length }} · unmatched:
-              {{ discoveryUnmatchedModels(props.catalogEntries, adapter).length }}
+              Catalog matched: {{ discoveryMatchedModels(cachedCatalogEntries, adapter).length }} · unmatched:
+              {{ discoveryUnmatchedModels(cachedCatalogEntries, adapter).length }}
             </p>
             <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
               <button
                 class="button"
-                :disabled="submittingConfig || !discoveryMatchedModels(props.catalogEntries, adapter).length"
+                :disabled="submittingConfig || !discoveryMatchedModels(cachedCatalogEntries, adapter).length"
                 @click="addDiscoveredAdapterCatalogMatches(provider.provider_id, adapter)"
               >
                 Add Catalog Matches
@@ -675,11 +772,11 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
               </span>
             </div>
             <p
-              v-if="discoveryUnmatchedModels(props.catalogEntries, adapter).length"
+              v-if="discoveryUnmatchedModels(cachedCatalogEntries, adapter).length"
               class="muted"
               style="margin-top: 10px"
             >
-              Unmatched: {{ discoveryUnmatchedModels(props.catalogEntries, adapter).map((model) => model.id).join(', ') }}
+              Unmatched: {{ discoveryUnmatchedModels(cachedCatalogEntries, adapter).map((model) => model.id).join(', ') }}
             </p>
             <p v-else-if="adapter.supported" class="muted" style="margin-top: 10px">No models returned.</p>
           </article>
@@ -825,6 +922,34 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
           </label>
         </div>
       </div>
+
+      <div class="inline-fields" style="margin-top: 12px; align-items: end">
+        <div class="field" style="flex: 1 1 320px">
+          <label class="label" for="catalog-search">Search Catalog</label>
+          <input
+            id="catalog-search"
+            v-model="catalogSearchQuery"
+            class="input mono"
+            placeholder="model id, display name, origin"
+          />
+        </div>
+        <div class="button-row">
+          <button class="button primary" :disabled="submittingConfig" @click="searchCatalogPage">Search</button>
+          <button class="button" :disabled="submittingConfig || catalogSearchOffset <= 0" @click="previousCatalogPage">
+            Previous
+          </button>
+          <button
+            class="button"
+            :disabled="submittingConfig || catalogSearchOffset + sortedCatalogEntries.length >= catalogSearchTotal"
+            @click="nextCatalogPage"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+      <p class="muted" style="margin-top: 10px">
+        Showing {{ sortedCatalogEntries.length }} of {{ catalogSearchTotal }} catalog entries.
+      </p>
 
       <div v-if="sortedCatalogEntries.length" class="record-list">
         <article v-for="entry in sortedCatalogEntries" :key="`${entry.model_id}/${entry.kind}`" class="record-card">

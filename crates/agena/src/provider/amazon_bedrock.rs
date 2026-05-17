@@ -767,7 +767,11 @@ impl AmazonBedrockProvider {
                     model.as_str(),
                     request.thinking.as_ref(),
                 ),
-                temperature: request.temperature,
+                temperature: if Self::anthropic_model_supports_sampling_parameters(model.as_str()) {
+                    request.temperature
+                } else {
+                    None
+                },
             },
         )
     }
@@ -806,6 +810,11 @@ impl AmazonBedrockProvider {
             || normalized.contains("claude-opus-4.6")
             || normalized.contains("claude-sonnet-4-6")
             || normalized.contains("claude-sonnet-4.6")
+    }
+
+    fn anthropic_model_supports_sampling_parameters(model: &str) -> bool {
+        let normalized = model.to_ascii_lowercase();
+        !(normalized.contains("claude-opus-4-7") || normalized.contains("claude-opus-4.7"))
     }
 
     async fn complete_sigv4_anthropic(
@@ -2768,6 +2777,31 @@ mod tests {
                 effort: Some("low")
             })
         ));
+        assert_eq!(body.temperature, None);
+    }
+
+    #[test]
+    fn native_anthropic_request_keeps_temperature_for_legacy_models() {
+        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+            model: ModelId::new("anthropic.claude-sonnet-4-5-20250929-v1:0"),
+            system: None,
+            messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
+            tools: Vec::new(),
+            temperature: Some(0.2),
+            max_output_tokens: Some(8_192),
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            request_override: Default::default(),
+            response_format: None,
+        });
+
+        assert_eq!(body.temperature, Some(0.2));
     }
 
     #[test]

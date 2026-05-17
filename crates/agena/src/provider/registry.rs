@@ -229,7 +229,12 @@ impl ModelProvider for NamedProvider {
             let fallback = self
                 .target
                 .model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.id);
-            model.capabilities = model.capabilities.clone().with_fallbacks_from(&fallback);
+            let current_capabilities = std::mem::take(&mut model.capabilities);
+            model.capabilities = if current_capabilities.is_default_placeholder() {
+                fallback.clone()
+            } else {
+                current_capabilities.with_fallbacks_from(&fallback)
+            };
             let metadata_fallback = self
                 .target
                 .model_metadata_for_adapter(model.adapter_id.as_ref(), &model.id);
@@ -719,8 +724,12 @@ impl ProviderRegistry {
                         assign_catalog_model_id(model);
                         let fallback = provider
                             .model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.id);
-                        model.capabilities =
-                            model.capabilities.clone().with_fallbacks_from(&fallback);
+                        let current_capabilities = std::mem::take(&mut model.capabilities);
+                        model.capabilities = if current_capabilities.is_default_placeholder() {
+                            fallback.clone()
+                        } else {
+                            current_capabilities.with_fallbacks_from(&fallback)
+                        };
                         let metadata_fallback = provider
                             .model_metadata_for_adapter(model.adapter_id.as_ref(), &model.id);
                         model.metadata = model
@@ -1899,6 +1908,37 @@ mod tests {
         assert!(model.thinking_modes.contains_key("thinking-medium"));
         assert!(model.thinking_modes.contains_key("thinking-high"));
         assert!(model.thinking_modes.contains_key("thinking-xhigh"));
+    }
+
+    #[tokio::test]
+    async fn provider_registry_list_models_applies_bedrock_opus_47_reasoning_and_capability_rules()
+    {
+        let provider = ModeSynthProvider {
+            provider_id: "bedrock-synth",
+            family: CapabilityFamily::Bedrock,
+            models: vec![Model::new("bedrock-synth", "anthropic.claude-opus-4-7")],
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+
+        let listed = registry
+            .list_models("bedrock-synth")
+            .await
+            .expect("provider models should list");
+        let model = listed
+            .into_iter()
+            .find(|model| model.id.as_str() == "anthropic.claude-opus-4-7")
+            .expect("anthropic.claude-opus-4-7 should be listed");
+
+        assert!(model.thinking_modes.contains_key("thinking-low"));
+        assert!(model.thinking_modes.contains_key("thinking-medium"));
+        assert!(model.thinking_modes.contains_key("thinking-high"));
+        assert!(model.thinking_modes.contains_key("thinking-xhigh"));
+        assert!(model.thinking_modes.contains_key("thinking-max"));
+        assert_eq!(
+            model.capabilities.temperature_supported,
+            CapabilitySupport::Unsupported
+        );
     }
 
     #[tokio::test]

@@ -13,16 +13,17 @@ mod curate;
 
 use crate::{
     AppError,
-    model::{Model, ModelId, ModelLifecycle},
+    config::{ConfigResolution, ProviderAdapterDefinition, ProviderCapabilityFamilyConfig},
+    model::{
+        CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality, ModelLifecycle,
+    },
     provider::{
-        ConfiguredModelDefinition, ConfiguredModelVariant, ModelCapabilityPatch, ModelProvider,
+        ConfiguredModelDefinition, ConfiguredModelVariant, FeatureCapabilityPatch,
+        FeatureCapabilityPatchBody, InputCapabilityPatch, InputCapabilityPatchBody,
+        ModelCapabilityFeature, ModelCapabilityPatch, ModelProvider, ProviderRegistry,
     },
 };
 
-pub const DEFAULT_REMOTE_URL: &str =
-    "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json";
-pub const DEFAULT_GITHUB_FALLBACK_URL: &str =
-    "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json";
 pub const DEFAULT_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24;
 
 fn is_false(value: &bool) -> bool {
@@ -32,8 +33,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelCatalogEntrySourceKind {
-    Remote,
-    Fallback,
+    Generated,
     Cache,
 }
 
@@ -147,10 +147,6 @@ impl ModelCatalogDocument {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalogSnapshot {
-    #[serde(default)]
-    pub remote_url: String,
-    #[serde(default)]
-    pub fallback_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -166,8 +162,6 @@ pub struct ModelCatalogSnapshot {
 impl Default for ModelCatalogSnapshot {
     fn default() -> Self {
         Self {
-            remote_url: DEFAULT_REMOTE_URL.to_owned(),
-            fallback_url: DEFAULT_GITHUB_FALLBACK_URL.to_owned(),
             last_refresh_at: None,
             last_successful_source: None,
             last_error: None,
@@ -236,8 +230,6 @@ impl ModelCatalogSnapshot {
 
     pub fn to_response(&self) -> ModelCatalogResponse {
         ModelCatalogResponse {
-            remote_url: self.remote_url.clone(),
-            fallback_url: self.fallback_url.clone(),
             last_refresh_at: self.last_refresh_at,
             last_successful_source: self.last_successful_source,
             last_error: self.last_error.clone(),
@@ -248,8 +240,6 @@ impl ModelCatalogSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalogConfig {
-    pub remote_url: String,
-    pub fallback_url: String,
     pub cache_path: PathBuf,
     pub custom_path: PathBuf,
     pub cache_max_age_secs: u64,
@@ -257,8 +247,6 @@ pub struct ModelCatalogConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogResponse {
-    pub remote_url: String,
-    pub fallback_url: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -272,8 +260,6 @@ impl ModelCatalogConfig {
     pub fn for_workspace_root(workspace_root: &Path) -> Self {
         let root = workspace_root.join(".agena").join("catalog");
         Self {
-            remote_url: DEFAULT_REMOTE_URL.to_owned(),
-            fallback_url: DEFAULT_GITHUB_FALLBACK_URL.to_owned(),
             cache_path: root.join("model-catalog-cache.json"),
             custom_path: root.join("model-catalog-custom.json"),
             cache_max_age_secs: DEFAULT_CACHE_MAX_AGE_SECS,
@@ -283,10 +269,6 @@ impl ModelCatalogConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CachedOfficialCatalog {
-    #[serde(default)]
-    remote_url: String,
-    #[serde(default)]
-    fallback_url: String,
     fetched_at_unix_ms: i64,
     source: ModelCatalogEntrySourceKind,
     document: ModelCatalogDocument,
@@ -346,24 +328,19 @@ impl ModelCatalogStore {
 
 #[derive(Clone)]
 pub struct ModelCatalogService {
-    client: reqwest::Client,
     store: ModelCatalogStore,
     state: Arc<RwLock<ModelCatalogSnapshot>>,
 }
 
 impl ModelCatalogService {
-    pub fn new(client: reqwest::Client, store: ModelCatalogStore) -> Result<Self, AppError> {
+    pub fn new(store: ModelCatalogStore) -> Result<Self, AppError> {
         let custom = store.read_custom()?;
         let mut snapshot = ModelCatalogSnapshot {
-            remote_url: store.config.remote_url.clone(),
-            fallback_url: store.config.fallback_url.clone(),
             custom,
             ..ModelCatalogSnapshot::default()
         };
 
         if let Some(cached) = store.read_cached_official()? {
-            snapshot.remote_url = cached.remote_url;
-            snapshot.fallback_url = cached.fallback_url;
             snapshot.last_successful_source = Some(cached.source);
             snapshot.last_refresh_at =
                 DateTime::<Utc>::from_timestamp_millis(cached.fetched_at_unix_ms);
@@ -371,7 +348,6 @@ impl ModelCatalogService {
         }
 
         Ok(Self {
-            client,
             store,
             state: Arc::new(RwLock::new(snapshot)),
         })
@@ -392,66 +368,56 @@ impl ModelCatalogService {
         (!record.models.is_empty()).then_some(record)
     }
 
-    pub async fn refresh_if_stale_on_startup(&self) -> Result<ModelCatalogSnapshot, AppError> {
+    pub async fn refresh_if_stale_on_startup(
+        &self,
+        providers: &ProviderRegistry,
+        resolution: Option<&ConfigResolution>,
+    ) -> Result<ModelCatalogSnapshot, AppError> {
         let snapshot = self.snapshot();
         if self.snapshot_needs_startup_refresh(&snapshot) {
-            self.refresh().await
+            self.refresh_from_registry(providers, resolution).await
         } else {
             Ok(snapshot)
         }
     }
 
-    pub async fn refresh(&self) -> Result<ModelCatalogSnapshot, AppError> {
-        let config = self.store.config().clone();
-        let remote_result = self.fetch_document(config.remote_url.as_str()).await;
-        let (source, document) = match remote_result {
-            Ok(document) => (ModelCatalogEntrySourceKind::Remote, document),
-            Err(remote_error) => {
-                let fallback_result = self.fetch_document(config.fallback_url.as_str()).await;
-                match fallback_result {
-                    Ok(document) => (ModelCatalogEntrySourceKind::Fallback, document),
-                    Err(fallback_error) => {
-                        if let Some(cached) = self.store.read_cached_official()? {
-                            let cache_is_fresh = self.cache_is_fresh(&cached);
-                            let mut snapshot = self.snapshot();
-                            snapshot.remote_url = config.remote_url;
-                            snapshot.fallback_url = config.fallback_url;
-                            snapshot.official = cached.document;
-                            snapshot.last_successful_source =
-                                Some(ModelCatalogEntrySourceKind::Cache);
-                            snapshot.last_refresh_at =
-                                DateTime::<Utc>::from_timestamp_millis(cached.fetched_at_unix_ms);
-                            snapshot.last_error = Some(format!(
-                                "remote refresh failed: {remote_error}; fallback failed: {fallback_error}; using {}cache",
-                                if cache_is_fresh { "" } else { "stale " }
-                            ));
-                            self.replace_snapshot(snapshot.clone());
-                            return Ok(snapshot);
-                        }
-                        return Err(AppError::Config(format!(
-                            "model catalog refresh failed: remote: {remote_error}; fallback: {fallback_error}"
-                        )));
-                    }
+    pub async fn refresh_from_registry(
+        &self,
+        providers: &ProviderRegistry,
+        resolution: Option<&ConfigResolution>,
+    ) -> Result<ModelCatalogSnapshot, AppError> {
+        let (document, warnings) = match self.build_catalog_document(providers, resolution).await {
+            Ok(result) => result,
+            Err(refresh_error) => {
+                if let Some(cached) = self.store.read_cached_official()? {
+                    let cache_is_fresh = self.cache_is_fresh(&cached);
+                    let mut snapshot = self.snapshot();
+                    snapshot.official = cached.document;
+                    snapshot.last_successful_source = Some(ModelCatalogEntrySourceKind::Cache);
+                    snapshot.last_refresh_at =
+                        DateTime::<Utc>::from_timestamp_millis(cached.fetched_at_unix_ms);
+                    snapshot.last_error = Some(format!(
+                        "catalog refresh failed: {refresh_error}; using {}cache",
+                        if cache_is_fresh { "" } else { "stale " }
+                    ));
+                    self.replace_snapshot(snapshot.clone());
+                    return Ok(snapshot);
                 }
+                return Err(refresh_error);
             }
         };
-
         let fetched_at_unix_ms = now_unix_ms();
         self.store.write_cached_official(&CachedOfficialCatalog {
-            remote_url: config.remote_url.clone(),
-            fallback_url: config.fallback_url.clone(),
             fetched_at_unix_ms,
-            source,
+            source: ModelCatalogEntrySourceKind::Generated,
             document: document.clone(),
         })?;
 
         let mut snapshot = self.snapshot();
-        snapshot.remote_url = config.remote_url;
-        snapshot.fallback_url = config.fallback_url;
         snapshot.official = document;
-        snapshot.last_successful_source = Some(source);
+        snapshot.last_successful_source = Some(ModelCatalogEntrySourceKind::Generated);
         snapshot.last_refresh_at = DateTime::<Utc>::from_timestamp_millis(fetched_at_unix_ms);
-        snapshot.last_error = None;
+        snapshot.last_error = warnings;
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
     }
@@ -477,19 +443,62 @@ impl ModelCatalogService {
         Ok(snapshot)
     }
 
-    async fn fetch_document(&self, url: &str) -> Result<ModelCatalogDocument, AppError> {
-        let response = self.client.get(url).send().await?;
-        if !response.status().is_success() {
+    async fn build_catalog_document(
+        &self,
+        providers: &ProviderRegistry,
+        resolution: Option<&ConfigResolution>,
+    ) -> Result<(ModelCatalogDocument, Option<String>), AppError> {
+        let mut provider_ids = providers.provider_ids();
+        provider_ids.sort_by(|left, right| {
+            provider_priority(right.as_str(), resolution)
+                .cmp(&provider_priority(left.as_str(), resolution))
+                .then_with(|| left.cmp(right))
+        });
+
+        let mut raw_models = BTreeMap::<String, CatalogModelDefinition>::new();
+        let mut errors = Vec::new();
+        let mut succeeded = 0_usize;
+
+        for provider_id in provider_ids {
+            match providers.list_models(provider_id.as_str()).await {
+                Ok(models) => {
+                    succeeded += 1;
+                    for model in models {
+                        if model.id.as_str().trim().is_empty() {
+                            continue;
+                        }
+                        let definition = catalog_definition_from_model(&model);
+                        raw_models
+                            .entry(model.id.to_string())
+                            .and_modify(|current| merge_catalog_definition(current, &definition))
+                            .or_insert(definition);
+                    }
+                }
+                Err(error) => errors.push(format!("{provider_id}: {error}")),
+            }
+        }
+
+        if succeeded == 0 {
+            let detail = if errors.is_empty() {
+                "no enabled providers exposed model lists".to_owned()
+            } else {
+                errors.join("; ")
+            };
             return Err(AppError::Config(format!(
-                "GET {url} returned {}",
-                response.status()
+                "model catalog generation failed: {detail}"
             )));
         }
-        let text = response.text().await?;
-        let document = serde_json::from_str::<ModelCatalogDocument>(&text)
-            .map_err(|err| AppError::Config(format!("parse model catalog from {url}: {err}")))?;
-        curate::curate_catalog_document(document)
-            .map_err(|err| AppError::Config(format!("curate model catalog from {url}: {err}")))
+
+        let document = curate::curate_catalog_document(ModelCatalogDocument { models: raw_models })
+            .map_err(|err| AppError::Config(format!("curate generated model catalog: {err}")))?;
+        let warning = (!errors.is_empty()).then(|| {
+            format!(
+                "catalog generated from {succeeded} provider(s); skipped {} provider(s): {}",
+                errors.len(),
+                errors.join("; ")
+            )
+        });
+        Ok((document, warning))
     }
 
     fn cache_is_fresh(&self, cached: &CachedOfficialCatalog) -> bool {
@@ -528,10 +537,268 @@ fn now_unix_ms() -> i64 {
         .unwrap_or_default()
 }
 
-pub(crate) fn curate_catalog_document(
-    document: ModelCatalogDocument,
-) -> Result<ModelCatalogDocument, AppError> {
-    curate::curate_catalog_document(document)
+pub(crate) fn canonical_model_catalog_id(model_id: &str) -> String {
+    curate::normalized_catalog_model_id(model_id)
+}
+
+fn provider_priority(provider_id: &str, resolution: Option<&ConfigResolution>) -> i32 {
+    let Some(resolution) = resolution else {
+        return 0;
+    };
+    let Some(provider) = resolution.config.providers.get(provider_id) else {
+        return 0;
+    };
+    provider
+        .adapters
+        .values()
+        .filter(|adapter| adapter.enabled)
+        .map(|adapter| match &adapter.definition {
+            ProviderAdapterDefinition::Anthropic(_) => 500,
+            ProviderAdapterDefinition::Gemini(_) => 500,
+            ProviderAdapterDefinition::OpenAi(config) => match config.options.capability_family {
+                Some(ProviderCapabilityFamilyConfig::OpenAi) | None => 450,
+                Some(ProviderCapabilityFamilyConfig::Anthropic)
+                | Some(ProviderCapabilityFamilyConfig::Gemini) => 350,
+                Some(ProviderCapabilityFamilyConfig::Bedrock)
+                | Some(ProviderCapabilityFamilyConfig::Gitlab) => 200,
+            },
+            ProviderAdapterDefinition::AmazonBedrock(_) => 200,
+            ProviderAdapterDefinition::Gitlab(_) => 150,
+            ProviderAdapterDefinition::Ollama(_) => 50,
+        })
+        .max()
+        .unwrap_or_default()
+}
+
+fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
+    CatalogModelDefinition {
+        lifecycle: model.metadata.lifecycle,
+        context_window_tokens: model.metadata.limits.context_window_tokens,
+        max_output_tokens: model.metadata.limits.max_output_tokens,
+        description: model.metadata.description.clone(),
+        display_name: model.display_name.clone(),
+        origin: None,
+        variants: model
+            .variants
+            .iter()
+            .map(|(name, variant)| {
+                (
+                    name.clone(),
+                    ConfiguredModelVariant {
+                        display_name: variant.display_name.clone(),
+                        description: variant.description.clone(),
+                        thinking: variant.thinking.clone(),
+                        disabled: false,
+                    },
+                )
+            })
+            .collect(),
+        capabilities: capability_patch_from_model(&model.capabilities),
+    }
+}
+
+fn capability_patch_from_model(capabilities: &ModelCapabilities) -> ModelCapabilityPatch {
+    let mut supported_inputs = Vec::new();
+    let mut unsupported_inputs = Vec::new();
+    for (modality, support) in [
+        (ModelInputModality::Text, capabilities.text_input),
+        (ModelInputModality::Image, capabilities.image_input),
+        (ModelInputModality::Document, capabilities.document_input),
+        (ModelInputModality::Audio, capabilities.audio_input),
+        (ModelInputModality::Video, capabilities.video_input),
+        (ModelInputModality::File, capabilities.file_input),
+    ] {
+        match support {
+            CapabilitySupport::Supported if !matches!(modality, ModelInputModality::Text) => {
+                supported_inputs.push(modality);
+            }
+            CapabilitySupport::Unsupported => unsupported_inputs.push(modality),
+            _ => {}
+        }
+    }
+
+    let mut supported_features = Vec::new();
+    let mut unsupported_features = Vec::new();
+    for (feature, support) in [
+        (
+            ModelCapabilityFeature::ToolCalling,
+            capabilities.tool_calling,
+        ),
+        (ModelCapabilityFeature::Streaming, capabilities.streaming),
+        (ModelCapabilityFeature::Reasoning, capabilities.reasoning),
+        (
+            ModelCapabilityFeature::StructuredOutput,
+            capabilities.structured_output,
+        ),
+        (
+            ModelCapabilityFeature::Temperature,
+            capabilities.temperature_supported,
+        ),
+    ] {
+        match support {
+            CapabilitySupport::Supported
+                if !matches!(feature, ModelCapabilityFeature::Temperature) =>
+            {
+                supported_features.push(feature);
+            }
+            CapabilitySupport::Unsupported => unsupported_features.push(feature),
+            _ => {}
+        }
+    }
+
+    ModelCapabilityPatch {
+        input: (!supported_inputs.is_empty() || !unsupported_inputs.is_empty()).then_some(
+            InputCapabilityPatch::Patch(InputCapabilityPatchBody {
+                supported: supported_inputs,
+                unsupported: unsupported_inputs,
+            }),
+        ),
+        features: (!supported_features.is_empty() || !unsupported_features.is_empty()).then_some(
+            FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+                supported: supported_features,
+                unsupported: unsupported_features,
+            }),
+        ),
+        ..ModelCapabilityPatch::default()
+    }
+}
+
+fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &CatalogModelDefinition) {
+    if current.lifecycle.is_none() {
+        current.lifecycle = next.lifecycle;
+    }
+    if current.context_window_tokens.is_none() {
+        current.context_window_tokens = next.context_window_tokens;
+    }
+    if current.max_output_tokens.is_none() {
+        current.max_output_tokens = next.max_output_tokens;
+    }
+    if current.description.is_none() {
+        current.description = next.description.clone();
+    }
+    if current.display_name.is_none() {
+        current.display_name = next.display_name.clone();
+    }
+    if current.origin.is_none() {
+        current.origin = next.origin.clone();
+    }
+    for (name, variant) in &next.variants {
+        current
+            .variants
+            .entry(name.clone())
+            .or_insert_with(|| variant.clone());
+    }
+    merge_capability_patch(&mut current.capabilities, &next.capabilities);
+}
+
+fn merge_capability_patch(current: &mut ModelCapabilityPatch, next: &ModelCapabilityPatch) {
+    merge_input_patch(&mut current.input, next.input.as_ref());
+    merge_feature_patch(&mut current.features, next.features.as_ref());
+    if current.text_input.is_none() {
+        current.text_input = next.text_input;
+    }
+    if current.image_input.is_none() {
+        current.image_input = next.image_input;
+    }
+    if current.document_input.is_none() {
+        current.document_input = next.document_input;
+    }
+    if current.audio_input.is_none() {
+        current.audio_input = next.audio_input;
+    }
+    if current.video_input.is_none() {
+        current.video_input = next.video_input;
+    }
+    if current.file_input.is_none() {
+        current.file_input = next.file_input;
+    }
+    if current.tool_calling.is_none() {
+        current.tool_calling = next.tool_calling;
+    }
+    if current.streaming.is_none() {
+        current.streaming = next.streaming;
+    }
+    if current.reasoning.is_none() {
+        current.reasoning = next.reasoning;
+    }
+    if current.structured_output.is_none() {
+        current.structured_output = next.structured_output;
+    }
+    if current.temperature_supported.is_none() {
+        current.temperature_supported = next.temperature_supported;
+    }
+}
+
+fn merge_input_patch(
+    current: &mut Option<InputCapabilityPatch>,
+    next: Option<&InputCapabilityPatch>,
+) {
+    match (current.as_mut(), next) {
+        (None, Some(next)) => *current = Some(next.clone()),
+        (
+            Some(InputCapabilityPatch::Supported(current_values)),
+            Some(InputCapabilityPatch::Supported(next_values)),
+        ) => {
+            merge_unique(current_values, next_values);
+        }
+        (
+            Some(InputCapabilityPatch::Patch(current_values)),
+            Some(InputCapabilityPatch::Patch(next_values)),
+        ) => {
+            merge_unique(&mut current_values.supported, &next_values.supported);
+            merge_unique(&mut current_values.unsupported, &next_values.unsupported);
+        }
+        (
+            Some(InputCapabilityPatch::Supported(current_values)),
+            Some(InputCapabilityPatch::Patch(next_values)),
+        ) => {
+            merge_unique(current_values, &next_values.supported);
+        }
+        (
+            Some(InputCapabilityPatch::Patch(current_values)),
+            Some(InputCapabilityPatch::Supported(next_values)),
+        ) => {
+            merge_unique(&mut current_values.supported, next_values);
+        }
+        _ => {}
+    }
+}
+
+fn merge_feature_patch(
+    current: &mut Option<FeatureCapabilityPatch>,
+    next: Option<&FeatureCapabilityPatch>,
+) {
+    match (current.as_mut(), next) {
+        (None, Some(next)) => *current = Some(next.clone()),
+        (
+            Some(FeatureCapabilityPatch::Supported(current_values)),
+            Some(FeatureCapabilityPatch::Supported(next_values)),
+        ) => merge_unique(current_values, next_values),
+        (
+            Some(FeatureCapabilityPatch::Patch(current_values)),
+            Some(FeatureCapabilityPatch::Patch(next_values)),
+        ) => {
+            merge_unique(&mut current_values.supported, &next_values.supported);
+            merge_unique(&mut current_values.unsupported, &next_values.unsupported);
+        }
+        (
+            Some(FeatureCapabilityPatch::Supported(current_values)),
+            Some(FeatureCapabilityPatch::Patch(next_values)),
+        ) => merge_unique(current_values, &next_values.supported),
+        (
+            Some(FeatureCapabilityPatch::Patch(current_values)),
+            Some(FeatureCapabilityPatch::Supported(next_values)),
+        ) => merge_unique(&mut current_values.supported, next_values),
+        _ => {}
+    }
+}
+
+fn merge_unique<T: Clone + PartialEq>(current: &mut Vec<T>, next: &[T]) {
+    for value in next {
+        if !current.contains(value) {
+            current.push(value.clone());
+        }
+    }
 }
 
 pub fn catalog_definition_to_provider_definition(
@@ -646,13 +913,52 @@ fn provider_model_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{model::CapabilitySupport, provider::ConfiguredModelVariant};
-    use mockito::Server;
-    use regex::Regex;
+    use crate::{
+        model::{CapabilitySupport, ModelId, ModelMetadata},
+        provider::ConfiguredModelVariant,
+    };
     use tempfile::tempdir;
 
     fn normalized_catalog_model_id(model_id: &str) -> String {
         curate::normalized_catalog_model_id(model_id)
+    }
+
+    struct StaticListProvider {
+        provider_id: &'static str,
+        default_model: ModelId,
+        models: Vec<Model>,
+    }
+
+    impl StaticListProvider {
+        fn new(provider_id: &'static str, default_model: &'static str, models: Vec<Model>) -> Self {
+            Self {
+                provider_id,
+                default_model: ModelId::new(default_model),
+                models,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModelProvider for StaticListProvider {
+        fn id(&self) -> &str {
+            self.provider_id
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, AppError> {
+            Ok(self.models.clone())
+        }
+
+        async fn complete(
+            &self,
+            _request: crate::provider::CompletionRequest,
+        ) -> Result<crate::provider::CompletionResponse, AppError> {
+            Err(AppError::Provider("not implemented".to_owned()))
+        }
     }
 
     #[test]
@@ -687,7 +993,7 @@ mod tests {
     #[test]
     fn entries_keep_official_and_custom_records_separate() {
         let snapshot = ModelCatalogSnapshot {
-            last_successful_source: Some(ModelCatalogEntrySourceKind::Remote),
+            last_successful_source: Some(ModelCatalogEntrySourceKind::Generated),
             official: ModelCatalogDocument {
                 models: BTreeMap::from([(
                     "claude-sonnet".to_owned(),
@@ -737,29 +1043,58 @@ mod tests {
     }
 
     #[test]
-    fn checked_in_catalog_file_curates_and_seeds_known_models() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog/model-catalog.json");
-        let document = serde_json::from_str::<ModelCatalogDocument>(
-            &std::fs::read_to_string(&path).expect("catalog file should be readable"),
-        )
-        .expect("catalog file should parse");
-        let document = curate_catalog_document(document).expect("catalog file should curate");
+    fn curated_catalog_document_canonicalizes_aliases_and_seeds_origin_labels() {
+        let document = curate::curate_catalog_document(ModelCatalogDocument {
+            models: BTreeMap::from([
+                (
+                    "openai.gpt-5.4".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("OpenAI GPT-5.4".to_owned()),
+                        ..CatalogModelDefinition::default()
+                    },
+                ),
+                (
+                    "study_gpt-chatgpt-4o-latest".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("Study GPT ChatGPT-4o Latest".to_owned()),
+                        ..CatalogModelDefinition::default()
+                    },
+                ),
+                (
+                    "amazon.nova-pro-v1:0".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("Amazon Nova Pro".to_owned()),
+                        ..CatalogModelDefinition::default()
+                    },
+                ),
+                (
+                    "gpt-oss-120b:free".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("GPT OSS 120B".to_owned()),
+                        ..CatalogModelDefinition::default()
+                    },
+                ),
+                (
+                    "claude-opus-4-7".to_owned(),
+                    CatalogModelDefinition {
+                        display_name: Some("Claude Opus 4.7".to_owned()),
+                        ..CatalogModelDefinition::default()
+                    },
+                ),
+            ]),
+        })
+        .expect("seed document should curate");
 
         let catalog = document.model_record();
-        assert!(catalog.models.contains_key("gpt-5.5"));
-        assert!(catalog.models.contains_key("gpt-5.5-pro"));
         assert!(catalog.models.contains_key("claude-opus-4-7"));
-        assert!(catalog.models.contains_key("claude-opus-4-6"));
-        assert!(catalog.models.contains_key("gemini-3.1-flash-lite"));
         assert!(catalog.models.contains_key("nova-pro-v1"));
-        assert!(catalog.models.contains_key("jamba-1.5-large"));
-        assert!(catalog.models.contains_key("command-a"));
-        assert!(catalog.models.contains_key("gemma-3-27b-it"));
+        assert!(catalog.models.contains_key("gpt-5.4"));
         assert!(catalog.models.contains_key("gpt-4o"));
+        assert!(catalog.models.contains_key("gpt-oss-120b"));
         assert_eq!(
             catalog
                 .models
-                .get("gpt-5.5")
+                .get("gpt-5.4")
                 .and_then(|definition| definition.origin.as_deref()),
             Some("OpenAI")
         );
@@ -771,45 +1106,33 @@ mod tests {
             Some("Anthropic")
         );
         assert!(!catalog.models.contains_key("openai.gpt-5.4"));
-        assert!(!catalog.models.contains_key("gpt-oss-120b:free"));
         assert!(!catalog.models.contains_key("study_gpt-chatgpt-4o-latest"));
+        assert!(!catalog.models.contains_key("gpt-oss-120b:free"));
+        assert!(!catalog.models.contains_key("amazon.nova-pro-v1:0"));
 
         let mut lowered = BTreeSet::new();
         let mut normalized = BTreeSet::new();
-        let source_alias = Regex::new(
-            r"^(?:openai\.|azure-|google\.|cohere-|ai21-|amazon\.|anthropic\.|duo-chat-|study_gpt-|meta\.|mistral\.|moonshot(?:ai)?\.|qwen\.|writer\.|zai\.|nvidia\.|minimax\.|(?:us|eu|au|jp|global|apac)\.)",
-        )
-        .unwrap();
-        let route_suffix = Regex::new(r"-v\d+:0$").unwrap();
         for model_id in catalog.models.keys() {
             assert_eq!(
                 model_id,
                 &model_id.to_ascii_lowercase(),
-                "checked-in catalog model id should be lowercase canonical text: {model_id}"
+                "curated model id should be lowercase canonical text: {model_id}"
             );
             assert!(
                 !model_id.contains('/'),
-                "checked-in catalog model id should not contain '/': {model_id}"
+                "curated model id should not contain '/': {model_id}"
             );
             assert!(
                 !model_id.contains("@default"),
-                "checked-in catalog model id should not contain '@default': {model_id}"
+                "curated model id should not contain '@default': {model_id}"
             );
             assert!(
                 !model_id.ends_with("-maas"),
-                "checked-in catalog model id should not contain provider route suffix '-maas': {model_id}"
+                "curated model id should not contain provider route suffix '-maas': {model_id}"
             );
             assert!(
                 !model_id.ends_with(":free"),
-                "checked-in catalog model id should not contain free-tier suffix ':free': {model_id}"
-            );
-            assert!(
-                !source_alias.is_match(model_id),
-                "checked-in catalog model id should not contain provider/source route prefixes: {model_id}"
-            );
-            assert!(
-                !route_suffix.is_match(model_id),
-                "checked-in catalog model id should not contain provider route suffix like '-v1:0': {model_id}"
+                "curated model id should not contain free-tier suffix ':free': {model_id}"
             );
             assert!(
                 catalog
@@ -817,16 +1140,16 @@ mod tests {
                     .get(model_id)
                     .and_then(|definition| definition.origin.as_ref())
                     .is_some_and(|origin| !origin.trim().is_empty()),
-                "checked-in catalog model id should include a non-empty origin label: {model_id}"
+                "curated model id should include a non-empty origin label: {model_id}"
             );
             assert!(
                 lowered.insert(model_id.to_ascii_lowercase()),
-                "checked-in catalog should not contain case-insensitive duplicate model ids: {model_id}"
+                "curated catalog should not contain case-insensitive duplicate model ids: {model_id}"
             );
             let normalized_model_id = normalized_catalog_model_id(model_id);
             assert!(
                 normalized.insert(normalized_model_id.clone()),
-                "checked-in catalog should not contain normalized duplicate model ids: {model_id} -> {normalized_model_id}"
+                "curated catalog should not contain normalized duplicate model ids: {model_id} -> {normalized_model_id}"
             );
         }
     }
@@ -835,8 +1158,6 @@ mod tests {
     async fn startup_refresh_reuses_fresh_cached_catalog() {
         let dir = tempdir().expect("tempdir should create");
         let store = ModelCatalogStore::new(ModelCatalogConfig {
-            remote_url: "https://example.invalid/catalog.json".to_owned(),
-            fallback_url: "https://example.invalid/fallback.json".to_owned(),
             cache_path: dir.path().join("model-catalog-cache.json"),
             custom_path: dir.path().join("model-catalog-custom.json"),
             cache_max_age_secs: 60,
@@ -844,75 +1165,75 @@ mod tests {
         let cached_document = model_catalog_document("cached-model");
         store
             .write_cached_official(&CachedOfficialCatalog {
-                remote_url: store.config().remote_url.clone(),
-                fallback_url: store.config().fallback_url.clone(),
                 fetched_at_unix_ms: now_unix_ms(),
-                source: ModelCatalogEntrySourceKind::Remote,
+                source: ModelCatalogEntrySourceKind::Cache,
                 document: cached_document.clone(),
             })
             .expect("cache should be written");
 
-        let service =
-            ModelCatalogService::new(reqwest::Client::new(), store).expect("service should load");
+        let service = ModelCatalogService::new(store).expect("service should load");
+        let providers = ProviderRegistry::new();
 
         let snapshot = service
-            .refresh_if_stale_on_startup()
+            .refresh_if_stale_on_startup(&providers, None)
             .await
             .expect("fresh startup snapshot should succeed");
 
         assert_eq!(snapshot.official, cached_document);
         assert_eq!(
             snapshot.last_successful_source,
-            Some(ModelCatalogEntrySourceKind::Remote)
+            Some(ModelCatalogEntrySourceKind::Cache)
         );
     }
 
     #[tokio::test]
-    async fn startup_refresh_updates_stale_cached_catalog() {
+    async fn startup_refresh_updates_stale_cached_catalog_from_provider_registry() {
         let dir = tempdir().expect("tempdir should create");
-        let mut server = Server::new_async().await;
-        let remote_seed = model_catalog_document("gpt-5");
-        let remote_body =
-            serde_json::to_string(&remote_seed).expect("remote document should serialize");
-        let remote_document =
-            curate_catalog_document(remote_seed).expect("remote seed should curate");
-        let remote_mock = server
-            .mock("GET", "/catalog.json")
-            .with_status(200)
-            .with_header("content-type", "application/json")
-            .with_body(remote_body)
-            .create();
-
         let store = ModelCatalogStore::new(ModelCatalogConfig {
-            remote_url: format!("{}/catalog.json", server.url()),
-            fallback_url: format!("{}/fallback.json", server.url()),
             cache_path: dir.path().join("model-catalog-cache.json"),
             custom_path: dir.path().join("model-catalog-custom.json"),
             cache_max_age_secs: 1,
         });
         store
             .write_cached_official(&CachedOfficialCatalog {
-                remote_url: store.config().remote_url.clone(),
-                fallback_url: store.config().fallback_url.clone(),
                 fetched_at_unix_ms: now_unix_ms() - 5_000,
-                source: ModelCatalogEntrySourceKind::Remote,
+                source: ModelCatalogEntrySourceKind::Cache,
                 document: model_catalog_document("gpt-4o"),
             })
             .expect("stale cache should be written");
 
-        let service =
-            ModelCatalogService::new(reqwest::Client::new(), store).expect("service should load");
+        let service = ModelCatalogService::new(store).expect("service should load");
+        let mut providers = ProviderRegistry::new();
+        providers.register(StaticListProvider::new(
+            "openai",
+            "gpt-5.4",
+            vec![
+                Model::new("openai", "openai.gpt-5.4")
+                    .with_display_name("GPT-5.4")
+                    .with_metadata(ModelMetadata {
+                        description: Some("Official OpenAI model".to_owned()),
+                        ..ModelMetadata::default()
+                    }),
+            ],
+        ));
 
         let snapshot = service
-            .refresh_if_stale_on_startup()
+            .refresh_if_stale_on_startup(&providers, None)
             .await
             .expect("stale startup refresh should succeed");
 
-        remote_mock.assert();
-        assert_eq!(snapshot.official, remote_document);
+        assert!(snapshot.official.models.contains_key("gpt-5.4"));
         assert_eq!(
             snapshot.last_successful_source,
-            Some(ModelCatalogEntrySourceKind::Remote)
+            Some(ModelCatalogEntrySourceKind::Generated)
+        );
+        assert_eq!(
+            snapshot
+                .official
+                .models
+                .get("gpt-5.4")
+                .and_then(|definition| definition.origin.as_deref()),
+            Some("OpenAI")
         );
     }
 

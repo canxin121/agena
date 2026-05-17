@@ -42,14 +42,7 @@ ttl_secs = 900
 max_bytes = 67108864
 
 [runtime.model_catalog]
-# Remote JSON catalog used to seed global model metadata, variants, catalog
-# defaults, and UI model pickers. Defaults to this repository's
-# `catalog/model-catalog.json` raw file; fetched catalog documents are curated
-# at runtime before they are stored in the local catalog cache.
-remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
-# Fallback checked when the remote catalog is unreachable.
-fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
-# Maximum age for the workspace-local official catalog cache under
+# Maximum age for the workspace-local generated catalog cache under
 # `.agena/catalog/model-catalog-cache.json`.
 cache_max_age_secs = 86400
 

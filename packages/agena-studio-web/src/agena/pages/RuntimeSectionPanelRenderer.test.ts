@@ -123,9 +123,7 @@ const sharedPanels = {
       watch_paths: ['src'],
       automation: { recent_jobs: [], enabled: true, job_count: 0 },
       model_catalog: {
-        remote_url: 'https://example.test/catalog.json',
-        fallback_url: 'https://example.test/fallback.json',
-        last_successful_source: 'remote',
+        last_successful_source: 'generated',
         last_refresh_at: '2026-05-15T00:00:00Z',
         entries: [],
       },

@@ -97,8 +97,6 @@ runtime.request_retry.base_delay_ms
 runtime.request_retry.max_delay_ms
 runtime.stream_replay.max_retries_after_output
 runtime.stream_replay.max_tracked_events
-runtime.model_catalog.remote_url
-runtime.model_catalog.fallback_url
 runtime.model_catalog.cache_max_age_secs
 ```
 
@@ -160,12 +158,9 @@ AGENA_PROVIDER_RETRY_BASE_DELAY_MS
 AGENA_PROVIDER_RETRY_MAX_DELAY_MS
 AGENA_PROVIDER_STREAM_REPLAY_MAX_RETRIES
 AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS
-AGENA_MODEL_CATALOG_URL
-AGENA_MODEL_CATALOG_FALLBACK_URL
 AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS
 AGENA_PROVIDER_MODELS_CACHE_DIR
 AGENA_PROVIDER_MODELS_CACHE_TTL_SECS
-AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL
 ```
 
 插件通过 `[plugins.list.<id>]` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
@@ -324,18 +319,16 @@ ttl_secs = 900
 max_bytes = 67108864
 
 [runtime.model_catalog]
-remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
-fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
 cache_max_age_secs = 86400
 ```
 
 全局默认项集中放在 `[default]`。`provider` 是默认逻辑 provider，`adapter` 是默认协议路由，`model` 是 backend-visible model id，`agent` 是新 root session 的默认 agent；未配置时默认 agent 是 `build`。
 
-Model catalog 按 model 管理元数据和本地模型覆盖，不再保存 default model。catalog 文件里的 model key 是真实 model id，例如 `models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由，也不再绑定某个 adapter。catalog model 定义支持一个纯展示用的 `origin` 字段，用来标记模型来源/厂商，便于 UI 分类；它不参与任何 provider/adapter/model 路由或能力推断。默认 `remote_url` 指向本仓库的 `catalog/model-catalog.json` GitHub raw 文件；`fallback_url` 是远程失败时的备用地址，也默认指向同一个本仓库 raw catalog。Agena 在刷新时会先抓取远程 document，再在运行时做 canonicalize / 去重 / origin 推断，然后把整理后的 official catalog 缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`；本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。
+Model catalog 按 model 管理元数据和本地模型覆盖，不再保存 default model。catalog 文件里的 model key 是真实 model id，例如 `models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由，也不再绑定某个 adapter。catalog model 定义支持一个纯展示用的 `origin` 字段，用来标记模型来源/厂商，便于 UI 分类；它不参与任何 provider/adapter/model 路由或能力推断。Agena 会在运行时从 live provider model lists 生成 official catalog，再做 canonicalize / 去重 / origin 推断，然后把整理后的结果缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`；本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。
 
 运行时 provider 会在 live model 列表里返回独立的 `adapter_id` 和真实 `model_id`，不会把二者拼成 provider-local route。`providers.<id>.default_adapter` 和 `providers.<id>.default_model` 可用作 provider 内部默认选择；如果该 provider 正好是 `default.provider` 且省略了 provider-local 默认值，解析器会分别使用 `default.adapter` 和 `default.model`。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存/删除 model-level 本地 override。Studio Settings / Providers 页面可以创建 provider，查看 provider 已启用 adapter 和 live models，把任意 catalog model 复制到某个 provider 的目标 adapter 下，也可以实时手动添加或修改 provider-local adapter model。
 
-Provider 的 live `/models` 列表还有独立磁盘缓存，用于减少启动 UI 或打开模型选择器时的 provider API 请求。默认位置是 `~/.agena/provider-models`，默认 TTL 是 15 分钟；可以通过 `AGENA_PROVIDER_MODELS_CACHE_DIR`、`AGENA_PROVIDER_MODELS_CACHE_TTL_SECS` 覆盖。如果 live `/models` 请求失败且没有可用缓存，Agena 会尝试从 model catalog 派生列表；该回退地址可通过 `AGENA_PROVIDER_MODELS_CATALOG_FALLBACK_URL` 覆盖。
+Provider 的 live `/models` 列表还有独立磁盘缓存，用于减少启动 UI 或打开模型选择器时的 provider API 请求。默认位置是 `~/.agena/provider-models`，默认 TTL 是 15 分钟；可以通过 `AGENA_PROVIDER_MODELS_CACHE_DIR`、`AGENA_PROVIDER_MODELS_CACHE_TTL_SECS` 覆盖。如果 live `/models` 请求失败且没有可用缓存，请求会直接失败。
 
 校验规则：
 

@@ -390,8 +390,6 @@ pub async fn get_model_catalog(
     let snapshot = state.runtime().current_snapshot();
     let catalog = snapshot.model_catalog_response();
     Ok(Json(ModelCatalogResponse {
-        remote_url: catalog.remote_url,
-        fallback_url: catalog.fallback_url,
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error,
@@ -412,9 +410,13 @@ pub async fn refresh_model_catalog(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
     let snapshot = state.runtime().current_snapshot();
+    let source_providers = snapshot.catalog_source_provider_registry();
     snapshot
         .model_catalog()
-        .refresh()
+        .refresh_from_registry(
+            source_providers.as_ref(),
+            Some(snapshot.config_resolution()),
+        )
         .await
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
@@ -2809,6 +2811,7 @@ mod tests {
     ) -> ResolvedProviderConfig {
         ResolvedProviderConfig {
             enabled: true,
+            default_adapter: "openai".to_owned(),
             default_model: "openai/default".to_owned(),
             auth,
             adapters: adapters.into_iter().collect(),

@@ -239,8 +239,6 @@ pub struct StreamReplayConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuntimeModelCatalogConfig {
-    pub remote_url: String,
-    pub fallback_url: String,
     pub cache_max_age_secs: u64,
 }
 

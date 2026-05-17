@@ -30,8 +30,8 @@ const panels = {
       {
         model_id: 'gpt-5',
         kind: 'official',
-        source: 'remote',
-        source_label: 'remote',
+        source: 'generated',
+        source_label: 'generated catalog',
         display_name: 'GPT-5',
       },
     ],

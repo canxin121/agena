@@ -111,14 +111,11 @@ enabled = true
 # enabled = true
 
 [runtime]
-# Agena also loads a model-first catalog for model picker metadata and local
-# workspace overrides. Defaults point at this repository's
-# `catalog/model-catalog.json` raw file; fetched catalog documents are curated
-# at runtime and cached under `.agena/catalog/model-catalog-cache.json`.
+# Agena also maintains a model-first catalog for model picker metadata and
+# local workspace overrides. The official catalog is generated at runtime from
+# live provider model lists and cached under `.agena/catalog/model-catalog-cache.json`.
 #
 # [runtime.model_catalog]
-# remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
-# fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
 # cache_max_age_secs = 86400
 
 [agents.plan]

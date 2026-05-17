@@ -572,7 +572,7 @@ Provider models:
 | Method | Path                                  | 说明                                                         |
 | ------ | ------------------------------------- | ------------------------------------------------------------ |
 | GET    | `/api/v1/model-catalog`               | current merged model catalog snapshot                        |
-| POST   | `/api/v1/model-catalog/refresh`       | refresh remote/fallback catalog and re-merge local overrides |
+| POST   | `/api/v1/model-catalog/refresh`       | regenerate the official catalog and re-merge local overrides |
 | PUT    | `/api/v1/model-catalog/entries`       | create or update a local catalog override                    |
 | DELETE | `/api/v1/model-catalog/entries`       | delete a local catalog override                              |
 
@@ -580,16 +580,14 @@ Model catalog response:
 
 ```json
 {
-  "remote_url": "https://example.test/catalog.json",
-  "fallback_url": "https://example.test/catalog-fallback.json",
   "last_refresh_at": "2026-05-15T08:00:00Z",
-  "last_successful_source": "remote",
+  "last_successful_source": "generated",
   "entries": [
     {
       "model_id": "gpt-5",
       "kind": "official",
-      "source": "remote",
-      "source_label": "remote catalog",
+      "source": "generated",
+      "source_label": "generated catalog",
       "display_name": "GPT-5",
       "lifecycle": "active",
       "context_window_tokens": 400000,

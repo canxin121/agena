@@ -47,8 +47,8 @@ function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCa
   return {
     model_id: 'gpt-5',
     kind: 'official',
-    source: 'remote',
-    source_label: 'remote',
+    source: 'generated',
+    source_label: 'generated catalog',
     display_name: 'GPT-5 Catalog',
     origin: 'OpenAI',
     lifecycle: 'preview',
@@ -235,8 +235,6 @@ describe('useRuntimeModelCatalogActions', () => {
       },
     }
     const emptyResponse = {
-      remote_url: '',
-      fallback_url: '',
       entries: [],
     }
     const actions = useRuntimeModelCatalogActions(state, {
@@ -280,14 +278,12 @@ describe('useRuntimeModelCatalogActions', () => {
         },
       },
       {
-        deleteModelCatalogEntry: async () => ({ remote_url: '', fallback_url: '', entries: [] }),
-        refreshModelCatalog: async () => ({ remote_url: '', fallback_url: '', entries: [] }),
+        deleteModelCatalogEntry: async () => ({ entries: [] }),
+        refreshModelCatalog: async () => ({ entries: [] }),
         upsertModelCatalogEntry: async (request) => {
           capturedRequest = request
           calls.push('upsert')
           return {
-            remote_url: '',
-            fallback_url: '',
             entries: [sampleCatalogEntry({ kind: 'custom', source: 'custom' })],
           }
         },

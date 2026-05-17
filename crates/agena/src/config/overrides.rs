@@ -22,8 +22,6 @@ pub enum ConfigOverride {
     RequestRetryMaxDelayMs(u64),
     StreamReplayMaxRetriesAfterOutput(u32),
     StreamReplayMaxTrackedEvents(usize),
-    ModelCatalogRemoteUrl(String),
-    ModelCatalogFallbackUrl(String),
     ModelCatalogCacheMaxAgeSecs(u64),
     ProviderDefaultModel {
         provider_id: String,
@@ -91,12 +89,6 @@ impl FromStr for ConfigOverride {
             "runtime.stream_replay.max_tracked_events" => Ok(Self::StreamReplayMaxTrackedEvents(
                 parse_numeric(raw_value, key)?,
             )),
-            "runtime.model_catalog.remote_url" => {
-                Ok(Self::ModelCatalogRemoteUrl(raw_value.to_owned()))
-            }
-            "runtime.model_catalog.fallback_url" => {
-                Ok(Self::ModelCatalogFallbackUrl(raw_value.to_owned()))
-            }
             "runtime.model_catalog.cache_max_age_secs" => Ok(Self::ModelCatalogCacheMaxAgeSecs(
                 parse_numeric(raw_value, key)?,
             )),
@@ -202,22 +194,6 @@ impl ConfigOverride {
                     .stream_replay
                     .get_or_insert_with(RawStreamReplayConfig::default)
                     .max_tracked_events = Some(*value);
-            }
-            Self::ModelCatalogRemoteUrl(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .model_catalog
-                    .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
-                    .remote_url = Some(value.clone());
-            }
-            Self::ModelCatalogFallbackUrl(value) => {
-                config
-                    .runtime
-                    .get_or_insert_with(RawRuntimeConfig::default)
-                    .model_catalog
-                    .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
-                    .fallback_url = Some(value.clone());
             }
             Self::ModelCatalogCacheMaxAgeSecs(value) => {
                 config

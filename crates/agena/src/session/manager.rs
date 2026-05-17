@@ -102,6 +102,7 @@ pub struct SessionRunOptions {
     pub model: ModelRef,
     pub thinking_mode: Option<String>,
     pub speed_mode: Option<String>,
+    pub verbosity: Option<String>,
     pub thinking: Option<ThinkingRequest>,
     pub request_override: ModelSpeedModeRequestOverride,
     pub system: Option<String>,
@@ -153,6 +154,7 @@ impl SessionRunOptions {
             top_k: None,
             seed: None,
             thinking: self.thinking.clone(),
+            verbosity: self.verbosity.clone(),
             response_format: None,
             request_override: self.request_override.clone(),
         }
@@ -563,6 +565,7 @@ impl SessionManager {
                     model_id: String::new(),
                     model_thinking_mode: None,
                     model_speed_mode: None,
+                    model_verbosity: None,
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -588,6 +591,7 @@ impl SessionManager {
                     model_id: String::new(),
                     model_thinking_mode: None,
                     model_speed_mode: None,
+                    model_verbosity: None,
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -723,6 +727,7 @@ impl SessionManager {
                     model,
                     thinking_mode: None,
                     speed_mode: None,
+                    verbosity: None,
                     thinking: None,
                     request_override: Default::default(),
                     system: None,
@@ -756,6 +761,7 @@ impl SessionManager {
                 model: ModelRef::new(provider_id, provider.default_model().to_string()),
                 thinking_mode: None,
                 speed_mode: None,
+                verbosity: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,
@@ -1190,6 +1196,7 @@ impl SessionManager {
                 model_id: request.options.model.model_id.to_string(),
                 model_thinking_mode: request.options.thinking_mode.clone(),
                 model_speed_mode: request.options.speed_mode.clone(),
+                model_verbosity: request.options.verbosity.clone(),
                 provider_metadata: None,
                 tags: Vec::new(),
             },
@@ -2067,6 +2074,7 @@ impl SessionManager {
                                         model_id: current_options.model.model_id.to_string(),
                                         model_thinking_mode: current_options.thinking_mode.clone(),
                                         model_speed_mode: current_options.speed_mode.clone(),
+                                        model_verbosity: current_options.verbosity.clone(),
                                         provider_metadata: None,
                                         tags: Vec::new(),
                                     },
@@ -2317,6 +2325,7 @@ impl SessionManager {
                 options.model.model_id.to_string(),
                 options.thinking_mode.clone(),
                 options.speed_mode.clone(),
+                options.verbosity.clone(),
                 prepared.prompt_cache_key.clone(),
                 prepared.prompt_window_generation,
             );
@@ -2774,6 +2783,7 @@ impl SessionManager {
                 model_id: options.model.model_id.to_string(),
                 model_thinking_mode: None,
                 model_speed_mode: None,
+                model_verbosity: options.verbosity.clone(),
                 provider_metadata: None,
                 tags: vec![MESSAGE_TAG_PROMPT_SUMMARY.to_string()],
             },
@@ -4072,6 +4082,7 @@ impl SessionManager {
                 model,
                 thinking_mode: None,
                 speed_mode: None,
+                verbosity: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,
@@ -4097,7 +4108,7 @@ impl SessionManager {
         session.runtime.execution.agent_permission = state.config.permission.clone();
         session.runtime.execution.agent_run = crate::agent::AgentRunConfig::default();
         session.runtime.set_model_override(None, None, None);
-        session.runtime.set_model_mode_overrides(None, None);
+        session.runtime.set_model_mode_overrides(None, None, None);
         Ok(session)
     }
 
@@ -4177,6 +4188,7 @@ impl SessionManager {
         let next_model_id = next_model.model_id.to_string();
         let next_thinking_mode = options.thinking_mode.clone();
         let next_speed_mode = options.speed_mode.clone();
+        let next_verbosity = options.verbosity.clone();
         let next_run = crate::agent::AgentRunConfig {
             temperature: profile.frontmatter.temperature,
             max_output_tokens: profile.frontmatter.max_output_tokens,
@@ -4198,6 +4210,7 @@ impl SessionManager {
             || session.runtime.execution.model_id.as_deref() != Some(next_model_id.as_str())
             || session.runtime.execution.model_thinking_mode != next_thinking_mode
             || session.runtime.execution.model_speed_mode != next_speed_mode
+            || session.runtime.execution.model_verbosity != next_verbosity
             || session.runtime.execution.agent_run != next_run;
         session.runtime.execution.agent_profile = Some(profile.name.clone());
         session.runtime.execution.agent_mode = Some(profile.frontmatter.mode);
@@ -4214,10 +4227,15 @@ impl SessionManager {
         );
         session
             .runtime
-            .set_model_mode_overrides(next_thinking_mode.clone(), next_speed_mode.clone());
+            .set_model_mode_overrides(
+                next_thinking_mode.clone(),
+                next_speed_mode.clone(),
+                next_verbosity.clone(),
+            );
         options.model = next_model;
         options.thinking_mode = next_thinking_mode;
         options.speed_mode = next_speed_mode;
+        options.verbosity = next_verbosity;
         options.system = session.runtime.execution.system_prompt_override.clone();
         if options.temperature.is_none() {
             options.temperature = next_run.temperature.map(|value| value.0);
@@ -4476,6 +4494,7 @@ impl SessionManager {
             model,
             thinking_mode: None,
             speed_mode: None,
+            verbosity: None,
             thinking: None,
             request_override: Default::default(),
             system: child.runtime.execution.system_prompt_override.clone(),
@@ -4523,6 +4542,7 @@ impl SessionManager {
                     model_id: options.model.model_id.to_string(),
                     model_thinking_mode: options.thinking_mode.clone(),
                     model_speed_mode: options.speed_mode.clone(),
+                    model_verbosity: options.verbosity.clone(),
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -6444,6 +6464,7 @@ mod tests {
             model: ModelRef::new("interruptible", "interruptible-model"),
             thinking_mode: None,
             speed_mode: None,
+            verbosity: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -6703,6 +6724,7 @@ mod tests {
             model: scripted_model_ref(),
             thinking_mode: None,
             speed_mode: None,
+            verbosity: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -6718,6 +6740,7 @@ mod tests {
             model: recording_model_ref(),
             thinking_mode: None,
             speed_mode: None,
+            verbosity: None,
             thinking: None,
             request_override: Default::default(),
             system: Some("system".to_string()),
@@ -6739,6 +6762,7 @@ mod tests {
             model: interrupted_model_ref(),
             thinking_mode: None,
             speed_mode: None,
+            verbosity: None,
             thinking: None,
             request_override: Default::default(),
             system: None,
@@ -6844,98 +6868,109 @@ mod tests {
         assert_eq!(received.reason, crate::plugin::SessionEndReason::Other);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn streaming_tool_execution_persists_in_progress_output() {
-        let workspace = TempWorkspace::new();
-        let db = open_temp_database(&workspace.root, "streaming_tool_execution.db").await;
-        let (plugins, chunk_sent, finish) = build_streaming_plugin_host(&workspace.root).await;
-        let manager = Arc::new(
-            build_manager_with_provider_and_plugins_on_db(
-                &workspace.root,
-                db,
-                PermissionPolicy::allow_all(),
-                ToolPermissionPolicy::allow_all(),
-                SessionManagerConfig::default(),
-                ContextPolicy::default(),
-                ScriptedProvider,
-                plugins,
-            )
-            .await,
-        );
-        let created = manager
-            .create_session(SessionCreateRequest {
-                title: "Streaming tool fixture".to_string(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("session creation should succeed");
-        let session_id = created.id;
-
-        let chunk_ready = chunk_sent.notified();
-        let manager_task = Arc::clone(&manager);
-        let submit = tokio::spawn(async move {
-            manager_task
-                .submit_user_turn(SessionUserTurnRequest {
-                    session_id,
-                    options: run_options(),
-                    parts: vec![crate::message::PartContent::text("stream plugin")],
-                })
-                .await
-        });
-
-        tokio::time::timeout(std::time::Duration::from_secs(1), chunk_ready)
-            .await
-            .expect("streaming chunk should be emitted");
-
-        let partial_output = tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                let session = manager
-                    .get_session(session_id)
+    #[test]
+    fn streaming_tool_execution_persists_in_progress_output() {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(2)
+            .thread_stack_size(8 * 1024 * 1024)
+            .build()
+            .expect("streaming tool test runtime should build")
+            .block_on(async {
+                let workspace = TempWorkspace::new();
+                let db = open_temp_database(&workspace.root, "streaming_tool_execution.db").await;
+                let (plugins, chunk_sent, finish) =
+                    build_streaming_plugin_host(&workspace.root).await;
+                let manager = Arc::new(
+                    build_manager_with_provider_and_plugins_on_db(
+                        &workspace.root,
+                        db,
+                        PermissionPolicy::allow_all(),
+                        ToolPermissionPolicy::allow_all(),
+                        SessionManagerConfig::default(),
+                        ContextPolicy::default(),
+                        ScriptedProvider,
+                        plugins,
+                    )
+                    .await,
+                );
+                let created = manager
+                    .create_session(SessionCreateRequest {
+                        title: "Streaming tool fixture".to_string(),
+                        parent_session_id: None,
+                    })
                     .await
-                    .expect("session should reload while streaming");
-                if let Some(output_text) = session
+                    .expect("session creation should succeed");
+                let session_id = created.id;
+
+                let chunk_ready = chunk_sent.notified();
+                let manager_task = Arc::clone(&manager);
+                let submit = tokio::spawn(async move {
+                    manager_task
+                        .submit_user_turn(SessionUserTurnRequest {
+                            session_id,
+                            options: run_options(),
+                            parts: vec![crate::message::PartContent::text("stream plugin")],
+                        })
+                        .await
+                });
+
+                tokio::time::timeout(std::time::Duration::from_secs(1), chunk_ready)
+                    .await
+                    .expect("streaming chunk should be emitted");
+
+                let partial_output =
+                    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                        loop {
+                            let session = manager
+                                .get_session(session_id)
+                                .await
+                                .expect("session should reload while streaming");
+                            if let Some(output_text) = session
+                                .messages
+                                .iter()
+                                .flat_map(|message| message.parts.iter())
+                                .find_map(|part| match part.content.as_ref() {
+                                    Some(crate::message::PartContent::Operation(operation))
+                                        if part.operation_id.as_deref()
+                                            == Some("call_stream_tool_1")
+                                            && part.status == ExecutionStatus::InProgress =>
+                                    {
+                                        Some(operation.model_output.text.clone())
+                                    }
+                                    _ => None,
+                                })
+                            {
+                                break output_text;
+                            }
+                            tokio::task::yield_now().await;
+                        }
+                    })
+                    .await
+                    .expect("streaming output should persist as in-progress");
+                assert_eq!(partial_output, "partial ");
+
+                finish.notify_waiters();
+                let completed = submit
+                    .await
+                    .expect("submit task should join")
+                    .expect("streaming submit should complete");
+                let final_output = completed
                     .messages
                     .iter()
                     .flat_map(|message| message.parts.iter())
                     .find_map(|part| match part.content.as_ref() {
                         Some(crate::message::PartContent::Operation(operation))
                             if part.operation_id.as_deref() == Some("call_stream_tool_1")
-                                && part.status == ExecutionStatus::InProgress =>
+                                && part.status == ExecutionStatus::Completed =>
                         {
                             Some(operation.model_output.text.clone())
                         }
                         _ => None,
                     })
-                {
-                    break output_text;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("streaming output should persist as in-progress");
-        assert_eq!(partial_output, "partial ");
-
-        finish.notify_waiters();
-        let completed = submit
-            .await
-            .expect("submit task should join")
-            .expect("streaming submit should complete");
-        let final_output = completed
-            .messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .find_map(|part| match part.content.as_ref() {
-                Some(crate::message::PartContent::Operation(operation))
-                    if part.operation_id.as_deref() == Some("call_stream_tool_1")
-                        && part.status == ExecutionStatus::Completed =>
-                {
-                    Some(operation.model_output.text.clone())
-                }
-                _ => None,
-            })
-            .expect("completed streamed tool output should exist");
-        assert_eq!(final_output, "partial done");
+                    .expect("completed streamed tool output should exist");
+                assert_eq!(final_output, "partial done");
+            });
     }
 
     #[allow(dead_code)]
@@ -7798,6 +7833,7 @@ mod tests {
                     model: recording_model_ref(),
                     thinking_mode: None,
                     speed_mode: None,
+                    verbosity: None,
                     thinking: None,
                     request_override: Default::default(),
                     system: None,
@@ -8644,6 +8680,7 @@ mod tests {
                 model: ModelRef::new("restartable", "restartable-model"),
                 thinking_mode: None,
                 speed_mode: None,
+                verbosity: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,
@@ -9290,6 +9327,7 @@ mod tests {
                 model_id: options.model.model_id.to_string(),
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
+                model_verbosity: options.verbosity.clone(),
                 provider_metadata: None,
                 tags: Vec::new(),
             },
@@ -9888,6 +9926,7 @@ mod tests {
                 model: ModelRef::new("slow", "slow-model"),
                 thinking_mode: None,
                 speed_mode: None,
+                verbosity: None,
                 thinking: None,
                 request_override: Default::default(),
                 system: None,

@@ -743,6 +743,7 @@ struct RunOptionsState {
     model: Option<ModelRef>,
     thinking_mode: Option<String>,
     speed_mode: Option<String>,
+    verbosity: Option<String>,
     system: Option<String>,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
@@ -5219,6 +5220,7 @@ impl App {
         });
         self.run_options.thinking_mode = None;
         self.run_options.speed_mode = None;
+        self.run_options.verbosity = None;
         self.focus = Focus::Composer;
         self.flash_success(self.i18n.text_args(
             "flash-provider-selected",
@@ -5233,6 +5235,7 @@ impl App {
         self.run_options.model = Some(model.clone());
         self.run_options.thinking_mode = None;
         self.run_options.speed_mode = None;
+        self.run_options.verbosity = None;
         self.focus = Focus::Composer;
         self.flash_success(self.i18n.text_args(
             "flash-model-selected",
@@ -5467,6 +5470,7 @@ impl App {
             CommandId::Model => self.handle_model_command(args),
             CommandId::ThinkingMode => self.handle_thinking_mode_command(args),
             CommandId::SpeedMode => self.handle_speed_mode_command(args),
+            CommandId::Verbosity => self.handle_verbosity_command(spec, args),
             CommandId::Temperature => self.handle_temperature_command(spec, args),
             CommandId::MaxOutput => self.handle_max_output_command(spec, args),
             CommandId::System => self.handle_system_command(spec, args),
@@ -6043,6 +6047,7 @@ impl App {
             self.run_options.model = None;
             self.run_options.thinking_mode = None;
             self.run_options.speed_mode = None;
+            self.run_options.verbosity = None;
             self.flash_success(ui_text::t(&self.i18n, "flash-provider-cleared"));
             return;
         }
@@ -6084,6 +6089,7 @@ impl App {
             self.run_options.model = None;
             self.run_options.thinking_mode = None;
             self.run_options.speed_mode = None;
+            self.run_options.verbosity = None;
             self.flash_success(ui_text::t(&self.i18n, "flash-model-cleared"));
             return;
         }
@@ -6153,6 +6159,27 @@ impl App {
             }
             _ => self.flash_error(ui_text::t(&self.i18n, "flash-temperature-invalid")),
         }
+    }
+
+    fn handle_verbosity_command(&mut self, spec: &'static CommandSpec, args: &str) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => spec.invocation()),
+            ));
+            return;
+        }
+        if trimmed.eq_ignore_ascii_case("clear") {
+            self.run_options.verbosity = None;
+            self.flash_success(ui_text::t(&self.i18n, "flash-verbosity-cleared"));
+            return;
+        }
+        self.run_options.verbosity = Some(trimmed.to_ascii_lowercase());
+        self.flash_success(self.i18n.text_args(
+            "flash-verbosity-set",
+            &crate::fl_args!("value" => trimmed.to_ascii_lowercase()),
+        ));
     }
 
     fn handle_max_output_command(&mut self, spec: &'static CommandSpec, args: &str) {
@@ -6328,6 +6355,11 @@ impl App {
             && !speed_mode.trim().is_empty()
         {
             parts.push(format!("speed={speed_mode}"));
+        }
+        if let Some(verbosity) = execution.execution.model_verbosity.as_deref()
+            && !verbosity.trim().is_empty()
+        {
+            parts.push(format!("verbosity={verbosity}"));
         }
         if let Some(workspace_root) = execution.execution.effective_workspace_root.as_deref()
             && !workspace_root.trim().is_empty()
@@ -10385,6 +10417,7 @@ impl RunOptionsState {
             model: self.model.clone(),
             thinking_mode: self.thinking_mode.clone(),
             speed_mode: self.speed_mode.clone(),
+            verbosity: self.verbosity.clone(),
             agent_profile: None,
             system: self.system.clone(),
             temperature: self.temperature,
@@ -10403,6 +10436,9 @@ impl RunOptionsState {
         }
         if let Some(speed_mode) = self.speed_mode.as_ref() {
             parts.push(format!("speed {}", speed_mode));
+        }
+        if let Some(verbosity) = self.verbosity.as_ref() {
+            parts.push(format!("verbosity {}", verbosity));
         }
         if let Some(temperature) = self.temperature {
             parts.push(format!("temp {:.2}", temperature));

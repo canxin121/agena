@@ -170,6 +170,7 @@ mod tests {
             model_id: model.to_string(),
             model_thinking_mode: None,
             model_speed_mode: None,
+            model_verbosity: None,
             provider_metadata: None,
             tags: Vec::new(),
         };

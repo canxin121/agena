@@ -114,6 +114,8 @@ pub struct CompletionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
     #[serde(
         default,

@@ -2079,6 +2079,7 @@ impl Backend {
             model,
             thinking_mode,
             speed_mode,
+            verbosity,
             agent_profile,
             system,
             temperature,
@@ -2152,6 +2153,13 @@ impl Backend {
                 &definition.adapter_overrides,
                 resolved_adapter_id.as_ref(),
             );
+        }
+        if let Some(verbosity) = verbosity
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            options.verbosity = Some(verbosity.to_ascii_lowercase());
         }
 
         if let Some(system) = system {

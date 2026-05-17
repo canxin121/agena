@@ -52,6 +52,8 @@ pub(crate) struct ChatCompletionRequest {
     /// OpenAI o-series reasoning effort; `None` for non-reasoning models.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

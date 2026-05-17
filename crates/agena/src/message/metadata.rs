@@ -48,6 +48,8 @@ pub struct MessageMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_speed_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
@@ -64,6 +66,7 @@ impl Default for MessageMetadata {
             model_id: String::new(),
             model_thinking_mode: None,
             model_speed_mode: None,
+            model_verbosity: None,
             provider_metadata: None,
             tags: Vec::new(),
         }

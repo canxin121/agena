@@ -76,6 +76,7 @@ async fn run_options_to_core(
                 model: options.model.clone(),
                 thinking_mode: options.thinking_mode.clone(),
                 speed_mode: options.speed_mode.clone(),
+                verbosity: options.verbosity.clone(),
                 agent_profile: options.agent_profile.clone(),
                 system: options.system.clone(),
                 temperature: options.temperature,
@@ -248,6 +249,7 @@ fn execution_context_from_http(
         model_id: value.model_id,
         model_thinking_mode: value.model_thinking_mode,
         model_speed_mode: value.model_speed_mode,
+        model_verbosity: value.model_verbosity,
         agent_run: value.agent_run,
         effective_workspace_root: value.effective_workspace_root,
         task_id: value.task_id,
@@ -1840,6 +1842,7 @@ enabled = true
             model: None,
             thinking_mode: None,
             speed_mode: None,
+            verbosity: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1883,6 +1886,7 @@ base_url = "http://localhost:11434"
             model: None,
             thinking_mode: None,
             speed_mode: None,
+            verbosity: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1927,6 +1931,7 @@ base_url = "http://localhost:11434"
             model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
             thinking_mode: None,
             speed_mode: None,
+            verbosity: None,
             agent_profile: None,
             system: Some("be concise".into()),
             temperature: Some(0.7),
@@ -1972,6 +1977,7 @@ thinking = { type = "budget", budget_tokens = 30000 }
             model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
             thinking_mode: Some("deep".to_string()),
             speed_mode: None,
+            verbosity: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2025,6 +2031,7 @@ headers = { x_reasoning_profile = "deep" }
             model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
             thinking_mode: Some("deep".to_string()),
             speed_mode: None,
+            verbosity: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2091,6 +2098,7 @@ body_patch = { response_format = "json_schema" }
             )),
             thinking_mode: None,
             speed_mode: Some("fast".to_string()),
+            verbosity: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2155,6 +2163,7 @@ thinking = { type = "adaptive", effort = "low" }
             model: Some(ModelRef::new("bedrock", "anthropic.claude-opus-4-7")),
             thinking_mode: Some("light".to_string()),
             speed_mode: None,
+            verbosity: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2174,6 +2183,63 @@ thinking = { type = "adaptive", effort = "low" }
                 display: None,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn run_options_to_core_resolves_default_and_explicit_verbosity() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[providers.openai.adapters.openai.models."gpt-5.4"]
+supports_verbosity = true
+default_verbosity = "low"
+"#,
+            "model-verbosity",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "verbosity").await;
+
+        let default_options = RunOptions {
+            model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+        let default_core = run_options_to_core(&state, session_id, &default_options)
+            .await
+            .expect("default verbosity should resolve");
+        assert_eq!(default_core.verbosity.as_deref(), Some("low"));
+
+        let explicit_options = RunOptions {
+            model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: Some("HIGH".to_string()),
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+        let explicit_core = run_options_to_core(&state, session_id, &explicit_options)
+            .await
+            .expect("explicit verbosity should resolve");
+        assert_eq!(explicit_core.verbosity.as_deref(), Some("high"));
     }
 
     #[tokio::test]
@@ -2202,6 +2268,7 @@ thinking = { type = "budget", budget_tokens = 3000 }
             model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
             thinking_mode: Some("deep".to_string()),
             speed_mode: None,
+            verbosity: None,
             agent_profile: None,
             system: None,
             temperature: None,

@@ -277,6 +277,7 @@ function createInput() {
     selectedProviderId: ref('anthropic'),
     selectedThinkingMode: ref(''),
     selectedSpeedMode: ref(''),
+    selectedVerbosity: ref(''),
     selectedSessionId: ref<number | null>(3),
     selectedWorkspaceId: ref<number | null>(1),
     sending: ref(false),

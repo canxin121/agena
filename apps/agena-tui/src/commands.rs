@@ -46,6 +46,7 @@ pub enum CommandId {
     Model,
     ThinkingMode,
     SpeedMode,
+    Verbosity,
     Temperature,
     MaxOutput,
     System,
@@ -405,6 +406,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &[],
         arguments: "<name|clear>",
         summary_key: "command-speed-mode-summary",
+    },
+    CommandSpec {
+        id: CommandId::Verbosity,
+        name: "verbosity",
+        aliases: &["verbose"],
+        arguments: "<low|medium|high|clear>",
+        summary_key: "command-verbosity-summary",
     },
     CommandSpec {
         id: CommandId::Temperature,

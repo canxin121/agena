@@ -1127,6 +1127,8 @@ impl ApiService {
         }
         let thinking_mode = non_empty(request.thinking_mode.as_deref()).map(ToOwned::to_owned);
         let speed_mode = non_empty(request.speed_mode.as_deref()).map(ToOwned::to_owned);
+        let requested_verbosity = non_empty(request.verbosity.as_deref())
+            .map(|value| value.trim().to_ascii_lowercase());
 
         let resolved_adapter_id = model.adapter_id.clone().or_else(|| {
             provider_registry
@@ -1176,11 +1178,21 @@ impl ApiService {
         };
 
         let request_override = thinking_request_override.merged_with(&speed_request_override);
+        let metadata = provider_registry.model_metadata(&model).map_err(api_error_from_app)?;
+        let verbosity = requested_verbosity.or_else(|| {
+            metadata
+                .default_verbosity
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_ascii_lowercase)
+        });
 
         Ok(agena::session::SessionRunOptions {
             model,
             thinking_mode,
             speed_mode,
+            verbosity,
             thinking,
             request_override,
             system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
@@ -1222,6 +1234,7 @@ impl ApiService {
                 model_id: session.runtime().execution.model_id.clone(),
                 model_thinking_mode: session.runtime().execution.model_thinking_mode.clone(),
                 model_speed_mode: session.runtime().execution.model_speed_mode.clone(),
+                model_verbosity: session.runtime().execution.model_verbosity.clone(),
                 agent_run: session.runtime().execution.agent_run.clone(),
                 effective_workspace_root: session
                     .runtime()

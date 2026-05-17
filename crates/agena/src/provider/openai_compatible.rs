@@ -737,6 +737,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
+            verbosity: request.verbosity.clone(),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -850,6 +851,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
+            verbosity: request.verbosity.clone(),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -1310,6 +1312,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -1355,6 +1358,7 @@ mod tests {
             top_k: None,
             seed: None,
             thinking: None,
+            verbosity: None,
             request_override: Default::default(),
             response_format: None,
         };
@@ -1438,6 +1442,7 @@ mod tests {
             top_k: None,
             seed: None,
             thinking: None,
+            verbosity: None,
             request_override: Default::default(),
             response_format: None,
         };
@@ -1523,6 +1528,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -1583,6 +1589,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -1647,6 +1654,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -1719,6 +1727,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -1848,6 +1857,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2086,6 +2096,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2206,6 +2217,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2270,6 +2282,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2324,6 +2337,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2385,6 +2399,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
+                verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
             })

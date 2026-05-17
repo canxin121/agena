@@ -13,7 +13,7 @@
 //! ```markdown
 //! ---
 //! description: "Read-only repo explorer"
-//! allowed_entries: ["read", "glob", "grep", "view_file"]
+//! allowed_entries: ["fs"]
 //! model: "claude-haiku-4-5"
 //! aliases: ["scout"]
 //! ---
@@ -421,20 +421,13 @@ fn default_profiles() -> Vec<AgentProfile> {
                 crate::permission::PermissionMode::Ask,
                 crate::permission::PermissionMode::Ask,
                 &[
-                    ("ask_user", crate::permission::PermissionMode::Allow),
-                    ("todo_write", crate::permission::PermissionMode::Allow),
-                    ("enter_plan_mode", crate::permission::PermissionMode::Allow),
-                    ("exit_plan_mode", crate::permission::PermissionMode::Allow),
-                    ("agent_switch", crate::permission::PermissionMode::Allow),
-                    ("agent_restore", crate::permission::PermissionMode::Allow),
+                    ("user", crate::permission::PermissionMode::Allow),
+                    ("todo", crate::permission::PermissionMode::Allow),
+                    ("plan", crate::permission::PermissionMode::Allow),
+                    ("agent", crate::permission::PermissionMode::Allow),
                     ("task", crate::permission::PermissionMode::Allow),
-                    ("tool_search", crate::permission::PermissionMode::Allow),
-                    ("workflow_init", crate::permission::PermissionMode::Allow),
-                    ("workflow_review", crate::permission::PermissionMode::Allow),
-                    (
-                        "workflow_security_review",
-                        crate::permission::PermissionMode::Allow,
-                    ),
+                    ("tools", crate::permission::PermissionMode::Allow),
+                    ("workflow", crate::permission::PermissionMode::Allow),
                 ],
             ),
             Some("openai/openai/gpt-5.3-codex"),
@@ -444,36 +437,18 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "general",
             "General-purpose delegated agent for broad research and mixed tasks.",
-            &[
-                "read",
-                "view_file",
-                "glob",
-                "grep",
-                "bash",
-                "web_fetch",
-                "web_search",
-                "todo_write",
-                "ask_user",
-                "tool_search",
-                "agent_switch",
-                "agent_restore",
-            ],
+            &["fs", "shell", "web", "todo", "user", "tools", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
-                    ("read", crate::permission::PermissionMode::Allow),
-                    ("view_file", crate::permission::PermissionMode::Allow),
-                    ("glob", crate::permission::PermissionMode::Allow),
-                    ("grep", crate::permission::PermissionMode::Allow),
-                    ("web_fetch", crate::permission::PermissionMode::Allow),
-                    ("web_search", crate::permission::PermissionMode::Allow),
-                    ("tool_search", crate::permission::PermissionMode::Allow),
-                    ("todo_write", crate::permission::PermissionMode::Allow),
-                    ("ask_user", crate::permission::PermissionMode::Allow),
-                    ("agent_switch", crate::permission::PermissionMode::Allow),
-                    ("agent_restore", crate::permission::PermissionMode::Allow),
-                    ("bash", crate::permission::PermissionMode::Ask),
+                    ("fs", crate::permission::PermissionMode::Allow),
+                    ("web", crate::permission::PermissionMode::Allow),
+                    ("tools", crate::permission::PermissionMode::Allow),
+                    ("todo", crate::permission::PermissionMode::Allow),
+                    ("user", crate::permission::PermissionMode::Allow),
+                    ("agent", crate::permission::PermissionMode::Allow),
+                    ("shell", crate::permission::PermissionMode::Ask),
                 ],
             ),
             None,
@@ -483,26 +458,14 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "explore",
             "Read-only codebase explorer for fast repo analysis.",
-            &[
-                "read",
-                "view_file",
-                "glob",
-                "grep",
-                "bash",
-                "web_fetch",
-                "web_search",
-            ],
+            &["fs", "shell", "web"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
-                    ("read", crate::permission::PermissionMode::Allow),
-                    ("view_file", crate::permission::PermissionMode::Allow),
-                    ("glob", crate::permission::PermissionMode::Allow),
-                    ("grep", crate::permission::PermissionMode::Allow),
-                    ("bash", crate::permission::PermissionMode::Ask),
-                    ("web_fetch", crate::permission::PermissionMode::Allow),
-                    ("web_search", crate::permission::PermissionMode::Allow),
+                    ("fs", crate::permission::PermissionMode::Allow),
+                    ("shell", crate::permission::PermissionMode::Ask),
+                    ("web", crate::permission::PermissionMode::Allow),
                 ],
             ),
             None,
@@ -512,26 +475,14 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "scout",
             "Read-only external research agent for docs, APIs, and dependency behavior.",
-            &[
-                "read",
-                "view_file",
-                "glob",
-                "grep",
-                "bash",
-                "web_fetch",
-                "web_search",
-            ],
+            &["fs", "shell", "web"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
-                    ("read", crate::permission::PermissionMode::Allow),
-                    ("view_file", crate::permission::PermissionMode::Allow),
-                    ("glob", crate::permission::PermissionMode::Allow),
-                    ("grep", crate::permission::PermissionMode::Allow),
-                    ("web_fetch", crate::permission::PermissionMode::Allow),
-                    ("web_search", crate::permission::PermissionMode::Allow),
-                    ("bash", crate::permission::PermissionMode::Ask),
+                    ("fs", crate::permission::PermissionMode::Allow),
+                    ("web", crate::permission::PermissionMode::Allow),
+                    ("shell", crate::permission::PermissionMode::Ask),
                 ],
             ),
             None,
@@ -541,18 +492,7 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "implement",
             "Editing agent for making targeted code changes.",
-            &[
-                "read",
-                "view_file",
-                "glob",
-                "grep",
-                "bash",
-                "apply_patch",
-                "notebook_edit",
-                "todo_write",
-                "agent_switch",
-                "agent_restore",
-            ],
+            &["fs", "shell", "fs_edit", "todo", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Ask,
                 crate::permission::PermissionMode::Ask,
@@ -565,21 +505,13 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "verify",
             "Validation agent for targeted testing and regression checks.",
-            &[
-                "read",
-                "view_file",
-                "glob",
-                "grep",
-                "bash",
-                "todo_write",
-                "agent_restore",
-            ],
+            &["fs", "shell", "todo", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
-                    ("bash", crate::permission::PermissionMode::Ask),
-                    ("agent_restore", crate::permission::PermissionMode::Allow),
+                    ("shell", crate::permission::PermissionMode::Ask),
+                    ("agent", crate::permission::PermissionMode::Allow),
                 ],
             ),
             None,
@@ -589,25 +521,14 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "planner",
             "Planning agent for read-only decomposition and execution strategy.",
-            &[
-                "read",
-                "view_file",
-                "glob",
-                "grep",
-                "bash",
-                "todo_write",
-                "enter_plan_mode",
-                "exit_plan_mode",
-                "agent_restore",
-            ],
+            &["fs", "shell", "todo", "plan", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
-                    ("enter_plan_mode", crate::permission::PermissionMode::Allow),
-                    ("exit_plan_mode", crate::permission::PermissionMode::Allow),
-                    ("agent_restore", crate::permission::PermissionMode::Allow),
-                    ("todo_write", crate::permission::PermissionMode::Allow),
+                    ("plan", crate::permission::PermissionMode::Allow),
+                    ("agent", crate::permission::PermissionMode::Allow),
+                    ("todo", crate::permission::PermissionMode::Allow),
                 ],
             ),
             None,
@@ -617,13 +538,13 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "reviewer",
             "Code review agent focused on bugs, risks, and missing tests.",
-            &["read", "view_file", "glob", "grep", "bash", "agent_restore"],
+            &["fs", "shell", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
                 &[
-                    ("bash", crate::permission::PermissionMode::Ask),
-                    ("agent_restore", crate::permission::PermissionMode::Allow),
+                    ("shell", crate::permission::PermissionMode::Ask),
+                    ("agent", crate::permission::PermissionMode::Allow),
                 ],
             ),
             None,
@@ -807,7 +728,7 @@ mod tests {
                 .frontmatter
                 .allowed_tools
                 .iter()
-                .any(|tool| tool == "read")
+                .any(|tool| tool == "fs")
         );
         assert!(registry.get("review").is_some(), "alias should resolve");
     }

@@ -761,12 +761,17 @@ impl ToolExecutor {
         if let Some(effects) = filesystem_effects_from_input(input)? {
             let command = input
                 .get("command")
+                .filter(|value| !matches!(value.as_str(), Some("bash" | "powershell" | "monitor")))
+                .or_else(|| input.pointer("/args/command"))
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
             if !command.is_empty() {
                 validate_shell_filesystem_effects(tool_name, command, effects.as_slice())?;
             }
-            let workdir = input.get("workdir").and_then(serde_json::Value::as_str);
+            let workdir = input
+                .get("workdir")
+                .or_else(|| input.pointer("/args/workdir"))
+                .and_then(serde_json::Value::as_str);
             let base = self.shell_effect_base_path(workdir);
             self.push_filesystem_effect_checks(checks, effects.as_slice(), base.as_path());
         }
@@ -1558,6 +1563,19 @@ fn validate_shell_filesystem_effects(
 }
 
 fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> {
+    if let Some(payload) = ToolPayloadInput::from_invocation(invocation) {
+        let command = match payload {
+            ToolPayloadInput::Bash(payload) => Some(payload.command),
+            ToolPayloadInput::PowerShell(payload) => Some(payload.command),
+            ToolPayloadInput::Monitor(crate::message::MonitorToolInput::Start {
+                command, ..
+            }) => Some(command),
+            _ => None,
+        };
+        if command.is_some() {
+            return command;
+        }
+    }
     let value = invocation_input_value(invocation);
     value
         .get("command")
@@ -1570,7 +1588,10 @@ fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> 
 fn filesystem_effects_from_input(
     input: &serde_json::Value,
 ) -> Result<Option<Vec<FilesystemEffect>>, ToolError> {
-    let Some(value) = input.get("filesystem_effects") else {
+    let Some(value) = input
+        .get("filesystem_effects")
+        .or_else(|| input.pointer("/args/filesystem_effects"))
+    else {
         return Ok(None);
     };
     let effects = serde_json::from_value(value.clone())
@@ -1878,7 +1899,8 @@ mod tests {
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
-        EventSubscription, LogLevel, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+        EventSubscription, HostTodoPriority, HostTodoStatus, LogLevel, SpawnSubtaskRequest,
+        SpawnSubtaskResponse, ToolDescriptor,
     };
     use crate::plugin::sdk::prelude::*;
     use crate::plugin::sdk::{
@@ -1887,7 +1909,10 @@ mod tests {
     use crate::plugin::{PluginEntry, PluginHost, PluginHostBuilder, PluginsConfig};
     use crate::role::Role;
 
-    use super::{ToolError, ToolExecutor, ToolPayloadInput, ToolPayloadOutput};
+    use super::{
+        ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadInput,
+        ToolPayloadOutput,
+    };
     use crate::plugins::provided::router as in_process_router;
 
     #[derive(Debug)]
@@ -1959,7 +1984,7 @@ mod tests {
 
         async fn list_tools(&self) -> SdkResult<Vec<ToolDescriptor>> {
             Ok(vec![ToolDescriptor {
-                name: "apply_patch".to_string(),
+                name: "fs_edit".to_string(),
                 description: Some("Patch files in the workspace".to_string()),
                 tags: vec![
                     crate::plugin::sdk::ToolTag::Mutating,
@@ -1974,24 +1999,31 @@ mod tests {
             &self,
             req: crate::plugin::sdk::host_api::HostTodoWriteRequest,
         ) -> SdkResult<ToolInvokeOutput> {
-            let context =
-                crate::plugin::sdk::host_api::current_host_callback_context().unwrap_or_default();
-            let session_id = context.session_id.unwrap_or(-1);
-            let call_id = context.call_id.unwrap_or(-1);
-            let executor =
-                in_process_router::current_executor_for_test(session_id, call_id, "todo_write")
-                    .ok_or_else(|| {
-                        PluginError::new("test host: no executor available for todo_write")
-                    })?;
-            executor
-                .execute_tool_payload_for_host(
-                    "todo_write",
-                    serde_json::to_value(req).map_err(|err| PluginError::new(err.to_string()))?,
-                    Some(session_id).filter(|id| *id >= 0),
-                    Some(call_id).filter(|id| *id >= 0),
-                    None,
-                )
-                .map_err(|err| PluginError::new(err.to_string()))
+            Ok(in_process_router::tool_execution_to_invoke_output(
+                ToolPayloadExecution::new(
+                    ToolPayloadOutput::TodoWrite {
+                        items: req
+                            .items
+                            .into_iter()
+                            .map(|item| TodoItem {
+                                content: item.content,
+                                status: match item.status {
+                                    HostTodoStatus::Pending => TodoStatus::Pending,
+                                    HostTodoStatus::InProgress => TodoStatus::InProgress,
+                                    HostTodoStatus::Completed => TodoStatus::Completed,
+                                    HostTodoStatus::Cancelled => TodoStatus::Cancelled,
+                                },
+                                priority: match item.priority {
+                                    HostTodoPriority::High => TodoPriority::High,
+                                    HostTodoPriority::Medium => TodoPriority::Medium,
+                                    HostTodoPriority::Low => TodoPriority::Low,
+                                },
+                            })
+                            .collect(),
+                    },
+                    ToolExecutionView::simple("Todo write", "Updated todo list"),
+                ),
+            ))
         }
     }
 
@@ -2642,7 +2674,7 @@ mod tests {
         let result = executor
             .execute_tool_payload_detailed(&ToolPayloadInput::ToolSearch(ToolSearchToolInput {
                 query: "patch files".to_string(),
-                load: vec!["apply_patch".to_string()],
+                load: vec!["fs_edit".to_string()],
                 limit: None,
             }))
             .expect("tool_search should succeed");
@@ -2652,8 +2684,8 @@ mod tests {
                 results,
                 loaded_tools,
             } => {
-                assert!(results.iter().any(|name| name == "apply_patch"));
-                assert_eq!(loaded_tools, vec!["apply_patch".to_string()]);
+                assert!(results.iter().any(|name| name == "fs_edit"));
+                assert_eq!(loaded_tools, vec!["fs_edit".to_string()]);
             }
             other => panic!("expected tool_search output, got {other:?}"),
         }
@@ -2667,19 +2699,15 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let initial = executor.available_tools();
-        assert!(
-            initial
-                .iter()
-                .any(|tool| tool.exposed_name == "tool_search")
-        );
-        assert!(initial.iter().any(|tool| tool.exposed_name == "todo_write"));
-        assert!(!initial.iter().any(|tool| tool.exposed_name == "bash"));
+        assert!(initial.iter().any(|tool| tool.exposed_name == "tools"));
+        assert!(initial.iter().any(|tool| tool.exposed_name == "todo"));
+        assert!(!initial.iter().any(|tool| tool.exposed_name == "shell"));
         assert!(!initial.iter().any(|tool| tool.exposed_name == "task"));
 
-        let messages = vec![loaded_tool_search_message(&["bash", "task"])];
+        let messages = vec![loaded_tool_search_message(&["shell", "task"])];
         let available = executor.available_tools_for_messages(messages.as_slice());
 
-        assert!(available.iter().any(|tool| tool.exposed_name == "bash"));
+        assert!(available.iter().any(|tool| tool.exposed_name == "shell"));
         assert!(available.iter().any(|tool| tool.exposed_name == "task"));
     }
 
@@ -2690,18 +2718,18 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let tools = executor.available_tools();
-        let read = tools
+        let fs = tools
             .iter()
-            .find(|tool| tool.exposed_name == "read")
-            .expect("read tool should be available");
-        assert_eq!(read.plugin_name, super::fs_plugin_id());
-        assert!(read.has_tag(crate::plugin::sdk::ToolTag::FilesystemRead));
+            .find(|tool| tool.exposed_name == "fs")
+            .expect("fs tool should be available");
+        assert_eq!(fs.plugin_name, super::fs_plugin_id());
+        assert!(fs.has_tag(crate::plugin::sdk::ToolTag::FilesystemRead));
 
-        let read_count = tools
+        let fs_count = tools
             .iter()
-            .filter(|tool| tool.exposed_name == "read")
+            .filter(|tool| tool.exposed_name == "fs")
             .count();
-        assert_eq!(read_count, 1);
+        assert_eq!(fs_count, 1);
     }
 
     #[test]
@@ -2975,8 +3003,8 @@ mod tests {
             .map(|item| item.exposed_name.as_str())
             .collect::<std::collections::BTreeSet<_>>();
 
-        assert!(names.contains("read"));
-        assert!(!names.contains("apply_patch"));
+        assert!(names.contains("fs"));
+        assert!(!names.contains("fs_edit"));
         assert!(!names.contains("task"));
     }
 
@@ -3051,12 +3079,13 @@ mod tests {
             input,
             plugin_name,
         } = prepared.invocation;
-        assert_eq!(name, "read");
+        assert_eq!(name, "fs");
         assert_eq!(plugin_name.as_deref(), Some(super::fs_plugin_id()));
         let payload = serde_json::Value::from(input);
-        assert_eq!(payload["file_path"], "notes.txt");
-        assert_eq!(payload["offset"], 3);
-        assert_eq!(payload["limit"], 5);
+        assert_eq!(payload["command"], "read");
+        assert_eq!(payload["args"]["file_path"], "notes.txt");
+        assert_eq!(payload["args"]["offset"], 3);
+        assert_eq!(payload["args"]["limit"], 5);
     }
 
     #[test]

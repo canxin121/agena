@@ -95,30 +95,40 @@ Runtime build 注册：
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
 | `agena.settings` | 读取、列出、校验和编辑当前 `config.toml` 的 settings tools |
 
-`agena.mcp` 读取 MCP server snapshot，并把每个 MCP capability 包装成 plugin tools，例如：
+内置 static plugin 使用少量领域级入口承载子命令，避免把每个动作都展开成独立 tool。常见入口：
 
-```text
-mcp:<server>:tool:<tool>
-mcp:<server>:resources:list
-mcp:<server>:resources:read
-mcp:<server>:prompts:list
-mcp:<server>:prompts:get
-```
+| Tool | 子命令 |
+| --- | --- |
+| `fs` | `read`, `view_file`, `glob`, `grep` |
+| `fs_edit` | `apply_patch`, `notebook_edit` |
+| `shell` | `bash`, `powershell`, `monitor` |
+| `web` | `fetch`, `search` |
+| `lsp` | `servers`, `definition`, `references`, `hover`, `diagnostics` |
+| `settings` | `get`, `list`, `validate` |
+| `settings_edit` | `set`, `delete`, `patch` |
+| `schedule` | `list` |
+| `schedule_edit` | `create`, `delete`, `wakeup` |
+| `workflow` | `init`, `review`, `security_review` |
+| `tools` | `search` |
+| `agent` | `switch`, `restore` |
+| `goal` | `get` |
+| `goal_edit` | `create`, `clear`, `update` |
+| `user` | `ask` |
+| `plan` | `enter`, `exit` |
+| `worktree` | `enter`, `exit` |
 
-因此，MCP 对模型的可见面统一进入 plugin host 和 plugin tool registry。
+这些入口统一使用 `{"command": "...", "args": {...}}` 形状。只读和写入类命令会拆成不同顶层 tool，例如 `fs` / `fs_edit`、`settings` / `settings_edit`，以保留 read-only 模型过滤、plan mode 拦截和权限 fallback 的语义边界。
 
-`agena.settings` 暴露给模型的工具包括：
+`agena.mcp` 读取 MCP server snapshot，但不再把每个 MCP capability 展开成一个模型可见 tool：
 
 | Tool | 作用 |
 | --- | --- |
-| `settings_get` | 读取一个 setting，支持 `source=effective` 或 `source=file` |
-| `settings_list` | 列出 table/object/array 下的 entries，可递归 |
-| `settings_set` | 设置一个 TOML path 的值 |
-| `settings_delete` | 删除一个 TOML path |
-| `settings_patch` | 深度合并一个 JSON object 到目标 table，`null` 删除 key |
-| `settings_validate` | 校验当前 `config.toml` 是否能被 runtime 加载 |
+| `mcp` | 只读 resource/prompt 命令：`resources_list`, `resources_read`, `prompts_list`, `prompts_get` |
+| `mcp_call` | 调用 MCP tool：`tool`，参数里包含 `server`, `tool`, `arguments` |
 
-这些工具使用当前 runtime 的 active config path。写入工具默认先校验再写入，并在有实际变更时通过 `host/config.reload` reload runtime；`dry_run=true` 会返回差异但不落盘、不 reload。
+因此，MCP 对模型的可见面统一进入 plugin host 和 plugin tool registry，同时不会随 server/tool 数量线性膨胀。MCP 的网络权限按调用里的 `server` 动态审计。
+
+`agena.settings` 使用当前 runtime 的 active config path。`settings_edit` 子命令默认先校验再写入，并在有实际变更时通过 `host/config.reload` reload runtime；`dry_run=true` 会返回差异但不落盘、不 reload。
 
 ## Transport
 
@@ -535,8 +545,8 @@ task = "ask"
 shell = "ask"
 
 [permission.entries.names]
-bash = "ask"
-apply_patch = "ask"
+shell = "ask"
+fs_edit = "ask"
 "my-plugin.echo" = "allow"
 ```
 

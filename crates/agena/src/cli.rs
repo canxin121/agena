@@ -38,7 +38,7 @@ use crate::{
     },
     error::AppError,
     memory::{MemoryStore, MemoryType},
-    message::{PartContent, StructuredObject, ToolInvocation},
+    message::{ApplyPatchToolInput, PartContent, StructuredObject, ToolInvocation},
     model::ModelRef,
     permission::{
         PermissionAction, PermissionMode, PermissionPolicy, PermissionReply, PermissionReplyKind,
@@ -56,7 +56,7 @@ use crate::{
         SessionSummary, SessionUserTurnRequest,
     },
     storage::StorageConfig,
-    tool::{ApplyPatchExecution, ToolExecutor},
+    tool::{ApplyPatchExecution, ToolExecutor, ToolPayloadInput},
     tracing as tracing_config,
 };
 
@@ -1878,14 +1878,9 @@ impl AgenaCli {
                 .with_tool_policy(ToolPermissionPolicy::allow_all()),
         )
         .with_plugin_manager(plugins);
-        let input = StructuredObject::try_from(serde_json::json!({ "patch": patch }))
-            .map_err(|err| AppError::Internal(err.to_string()))?;
+        let input = ToolPayloadInput::ApplyPatch(ApplyPatchToolInput { patch }).into_invocation();
         let execution = executor
-            .execute_invocation_detailed_bypassing_permissions(
-                &ToolInvocation::new("apply_patch", input),
-                -1,
-                -1,
-            )
+            .execute_invocation_detailed_bypassing_permissions(&input, -1, -1)
             .map_err(|err| AppError::Config(err.to_string()))?;
         let patch = execution.apply_patch.ok_or_else(|| {
             AppError::Internal("apply_patch tool did not return patch metadata".to_owned())

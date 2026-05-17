@@ -805,14 +805,6 @@ impl SessionProcessor {
                     .name_tool_call(&history_call_id, name)
                     .map_err(|err| AppError::Internal(err.to_string()))?;
             }
-            // Replay any argument fragments that arrived before we knew the
-            // call existed (uncommon, but possible if name-only deltas arrived
-            // first).
-            if !pending.arguments_json.is_empty() {
-                turn_buffer
-                    .append_tool_arguments(&history_call_id, pending.arguments_json.as_str())
-                    .map_err(|err| AppError::Internal(err.to_string()))?;
-            }
             pending.history_call_id = Some(history_call_id);
         } else if let Some(history_call_id) = pending.history_call_id.as_ref()
             && let Some(name) = pending.name.as_deref()
@@ -1521,6 +1513,14 @@ mod tests {
             })
             .await
             .expect("processor run should succeed");
+
+        let issued_arguments = result.history_items.iter().find_map(|event| match event {
+            EventKind::ToolCallIssued(payload) if payload.call_id.as_str() == "call_1" => {
+                Some(payload.arguments.clone())
+            }
+            _ => None,
+        });
+        assert_eq!(issued_arguments, Some(json!({"q": "rust"})));
 
         let assistant = result
             .state

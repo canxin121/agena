@@ -10,14 +10,16 @@ use agena_mcp_client::protocol::{
     ReadResourceResult, ResourceContents, ToolDescriptor,
 };
 use async_trait::async_trait;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::message::{AttachmentItem, OperationBlock};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, NetworkAccessSpec, Plugin, PluginManifest,
-    PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput, ToolTag,
+    HookSubscription, InitContext, InitOutcome, NetworkAccessSpec, NetworkRequest, Plugin,
+    PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    ToolTag,
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
@@ -70,99 +72,163 @@ impl Plugin for McpPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let target = target_from_entry_name(input.tool_name.as_str()).ok_or_else(|| {
-            PluginError::invalid_params(format!("invalid MCP plugin tool '{}'", input.tool_name))
-        })?;
+        let target = target_from_invocation(input.tool_name.as_str(), input.input)?;
         match target {
-            McpEntryTarget::Tool { server, tool } => {
-                let arguments = input_arguments(input.input);
+            McpEntryTarget::Tool {
+                server,
+                tool,
+                arguments,
+            } => {
                 let result = self
                     .manager
-                    .call_tool(server, tool, arguments)
+                    .call_tool(&server, &tool, arguments)
                     .await
                     .map_err(|err| {
                         PluginError::new(format!("mcp:{server}:tool:{tool} call failed: {err}"))
                     })?;
-                invoke_tool_output(server, tool, result)
+                invoke_tool_output(&server, &tool, result)
             }
             McpEntryTarget::ListResources { server } => {
-                let result = self.manager.list_resources(server).await.map_err(|err| {
+                let result = self.manager.list_resources(&server).await.map_err(|err| {
                     PluginError::new(format!("mcp:{server}:resources:list failed: {err}"))
                 })?;
-                list_resources_output(server, result)
+                list_resources_output(&server, result)
             }
             McpEntryTarget::ReadResource { server } => {
-                let input: ReadResourceInput = serde_json::from_value(input.input)?;
                 let result = self
                     .manager
-                    .read_resource(server, input.uri.as_str())
+                    .read_resource(&server.server, server.uri.as_str())
                     .await
                     .map_err(|err| {
                         PluginError::new(format!(
-                            "mcp:{server}:resources:read '{}' failed: {err}",
-                            input.uri
+                            "mcp:{}:resources:read '{}' failed: {err}",
+                            server.server, server.uri
                         ))
                     })?;
-                read_resource_output(server, input.uri.as_str(), result)
+                read_resource_output(&server.server, server.uri.as_str(), result)
             }
             McpEntryTarget::ListPrompts { server } => {
-                let result = self.manager.list_prompts(server).await.map_err(|err| {
+                let result = self.manager.list_prompts(&server).await.map_err(|err| {
                     PluginError::new(format!("mcp:{server}:prompts:list failed: {err}"))
                 })?;
-                list_prompts_output(server, result)
+                list_prompts_output(&server, result)
             }
             McpEntryTarget::GetPrompt { server } => {
-                let input: GetPromptInput = serde_json::from_value(input.input)?;
+                let server_name = server.server;
+                let prompt_name = server.name;
                 let result = self
                     .manager
-                    .get_prompt(server, input.name.as_str(), input.arguments)
+                    .get_prompt(&server_name, prompt_name.as_str(), server.arguments)
                     .await
                     .map_err(|err| {
                         PluginError::new(format!(
-                            "mcp:{server}:prompts:get '{}' failed: {err}",
-                            input.name
+                            "mcp:{}:prompts:get '{}' failed: {err}",
+                            server_name, prompt_name
                         ))
                     })?;
-                get_prompt_output(server, input.name.as_str(), result)
+                get_prompt_output(&server_name, prompt_name.as_str(), result)
             }
+        }
+    }
+
+    async fn permission_networks(
+        &self,
+        tool: &str,
+        input: &serde_json::Value,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        let target = target_from_invocation(tool, input.clone())?;
+        let server = target.server_name();
+        let network_access = network_access_by_server(&self.manager).await;
+        Ok(network_access
+            .get(server)
+            .map(|spec| vec![NetworkRequest::connect(spec.target.clone())])
+            .unwrap_or_default())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum McpEntryTarget {
+    Tool {
+        server: String,
+        tool: String,
+        arguments: Option<Value>,
+    },
+    ListResources {
+        server: String,
+    },
+    ReadResource {
+        server: ReadResourceInput,
+    },
+    ListPrompts {
+        server: String,
+    },
+    GetPrompt {
+        server: GetPromptInput,
+    },
+}
+
+impl McpEntryTarget {
+    fn server_name(&self) -> &str {
+        match self {
+            Self::Tool { server, .. }
+            | Self::ListResources { server }
+            | Self::ListPrompts { server } => server,
+            Self::ReadResource { server } => server.server.as_str(),
+            Self::GetPrompt { server } => server.server.as_str(),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum McpEntryTarget<'a> {
-    Tool { server: &'a str, tool: &'a str },
-    ListResources { server: &'a str },
-    ReadResource { server: &'a str },
-    ListPrompts { server: &'a str },
-    GetPrompt { server: &'a str },
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum McpToolInput {
+    ResourcesList(McpServerInput),
+    ResourcesRead(ReadResourceInput),
+    PromptsList(McpServerInput),
+    PromptsGet(GetPromptInput),
 }
 
-pub(super) fn target_from_entry_name(name: &str) -> Option<McpEntryTarget<'_>> {
-    let rest = name.strip_prefix("mcp:")?;
-    let mut parts = rest.splitn(3, ':');
-    let server = parts.next()?;
-    let kind = parts.next()?;
-    let remainder = parts.next()?;
-    if server.is_empty() || remainder.is_empty() {
-        return None;
-    }
-    match kind {
-        "tool" => Some(McpEntryTarget::Tool {
-            server,
-            tool: remainder,
-        }),
-        "resources" => match remainder {
-            "list" => Some(McpEntryTarget::ListResources { server }),
-            "read" => Some(McpEntryTarget::ReadResource { server }),
-            _ => None,
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum McpCallInput {
+    Tool(CallToolInput),
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+struct McpServerInput {
+    server: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+struct CallToolInput {
+    server: String,
+    tool: String,
+    #[serde(default)]
+    arguments: Option<Value>,
+}
+
+pub(super) fn target_from_invocation(entry: &str, input: Value) -> SdkResult<McpEntryTarget> {
+    match entry {
+        "mcp" => match serde_json::from_value::<McpToolInput>(input)? {
+            McpToolInput::ResourcesList(args) => Ok(McpEntryTarget::ListResources {
+                server: args.server,
+            }),
+            McpToolInput::ResourcesRead(args) => Ok(McpEntryTarget::ReadResource { server: args }),
+            McpToolInput::PromptsList(args) => Ok(McpEntryTarget::ListPrompts {
+                server: args.server,
+            }),
+            McpToolInput::PromptsGet(args) => Ok(McpEntryTarget::GetPrompt { server: args }),
         },
-        "prompts" => match remainder {
-            "list" => Some(McpEntryTarget::ListPrompts { server }),
-            "get" => Some(McpEntryTarget::GetPrompt { server }),
-            _ => None,
+        "mcp_call" => match serde_json::from_value::<McpCallInput>(input)? {
+            McpCallInput::Tool(args) => Ok(McpEntryTarget::Tool {
+                server: args.server,
+                tool: args.tool,
+                arguments: empty_object_to_none(args.arguments),
+            }),
         },
-        _ => None,
+        other => Err(PluginError::invalid_params(format!(
+            "invalid MCP plugin tool '{other}'"
+        ))),
     }
 }
 
@@ -171,15 +237,15 @@ fn manifest_from_snapshot(
     tools: Vec<(String, ToolDescriptor)>,
     network_access: &BTreeMap<String, NetworkAccessSpec>,
 ) -> PluginManifest {
-    let mut entries = tools
-        .into_iter()
-        .map(|(server, tool)| tool_entry_decl(server, tool, network_access))
-        .collect::<Vec<_>>();
-    for server in servers {
-        entries.extend(resource_and_prompt_entry_decls(server, network_access));
+    let mut entries = Vec::new();
+    if !servers.is_empty() {
+        entries.push(mcp_decl(servers.len(), !network_access.is_empty()));
+    }
+    if !tools.is_empty() {
+        entries.push(mcp_call_decl(tools.len(), !network_access.is_empty()));
     }
     PluginManifest::builder("agena-mcp", env!("CARGO_PKG_VERSION"))
-        .description("Agena MCP bridge exposed as plugin tools.")
+        .description("Agena MCP bridge exposed as hierarchical plugin commands.")
         .hooks(HookSubscription::TOOL_INVOKE)
         .tools(entries)
         .build()
@@ -196,115 +262,61 @@ async fn network_access_by_server(
         .collect()
 }
 
-fn tool_entry_decl(
-    server: String,
-    tool: ToolDescriptor,
-    network_access: &BTreeMap<String, NetworkAccessSpec>,
-) -> PluginToolDecl {
-    let name = format!("mcp:{server}:tool:{}", tool.name);
-    let schema = tool
-        .input_schema
-        .unwrap_or_else(|| serde_json::json!({"type": "object", "properties": {}}));
-    let entry = PluginToolDecl::new(name, schema)
-        .description(tool.description.unwrap_or_default())
-        .tags([ToolTag::Mutating, ToolTag::Mcp])
-        .concurrency_safe(false);
-    apply_server_network_access(entry, &server, network_access)
+fn mcp_decl(server_count: usize, has_network_servers: bool) -> PluginToolDecl {
+    let entry = PluginToolDecl::new(
+        "mcp",
+        crate::entry::definition::json_schema_for::<McpToolInput>(),
+    )
+    .description(format!(
+        "MCP read command for {server_count} configured server(s). Set command to resources_list, resources_read, prompts_list, or prompts_get; pass server-specific args."
+    ))
+    .tags([ToolTag::ReadOnly, ToolTag::Mcp])
+    .concurrency_safe(true)
+    .deferred_load();
+    maybe_network_tag(entry, has_network_servers)
 }
 
-fn resource_and_prompt_entry_decls(
-    server: String,
-    network_access: &BTreeMap<String, NetworkAccessSpec>,
-) -> Vec<PluginToolDecl> {
-    let entries = vec![
-        PluginToolDecl::new(
-            format!("mcp:{server}:resources:list"),
-            empty_object_schema(),
-        )
-        .description(format!("List MCP resources exposed by server '{server}'."))
-        .tags([ToolTag::ReadOnly, ToolTag::Mcp])
-        .concurrency_safe(true)
-        .deferred_load(),
-        PluginToolDecl::new(
-            format!("mcp:{server}:resources:read"),
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "uri": { "type": "string" }
-                },
-                "required": ["uri"]
-            }),
-        )
-        .description(format!(
-            "Read one MCP resource from server '{server}' by URI."
-        ))
-        .tags([ToolTag::ReadOnly, ToolTag::Mcp])
-        .concurrency_safe(true)
-        .deferred_load(),
-        PluginToolDecl::new(format!("mcp:{server}:prompts:list"), empty_object_schema())
-            .description(format!("List MCP prompts exposed by server '{server}'."))
-            .tags([ToolTag::ReadOnly, ToolTag::Mcp])
-            .concurrency_safe(true)
-            .deferred_load(),
-        PluginToolDecl::new(
-            format!("mcp:{server}:prompts:get"),
-            serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "name": { "type": "string" },
-                    "arguments": {
-                        "type": "object",
-                        "additionalProperties": { "type": "string" }
-                    }
-                },
-                "required": ["name"]
-            }),
-        )
-        .description(format!(
-            "Get one MCP prompt from server '{server}' by name."
-        ))
-        .tags([ToolTag::ReadOnly, ToolTag::Mcp])
-        .concurrency_safe(true)
-        .deferred_load(),
-    ];
-    entries
-        .into_iter()
-        .map(|entry| apply_server_network_access(entry, &server, network_access))
-        .collect()
+fn mcp_call_decl(tool_count: usize, has_network_servers: bool) -> PluginToolDecl {
+    let entry = PluginToolDecl::new(
+        "mcp_call",
+        crate::entry::definition::json_schema_for::<McpCallInput>(),
+    )
+    .description(format!(
+        "MCP tool command for {tool_count} discovered tool(s). Set command to tool and pass server, tool, and optional arguments in args."
+    ))
+    .tags([ToolTag::Mutating, ToolTag::Mcp])
+    .concurrency_safe(false)
+    .deferred_load();
+    maybe_network_tag(entry, has_network_servers)
 }
 
-fn apply_server_network_access(
-    entry: PluginToolDecl,
-    server: &str,
-    network_access: &BTreeMap<String, NetworkAccessSpec>,
-) -> PluginToolDecl {
-    match network_access.get(server) {
-        Some(spec) => entry.network_access(spec.clone()).tag(ToolTag::Network),
-        None => entry,
+fn maybe_network_tag(entry: PluginToolDecl, has_network_servers: bool) -> PluginToolDecl {
+    if has_network_servers {
+        entry.tag(ToolTag::Network)
+    } else {
+        entry
     }
 }
 
-fn empty_object_schema() -> Value {
-    serde_json::json!({"type": "object", "properties": {}})
-}
-
-#[derive(Debug, Deserialize)]
-struct ReadResourceInput {
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
+pub(super) struct ReadResourceInput {
+    server: String,
     uri: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct GetPromptInput {
+#[derive(Debug, Deserialize, JsonSchema, Clone, PartialEq, Eq)]
+pub(super) struct GetPromptInput {
+    server: String,
     name: String,
     #[serde(default)]
     arguments: Option<BTreeMap<String, String>>,
 }
 
-fn input_arguments(input: Value) -> Option<Value> {
+fn empty_object_to_none(input: Option<Value>) -> Option<Value> {
     match input {
-        Value::Null => None,
-        Value::Object(map) if map.is_empty() => None,
-        other => Some(other),
+        Some(Value::Null) | None => None,
+        Some(Value::Object(map)) if map.is_empty() => None,
+        other => other,
     }
 }
 
@@ -609,42 +621,86 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mcp_entry_names_are_namespaced() {
+    fn mcp_invocation_routes_hierarchical_commands() {
         assert_eq!(
-            target_from_entry_name("mcp:docs:tool:search"),
-            Some(McpEntryTarget::Tool {
-                server: "docs",
-                tool: "search"
-            })
+            target_from_invocation(
+                "mcp_call",
+                serde_json::json!({
+                    "command": "tool",
+                    "args": { "server": "docs", "tool": "search", "arguments": { "q": "rust" } }
+                })
+            )
+            .expect("mcp tool target"),
+            McpEntryTarget::Tool {
+                server: "docs".to_string(),
+                tool: "search".to_string(),
+                arguments: Some(serde_json::json!({ "q": "rust" })),
+            }
         );
         assert_eq!(
-            target_from_entry_name("mcp:docs:tool:search:advanced"),
-            Some(McpEntryTarget::Tool {
-                server: "docs",
-                tool: "search:advanced"
-            })
+            target_from_invocation(
+                "mcp",
+                serde_json::json!({
+                    "command": "resources_list",
+                    "args": { "server": "docs" }
+                })
+            )
+            .expect("mcp resources list target"),
+            McpEntryTarget::ListResources {
+                server: "docs".to_string()
+            }
         );
         assert_eq!(
-            target_from_entry_name("mcp:docs:resources:list"),
-            Some(McpEntryTarget::ListResources { server: "docs" })
+            target_from_invocation(
+                "mcp",
+                serde_json::json!({
+                    "command": "resources_read",
+                    "args": { "server": "docs", "uri": "file:///README.md" }
+                })
+            )
+            .expect("mcp resources read target"),
+            McpEntryTarget::ReadResource {
+                server: ReadResourceInput {
+                    server: "docs".to_string(),
+                    uri: "file:///README.md".to_string(),
+                }
+            }
         );
         assert_eq!(
-            target_from_entry_name("mcp:docs:resources:read"),
-            Some(McpEntryTarget::ReadResource { server: "docs" })
+            target_from_invocation(
+                "mcp",
+                serde_json::json!({
+                    "command": "prompts_list",
+                    "args": { "server": "docs" }
+                })
+            )
+            .expect("mcp prompts list target"),
+            McpEntryTarget::ListPrompts {
+                server: "docs".to_string()
+            }
         );
         assert_eq!(
-            target_from_entry_name("mcp:docs:prompts:list"),
-            Some(McpEntryTarget::ListPrompts { server: "docs" })
+            target_from_invocation(
+                "mcp",
+                serde_json::json!({
+                    "command": "prompts_get",
+                    "args": { "server": "docs", "name": "summarize" }
+                })
+            )
+            .expect("mcp prompts get target"),
+            McpEntryTarget::GetPrompt {
+                server: GetPromptInput {
+                    server: "docs".to_string(),
+                    name: "summarize".to_string(),
+                    arguments: None,
+                }
+            }
         );
-        assert_eq!(
-            target_from_entry_name("mcp:docs:prompts:get"),
-            Some(McpEntryTarget::GetPrompt { server: "docs" })
-        );
-        assert_eq!(target_from_entry_name("mcp:docs:search"), None);
+        assert!(target_from_invocation("mcp:docs:search", serde_json::json!({})).is_err());
     }
 
     #[test]
-    fn mcp_manifest_includes_resource_and_prompt_entries_per_server() {
+    fn mcp_manifest_includes_hierarchical_entries() {
         let manifest = manifest_from_snapshot(
             vec!["docs".to_string()],
             vec![(
@@ -663,16 +719,11 @@ mod tests {
             .map(|entry| entry.name.as_str())
             .collect::<BTreeSet<_>>();
 
-        assert!(names.contains("mcp:docs:tool:search"));
-        assert!(names.contains("mcp:docs:resources:list"));
-        assert!(names.contains("mcp:docs:resources:read"));
-        assert!(names.contains("mcp:docs:prompts:list"));
-        assert!(names.contains("mcp:docs:prompts:get"));
-        assert!(!names.contains("mcp:docs:search"));
+        assert_eq!(names, BTreeSet::from(["mcp", "mcp_call"]));
     }
 
     #[test]
-    fn mcp_manifest_marks_http_server_entries_with_network_access() {
+    fn mcp_manifest_marks_hierarchical_entries_for_network_servers() {
         let mut network_access = BTreeMap::new();
         network_access.insert(
             "remote".to_string(),
@@ -703,25 +754,10 @@ mod tests {
             &network_access,
         );
 
-        let remote_entries = manifest
-            .entries
-            .iter()
-            .filter(|entry| entry.name.starts_with("mcp:remote:"))
-            .collect::<Vec<_>>();
-        assert_eq!(remote_entries.len(), 5);
-        for entry in remote_entries {
-            assert_eq!(entry.network_access, vec![network_access["remote"].clone()]);
-            assert!(entry.tags.iter().any(|tag| tag == &ToolTag::Network));
-        }
-
-        let local_entries = manifest
-            .entries
-            .iter()
-            .filter(|entry| entry.name.starts_with("mcp:local:"))
-            .collect::<Vec<_>>();
-        assert_eq!(local_entries.len(), 5);
-        for entry in local_entries {
+        assert_eq!(manifest.entries.len(), 2);
+        for entry in &manifest.entries {
             assert!(entry.network_access.is_empty());
+            assert!(entry.tags.iter().any(|tag| tag == &ToolTag::Network));
         }
     }
 

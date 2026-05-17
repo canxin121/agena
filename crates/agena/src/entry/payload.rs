@@ -85,13 +85,26 @@ impl ToolPayloadInput {
     /// Convert into a generic [`ToolInvocation`] carrying this tool's name
     /// and a `StructuredObject` payload.
     pub fn into_invocation(self) -> ToolInvocation {
-        let name = self.tool_name().to_string();
+        let legacy_name = self.tool_name();
         let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
         let mut object = match value {
             serde_json::Value::Object(map) => map,
             _ => serde_json::Map::new(),
         };
         object.remove("tool");
+        let name = match grouped_invocation_for_tool(legacy_name) {
+            Some((entry, command)) => {
+                let mut wrapped = serde_json::Map::new();
+                wrapped.insert(
+                    "command".to_string(),
+                    serde_json::Value::String(command.to_string()),
+                );
+                wrapped.insert("args".to_string(), serde_json::Value::Object(object));
+                object = wrapped;
+                entry.to_string()
+            }
+            None => legacy_name.to_string(),
+        };
         let payload =
             StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
         ToolInvocation::new(name, payload)
@@ -108,9 +121,11 @@ impl ToolPayloadInput {
             serde_json::Value::Null => serde_json::Map::new(),
             _ => return None,
         };
+        let name = canonical_tool_payload_name(invocation.name.as_str());
+        let payload_name = grouped_tool_payload_name(name, &mut object).unwrap_or(name);
         object.insert(
             "tool".to_string(),
-            serde_json::Value::String(canonical_tool_payload_name(invocation.name.as_str()).into()),
+            serde_json::Value::String(payload_name.into()),
         );
         serde_json::from_value(serde_json::Value::Object(object)).ok()
     }
@@ -380,4 +395,81 @@ impl ToolPayloadOutput {
 
 fn canonical_tool_payload_name(name: &str) -> &str {
     name.rsplit('/').next().unwrap_or(name)
+}
+
+fn grouped_invocation_for_tool(tool: &str) -> Option<(&'static str, &'static str)> {
+    Some(match tool {
+        "read" => ("fs", "read"),
+        "view_file" => ("fs", "view_file"),
+        "glob" => ("fs", "glob"),
+        "grep" => ("fs", "grep"),
+        "apply_patch" => ("fs_edit", "apply_patch"),
+        "notebook_edit" => ("fs_edit", "notebook_edit"),
+        "bash" => ("shell", "bash"),
+        "powershell" => ("shell", "powershell"),
+        "monitor" => ("shell", "monitor"),
+        "web_fetch" => ("web", "fetch"),
+        "web_search" => ("web", "search"),
+        "tool_search" => ("tools", "search"),
+        "todo_write" => ("todo", "write"),
+        "ask_user" => ("user", "ask"),
+        "enter_plan_mode" => ("plan", "enter"),
+        "exit_plan_mode" => ("plan", "exit"),
+        "enter_worktree" => ("worktree", "enter"),
+        "exit_worktree" => ("worktree", "exit"),
+        "cron_create" => ("schedule_edit", "create"),
+        "cron_list" => ("schedule", "list"),
+        "cron_delete" => ("schedule_edit", "delete"),
+        "schedule_wakeup" => ("schedule_edit", "wakeup"),
+        "lsp_definition" => ("lsp", "definition"),
+        "lsp_references" => ("lsp", "references"),
+        "lsp_hover" => ("lsp", "hover"),
+        "lsp_diagnostics" => ("lsp", "diagnostics"),
+        _ => return None,
+    })
+}
+
+fn grouped_tool_payload_name(
+    entry: &str,
+    input: &mut serde_json::Map<String, serde_json::Value>,
+) -> Option<&'static str> {
+    let command = input.get("command")?.as_str()?;
+    let tool = match (entry, command) {
+        ("fs", "read") => "read",
+        ("fs", "view_file") => "view_file",
+        ("fs", "glob") => "glob",
+        ("fs", "grep") => "grep",
+        ("fs_edit", "apply_patch") => "apply_patch",
+        ("fs_edit", "notebook_edit") => "notebook_edit",
+        ("shell", "bash") => "bash",
+        ("shell", "powershell") => "powershell",
+        ("shell", "monitor") => "monitor",
+        ("web", "fetch") => "web_fetch",
+        ("web", "search") => "web_search",
+        ("tools", "search") => "tool_search",
+        ("todo", "write") => "todo_write",
+        ("user", "ask") => "ask_user",
+        ("plan", "enter") => "enter_plan_mode",
+        ("plan", "exit") => "exit_plan_mode",
+        ("worktree", "enter") => "enter_worktree",
+        ("worktree", "exit") => "exit_worktree",
+        ("schedule_edit", "create") => "cron_create",
+        ("schedule", "list") => "cron_list",
+        ("schedule_edit", "delete") => "cron_delete",
+        ("schedule_edit", "wakeup") => "schedule_wakeup",
+        ("lsp", "definition") => "lsp_definition",
+        ("lsp", "references") => "lsp_references",
+        ("lsp", "hover") => "lsp_hover",
+        ("lsp", "diagnostics") => "lsp_diagnostics",
+        _ => return None,
+    };
+    let args = input
+        .remove("args")
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+    *input = match args {
+        serde_json::Value::Object(map) => map,
+        serde_json::Value::Null => serde_json::Map::new(),
+        _ => return None,
+    };
+    Some(tool)
 }

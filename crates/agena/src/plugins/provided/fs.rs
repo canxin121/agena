@@ -4,92 +4,89 @@ use crate::message::{
     ApplyPatchToolInput, GlobToolInput, GrepToolInput, NotebookEditToolInput, ReadToolInput,
     ViewFileToolInput,
 };
-use crate::plugin::sdk::manifest::{InputPathSpec, PathKind};
+use crate::plugin::PluginError;
 use crate::plugin::sdk::{PluginToolDecl, ToolTag};
 use crate::plugins::provided::router::InProcessToolPlugin;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde_json::Value as JsonValue;
 
 pub(crate) const FS_PLUGIN_ID: &str = "agena.fs";
 
 pub(crate) fn new_plugin() -> InProcessToolPlugin {
-    InProcessToolPlugin::new(
+    InProcessToolPlugin::new_with_resolver(
         "agena-fs",
-        "Filesystem tools (read, view_file, glob, grep, apply_patch, notebook_edit).",
+        "Filesystem command tools for read/search and explicit edits.",
         entries(),
+        resolve_entry,
     )
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum FsToolInput {
+    Read(ReadToolInput),
+    ViewFile(ViewFileToolInput),
+    Glob(GlobToolInput),
+    Grep(GrepToolInput),
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum FsEditToolInput {
+    ApplyPatch(ApplyPatchToolInput),
+    NotebookEdit(NotebookEditToolInput),
 }
 
 fn entries() -> Vec<PluginToolDecl> {
     vec![
         PluginToolDecl::new(
-            "read",
-            crate::entry::definition::json_schema_for::<ReadToolInput>(),
-        )
-        .description("Read a UTF-8 text file or list a directory with optional pagination.")
-        .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
-        .input_path(required_path("$.file_path", PathKind::Read))
-        .concurrency_safe(true)
-        .always_load(),
-        PluginToolDecl::new(
-            "view_file",
-            crate::entry::definition::json_schema_for::<ViewFileToolInput>(),
+            "fs",
+            crate::entry::definition::json_schema_for::<FsToolInput>(),
         )
         .description(
-            "Load a local file and attach it back to the conversation as inline multimodal input.",
+            "Filesystem read/search command. Set command to read, view_file, glob, or grep; pass that command's payload in args.",
         )
         .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
-        .input_path(required_path("$.path", PathKind::Read))
         .concurrency_safe(true)
         .always_load(),
         PluginToolDecl::new(
-            "glob",
-            crate::entry::definition::json_schema_for::<GlobToolInput>(),
+            "fs_edit",
+            crate::entry::definition::json_schema_for::<FsEditToolInput>(),
         )
-        .description("Search files by glob pattern from the workspace or a subdirectory.")
-        .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
-        .input_path(optional_path("$.path", PathKind::Read))
-        .concurrency_safe(true)
-        .always_load(),
-        PluginToolDecl::new(
-            "grep",
-            crate::entry::definition::json_schema_for::<GrepToolInput>(),
+        .description(
+            "Filesystem edit command. Set command to apply_patch or notebook_edit; pass that command's payload in args.",
         )
-        .description("Search file contents by regex pattern with optional include glob.")
-        .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
-        .input_path(optional_path("$.path", PathKind::Read))
-        .concurrency_safe(true)
-        .always_load(),
-        PluginToolDecl::new(
-            "apply_patch",
-            crate::entry::definition::json_schema_for::<ApplyPatchToolInput>(),
-        )
-        .description("Apply a structured patch that can add, update, move, or delete files.")
         .tags([ToolTag::Mutating, ToolTag::FilesystemWrite])
-        .concurrency_safe(false)
-        .deferred_load(),
-        PluginToolDecl::new(
-            "notebook_edit",
-            crate::entry::definition::json_schema_for::<NotebookEditToolInput>(),
-        )
-        .description("Edit a Jupyter .ipynb cell by replacing, inserting, or deleting a cell.")
-        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite])
-        .input_path(required_path("$.notebook_path", PathKind::Write))
         .concurrency_safe(false)
         .deferred_load(),
     ]
 }
 
-fn required_path(jsonpath: &str, kind: PathKind) -> InputPathSpec {
-    InputPathSpec {
-        jsonpath: jsonpath.to_string(),
-        kind,
-        optional: false,
+fn resolve_entry(entry: &str, input: JsonValue) -> crate::plugin::sdk::Result<(String, JsonValue)> {
+    match entry {
+        "fs" => match serde_json::from_value::<FsToolInput>(input)? {
+            FsToolInput::Read(args) => tool_args("read", args),
+            FsToolInput::ViewFile(args) => tool_args("view_file", args),
+            FsToolInput::Glob(args) => tool_args("glob", args),
+            FsToolInput::Grep(args) => tool_args("grep", args),
+        },
+        "fs_edit" => match serde_json::from_value::<FsEditToolInput>(input)? {
+            FsEditToolInput::ApplyPatch(args) => tool_args("apply_patch", args),
+            FsEditToolInput::NotebookEdit(args) => tool_args("notebook_edit", args),
+        },
+        other => Err(PluginError::invalid_params(format!(
+            "unknown filesystem entry '{other}'"
+        ))),
     }
 }
 
-fn optional_path(jsonpath: &str, kind: PathKind) -> InputPathSpec {
-    InputPathSpec {
-        jsonpath: jsonpath.to_string(),
-        kind,
-        optional: true,
-    }
+fn tool_args<T: serde::Serialize>(
+    tool: &str,
+    args: T,
+) -> crate::plugin::sdk::Result<(String, JsonValue)> {
+    Ok((
+        tool.to_string(),
+        serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
+    ))
 }

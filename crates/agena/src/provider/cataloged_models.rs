@@ -17,7 +17,6 @@ use super::{
 #[derive(Clone)]
 pub struct CatalogedModelsProvider {
     target: Arc<dyn ModelProvider>,
-    default_model: ModelId,
     provider: Arc<ModelCatalogProviderRecord>,
 }
 
@@ -27,17 +26,11 @@ impl CatalogedModelsProvider {
         target: Arc<dyn ModelProvider>,
         provider: ModelCatalogProviderRecord,
     ) -> Arc<dyn ModelProvider> {
-        let default_model = provider
-            .default_model
-            .clone()
-            .map(ModelId::new)
-            .unwrap_or_else(|| target.default_model().clone());
-        if provider.models.is_empty() && provider.default_model.is_none() {
+        if provider.models.is_empty() {
             target
         } else {
             Arc::new(Self {
                 target,
-                default_model,
                 provider: Arc::new(provider),
             })
         }
@@ -81,7 +74,7 @@ impl ModelProvider for CatalogedModelsProvider {
     }
 
     fn default_model(&self) -> &ModelId {
-        &self.default_model
+        self.target.default_model()
     }
 
     fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
@@ -231,7 +224,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn catalog_wrapper_overrides_default_model_and_lists_custom_models() {
+    async fn catalog_wrapper_lists_custom_models_without_overriding_default() {
         let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
             default_model: ModelId::new("gpt-4.1"),
             listed: vec![Model::new("openai", "gpt-4.1").with_display_name("GPT 4.1")],
@@ -239,7 +232,6 @@ mod tests {
         let provider = CatalogedModelsProvider::new(
             target,
             ModelCatalogProviderRecord {
-                default_model: Some("gpt-5".to_owned()),
                 models: BTreeMap::from([(
                     "gpt-5".to_owned(),
                     crate::model_catalog::CatalogModelDefinition {
@@ -262,7 +254,7 @@ mod tests {
             },
         );
 
-        assert_eq!(provider.default_model().as_str(), "gpt-5");
+        assert_eq!(provider.default_model().as_str(), "gpt-4.1");
         let models = provider
             .list_models()
             .await

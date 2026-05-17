@@ -28,8 +28,6 @@ const panels = {
     drafts: { openai: '' },
     catalogEntries: [
       {
-        adapter_id: 'openai',
-        provider_id: 'openai',
         model_id: 'gpt-5',
         kind: 'official',
         source: 'remote',

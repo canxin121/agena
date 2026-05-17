@@ -1,9 +1,9 @@
 use std::str::FromStr;
 
 use super::{
-    ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
-    RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
-    SharedGatewayEndpointLayout, parse_numeric,
+    ConfigError, RawConfig, RawDefaultConfig, RawProviderHttpConfig, RawRequestRetryConfig,
+    RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig,
+    RawUiConfig, SharedGatewayEndpointLayout, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -11,6 +11,10 @@ pub enum ConfigOverride {
     TracingFilter(String),
     TracingDatabaseLevel(String),
     UiLocale(String),
+    DefaultProvider(String),
+    DefaultAdapter(String),
+    DefaultModel(String),
+    DefaultAgent(String),
     ProviderHttpTimeoutSecs(u64),
     ProviderConnectTimeoutSecs(u64),
     RequestRetryMaxRetries(u32),
@@ -62,6 +66,12 @@ impl FromStr for ConfigOverride {
             "tracing.filter" => Ok(Self::TracingFilter(raw_value.to_owned())),
             "tracing.database_level" => Ok(Self::TracingDatabaseLevel(raw_value.to_owned())),
             "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
+            "default.provider" => Ok(Self::DefaultProvider(raw_value.to_owned())),
+            "default.adapter" => Ok(Self::DefaultAdapter(raw_value.to_owned())),
+            "default.model" => Ok(Self::DefaultModel(raw_value.to_owned())),
+            "default.agent" | "runtime.default_agent" => {
+                Ok(Self::DefaultAgent(raw_value.to_owned()))
+            }
             "runtime.provider_http.timeout_secs" => Ok(Self::ProviderHttpTimeoutSecs(
                 parse_numeric(raw_value, key)?,
             )),
@@ -114,6 +124,30 @@ impl ConfigOverride {
             }
             Self::UiLocale(locale) => {
                 config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale.clone());
+            }
+            Self::DefaultProvider(value) => {
+                config
+                    .default
+                    .get_or_insert_with(RawDefaultConfig::default)
+                    .provider = Some(value.clone());
+            }
+            Self::DefaultAdapter(value) => {
+                config
+                    .default
+                    .get_or_insert_with(RawDefaultConfig::default)
+                    .adapter = Some(value.clone());
+            }
+            Self::DefaultModel(value) => {
+                config
+                    .default
+                    .get_or_insert_with(RawDefaultConfig::default)
+                    .model = Some(value.clone());
+            }
+            Self::DefaultAgent(value) => {
+                config
+                    .default
+                    .get_or_insert_with(RawDefaultConfig::default)
+                    .agent = Some(value.clone());
             }
             Self::ProviderHttpTimeoutSecs(value) => {
                 config

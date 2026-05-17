@@ -737,7 +737,7 @@ fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig
         cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
         max_turn_loops: defaults.max_turn_loops,
         doom_loop: defaults.doom_loop,
-        default_agent: resolution.config.runtime.default_agent.clone(),
+        default_agent: Some(resolution.config.default.agent.clone()),
         permission: resolution.config.permission.clone(),
     }
 }

@@ -7,8 +7,6 @@ describe('RuntimeOverviewPanel', () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
       catalogEntries: [
         {
-          adapter_id: 'anthropic',
-          provider_id: 'anthropic',
           model_id: 'claude-sonnet-4-6',
           display_name: 'Claude Sonnet 4.6',
           description: 'Balanced model',
@@ -42,8 +40,6 @@ describe('RuntimeOverviewPanel', () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
       catalogEntries: [
         {
-          adapter_id: 'openai',
-          provider_id: 'openai',
           model_id: 'gpt-5',
           kind: 'official',
           source: 'remote',
@@ -105,8 +101,6 @@ describe('RuntimeOverviewPanel', () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
       catalogEntries: [
         {
-          adapter_id: 'openai',
-          provider_id: 'openai',
           model_id: 'gpt-5',
           kind: 'official',
           source: 'remote',
@@ -114,8 +108,6 @@ describe('RuntimeOverviewPanel', () => {
           display_name: 'GPT-5 Official',
         },
         {
-          adapter_id: 'openai',
-          provider_id: 'openai',
           model_id: 'gpt-5',
           kind: 'custom',
           source: 'custom',

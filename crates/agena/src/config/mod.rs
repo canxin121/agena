@@ -17,8 +17,8 @@ pub use overrides::ConfigOverride;
 pub use types::{
     AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer,
     BedrockSigv4AuthConfig, ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta,
-    ConfigSource, GitlabProviderOptions, HttpProviderAdapterConfig, LspConfig, LspServerConfig,
-    McpConfig, McpHttpAuthConfig, McpHttpMode, McpServerConfig, MemoryConfig,
+    ConfigSource, DefaultConfig, GitlabProviderOptions, HttpProviderAdapterConfig, LspConfig,
+    LspServerConfig, McpConfig, McpHttpAuthConfig, McpHttpMode, McpServerConfig, MemoryConfig,
     OllamaProviderOptions, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
     PluginConfig, ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
@@ -47,6 +47,7 @@ pub use edit::{
 };
 pub(crate) use error::parse_numeric;
 pub(crate) use raw::{
-    RawConfig, RawConfigFile, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
-    RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
+    RawConfig, RawConfigFile, RawDefaultConfig, RawProviderHttpConfig, RawRequestRetryConfig,
+    RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig,
+    RawUiConfig,
 };

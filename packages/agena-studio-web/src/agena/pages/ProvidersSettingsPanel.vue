@@ -46,6 +46,7 @@ const props = defineProps<{
 const ADAPTER_OPTIONS = ['openai', 'anthropic', 'gemini', 'ollama', 'gitlab', 'amazon_bedrock'] as const
 const submittingConfig = ref(false)
 const catalogCopyProviderId = ref('')
+const catalogCopyAdapterId = ref('openai')
 const catalogCopySetDefault = ref(false)
 const providerModelProviderId = ref('')
 const providerModelSetDefault = ref(false)
@@ -71,15 +72,18 @@ const deviceFlowCount = computed(
   () => props.authProviders.filter((provider) => supportsDeviceLogin(provider.provider_id)).length,
 )
 const providerConfigCount = computed(() => props.providers.length)
-const catalogEntriesByAdapter = computed(() =>
+const sortedCatalogEntries = computed(() =>
   [...props.catalogEntries].sort((left, right) => {
-    const leftAdapterId = left.adapter_id || left.provider_id || ''
-    const rightAdapterId = right.adapter_id || right.provider_id || ''
-    if (leftAdapterId !== rightAdapterId) return leftAdapterId.localeCompare(rightAdapterId)
     if (left.model_id !== right.model_id) return left.model_id.localeCompare(right.model_id)
     return left.kind.localeCompare(right.kind)
   }),
 )
+const catalogCopyAdapterOptions = computed(() => {
+  const adapterIds = new Set<string>(ADAPTER_OPTIONS)
+  const provider = props.providers.find((provider) => provider.provider_id === catalogCopyProviderId.value)
+  for (const adapter of provider?.adapters || []) adapterIds.add(adapter.adapter_id)
+  return [...adapterIds].filter(Boolean).sort((left, right) => left.localeCompare(right))
+})
 
 function providerName(providerId: string) {
   return providerId
@@ -119,10 +123,6 @@ function isAtomGitProvider(providerId: string) {
 function optionalText(value: string) {
   const normalized = String(value || '').trim()
   return normalized || undefined
-}
-
-function adapterIdForEntry(entry: ModelCatalogEntry) {
-  return entry.adapter_id || entry.provider_id || ''
 }
 
 function providerRoute(adapterId: string, modelId: string) {
@@ -247,9 +247,10 @@ async function createProvider() {
 
 function loadCatalogEntryIntoProviderDraft(entry: ModelCatalogEntry) {
   providerModelDraft.value = createModelCatalogDraftFromEntry(entry)
+  providerModelDraft.value.adapter_id = catalogCopyAdapterId.value || providerModelDraft.value.adapter_id
   providerModelProviderId.value = catalogCopyProviderId.value || providerModelProviderId.value
   providerModelSetDefault.value = catalogCopySetDefault.value
-  setConfigMessage(`Loaded ${adapterIdForEntry(entry)}/${entry.model_id} into provider model draft.`)
+  setConfigMessage(`Loaded ${entry.model_id} into provider model draft.`)
 }
 
 function loadLiveModelIntoProviderDraft(model: ProviderModel) {
@@ -275,7 +276,7 @@ async function saveProviderModelDraft() {
 async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
   await patchProviderAdapterModel({
     providerId: catalogCopyProviderId.value,
-    adapterId: adapterIdForEntry(entry),
+    adapterId: catalogCopyAdapterId.value,
     modelId: entry.model_id,
     definition: modelDefinitionFromEntry(entry),
     setDefault: catalogCopySetDefault.value,
@@ -538,8 +539,8 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
     <section class="record-card">
       <div class="settings-panel-header">
         <div>
-          <p class="settings-panel-kicker">Adapter Catalog</p>
-          <h3 class="settings-panel-title">Copy Catalog Models to Provider</h3>
+          <p class="settings-panel-kicker">Model Catalog</p>
+          <h3 class="settings-panel-title">Copy Models to Provider Adapter</h3>
         </div>
         <div class="inline-fields" style="align-items: end">
           <div class="field">
@@ -551,6 +552,14 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
               </option>
             </select>
           </div>
+          <div class="field">
+            <label class="label" for="catalog-copy-adapter">Target Adapter</label>
+            <select id="catalog-copy-adapter" v-model="catalogCopyAdapterId" class="select">
+              <option v-for="adapterId in catalogCopyAdapterOptions" :key="adapterId" :value="adapterId">
+                {{ adapterId }}
+              </option>
+            </select>
+          </div>
           <label class="muted" style="display: flex; gap: 8px; align-items: center">
             <input v-model="catalogCopySetDefault" type="checkbox" />
             Set default
@@ -558,15 +567,15 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
         </div>
       </div>
 
-      <div v-if="catalogEntriesByAdapter.length" class="record-list">
+      <div v-if="sortedCatalogEntries.length" class="record-list">
         <article
-          v-for="entry in catalogEntriesByAdapter"
-          :key="`${adapterIdForEntry(entry)}/${entry.model_id}/${entry.kind}`"
+          v-for="entry in sortedCatalogEntries"
+          :key="`${entry.model_id}/${entry.kind}`"
           class="record-card"
         >
           <div class="record-header">
             <div>
-              <p class="settings-panel-kicker">{{ adapterIdForEntry(entry) }}</p>
+              <p class="settings-panel-kicker">{{ entry.source_label || entry.source || entry.kind }}</p>
               <h3 class="record-title">{{ entry.display_name || entry.model_id }}</h3>
               <div class="record-subtitle mono">{{ entry.model_id }}</div>
             </div>
@@ -582,7 +591,7 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
             </button>
             <button
               class="button primary"
-              :disabled="submittingConfig || !catalogCopyProviderId"
+              :disabled="submittingConfig || !catalogCopyProviderId || !catalogCopyAdapterId"
               @click="copyCatalogEntryToProvider(entry)"
             >
               Copy to Provider
@@ -590,7 +599,7 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
           </div>
         </article>
       </div>
-      <p v-else class="muted">No adapter catalog entries loaded.</p>
+      <p v-else class="muted">No model catalog entries loaded.</p>
     </section>
 
     <section class="settings-panel">

@@ -426,59 +426,36 @@ pub async fn refresh_model_catalog(
     get_model_catalog(State(state)).await
 }
 
-fn model_catalog_adapter_id(
-    adapter_id: Option<String>,
-    legacy_provider_id: Option<String>,
-) -> Result<String, ServerError> {
-    adapter_id
-        .or(legacy_provider_id)
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| ServerError::BadRequest("adapter_id is required".to_owned()))
-}
-
 pub async fn upsert_model_catalog_entry(
     State(state): State<AppState>,
     Json(request): Json<ModelCatalogEntryWriteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let adapter_id = model_catalog_adapter_id(request.adapter_id, request.provider_id)?;
     let snapshot = state.runtime().current_snapshot();
     snapshot
         .model_catalog()
-        .upsert_custom_entry(
-            adapter_id,
-            request.model_id,
-            request.definition,
-            request.set_default_for_adapter || request.set_default_for_provider,
-        )
+        .upsert_custom_entry(request.model_id, request.definition)
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
     get_model_catalog(State(state)).await
 }
 
 pub async fn set_model_catalog_provider_default(
-    State(state): State<AppState>,
-    Json(request): Json<ModelCatalogProviderDefaultRequest>,
-) -> Result<impl IntoResponse, ServerError> {
-    let adapter_id = model_catalog_adapter_id(request.adapter_id, request.provider_id)?;
-    let snapshot = state.runtime().current_snapshot();
-    snapshot
-        .model_catalog()
-        .set_adapter_default_model(adapter_id, request.model_id)
-        .map_err(ServerError::Core)?;
-    reload_runtime_from_config(&state).await?;
-    get_model_catalog(State(state)).await
+    State(_state): State<AppState>,
+    Json(_request): Json<ModelCatalogProviderDefaultRequest>,
+) -> Result<Json<ModelCatalogResponse>, ServerError> {
+    Err(ServerError::BadRequest(
+        "model catalog default model is no longer supported; configure [default] provider/adapter/model instead".to_owned(),
+    ))
 }
 
 pub async fn delete_model_catalog_entry(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<ModelCatalogEntryDeleteQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let adapter_id = model_catalog_adapter_id(query.adapter_id, query.provider_id)?;
     let snapshot = state.runtime().current_snapshot();
     snapshot
         .model_catalog()
-        .remove_custom_entry(adapter_id.as_str(), query.model_id.as_str())
+        .remove_custom_entry(query.model_id.as_str())
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
     get_model_catalog(State(state)).await
@@ -2304,17 +2281,34 @@ async fn resolve_run_options(
     request: SessionRunOptionsRequest,
 ) -> Result<agena::session::SessionRunOptions, ServerError> {
     let snapshot = state.runtime().current_snapshot();
+    let default_model = configured_default_model(&snapshot)?;
     let manager = state.session_manager()?;
     state
         .service()
         .resolve_run_options(
             snapshot.provider_registry().as_ref(),
+            default_model,
             manager.as_ref(),
             session_id,
             request,
         )
         .await
         .map_err(server_error_from_http)
+}
+
+fn configured_default_model(
+    snapshot: &agena::runtime::RuntimeSnapshot,
+) -> Result<Option<agena::model::ModelRef>, ServerError> {
+    let default = &snapshot.config_resolution().config.default;
+    let Some(provider_id) = default.provider.as_deref() else {
+        return Ok(None);
+    };
+    let registry = snapshot.provider_registry();
+    let model_route = default.model_route();
+    registry
+        .resolve_model_target(provider_id, model_route.as_deref())
+        .map(Some)
+        .map_err(ServerError::Core)
 }
 
 fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {

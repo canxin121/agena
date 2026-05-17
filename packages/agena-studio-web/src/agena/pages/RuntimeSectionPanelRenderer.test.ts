@@ -108,10 +108,8 @@ const sharedPanels = {
   overview: {
     catalogEntries: [
       {
-        adapter_id: 'openai',
-        provider_id: 'openai',
         model_id: 'gpt-5',
-        default_model_for_adapter: 'gpt-5',
+        default_model: 'gpt-5',
         has_local_override: false,
         display_name: 'GPT-5',
         description: 'flagship model',

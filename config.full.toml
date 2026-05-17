@@ -7,10 +7,14 @@ enabled = false
 service_name = "agena"
 # otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
 
-[runtime]
-# Primary agent for new root sessions.
-default_agent = "build"
+[default]
+# Global defaults for new sessions and command invocations.
+provider = "openai"
+adapter = "openai"
+model = "gpt-5.5"
+agent = "build"
 
+[runtime]
 [runtime.provider_http]
 timeout_secs = 120
 connect_timeout_secs = 15
@@ -38,8 +42,8 @@ ttl_secs = 900
 max_bytes = 67108864
 
 [runtime.model_catalog]
-# Remote JSON catalog used to seed adapter-first model metadata, variants,
-# adapter defaults, and UI model pickers. Defaults to this repository's
+# Remote JSON catalog used to seed global model metadata, variants, catalog
+# defaults, and UI model pickers. Defaults to this repository's
 # `catalog/model-catalog.json` raw file; point it at another static JSON host
 # only if you maintain a mirror.
 remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
@@ -231,6 +235,7 @@ include_global = true
 # backend = "duck_duck_go_html"
 
 [providers.openai]
+# Provider-local default route. The global session default lives in [default].
 default_model = "openai/gpt-5.5"
 
 [providers.openai.auth]

@@ -271,13 +271,11 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
         .current_snapshot()
         .model_catalog()
         .upsert_custom_entry(
-            "openai",
             "gpt-5-mini",
             CatalogModelDefinition {
                 display_name: Some("GPT-5 Mini Workspace".to_owned()),
                 ..CatalogModelDefinition::default()
             },
-            false,
         )
         .expect("custom catalog entry should be written");
     let app = router(state);
@@ -309,15 +307,13 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
         .and_then(|value| value.as_array())
         .expect("runtime payload should include model_catalog entries");
     assert!(runtime_entries.iter().any(|entry| {
-        entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
-            && entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5")
+        entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5")
             && entry.get("kind").and_then(|value| value.as_str()) == Some("official")
             && entry.get("source").and_then(|value| value.as_str()) == Some("cache")
             && entry.get("source_label").and_then(|value| value.as_str()) == Some("cached catalog")
     }));
     assert!(runtime_entries.iter().any(|entry| {
-        entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
-            && entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
+        entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
             && entry.get("kind").and_then(|value| value.as_str()) == Some("custom")
             && entry.get("source").and_then(|value| value.as_str()) == Some("custom")
             && entry.get("source_label").and_then(|value| value.as_str())
@@ -357,15 +353,13 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
         .and_then(|value| value.as_array())
         .expect("catalog payload should include entries");
     assert!(catalog_entries.iter().any(|entry| {
-        entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
-            && entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5")
+        entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5")
             && entry.get("kind").and_then(|value| value.as_str()) == Some("official")
             && entry.get("source").and_then(|value| value.as_str()) == Some("cache")
             && entry.get("source_label").and_then(|value| value.as_str()) == Some("cached catalog")
     }));
     assert!(catalog_entries.iter().any(|entry| {
-        entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
-            && entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
+        entry.get("model_id").and_then(|value| value.as_str()) == Some("gpt-5-mini")
             && entry.get("kind").and_then(|value| value.as_str()) == Some("custom")
             && entry.get("source").and_then(|value| value.as_str()) == Some("custom")
             && entry.get("source_label").and_then(|value| value.as_str())
@@ -505,10 +499,8 @@ async fn model_catalog_delete_accepts_visible_model_ids_with_slashes() {
         .current_snapshot()
         .model_catalog()
         .upsert_custom_entry(
-            "openai",
             "openai/google/gemini-2.5-pro",
             CatalogModelDefinition::default(),
-            false,
         )
         .expect("custom catalog entry should be written");
 
@@ -582,8 +574,7 @@ enabled = true
         .current_snapshot()
         .model_catalog()
         .upsert_custom_entry(
-            "gateway",
-            "openai/gpt-upstream",
+            "gpt-upstream",
             CatalogModelDefinition {
                 display_name: Some("Decorated GPT".to_owned()),
                 description: Some("Catalog description".to_owned()),
@@ -592,7 +583,6 @@ enabled = true
                 max_output_tokens: Some(7_890),
                 ..CatalogModelDefinition::default()
             },
-            false,
         )
         .expect("custom catalog entry should be written");
 
@@ -690,8 +680,7 @@ enabled = true
         .current_snapshot()
         .model_catalog()
         .upsert_custom_entry(
-            "gateway",
-            "openai/gpt-catalog-only",
+            "gpt-catalog-only",
             CatalogModelDefinition {
                 display_name: Some("Catalog Only GPT".to_owned()),
                 description: Some("Only in catalog".to_owned()),
@@ -700,7 +689,6 @@ enabled = true
                 max_output_tokens: Some(3_333),
                 ..CatalogModelDefinition::default()
             },
-            false,
         )
         .expect("custom catalog entry should be written");
 

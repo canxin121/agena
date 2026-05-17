@@ -31,7 +31,7 @@ use sea_orm::{Database, DatabaseConnection};
 
 const LIVE_BASE_URL: &str = "https://api.cxits.cn/";
 const LIVE_MODEL: &str = "gpt-5.4";
-const LIVE_KEY_ENV: &str = "CX-API-KEY";
+const LIVE_KEY_ENV: &str = "CX_API_KEY";
 const CACHE_PROBE_ATTEMPTS: usize = 8;
 const CACHE_PROBE_PREFIX_REPETITIONS: usize = 4000;
 const CACHE_PROBE_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -87,7 +87,7 @@ fn live_key() -> String {
         .ok()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
-        .expect("CX-API-KEY must be set for provider gateway live tests")
+        .expect("CX_API_KEY must be set for provider gateway live tests")
 }
 
 fn live_base_root() -> &'static str {

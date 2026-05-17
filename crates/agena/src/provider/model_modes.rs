@@ -280,6 +280,8 @@ fn bedrock_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
             ReasoningEffort::Low,
             ReasoningEffort::Medium,
             ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
         ]);
     }
     if model.contains("claude-opus-4-6") || model.contains("claude-opus-4.6") {
@@ -546,8 +548,8 @@ mod tests {
         assert!(modes.contains_key("thinking-low"));
         assert!(modes.contains_key("thinking-medium"));
         assert!(modes.contains_key("thinking-high"));
-        assert!(!modes.contains_key("thinking-max"));
-        assert!(!modes.contains_key("thinking-xhigh"));
+        assert!(modes.contains_key("thinking-xhigh"));
+        assert!(modes.contains_key("thinking-max"));
         assert_eq!(
             modes
                 .get("thinking-low")

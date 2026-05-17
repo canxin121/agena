@@ -112,9 +112,10 @@ enabled = true
 # new root sessions.
 default_agent = "build"
 
-# Agena also loads a remote model catalog for provider defaults, model picker
-# metadata, and local workspace overrides. Defaults point at this repository's
-# `catalog/model-catalog.json` raw file and fall back to the bundled copy.
+# Agena also loads an adapter-first model catalog for model picker metadata,
+# adapter defaults, and local workspace overrides. Defaults point at this
+# repository's `catalog/model-catalog.json` raw file and fall back to the
+# bundled copy.
 #
 # [runtime.model_catalog]
 # remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"

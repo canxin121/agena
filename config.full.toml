@@ -38,9 +38,10 @@ ttl_secs = 900
 max_bytes = 67108864
 
 [runtime.model_catalog]
-# Remote JSON catalog used to seed provider defaults, model metadata, variants,
-# and UI model pickers. Defaults to this repository's `catalog/model-catalog.json`
-# raw file; point it at another static JSON host only if you maintain a mirror.
+# Remote JSON catalog used to seed adapter-first model metadata, variants,
+# adapter defaults, and UI model pickers. Defaults to this repository's
+# `catalog/model-catalog.json` raw file; point it at another static JSON host
+# only if you maintain a mirror.
 remote_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"
 # Fallback checked when the remote catalog is unreachable.
 fallback_url = "https://raw.githubusercontent.com/canxin121/agena/main/catalog/model-catalog.json"

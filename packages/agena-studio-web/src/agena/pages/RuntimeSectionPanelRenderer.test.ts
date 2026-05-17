@@ -108,9 +108,10 @@ const sharedPanels = {
   overview: {
     catalogEntries: [
       {
+        adapter_id: 'openai',
         provider_id: 'openai',
         model_id: 'gpt-5',
-        default_model_for_provider: 'gpt-5',
+        default_model_for_adapter: 'gpt-5',
         has_local_override: false,
         display_name: 'GPT-5',
         description: 'flagship model',
@@ -131,8 +132,15 @@ const sharedPanels = {
         entries: [],
       },
     },
-    providers: [{ provider_id: 'openai', default_model: 'gpt-5', default_model_ref: 'openai/gpt-5', catalog_default_model: 'gpt-5' }],
-    providerModels: { openai: [{ provider_id: 'openai', id: 'gpt-5', display_name: 'GPT-5' }] },
+    providers: [
+      {
+        provider_id: 'openai',
+        default_model: 'openai/gpt-5',
+        default_model_ref: 'openai/openai/gpt-5',
+        adapters: [{ adapter_id: 'openai', enabled: true, configured_model_count: 1 }],
+      },
+    ],
+    providerModels: { openai: [{ provider_id: 'openai', id: 'openai/gpt-5', display_name: 'GPT-5' }] },
     sessionCacheFacts: [{ label: 'Entries', value: '4' }],
     formatProviderModel: (model: { display_name?: string; id: string }) => model.display_name || model.id,
   },

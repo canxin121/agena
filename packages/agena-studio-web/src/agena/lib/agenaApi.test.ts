@@ -25,7 +25,7 @@ describe('deleteModelCatalogEntry', () => {
     await deleteModelCatalogEntry('openai', 'openai/google/gemini-2.5-pro')
 
     expect(capturedUrl).toContain('/api/v1/model-catalog/entries?')
-    expect(capturedUrl).toContain('provider_id=openai')
+    expect(capturedUrl).toContain('adapter_id=openai')
     expect(capturedUrl).toContain('model_id=openai%2Fgoogle%2Fgemini-2.5-pro')
     expect(capturedUrl).not.toContain('/providers/openai/models/')
     expect(capturedInit?.method).toBe('DELETE')

@@ -7,6 +7,7 @@ describe('RuntimeOverviewPanel', () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
       catalogEntries: [
         {
+          adapter_id: 'anthropic',
           provider_id: 'anthropic',
           model_id: 'claude-sonnet-4-6',
           display_name: 'Claude Sonnet 4.6',
@@ -41,6 +42,7 @@ describe('RuntimeOverviewPanel', () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
       catalogEntries: [
         {
+          adapter_id: 'openai',
           provider_id: 'openai',
           model_id: 'gpt-5',
           kind: 'official',
@@ -66,21 +68,21 @@ describe('RuntimeOverviewPanel', () => {
       providers: [
         {
           provider_id: 'openai',
-          default_model: 'gpt-5',
-          default_model_ref: 'openai/gpt-5',
-          catalog_default_model: 'gpt-5',
+          default_model: 'openai/gpt-5',
+          default_model_ref: 'openai/openai/gpt-5',
+          adapters: [{ adapter_id: 'openai', enabled: true, configured_model_count: 2 }],
         },
       ],
       providerModels: {
         openai: [
           {
             provider_id: 'openai',
-            id: 'gpt-5',
+            id: 'openai/gpt-5',
             display_name: 'GPT-5',
           },
           {
             provider_id: 'openai',
-            id: 'gpt-5-mini',
+            id: 'openai/gpt-5-mini',
             display_name: 'GPT-5 Mini',
           },
         ],
@@ -103,6 +105,7 @@ describe('RuntimeOverviewPanel', () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
       catalogEntries: [
         {
+          adapter_id: 'openai',
           provider_id: 'openai',
           model_id: 'gpt-5',
           kind: 'official',
@@ -111,6 +114,7 @@ describe('RuntimeOverviewPanel', () => {
           display_name: 'GPT-5 Official',
         },
         {
+          adapter_id: 'openai',
           provider_id: 'openai',
           model_id: 'gpt-5',
           kind: 'custom',
@@ -137,9 +141,9 @@ describe('RuntimeOverviewPanel', () => {
       providers: [
         {
           provider_id: 'openai',
-          default_model: 'gpt-5',
-          default_model_ref: 'openai/gpt-5',
-          catalog_default_model: 'gpt-5',
+          default_model: 'openai/gpt-5',
+          default_model_ref: 'openai/openai/gpt-5',
+          adapters: [{ adapter_id: 'openai', enabled: true, configured_model_count: 0 }],
         },
       ],
       providerModels: { openai: [] },

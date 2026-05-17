@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test'
+import { ref } from 'vue'
 
 import { renderVueSsr } from './test/renderVueSsr'
 
 const panels = {
   providers: {
+    actionError: ref(''),
+    actionMessage: ref(''),
     authProviders: [
       {
         provider_id: 'openai',
@@ -23,6 +26,27 @@ const panels = {
     deviceAuthEnterpriseDrafts: { openai: '' },
     deviceAuthStartState: { openai: null },
     drafts: { openai: '' },
+    catalogEntries: [
+      {
+        adapter_id: 'openai',
+        provider_id: 'openai',
+        model_id: 'gpt-5',
+        kind: 'official',
+        source: 'remote',
+        source_label: 'remote',
+        display_name: 'GPT-5',
+      },
+    ],
+    load: async () => {},
+    providerModels: { openai: [{ provider_id: 'openai', id: 'openai/gpt-5', display_name: 'GPT-5' }] },
+    providers: [
+      {
+        provider_id: 'openai',
+        default_model: 'openai/gpt-5',
+        default_model_ref: 'openai/openai/gpt-5',
+        adapters: [{ adapter_id: 'openai', enabled: true, configured_model_count: 1 }],
+      },
+    ],
     finishBrowserAuth: () => {},
     pollDeviceAuth: () => {},
     saveApiKey: () => {},

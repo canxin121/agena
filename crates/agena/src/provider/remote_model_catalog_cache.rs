@@ -11,8 +11,8 @@ use crate::{
     error::AppError,
     model::{Model, ModelCapabilities},
     model_catalog::{
-        DEFAULT_GITHUB_FALLBACK_URL, ModelCatalogDocument, bundled_catalog_document,
-        catalog_definition_to_provider_definition,
+        DEFAULT_GITHUB_FALLBACK_URL, ModelCatalogDocument,
+        catalog_definition_to_provider_definition, curate_catalog_document,
     },
 };
 
@@ -166,22 +166,11 @@ impl RemoteModelCatalogCache {
                 tracing::warn!(
                     provider_id = %source.provider_id,
                     error = %error,
-                    "failed to fetch model catalog fallback; trying bundled catalog"
+                    "failed to fetch model catalog fallback"
                 );
             }
         }
-
-        match bundled_catalog_document() {
-            Ok(document) => Ok(catalog_models_from_document(source, &document)),
-            Err(error) => {
-                tracing::warn!(
-                    provider_id = %source.provider_id,
-                    error = %error,
-                    "failed to load bundled model catalog fallback"
-                );
-                Ok(None)
-            }
-        }
+        Ok(None)
     }
 
     fn is_fresh(&self, entry: &RemoteModelCatalogCacheEntry) -> bool {
@@ -304,6 +293,11 @@ async fn fetch_catalog_document(url: &str) -> Result<ModelCatalogDocument, AppEr
     }
     serde_json::from_str::<ModelCatalogDocument>(&body)
         .map_err(|err| AppError::Config(format!("parse catalog fallback from {url}: {err}")))
+        .and_then(|document| {
+            curate_catalog_document(document).map_err(|err| {
+                AppError::Config(format!("curate catalog fallback from {url}: {err}"))
+            })
+        })
 }
 
 fn catalog_models_from_document(
@@ -564,9 +558,9 @@ mod tests {
 
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].provider_id.as_str(), "amazon-bedrock");
-        assert_eq!(models[0].id.as_str(), "amazon.nova-pro-v1:0");
-        assert_eq!(models[0].display_name.as_deref(), Some("Amazon Nova Pro"));
-        assert_eq!(models[1].id.as_str(), "anthropic.claude-sonnet-4-5");
-        assert_eq!(models[1].display_name.as_deref(), Some("Claude Sonnet 4.5"));
+        assert_eq!(models[0].id.as_str(), "claude-sonnet-4-5");
+        assert_eq!(models[0].display_name.as_deref(), Some("Claude Sonnet 4.5"));
+        assert_eq!(models[1].id.as_str(), "nova-pro-v1");
+        assert_eq!(models[1].display_name.as_deref(), Some("Amazon Nova Pro"));
     }
 }

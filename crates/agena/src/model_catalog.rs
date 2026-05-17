@@ -9,6 +9,8 @@ use std::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+mod curate;
+
 use crate::{
     AppError,
     model::{Model, ModelId, ModelLifecycle},
@@ -410,41 +412,18 @@ impl ModelCatalogService {
                     Ok(document) => (ModelCatalogEntrySourceKind::Fallback, document),
                     Err(fallback_error) => {
                         if let Some(cached) = self.store.read_cached_official()? {
-                            if self.cache_is_fresh(&cached) {
-                                let mut snapshot = self.snapshot();
-                                snapshot.last_error = Some(format!(
-                                    "remote refresh failed: {remote_error}; fallback failed: {fallback_error}; using cache"
-                                ));
-                                snapshot.last_successful_source =
-                                    Some(ModelCatalogEntrySourceKind::Cache);
-                                snapshot.official = cached.document;
-                                snapshot.last_refresh_at = DateTime::<Utc>::from_timestamp_millis(
-                                    cached.fetched_at_unix_ms,
-                                );
-                                self.replace_snapshot(snapshot.clone());
-                                return Ok(snapshot);
-                            }
-                        }
-                        if let Ok(document) = bundled_catalog_document() {
-                            let fetched_at_unix_ms = now_unix_ms();
-                            self.store.write_cached_official(&CachedOfficialCatalog {
-                                remote_url: config.remote_url.clone(),
-                                fallback_url: config.fallback_url.clone(),
-                                fetched_at_unix_ms,
-                                source: ModelCatalogEntrySourceKind::Fallback,
-                                document: document.clone(),
-                            })?;
-
+                            let cache_is_fresh = self.cache_is_fresh(&cached);
                             let mut snapshot = self.snapshot();
                             snapshot.remote_url = config.remote_url;
                             snapshot.fallback_url = config.fallback_url;
-                            snapshot.official = document;
+                            snapshot.official = cached.document;
                             snapshot.last_successful_source =
-                                Some(ModelCatalogEntrySourceKind::Fallback);
+                                Some(ModelCatalogEntrySourceKind::Cache);
                             snapshot.last_refresh_at =
-                                DateTime::<Utc>::from_timestamp_millis(fetched_at_unix_ms);
+                                DateTime::<Utc>::from_timestamp_millis(cached.fetched_at_unix_ms);
                             snapshot.last_error = Some(format!(
-                                "remote refresh failed: {remote_error}; fallback failed: {fallback_error}; using bundled catalog"
+                                "remote refresh failed: {remote_error}; fallback failed: {fallback_error}; using {}cache",
+                                if cache_is_fresh { "" } else { "stale " }
                             ));
                             self.replace_snapshot(snapshot.clone());
                             return Ok(snapshot);
@@ -507,8 +486,10 @@ impl ModelCatalogService {
             )));
         }
         let text = response.text().await?;
-        serde_json::from_str::<ModelCatalogDocument>(&text)
-            .map_err(|err| AppError::Config(format!("parse model catalog from {url}: {err}")))
+        let document = serde_json::from_str::<ModelCatalogDocument>(&text)
+            .map_err(|err| AppError::Config(format!("parse model catalog from {url}: {err}")))?;
+        curate::curate_catalog_document(document)
+            .map_err(|err| AppError::Config(format!("curate model catalog from {url}: {err}")))
     }
 
     fn cache_is_fresh(&self, cached: &CachedOfficialCatalog) -> bool {
@@ -547,18 +528,16 @@ fn now_unix_ms() -> i64 {
         .unwrap_or_default()
 }
 
+pub(crate) fn curate_catalog_document(
+    document: ModelCatalogDocument,
+) -> Result<ModelCatalogDocument, AppError> {
+    curate::curate_catalog_document(document)
+}
+
 pub fn catalog_definition_to_provider_definition(
     definition: &CatalogModelDefinition,
 ) -> ConfiguredModelDefinition {
     definition.clone().into_configured_definition()
-}
-
-pub fn bundled_catalog_document() -> Result<ModelCatalogDocument, AppError> {
-    serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../catalog/model-catalog.json"
-    )))
-    .map_err(|err| AppError::Config(format!("parse bundled model catalog: {err}")))
 }
 
 pub fn decorate_provider_models(
@@ -670,213 +649,10 @@ mod tests {
     use crate::{model::CapabilitySupport, provider::ConfiguredModelVariant};
     use mockito::Server;
     use regex::Regex;
-    use std::sync::OnceLock;
     use tempfile::tempdir;
 
     fn normalized_catalog_model_id(model_id: &str) -> String {
-        static RULES: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
-
-        let mut normalized = model_id.trim().to_ascii_lowercase();
-        if let Some(stripped) = normalized.strip_suffix("@default") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_suffix("-maas") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_suffix(":free") {
-            normalized = stripped.to_owned();
-        }
-        if normalized == "study_gpt-chatgpt-4o-latest" {
-            normalized = "gpt-4o".to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("openai.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("azure-") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("google.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("ai21-") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("cohere-command-") {
-            normalized = format!("command-{stripped}");
-        } else if normalized == "cohere-embed-v-4-0" {
-            normalized = "embed-v4.0".to_owned();
-        } else if let Some(stripped) = normalized.strip_prefix("cohere-embed-v3-") {
-            normalized = format!("embed-v3-{stripped}");
-        }
-        if let Some(stripped) = normalized.strip_prefix("moonshot-kimi-") {
-            normalized = format!("kimi-{stripped}");
-        }
-        if let Some(stripped) = normalized.strip_prefix("moonshot.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("moonshotai.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("zai.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("minimax.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("qwen.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("writer.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("nvidia.") {
-            normalized = stripped.to_owned();
-        }
-        if let Some(stripped) = normalized.strip_prefix("mistral.") {
-            normalized = stripped.to_owned();
-        }
-        normalized = match normalized.as_str() {
-            "duo-chat-haiku-4-5" => "claude-haiku-4-5".to_owned(),
-            "duo-chat-opus-4-5" => "claude-opus-4-5".to_owned(),
-            "duo-chat-opus-4-6" => "claude-opus-4-6".to_owned(),
-            "duo-chat-opus-4-7" => "claude-opus-4-7".to_owned(),
-            "duo-chat-sonnet-4-5" => "claude-sonnet-4-5".to_owned(),
-            "duo-chat-sonnet-4-6" => "claude-sonnet-4-6".to_owned(),
-            "duo-chat-gpt-5" => "gpt-5".to_owned(),
-            "duo-chat-gpt-5-mini" => "gpt-5-mini".to_owned(),
-            "duo-chat-gpt-5-codex" => "gpt-5-codex".to_owned(),
-            "duo-chat-gpt-5-1" => "gpt-5.1".to_owned(),
-            "duo-chat-gpt-5-2" => "gpt-5.2".to_owned(),
-            "duo-chat-gpt-5-2-codex" => "gpt-5.2-codex".to_owned(),
-            "duo-chat-gpt-5-3-codex" => "gpt-5.3-codex".to_owned(),
-            "duo-chat-gpt-5-4" => "gpt-5.4".to_owned(),
-            "duo-chat-gpt-5-4-mini" => "gpt-5.4-mini".to_owned(),
-            "duo-chat-gpt-5-4-nano" => "gpt-5.4-nano".to_owned(),
-            _ => normalized,
-        };
-
-        if let Some((prefix, tail)) = normalized.split_once('.')
-            && matches!(prefix, "us" | "eu" | "au" | "jp" | "global" | "apac")
-        {
-            normalized = tail.to_owned();
-        }
-        normalized = normalized.replace('_', ".");
-
-        if let Some((prefix, tail)) = normalized.split_once('.')
-            && prefix.chars().all(|ch| ch.is_ascii_alphanumeric())
-            && tail
-                .chars()
-                .next()
-                .map(|ch| ch.is_ascii_alphabetic())
-                .unwrap_or(false)
-        {
-            normalized = format!("{prefix}-{tail}");
-        }
-
-        for (pattern, replacement) in RULES.get_or_init(|| {
-            vec![
-                (
-                    Regex::new(r"^(aion)-(\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1-$2.$3$4",
-                ),
-                (
-                    Regex::new(r"^(claude-(?:haiku|opus|sonnet)-)(\d)(\d)(.*)$").unwrap(),
-                    "$1$2-$3$4",
-                ),
-                (
-                    Regex::new(r"^claude-3-5-haiku-(\d{8})-v1:0$").unwrap(),
-                    "claude-haiku-3-5-$1",
-                ),
-                (
-                    Regex::new(r"^claude-3-5-sonnet-(\d{8})-v2:0$").unwrap(),
-                    "claude-sonnet-3-5-$1",
-                ),
-                (
-                    Regex::new(r"^claude-3-7-sonnet-(\d{8})-v1:0$").unwrap(),
-                    "claude-sonnet-3-7-$1",
-                ),
-                (
-                    Regex::new(r"^claude-opus-4-6-v1$").unwrap(),
-                    "claude-opus-4-6",
-                ),
-                (
-                    Regex::new(r"^(deepseek-v)(\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1$2.$3$4",
-                ),
-                (Regex::new(r"^deepseek\.r1-v1:0$").unwrap(), "deepseek-r1"),
-                (Regex::new(r"^deepseek\.v3-v1:0$").unwrap(), "deepseek-v3"),
-                (Regex::new(r"^devstral-2:123b$").unwrap(), "devstral-2-123b"),
-                (
-                    Regex::new(r"^devstral-small-2:24b$").unwrap(),
-                    "devstral-small-2-24b",
-                ),
-                (
-                    Regex::new(r"^(gemini)-(\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1-$2.$3$4",
-                ),
-                (
-                    Regex::new(r"^(gpt)-(\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1-$2.$3$4",
-                ),
-                (
-                    Regex::new(r"^gpt-oss-(120b|20b)-1:0$").unwrap(),
-                    "gpt-oss-$1",
-                ),
-                (Regex::new(r"^(grok)-(\d+)(\d)(.*)$").unwrap(), "$1-$2.$3$4"),
-                (
-                    Regex::new(r"^(grok)-(\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1-$2.$3$4",
-                ),
-                (
-                    Regex::new(r"^(kimi-k\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1.$2$3",
-                ),
-                (
-                    Regex::new(r"^(llama)-(\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1-$2.$3$4",
-                ),
-                (
-                    Regex::new(r"^(minimax-m\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1.$2$3",
-                ),
-                (
-                    Regex::new(r"^(mistral-small)-(\d+)[-.](\d+)(.*)$").unwrap(),
-                    "$1-$2.$3$4",
-                ),
-                (
-                    Regex::new(r"^ministral-3:(14b|8b|3b)$").unwrap(),
-                    "ministral-3-$1",
-                ),
-                (Regex::new(r"^(nvidia)\.(.*)$").unwrap(), "$1-$2"),
-                (
-                    Regex::new(r"^pixtral-large-2502-v1:0$").unwrap(),
-                    "pixtral-large-2502",
-                ),
-                (Regex::new(r"^(qwen\d+)[-.](\d+)(.*)$").unwrap(), "$1.$2$3"),
-                (
-                    Regex::new(r"^qwen3\.235b-a22b-instruct-2507$").unwrap(),
-                    "qwen3-235b-a22b-instruct-2507",
-                ),
-                (Regex::new(r"^qwen3\.5:397b$").unwrap(), "qwen3.5-397b-a17b"),
-            ]
-        }) {
-            normalized = pattern
-                .replace(normalized.as_str(), *replacement)
-                .into_owned();
-        }
-
-        normalized = normalized.replace("v1_5", "v1.5");
-        normalized = normalized.replace("v2_5", "v2.5");
-        normalized = normalized.replace("v3_5", "v3.5");
-        normalized = normalized.replace("v4_5", "v4.5");
-        normalized = normalized.replace("v5_5", "v5.5");
-        normalized = normalized.replace(".v", "-v");
-
-        while normalized.contains("--") {
-            normalized = normalized.replace("--", "-");
-        }
-
-        normalized
+        curate::normalized_catalog_model_id(model_id)
     }
 
     #[test]
@@ -961,8 +737,13 @@ mod tests {
     }
 
     #[test]
-    fn bundled_fallback_catalog_file_parses_and_seeds_known_models() {
-        let document = bundled_catalog_document().expect("bundled fallback catalog should parse");
+    fn checked_in_catalog_file_curates_and_seeds_known_models() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../catalog/model-catalog.json");
+        let document = serde_json::from_str::<ModelCatalogDocument>(
+            &std::fs::read_to_string(&path).expect("catalog file should be readable"),
+        )
+        .expect("catalog file should parse");
+        let document = curate_catalog_document(document).expect("catalog file should curate");
 
         let catalog = document.model_record();
         assert!(catalog.models.contains_key("gpt-5.5"));
@@ -1004,31 +785,31 @@ mod tests {
             assert_eq!(
                 model_id,
                 &model_id.to_ascii_lowercase(),
-                "bundled catalog model id should be lowercase canonical text: {model_id}"
+                "checked-in catalog model id should be lowercase canonical text: {model_id}"
             );
             assert!(
                 !model_id.contains('/'),
-                "bundled catalog model id should not contain '/': {model_id}"
+                "checked-in catalog model id should not contain '/': {model_id}"
             );
             assert!(
                 !model_id.contains("@default"),
-                "bundled catalog model id should not contain '@default': {model_id}"
+                "checked-in catalog model id should not contain '@default': {model_id}"
             );
             assert!(
                 !model_id.ends_with("-maas"),
-                "bundled catalog model id should not contain provider route suffix '-maas': {model_id}"
+                "checked-in catalog model id should not contain provider route suffix '-maas': {model_id}"
             );
             assert!(
                 !model_id.ends_with(":free"),
-                "bundled catalog model id should not contain free-tier suffix ':free': {model_id}"
+                "checked-in catalog model id should not contain free-tier suffix ':free': {model_id}"
             );
             assert!(
                 !source_alias.is_match(model_id),
-                "bundled catalog model id should not contain provider/source route prefixes: {model_id}"
+                "checked-in catalog model id should not contain provider/source route prefixes: {model_id}"
             );
             assert!(
                 !route_suffix.is_match(model_id),
-                "bundled catalog model id should not contain provider route suffix like '-v1:0': {model_id}"
+                "checked-in catalog model id should not contain provider route suffix like '-v1:0': {model_id}"
             );
             assert!(
                 catalog
@@ -1036,16 +817,16 @@ mod tests {
                     .get(model_id)
                     .and_then(|definition| definition.origin.as_ref())
                     .is_some_and(|origin| !origin.trim().is_empty()),
-                "bundled catalog model id should include a non-empty origin label: {model_id}"
+                "checked-in catalog model id should include a non-empty origin label: {model_id}"
             );
             assert!(
                 lowered.insert(model_id.to_ascii_lowercase()),
-                "bundled catalog should not contain case-insensitive duplicate model ids: {model_id}"
+                "checked-in catalog should not contain case-insensitive duplicate model ids: {model_id}"
             );
             let normalized_model_id = normalized_catalog_model_id(model_id);
             assert!(
                 normalized.insert(normalized_model_id.clone()),
-                "bundled catalog should not contain normalized duplicate model ids: {model_id} -> {normalized_model_id}"
+                "checked-in catalog should not contain normalized duplicate model ids: {model_id} -> {normalized_model_id}"
             );
         }
     }
@@ -1090,9 +871,11 @@ mod tests {
     async fn startup_refresh_updates_stale_cached_catalog() {
         let dir = tempdir().expect("tempdir should create");
         let mut server = Server::new_async().await;
-        let remote_document = model_catalog_document("fresh-model");
+        let remote_seed = model_catalog_document("gpt-5");
         let remote_body =
-            serde_json::to_string(&remote_document).expect("remote document should serialize");
+            serde_json::to_string(&remote_seed).expect("remote document should serialize");
+        let remote_document =
+            curate_catalog_document(remote_seed).expect("remote seed should curate");
         let remote_mock = server
             .mock("GET", "/catalog.json")
             .with_status(200)
@@ -1113,7 +896,7 @@ mod tests {
                 fallback_url: store.config().fallback_url.clone(),
                 fetched_at_unix_ms: now_unix_ms() - 5_000,
                 source: ModelCatalogEntrySourceKind::Remote,
-                document: model_catalog_document("stale-model"),
+                document: model_catalog_document("gpt-4o"),
             })
             .expect("stale cache should be written");
 

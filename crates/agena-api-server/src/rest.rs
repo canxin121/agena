@@ -3241,6 +3241,7 @@ mod tests {
             "openai".to_owned(),
             ResolvedProviderAdapterConfig {
                 enabled: true,
+                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
                     extra_headers: Default::default(),
                     options: OpenAiProviderOptions {

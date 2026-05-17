@@ -275,8 +275,30 @@ fn gemini_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
 }
 
 fn bedrock_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
+    if model.contains("claude-opus-4-7") || model.contains("claude-opus-4.7") {
+        return adaptive_modes(&[
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ]);
+    }
+    if model.contains("claude-opus-4-6") || model.contains("claude-opus-4.6") {
+        return adaptive_modes(&[
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Max,
+        ]);
+    }
+    if model.contains("claude-sonnet-4-6") || model.contains("claude-sonnet-4.6") {
+        return adaptive_modes(&[
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ]);
+    }
     if model.contains("claude") || model.contains("anthropic") {
-        return anthropic_reasoning_modes(model);
+        return effort_modes(&[ReasoningEffort::High, ReasoningEffort::Max], false);
     }
     if model.contains("nova") {
         return effort_modes(
@@ -370,6 +392,21 @@ fn versioned_gpt5_reasoning_modes(
         ],
         compatible || version >= 2,
     ))
+}
+
+fn adaptive_modes(efforts: &[ReasoningEffort]) -> BTreeMap<String, ModelThinkingMode> {
+    let mut modes = BTreeMap::new();
+    for effort in efforts {
+        modes.insert(
+            format!("thinking-{}", effort.as_str()),
+            ModelThinkingMode::new()
+                .with_display_name(format!("Thinking {}", title_case(effort.as_str())))
+                .with_thinking(ThinkingRequest::Adaptive {
+                    effort: Some(*effort),
+                }),
+        );
+    }
+    modes
 }
 
 fn effort_modes(
@@ -497,5 +534,27 @@ mod tests {
         assert!(modes.contains_key("thinking-low"));
         assert!(modes.contains_key("thinking-medium"));
         assert!(modes.contains_key("thinking-high"));
+    }
+
+    #[test]
+    fn bedrock_claude_47_modes_use_adaptive_thinking_only() {
+        let modes = default_model_mode_registry().thinking_modes_for_family(
+            CapabilityFamily::Bedrock,
+            None,
+            "anthropic.claude-opus-4-7",
+        );
+        assert!(modes.contains_key("thinking-low"));
+        assert!(modes.contains_key("thinking-medium"));
+        assert!(modes.contains_key("thinking-high"));
+        assert!(!modes.contains_key("thinking-max"));
+        assert!(!modes.contains_key("thinking-xhigh"));
+        assert_eq!(
+            modes
+                .get("thinking-low")
+                .and_then(|mode| mode.thinking.as_ref()),
+            Some(&ThinkingRequest::Adaptive {
+                effort: Some(ReasoningEffort::Low),
+            })
+        );
     }
 }

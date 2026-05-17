@@ -235,7 +235,6 @@ describe('useRuntimeSectionLoadActions', () => {
                 fallback_url: '',
                 entries: [
                   {
-                    adapter_id: 'anthropic',
                     model_id: 'claude-opus-4-7',
                     kind: 'official',
                     source: 'remote',
@@ -274,7 +273,7 @@ describe('useRuntimeSectionLoadActions', () => {
 
     expect(calls).toEqual(['loadSettingsSectionData:bash', 'replaceProviderModels:anthropic', 'loadDesktopPanel'])
     expect(state.authProviders.value.map((provider) => provider.provider_id)).toEqual(['anthropic'])
-    expect(state.catalogEntries.value.map((entry) => entry.adapter_id)).toEqual(['anthropic'])
+    expect(state.catalogEntries.value.map((entry) => entry.model_id)).toEqual(['claude-opus-4-7'])
     expect(state.permissionRules.value.map((rule) => rule.id)).toEqual([1])
   })
 

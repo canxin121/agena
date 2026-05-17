@@ -265,9 +265,9 @@ fn build_provider(
         .map(|(adapter_id, _)| adapter_id.clone())
         .collect::<Vec<_>>();
 
-    if let Some(provider_record) = catalog.and_then(|snapshot| {
-        snapshot.merged_provider_for_adapters(provider_id, &catalog_adapter_ids)
-    }) {
+    if let Some(provider_record) =
+        catalog.and_then(|snapshot| snapshot.merged_provider_for_adapters(&catalog_adapter_ids))
+    {
         Ok(CatalogedModelsProvider::new(provider, provider_record))
     } else {
         Ok(provider)

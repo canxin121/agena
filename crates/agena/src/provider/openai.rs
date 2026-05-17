@@ -1559,23 +1559,11 @@ impl ModelProvider for OpenAiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let mut source = RemoteModelCatalogSource::new(
+        let source = RemoteModelCatalogSource::new(
             self.id.as_str(),
             self.model_endpoint()?,
             self.api_key.prompt_cache_scope(),
         );
-        source = match self.capability_family {
-            CapabilityFamily::OpenAi => source
-                .with_catalog_provider_id("openai")
-                .with_catalog_visible_model_prefix("openai"),
-            CapabilityFamily::OpenAiCompatible => source
-                .with_catalog_provider_id("openai")
-                .with_catalog_visible_model_prefix("openai"),
-            CapabilityFamily::Anthropic => source.with_catalog_provider_id("anthropic"),
-            CapabilityFamily::Gemini => source.with_catalog_provider_id("gemini"),
-            CapabilityFamily::Bedrock => source.with_catalog_provider_id("bedrock"),
-            CapabilityFamily::Gitlab => source.with_catalog_provider_id("gitlab"),
-        };
         RemoteModelCatalogCache::default()
             .get_or_fetch(&source, || async {
                 let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {

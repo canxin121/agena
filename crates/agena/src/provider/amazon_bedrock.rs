@@ -1384,9 +1384,7 @@ impl ModelProvider for AmazonBedrockProvider {
             PROVIDER_ID,
             endpoint.as_str(),
             self.models_cache_auth_scope(),
-        )
-        .with_catalog_provider_id("bedrock")
-        .with_catalog_visible_model_prefix("amazon_bedrock");
+        );
         RemoteModelCatalogCache::default()
             .get_or_fetch(&source, || async {
                 match &self.auth_mode {

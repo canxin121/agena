@@ -173,14 +173,9 @@ fn seed_cached_official_catalog(workspace_root: &str) {
         "fetched_at_unix_ms": fetched_at_unix_ms,
         "source": "cache",
         "document": {
-            "providers": {
-                "openai": {
-                    "default_model": "gpt-5",
-                    "models": {
-                        "gpt-5": {
-                            "display_name": "GPT-5 Official"
-                        }
-                    }
+            "models": {
+                "gpt-5": {
+                    "display_name": "GPT-5 Official"
                 }
             }
         }
@@ -509,9 +504,7 @@ async fn model_catalog_delete_accepts_visible_model_ids_with_slashes() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(
-                    "/api/v1/model-catalog/entries?provider_id=openai&model_id=openai%2Fgoogle%2Fgemini-2.5-pro",
-                )
+                .uri("/api/v1/model-catalog/entries?model_id=openai%2Fgoogle%2Fgemini-2.5-pro")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -527,9 +520,8 @@ async fn model_catalog_delete_accepts_visible_model_ids_with_slashes() {
         .expect("catalog response should include entries");
     assert!(
         !entries.iter().any(|entry| {
-            entry.get("provider_id").and_then(|value| value.as_str()) == Some("openai")
-                && entry.get("model_id").and_then(|value| value.as_str())
-                    == Some("openai/google/gemini-2.5-pro")
+            entry.get("model_id").and_then(|value| value.as_str())
+                == Some("openai/google/gemini-2.5-pro")
         }),
         "deleted entry should not remain in catalog payload: {value:?}"
     );

@@ -18,11 +18,10 @@ use crate::local_api::{
     MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
     MarketplaceUninstallResponse, MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
     MarketplaceUpgradeResponse, MessageListQuery, ModelCatalogEntryWriteRequest,
-    ModelCatalogProviderDefaultRequest, ModelCatalogResponse, PartLoadMode,
-    PermissionRuleListQuery, PermissionRuleRevokeRequest, PermissionRuleWriteRequest,
-    PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse,
-    RuntimeReloadResponse, SessionContinueRequestBody, SessionCreateRequest,
-    SessionEventStreamQuery, SessionGoalSetRequest, SessionListQuery,
+    ModelCatalogResponse, PartLoadMode, PermissionRuleListQuery, PermissionRuleRevokeRequest,
+    PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
+    PluginStatusListResponse, RuntimeReloadResponse, SessionContinueRequestBody,
+    SessionCreateRequest, SessionEventStreamQuery, SessionGoalSetRequest, SessionListQuery,
     SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
     SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
     WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
@@ -68,10 +67,6 @@ pub struct SessionEventListCompatQuery {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelCatalogEntryDeleteQuery {
-    #[serde(default)]
-    pub adapter_id: Option<String>,
-    #[serde(default)]
-    pub provider_id: Option<String>,
     pub model_id: String,
 }
 
@@ -437,15 +432,6 @@ pub async fn upsert_model_catalog_entry(
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
     get_model_catalog(State(state)).await
-}
-
-pub async fn set_model_catalog_provider_default(
-    State(_state): State<AppState>,
-    Json(_request): Json<ModelCatalogProviderDefaultRequest>,
-) -> Result<Json<ModelCatalogResponse>, ServerError> {
-    Err(ServerError::BadRequest(
-        "model catalog default model is no longer supported; configure [default] provider/adapter/model instead".to_owned(),
-    ))
 }
 
 pub async fn delete_model_catalog_entry(

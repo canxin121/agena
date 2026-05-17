@@ -220,8 +220,6 @@ fn model_catalog_entry_from_http(
     value: HttpModelCatalogEntryResource,
 ) -> ModelCatalogEntryResource {
     ModelCatalogEntryResource {
-        adapter_id: value.adapter_id,
-        provider_id: value.provider_id,
         model_id: value.model_id,
         kind: match value.kind {
             crate::local_api::dto::ModelCatalogEntryKind::Official => {

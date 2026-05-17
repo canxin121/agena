@@ -363,11 +363,8 @@ impl RawConfig {
 
         let raw_default = self.default.unwrap_or_default();
         let raw_runtime = self.runtime.unwrap_or_default();
-        let default = raw_default
-            .clone()
-            .resolve(raw_runtime.default_agent.clone());
-        let mut runtime = RuntimeConfig::from_raw(raw_runtime)?;
-        runtime.default_agent = Some(default.agent.clone());
+        let default = raw_default.clone().resolve();
+        let runtime = RuntimeConfig::from_raw(raw_runtime)?;
         let permission = self.permission.unwrap_or_default();
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         let plugin_options = PluginRuntimeOptions::from_plugins(&plugins)?;
@@ -707,14 +704,12 @@ impl Merge for RawDefaultConfig {
 }
 
 impl RawDefaultConfig {
-    fn resolve(self, legacy_runtime_agent: Option<String>) -> DefaultConfig {
+    fn resolve(self) -> DefaultConfig {
         DefaultConfig {
             provider: normalize_optional_string(self.provider),
             adapter: normalize_optional_string(self.adapter),
             model: normalize_optional_string(self.model),
-            agent: normalize_optional_string(self.agent)
-                .or_else(|| normalize_optional_string(legacy_runtime_agent))
-                .unwrap_or_else(|| "build".to_owned()),
+            agent: normalize_optional_string(self.agent).unwrap_or_else(|| "build".to_owned()),
         }
     }
 
@@ -733,7 +728,7 @@ impl RawDefaultConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawRuntimeConfig {
     pub(crate) provider_http: Option<RawProviderHttpConfig>,
     pub(crate) request_retry: Option<RawRequestRetryConfig>,
@@ -742,7 +737,6 @@ pub(crate) struct RawRuntimeConfig {
     pub(crate) reload: Option<RawRuntimeReloadConfig>,
     pub(crate) janitor: Option<RawRuntimeJanitorConfig>,
     pub(crate) session_cache: Option<RawSessionCacheConfig>,
-    pub(crate) default_agent: Option<String>,
 }
 
 impl Merge for RawRuntimeConfig {
@@ -754,7 +748,6 @@ impl Merge for RawRuntimeConfig {
         merge_option_struct(&mut self.reload, overlay.reload);
         merge_option_struct(&mut self.janitor, overlay.janitor);
         merge_option_struct(&mut self.session_cache, overlay.session_cache);
-        merge_option(&mut self.default_agent, overlay.default_agent);
     }
 }
 
@@ -863,8 +856,6 @@ impl RuntimeConfig {
                 ttl_secs: session_cache_ttl_secs,
                 max_bytes: session_cache_max_bytes,
             },
-            default_agent: normalize_optional_string(raw.default_agent)
-                .or_else(|| Some("build".to_string())),
         })
     }
 }

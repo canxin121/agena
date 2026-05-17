@@ -145,10 +145,6 @@ pub enum ModelCatalogSourceKind {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelCatalogEntryResource {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub adapter_id: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub provider_id: String,
     pub model_id: String,
     pub kind: ModelCatalogEntryKind,
     pub source: ModelCatalogSourceKind,
@@ -208,8 +204,6 @@ impl ModelCatalogEntryResource {
         .map(str::to_owned);
 
         Self {
-            adapter_id: value.adapter_id.clone(),
-            provider_id: value.adapter_id.clone(),
             model_id: value.model_id,
             kind,
             source,
@@ -229,22 +223,9 @@ impl ModelCatalogEntryResource {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelCatalogEntryWriteRequest {
-    #[serde(default)]
-    pub adapter_id: Option<String>,
-    #[serde(default)]
-    pub provider_id: Option<String>,
     pub model_id: String,
     #[serde(flatten)]
     pub definition: CatalogModelDefinition,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ModelCatalogProviderDefaultRequest {
-    #[serde(default)]
-    pub adapter_id: Option<String>,
-    #[serde(default)]
-    pub provider_id: Option<String>,
-    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

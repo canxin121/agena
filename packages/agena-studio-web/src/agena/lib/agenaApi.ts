@@ -240,8 +240,6 @@ export type ModelCatalogSourceKind = 'remote' | 'fallback' | 'cache' | 'custom'
 export type ModelCatalogEntryKind = 'official' | 'custom'
 
 export type ModelCatalogEntry = {
-  adapter_id?: string
-  provider_id?: string
   model_id: string
   kind: ModelCatalogEntryKind
   source: ModelCatalogSourceKind
@@ -268,8 +266,6 @@ export type ModelCatalogResponse = {
 }
 
 export type ModelCatalogEntryWriteRequest = {
-  adapter_id?: string
-  provider_id?: string
   model_id: string
   family?: string | null
   lifecycle?: string | null
@@ -805,11 +801,10 @@ export async function upsertModelCatalogEntry(input: ModelCatalogEntryWriteReque
   })
 }
 
-export async function deleteModelCatalogEntry(modelId: string, adapterId = ''): Promise<ModelCatalogResponse> {
+export async function deleteModelCatalogEntry(modelId: string): Promise<ModelCatalogResponse> {
   const params = new URLSearchParams({
     model_id: modelId,
   })
-  if (adapterId) params.set('adapter_id', adapterId)
   return await apiJson<ModelCatalogResponse>(`/api/v1/model-catalog/entries?${params.toString()}`, {
     method: 'DELETE',
   })

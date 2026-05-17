@@ -361,9 +361,7 @@ impl ModelProvider for GeminiProvider {
             PROVIDER_ID,
             endpoint.as_str(),
             self.api_key.prompt_cache_scope(),
-        )
-        .with_catalog_provider_id("gemini")
-        .with_catalog_visible_model_prefix("gemini");
+        );
         RemoteModelCatalogCache::default()
             .get_or_fetch(&source, || async {
                 let response = self

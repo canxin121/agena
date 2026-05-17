@@ -223,11 +223,11 @@ impl GitlabProvider {
             .unwrap_or(model_id.trim())
     }
 
-    fn models_from_catalog_provider(
+    fn models_from_catalog_record(
         &self,
-        provider: ModelCatalogProviderRecord,
+        catalog: ModelCatalogProviderRecord,
     ) -> Vec<ProviderModel> {
-        provider
+        catalog
             .models
             .into_iter()
             .map(|(catalog_model_id, definition)| {
@@ -268,7 +268,7 @@ impl GitlabProvider {
         })
     }
 
-    async fn catalog_provider_record(&self) -> Result<ModelCatalogProviderRecord, AppError> {
+    async fn catalog_record(&self) -> Result<ModelCatalogProviderRecord, AppError> {
         let remote_url = Self::model_catalog_remote_url();
         let fallback_url = Self::model_catalog_fallback_url();
 
@@ -585,8 +585,8 @@ impl ModelProvider for GitlabProvider {
         );
         RemoteModelCatalogCache::default()
             .get_or_fetch(&source, || async {
-                let provider = self.catalog_provider_record().await?;
-                Ok(self.models_from_catalog_provider(provider))
+                let catalog = self.catalog_record().await?;
+                Ok(self.models_from_catalog_record(catalog))
             })
             .await
     }
@@ -803,20 +803,16 @@ mod tests {
                 .with_header("content-type", "application/json")
                 .with_body(
                     serde_json::json!({
-                        "providers": {
-                            "gitlab": {
-                                "models": {
-                                    "gitlab/duo-chat-sonnet-4-5": {
-                                        "display_name": "GitLab Duo Chat Sonnet 4.5",
-                                        "family": "claude",
-                                        "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
-                                    },
-                                    "gitlab/duo-chat-gpt-5-codex": {
-                                        "display_name": "GitLab Duo Chat GPT-5 Codex",
-                                        "family": "gpt",
-                                        "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
-                                    }
-                                }
+                        "models": {
+                            "duo-chat-sonnet-4-5": {
+                                "display_name": "GitLab Duo Chat Sonnet 4.5",
+                                "family": "claude",
+                                "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
+                            },
+                            "duo-chat-gpt-5-codex": {
+                                "display_name": "GitLab Duo Chat GPT-5 Codex",
+                                "family": "gpt",
+                                "features": { "supported": ["tool_calling", "streaming", "reasoning"] }
                             }
                         }
                     })

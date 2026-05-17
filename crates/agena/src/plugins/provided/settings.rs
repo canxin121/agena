@@ -367,8 +367,8 @@ mod tests {
     fn effective_host_path_defaults_to_resolved_config() {
         assert_eq!(effective_host_path(None).as_deref(), Some("config"));
         assert_eq!(
-            effective_host_path(Some("runtime.default_agent")).as_deref(),
-            Some("config.runtime.default_agent")
+            effective_host_path(Some("default.agent")).as_deref(),
+            Some("config.default.agent")
         );
         assert_eq!(
             effective_host_path(Some("meta.config_path")).as_deref(),

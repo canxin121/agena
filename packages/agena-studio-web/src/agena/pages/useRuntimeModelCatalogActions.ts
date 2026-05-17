@@ -202,7 +202,7 @@ function createModelCatalogVariantDrafts(
 
 export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): ModelCatalogEditableDraft {
   return {
-    adapter_id: entry.adapter_id || entry.provider_id || '',
+    adapter_id: '',
     model_id: entry.model_id,
     family: String(entry.family || ''),
     lifecycle: String(entry.lifecycle || ''),
@@ -321,8 +321,6 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
 
 export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditableDraft): Record<string, unknown> {
   const request = buildModelCatalogWriteRequest(draft) as Record<string, unknown>
-  delete request.adapter_id
-  delete request.provider_id
   delete request.model_id
 
   for (const [key, value] of Object.entries({ ...request })) {
@@ -379,11 +377,11 @@ export function useRuntimeModelCatalogActions(
     }
   }
 
-  async function deleteCatalogEntryAction(modelId: string, adapterId = '') {
+  async function deleteCatalogEntryAction(modelId: string) {
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      const response = await deps.deleteModelCatalogEntry(modelId, adapterId)
+      const response = await deps.deleteModelCatalogEntry(modelId)
       replaceEntries(response.entries ?? [])
       input.actionMessage.value = `Deleted local catalog override ${modelId}.`
       await input.load()

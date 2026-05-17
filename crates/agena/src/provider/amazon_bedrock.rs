@@ -2003,6 +2003,29 @@ fn bedrock_anthropic_budget_for_effort(effort: crate::provider::ReasoningEffort)
     }
 }
 
+fn bedrock_anthropic_effort_for_budget(
+    model: &str,
+    budget_tokens: u32,
+) -> Option<crate::provider::ReasoningEffort> {
+    if !model.to_ascii_lowercase().contains("claude-opus-4-7")
+        && !model.to_ascii_lowercase().contains("claude-opus-4.7")
+    {
+        return None;
+    }
+
+    Some(if budget_tokens <= 4_000 {
+        crate::provider::ReasoningEffort::Low
+    } else if budget_tokens <= 10_000 {
+        crate::provider::ReasoningEffort::Medium
+    } else if budget_tokens <= 16_000 {
+        crate::provider::ReasoningEffort::High
+    } else if budget_tokens < 31_999 {
+        crate::provider::ReasoningEffort::Xhigh
+    } else {
+        crate::provider::ReasoningEffort::Max
+    })
+}
+
 fn bedrock_anthropic_thinking_body(
     model: &str,
     thinking: Option<&ThinkingRequest>,
@@ -2010,9 +2033,15 @@ fn bedrock_anthropic_thinking_body(
     match thinking? {
         ThinkingRequest::Disabled => None,
         ThinkingRequest::Budget { budget_tokens } => {
-            Some(BedrockAnthropicThinkingConfig::Enabled {
+            if let Some(effort) = bedrock_anthropic_effort_for_budget(model, *budget_tokens) {
+                Some(BedrockAnthropicThinkingConfig::Adaptive {
+                    effort: Some(effort.as_str()),
+                })
+            } else {
+                Some(BedrockAnthropicThinkingConfig::Enabled {
                 budget_tokens: *budget_tokens,
-            })
+                })
+            }
         }
         ThinkingRequest::Adaptive { effort }
             if AmazonBedrockProvider::anthropic_model_uses_adaptive_thinking(model) =>
@@ -2778,6 +2807,37 @@ mod tests {
             })
         ));
         assert_eq!(body.temperature, None);
+    }
+
+    #[test]
+    fn native_anthropic_request_coerces_budget_thinking_to_adaptive_for_opus_47() {
+        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+            model: ModelId::new("anthropic.claude-opus-4-7"),
+            system: None,
+            messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: Some(8_192),
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: Some(crate::provider::ThinkingRequest::Budget {
+                budget_tokens: 31_999,
+            }),
+            request_override: Default::default(),
+            response_format: None,
+        });
+
+        assert!(matches!(
+            body.thinking,
+            Some(BedrockAnthropicThinkingConfig::Adaptive {
+                effort: Some("max")
+            })
+        ));
     }
 
     #[test]

@@ -809,6 +809,8 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
                         display_name: mode.display_name.clone(),
                         description: mode.description.clone(),
                         thinking: mode.thinking.clone(),
+                        request_override: mode.request_override.clone(),
+                        adapter_overrides: mode.adapter_overrides.clone(),
                         disabled: false,
                     },
                 )
@@ -977,6 +979,14 @@ fn merge_catalog_thinking_mode(
     }
     if current.thinking.is_none() {
         current.thinking = next.thinking.clone();
+    }
+    merge_speed_mode_request_override_fill_missing(&mut current.request_override, &next.request_override);
+    for (adapter_id, override_patch) in &next.adapter_overrides {
+        let current_patch = current
+            .adapter_overrides
+            .entry(adapter_id.clone())
+            .or_default();
+        merge_speed_mode_request_override_fill_missing(current_patch, override_patch);
     }
     current.disabled |= next.disabled;
 }
@@ -1498,7 +1508,7 @@ mod tests {
         model::{CapabilitySupport, ModelId, ModelMetadata, ModelSpeedModeRequestOverride},
         provider::{
             ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ModelCapabilityFeature,
-            ThinkingRequest,
+            ReasoningEffort, ThinkingRequest,
         },
     };
     use tempfile::tempdir;
@@ -1602,6 +1612,8 @@ mod tests {
                                 display_name: Some("Deep".to_owned()),
                                 description: None,
                                 thinking: None,
+                                request_override: Default::default(),
+                                adapter_overrides: BTreeMap::new(),
                                 disabled: false,
                             },
                         )]),
@@ -2254,6 +2266,99 @@ mod tests {
                 .get("openai")
                 .and_then(|override_patch| override_patch.body_patch.get("service_tier")),
             Some(&serde_json::json!("priority"))
+        );
+    }
+
+    #[test]
+    fn merge_catalog_thinking_mode_fill_missing_preserves_existing_override_values() {
+        let mut current = ConfiguredModelThinkingMode {
+            display_name: Some("Deep".to_owned()),
+            description: None,
+            thinking: Some(ThinkingRequest::Effort {
+                effort: ReasoningEffort::High,
+            }),
+            request_override: ModelSpeedModeRequestOverride {
+                headers: BTreeMap::from([("x-base".to_owned(), "one".to_owned())]),
+                body_patch: BTreeMap::from([(
+                    "reasoning".to_owned(),
+                    serde_json::json!({ "summary": "auto" }),
+                )]),
+            },
+            adapter_overrides: BTreeMap::from([(
+                "openai".to_owned(),
+                ModelSpeedModeRequestOverride {
+                    headers: BTreeMap::from([("x-profile".to_owned(), "deep".to_owned())]),
+                    body_patch: BTreeMap::new(),
+                },
+            )]),
+            disabled: false,
+        };
+        let next = ConfiguredModelThinkingMode {
+            display_name: None,
+            description: Some("More reasoning".to_owned()),
+            thinking: Some(ThinkingRequest::Effort {
+                effort: ReasoningEffort::Low,
+            }),
+            request_override: ModelSpeedModeRequestOverride {
+                headers: BTreeMap::from([
+                    ("x-base".to_owned(), "two".to_owned()),
+                    ("x-extra".to_owned(), "three".to_owned()),
+                ]),
+                body_patch: BTreeMap::from([(
+                    "reasoning".to_owned(),
+                    serde_json::json!({ "summary": "concise" }),
+                )]),
+            },
+            adapter_overrides: BTreeMap::from([(
+                "openai".to_owned(),
+                ModelSpeedModeRequestOverride {
+                    headers: BTreeMap::from([
+                        ("x-profile".to_owned(), "light".to_owned()),
+                        ("x-extra".to_owned(), "adapter".to_owned()),
+                    ]),
+                    body_patch: BTreeMap::new(),
+                },
+            )]),
+            disabled: false,
+        };
+
+        merge_catalog_thinking_mode(&mut current, &next);
+
+        assert_eq!(current.display_name.as_deref(), Some("Deep"));
+        assert_eq!(current.description.as_deref(), Some("More reasoning"));
+        assert_eq!(
+            current.thinking,
+            Some(ThinkingRequest::Effort {
+                effort: ReasoningEffort::High,
+            })
+        );
+        assert_eq!(
+            current.request_override.headers.get("x-base").map(String::as_str),
+            Some("one")
+        );
+        assert_eq!(
+            current.request_override.headers.get("x-extra").map(String::as_str),
+            Some("three")
+        );
+        assert_eq!(
+            current.request_override.body_patch.get("reasoning"),
+            Some(&serde_json::json!({ "summary": "auto" }))
+        );
+        assert_eq!(
+            current
+                .adapter_overrides
+                .get("openai")
+                .and_then(|override_patch| override_patch.headers.get("x-profile"))
+                .map(String::as_str),
+            Some("deep")
+        );
+        assert_eq!(
+            current
+                .adapter_overrides
+                .get("openai")
+                .and_then(|override_patch| override_patch.headers.get("x-extra"))
+                .map(String::as_str),
+            Some("adapter")
         );
     }
 

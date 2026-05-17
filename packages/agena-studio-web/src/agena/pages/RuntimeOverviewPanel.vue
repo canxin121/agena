@@ -636,6 +636,28 @@ onMounted(() => {
               />
             </div>
 
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-thinking-mode-request-override-${index}`">Request Override JSON</label>
+              <textarea
+                :id="`catalog-thinking-mode-request-override-${index}`"
+                v-model="mode.request_override_json"
+                class="input mono"
+                rows="4"
+                placeholder='{"reasoning":{"summary":"auto"},"include":["reasoning.encrypted_content"]}'
+              />
+            </div>
+
+            <div class="field" style="margin-top: 12px">
+              <label class="label" :for="`catalog-thinking-mode-adapter-overrides-${index}`">Adapter Overrides JSON</label>
+              <textarea
+                :id="`catalog-thinking-mode-adapter-overrides-${index}`"
+                v-model="mode.adapter_overrides_json"
+                class="input mono"
+                rows="4"
+                placeholder='{"openai":{"headers":{"x-example":"1"}}}'
+              />
+            </div>
+
             <label
               class="muted"
               :for="`catalog-thinking-mode-disabled-${index}`"

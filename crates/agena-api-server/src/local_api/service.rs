@@ -28,7 +28,7 @@ use agena::{
         ExecutionStatus, Message, MessagePart, PartContent, PermissionRequestPart,
         UserInputRequest, UserInputRequestPart,
     },
-    model::{ModelRef, ModelSpeedModeRequestOverride},
+    model::{AdapterId, ModelRef, ModelSpeedModeRequestOverride},
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,
     session::{Session, SessionGoal, SessionManager},
@@ -1128,7 +1128,13 @@ impl ApiService {
         let thinking_mode = non_empty(request.thinking_mode.as_deref()).map(ToOwned::to_owned);
         let speed_mode = non_empty(request.speed_mode.as_deref()).map(ToOwned::to_owned);
 
-        let thinking = if let Some(thinking_mode_name) = thinking_mode.as_deref() {
+        let resolved_adapter_id = model.adapter_id.clone().or_else(|| {
+            provider_registry
+                .get(model.provider_id.as_str())
+                .and_then(|provider| provider.default_adapter().cloned())
+        });
+
+        let (thinking, thinking_request_override) = if let Some(thinking_mode_name) = thinking_mode.as_deref() {
             let thinking_modes = provider_registry
                 .model_thinking_modes(&model)
                 .map_err(api_error_from_app)?;
@@ -1138,12 +1144,19 @@ impl ApiService {
                     model
                 ))
             })?;
-            thinking_mode.thinking.clone()
+            (
+                thinking_mode.thinking.clone(),
+                resolve_mode_request_override(
+                    &thinking_mode.request_override,
+                    &thinking_mode.adapter_overrides,
+                    resolved_adapter_id.as_ref(),
+                ),
+            )
         } else {
-            None
+            (None, ModelSpeedModeRequestOverride::default())
         };
 
-        let request_override = if let Some(speed_mode_name) = speed_mode.as_deref() {
+        let speed_request_override = if let Some(speed_mode_name) = speed_mode.as_deref() {
             let speed_modes = provider_registry
                 .model_speed_modes(&model)
                 .map_err(api_error_from_app)?;
@@ -1153,22 +1166,16 @@ impl ApiService {
                     model
                 ))
             })?;
-            let resolved_adapter_id = model.adapter_id.clone().or_else(|| {
-                provider_registry
-                    .get(model.provider_id.as_str())
-                    .and_then(|provider| provider.default_adapter().cloned())
-            });
-            let mut request_override = speed_mode.request_override.clone();
-            if let Some(adapter_id) = resolved_adapter_id.as_ref()
-                && let Some(adapter_override) =
-                    speed_mode.adapter_overrides.get(adapter_id.as_str())
-            {
-                request_override = request_override.merged_with(adapter_override);
-            }
-            request_override
+            resolve_mode_request_override(
+                &speed_mode.request_override,
+                &speed_mode.adapter_overrides,
+                resolved_adapter_id.as_ref(),
+            )
         } else {
             ModelSpeedModeRequestOverride::default()
         };
+
+        let request_override = thinking_request_override.merged_with(&speed_request_override);
 
         Ok(agena::session::SessionRunOptions {
             model,
@@ -1383,6 +1390,20 @@ impl ApiService {
             .map(|model| session_resource(model, &message_stats, &child_counts))
             .collect()
     }
+}
+
+fn resolve_mode_request_override(
+    request_override: &ModelSpeedModeRequestOverride,
+    adapter_overrides: &std::collections::BTreeMap<String, ModelSpeedModeRequestOverride>,
+    resolved_adapter_id: Option<&AdapterId>,
+) -> ModelSpeedModeRequestOverride {
+    let mut merged = request_override.clone();
+    if let Some(adapter_id) = resolved_adapter_id.map(AdapterId::as_str)
+        && let Some(adapter_override) = adapter_overrides.get(adapter_id)
+    {
+        merged = merged.merged_with(adapter_override);
+    }
+    merged
 }
 
 fn workspace_resource(

@@ -548,6 +548,8 @@ fn router_thinking_modes(
                 display_name: Some("No Thinking".to_owned()),
                 description: None,
                 thinking: Some(ThinkingRequest::Disabled),
+                request_override: Default::default(),
+                adapter_overrides: BTreeMap::new(),
                 disabled: false,
             },
         );
@@ -567,6 +569,8 @@ fn router_thinking_modes(
                     display_name: Some(format!("Thinking {}", title_case_tokenized(level))),
                     description: None,
                     thinking: Some(ThinkingRequest::Effort { effort }),
+                    request_override: Default::default(),
+                    adapter_overrides: BTreeMap::new(),
                     disabled: false,
                 });
         }
@@ -582,6 +586,8 @@ fn router_thinking_modes(
                     thinking: Some(ThinkingRequest::Budget {
                         budget_tokens: high_budget,
                     }),
+                    request_override: Default::default(),
+                    adapter_overrides: BTreeMap::new(),
                     disabled: false,
                 },
             );
@@ -596,6 +602,8 @@ fn router_thinking_modes(
                     thinking: Some(ThinkingRequest::Budget {
                         budget_tokens: max_budget,
                     }),
+                    request_override: Default::default(),
+                    adapter_overrides: BTreeMap::new(),
                     disabled: false,
                 },
             );
@@ -624,6 +632,8 @@ fn codex_thinking_modes(
                 display_name: Some(format!("Thinking {}", title_case_tokenized(effort_name))),
                 description: normalize_optional_string(level.description.clone()),
                 thinking: Some(ThinkingRequest::Effort { effort }),
+                request_override: Default::default(),
+                adapter_overrides: BTreeMap::new(),
                 disabled: false,
             },
         );
@@ -951,6 +961,8 @@ fn insert_effort_mode(
             display_name: Some(format!("Thinking {}", title_case_tokenized(effort_name))),
             description: None,
             thinking: Some(ThinkingRequest::Effort { effort }),
+            request_override: Default::default(),
+            adapter_overrides: BTreeMap::new(),
             disabled: false,
         });
 }

@@ -44,6 +44,11 @@ function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderMo
       high: {
         display_name: 'High',
         description: 'More reasoning',
+        request_override: {
+          body_patch: {
+            reasoning: { summary: 'auto' },
+          },
+        },
       },
     },
     speed_modes: {
@@ -101,6 +106,16 @@ describe('useRuntimeModelCatalogActions', () => {
             display_name: 'Deep',
             description: 'More reasoning',
             thinking: { type: 'budget', budget_tokens: 30000 },
+            request_override: {
+              body_patch: {
+                reasoning: { summary: 'auto' },
+              },
+            },
+            adapter_overrides: {
+              openai: {
+                headers: { x_reasoning_profile: 'deep' },
+              },
+            },
             disabled: true,
           },
         },
@@ -128,6 +143,24 @@ describe('useRuntimeModelCatalogActions', () => {
         description: 'More reasoning',
         disabled: true,
         thinking_json: JSON.stringify({ type: 'budget', budget_tokens: 30000 }, null, 2),
+        request_override_json: JSON.stringify(
+          {
+            body_patch: {
+              reasoning: { summary: 'auto' },
+            },
+          },
+          null,
+          2,
+        ),
+        adapter_overrides_json: JSON.stringify(
+          {
+            openai: {
+              headers: { x_reasoning_profile: 'deep' },
+            },
+          },
+          null,
+          2,
+        ),
       },
     ])
     expect(draft.speed_modes).toEqual([
@@ -190,6 +223,16 @@ describe('useRuntimeModelCatalogActions', () => {
           description: 'More reasoning',
           disabled: false,
           thinking_json: '',
+          request_override_json: JSON.stringify(
+            {
+              body_patch: {
+                reasoning: { summary: 'auto' },
+              },
+            },
+            null,
+            2,
+          ),
+          adapter_overrides_json: '',
         },
       ],
       speed_modes: [
@@ -264,6 +307,8 @@ describe('useRuntimeModelCatalogActions', () => {
       description: ' More reasoning ',
       disabled: true,
       thinking_json: '{"type":"budget","budget_tokens":30000}',
+      request_override_json: '{"body_patch":{"reasoning":{"summary":"auto"}}}',
+      adapter_overrides_json: '{"openai":{"headers":{"x_reasoning_profile":"deep"}}}',
     })
     draft.speed_modes.push({
       name: ' fast ',
@@ -290,6 +335,14 @@ describe('useRuntimeModelCatalogActions', () => {
         display_name: 'Deep',
         description: 'More reasoning',
         thinking: { type: 'budget', budget_tokens: 30000 },
+        request_override: {
+          body_patch: { reasoning: { summary: 'auto' } },
+        },
+        adapter_overrides: {
+          openai: {
+            headers: { x_reasoning_profile: 'deep' },
+          },
+        },
         disabled: true,
       },
     })
@@ -358,6 +411,8 @@ describe('useRuntimeModelCatalogActions', () => {
       description: '',
       disabled: false,
       thinking_json: '{',
+      request_override_json: '',
+      adapter_overrides_json: '',
     })
     await actions.saveCatalogEntryAction(invalidThinkingDraft)
     expect(calls).toEqual([])
@@ -431,6 +486,11 @@ describe('useRuntimeModelCatalogActions', () => {
         high: {
           display_name: 'High',
           description: 'More reasoning',
+          request_override: {
+            body_patch: {
+              reasoning: { summary: 'auto' },
+            },
+          },
         },
       },
       speed_modes: {

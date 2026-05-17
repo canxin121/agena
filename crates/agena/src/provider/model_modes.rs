@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::LazyLock};
 
 use regex::Regex;
 
-use crate::model::{AdapterId, ModelThinkingMode};
+use crate::model::{AdapterId, ModelSpeedModeRequestOverride, ModelThinkingMode};
 
 use super::{CapabilityFamily, ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 
@@ -113,23 +113,23 @@ fn looks_like_openai_compatible_reasoning_model(model: &str) -> bool {
 
 fn openai_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
     if model.contains("deep-research") {
-        return effort_modes(&[ReasoningEffort::Medium], false);
+        return openai_reasoning_mode_overrides(effort_modes(&[ReasoningEffort::Medium], false));
     }
     if let Some(modes) = gpt5_chat_reasoning_modes(model) {
-        return modes;
+        return openai_reasoning_mode_overrides(modes);
     }
     if GPT5_PRO_RE.is_match(model) {
-        return effort_modes(&[ReasoningEffort::High], false);
+        return openai_reasoning_mode_overrides(effort_modes(&[ReasoningEffort::High], false));
     }
     if let Some(modes) = gpt5_codex_reasoning_modes(model, false) {
-        return modes;
+        return openai_reasoning_mode_overrides(modes);
     }
     if let Some(modes) = versioned_gpt5_reasoning_modes(model, false) {
-        return modes;
+        return openai_reasoning_mode_overrides(modes);
     }
 
     if GPT5_FAMILY_RE.is_match(model) {
-        return effort_modes(
+        return openai_reasoning_mode_overrides(effort_modes(
             &[
                 ReasoningEffort::Minimal,
                 ReasoningEffort::Low,
@@ -137,18 +137,18 @@ fn openai_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
                 ReasoningEffort::High,
             ],
             false,
-        );
+        ));
     }
 
     if model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4") {
-        return effort_modes(
+        return openai_reasoning_mode_overrides(effort_modes(
             &[
                 ReasoningEffort::Low,
                 ReasoningEffort::Medium,
                 ReasoningEffort::High,
             ],
             false,
-        );
+        ));
     }
 
     BTreeMap::new()
@@ -419,6 +419,37 @@ fn adaptive_modes_with_display(
     modes
 }
 
+fn openai_reasoning_mode_overrides(
+    mut modes: BTreeMap<String, ModelThinkingMode>,
+) -> BTreeMap<String, ModelThinkingMode> {
+    let request_override = openai_reasoning_request_override();
+    for mode in modes.values_mut() {
+        if matches!(mode.thinking, Some(ThinkingRequest::Disabled) | None) {
+            continue;
+        }
+        mode.request_override = mode.request_override.merged_with(&request_override);
+    }
+    modes
+}
+
+fn openai_reasoning_request_override() -> ModelSpeedModeRequestOverride {
+    let mut body_patch = BTreeMap::new();
+    body_patch.insert(
+        "reasoning".to_owned(),
+        serde_json::json!({
+            "summary": "auto",
+        }),
+    );
+    body_patch.insert(
+        "include".to_owned(),
+        serde_json::json!(["reasoning.encrypted_content"]),
+    );
+    ModelSpeedModeRequestOverride {
+        headers: BTreeMap::new(),
+        body_patch,
+    }
+}
+
 fn effort_modes(
     efforts: &[ReasoningEffort],
     include_disabled: bool,
@@ -493,6 +524,18 @@ mod tests {
         assert!(modes.contains_key("thinking-high"));
         assert!(modes.contains_key("thinking-xhigh"));
         assert!(!modes.contains_key("thinking-minimal"));
+        assert_eq!(
+            modes
+                .get("thinking-low")
+                .and_then(|mode| mode.request_override.body_patch.get("include")),
+            Some(&serde_json::json!(["reasoning.encrypted_content"]))
+        );
+        assert_eq!(
+            modes
+                .get("thinking-low")
+                .and_then(|mode| mode.request_override.body_patch.get("reasoning")),
+            Some(&serde_json::json!({ "summary": "auto" }))
+        );
     }
 
     #[test]

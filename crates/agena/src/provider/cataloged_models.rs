@@ -383,6 +383,8 @@ mod tests {
                                 thinking: Some(ThinkingRequest::Budget {
                                     budget_tokens: 20_000,
                                 }),
+                                request_override: Default::default(),
+                                adapter_overrides: BTreeMap::new(),
                                 disabled: false,
                             },
                         )]),

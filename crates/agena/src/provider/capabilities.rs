@@ -70,10 +70,18 @@ impl Default for CapabilityRegistry {
                 CapabilityFamilyProfile::new(
                     CapabilityFamily::Bedrock,
                     bedrock_default_capabilities(),
-                    vec![ModelCapabilityRule::new(
-                        ModelMatcher::contains("claude"),
-                        anthropic_claude_capabilities(),
-                    )],
+                    vec![
+                        ModelCapabilityRule::new(
+                            ModelMatcher::contains("opus-4-7")
+                                .or(ModelMatcher::contains("opus-4.7")),
+                            anthropic_claude_capabilities()
+                                .with_temperature_supported(CapabilitySupport::Unsupported),
+                        ),
+                        ModelCapabilityRule::new(
+                            ModelMatcher::contains("claude"),
+                            anthropic_claude_capabilities(),
+                        ),
+                    ],
                 ),
                 CapabilityFamilyProfile::new(
                     CapabilityFamily::Gitlab,
@@ -352,5 +360,17 @@ mod tests {
         assert_eq!(capabilities.image_input, CapabilitySupport::Supported);
         assert_eq!(capabilities.reasoning, CapabilitySupport::Supported);
         assert_eq!(capabilities.structured_output, CapabilitySupport::Supported);
+    }
+
+    #[test]
+    fn bedrock_opus_47_marks_temperature_as_unsupported() {
+        let registry = CapabilityRegistry::default();
+        let capabilities = registry
+            .capabilities_for_family(CapabilityFamily::Bedrock, "anthropic.claude-opus-4-7");
+        assert_eq!(capabilities.reasoning, CapabilitySupport::Supported);
+        assert_eq!(
+            capabilities.temperature_supported,
+            CapabilitySupport::Unsupported
+        );
     }
 }

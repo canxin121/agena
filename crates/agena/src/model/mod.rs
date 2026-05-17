@@ -682,6 +682,10 @@ impl Default for ModelCapabilities {
 }
 
 impl ModelCapabilities {
+    pub fn is_default_placeholder(&self) -> bool {
+        self == &Self::default()
+    }
+
     pub fn text_only() -> Self {
         Self::default()
             .with_tool_calling(CapabilitySupport::Unsupported)
@@ -1085,7 +1089,11 @@ impl Model {
     }
 
     pub fn with_capability_fallbacks(mut self, fallback: &ModelCapabilities) -> Self {
-        self.capabilities = self.capabilities.with_fallbacks_from(fallback);
+        self.capabilities = if self.capabilities.is_default_placeholder() {
+            fallback.clone()
+        } else {
+            self.capabilities.with_fallbacks_from(fallback)
+        };
         self
     }
 
@@ -1207,6 +1215,22 @@ mod tests {
         assert_eq!(
             merged.pricing.as_ref().map(|pricing| pricing.tiers.len()),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn model_capability_fallbacks_replace_default_placeholder_capabilities() {
+        let model = Model::new("bedrock", "anthropic.claude-opus-4-7");
+        let fallback = ModelCapabilities::default()
+            .with_reasoning(CapabilitySupport::Supported)
+            .with_temperature_supported(CapabilitySupport::Unsupported);
+
+        let merged = model.with_capability_fallbacks(&fallback);
+
+        assert_eq!(merged.capabilities.reasoning, CapabilitySupport::Supported);
+        assert_eq!(
+            merged.capabilities.temperature_supported,
+            CapabilitySupport::Unsupported
         );
     }
 }

@@ -2107,6 +2107,7 @@ thinking = { type = "adaptive", effort = "low" }
             core.thinking,
             Some(agena::provider::ThinkingRequest::Adaptive {
                 effort: Some(agena::provider::ReasoningEffort::Low),
+                display: None,
             })
         );
     }

@@ -4,7 +4,7 @@ use regex::Regex;
 
 use crate::model::{AdapterId, ModelThinkingMode};
 
-use super::{CapabilityFamily, ReasoningEffort, ThinkingRequest};
+use super::{CapabilityFamily, ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ModelModeRegistry;
@@ -201,7 +201,7 @@ fn anthropic_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode>
         return BTreeMap::new();
     }
     if model.contains("opus-4-7") || model.contains("opus-4.7") {
-        return effort_modes(
+        return adaptive_modes_with_display(
             &[
                 ReasoningEffort::Low,
                 ReasoningEffort::Medium,
@@ -209,7 +209,7 @@ fn anthropic_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode>
                 ReasoningEffort::Xhigh,
                 ReasoningEffort::Max,
             ],
-            false,
+            Some(ThinkingDisplay::Summarized),
         );
     }
     if model.contains("opus-4-6")
@@ -217,15 +217,12 @@ fn anthropic_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode>
         || model.contains("sonnet-4-6")
         || model.contains("sonnet-4.6")
     {
-        return effort_modes(
-            &[
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-                ReasoningEffort::Max,
-            ],
-            false,
-        );
+        return adaptive_modes(&[
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Max,
+        ]);
     }
     if model.contains("opus-4-5") || model.contains("opus-4.5") {
         return effort_modes(
@@ -276,13 +273,16 @@ fn gemini_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
 
 fn bedrock_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
     if model.contains("claude-opus-4-7") || model.contains("claude-opus-4.7") {
-        return adaptive_modes(&[
-            ReasoningEffort::Low,
-            ReasoningEffort::Medium,
-            ReasoningEffort::High,
-            ReasoningEffort::Xhigh,
-            ReasoningEffort::Max,
-        ]);
+        return adaptive_modes_with_display(
+            &[
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Xhigh,
+                ReasoningEffort::Max,
+            ],
+            Some(ThinkingDisplay::Summarized),
+        );
     }
     if model.contains("claude-opus-4-6") || model.contains("claude-opus-4.6") {
         return adaptive_modes(&[
@@ -397,6 +397,13 @@ fn versioned_gpt5_reasoning_modes(
 }
 
 fn adaptive_modes(efforts: &[ReasoningEffort]) -> BTreeMap<String, ModelThinkingMode> {
+    adaptive_modes_with_display(efforts, None)
+}
+
+fn adaptive_modes_with_display(
+    efforts: &[ReasoningEffort],
+    display: Option<ThinkingDisplay>,
+) -> BTreeMap<String, ModelThinkingMode> {
     let mut modes = BTreeMap::new();
     for effort in efforts {
         modes.insert(
@@ -405,6 +412,7 @@ fn adaptive_modes(efforts: &[ReasoningEffort]) -> BTreeMap<String, ModelThinking
                 .with_display_name(format!("Thinking {}", title_case(effort.as_str())))
                 .with_thinking(ThinkingRequest::Adaptive {
                     effort: Some(*effort),
+                    display,
                 }),
         );
     }
@@ -556,6 +564,25 @@ mod tests {
                 .and_then(|mode| mode.thinking.as_ref()),
             Some(&ThinkingRequest::Adaptive {
                 effort: Some(ReasoningEffort::Low),
+                display: Some(ThinkingDisplay::Summarized),
+            })
+        );
+    }
+
+    #[test]
+    fn anthropic_opus_47_modes_use_adaptive_summarized_thinking() {
+        let modes = default_model_mode_registry().thinking_modes_for_family(
+            CapabilityFamily::Anthropic,
+            None,
+            "claude-opus-4.7",
+        );
+        assert_eq!(
+            modes
+                .get("thinking-medium")
+                .and_then(|mode| mode.thinking.as_ref()),
+            Some(&ThinkingRequest::Adaptive {
+                effort: Some(ReasoningEffort::Medium),
+                display: Some(ThinkingDisplay::Summarized),
             })
         );
     }

@@ -8,7 +8,7 @@ use crate::{
 
 /// Controls extended thinking / reasoning for providers that support it.
 ///
-/// For Anthropic: maps to the `thinking` request field with `budget_tokens`.
+/// For Anthropic: maps to `thinking` plus provider-specific effort/output settings.
 /// For OpenAI reasoning models: maps to `reasoning_effort`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -20,6 +20,8 @@ pub enum ThinkingRequest {
     Adaptive {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effort: Option<ReasoningEffort>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<ThinkingDisplay>,
     },
     Effort {
         effort: ReasoningEffort,
@@ -47,6 +49,22 @@ impl ReasoningEffort {
             Self::High => "high",
             Self::Xhigh => "xhigh",
             Self::Max => "max",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinkingDisplay {
+    Summarized,
+    Omitted,
+}
+
+impl ThinkingDisplay {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Summarized => "summarized",
+            Self::Omitted => "omitted",
         }
     }
 }
@@ -277,6 +295,7 @@ mod tests {
     fn thinking_request_serializes_adaptive_variant_with_optional_effort() {
         let value = ThinkingRequest::Adaptive {
             effort: Some(super::ReasoningEffort::Low),
+            display: Some(super::ThinkingDisplay::Summarized),
         };
 
         let json = serde_json::to_value(&value).expect("serialize adaptive thinking request");
@@ -286,6 +305,7 @@ mod tests {
             serde_json::json!({
                 "type": "adaptive",
                 "effort": "low",
+                "display": "summarized",
             })
         );
     }

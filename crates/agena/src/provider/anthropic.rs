@@ -13,7 +13,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
-        StreamResumePolicy, ThinkingRequest,
+        StreamResumePolicy, ThinkingDisplay, ThinkingRequest,
         auth::AuthData,
         prompt_cache,
         remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
@@ -624,8 +624,8 @@ impl ModelProvider for AnthropicProvider {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
 
-        let thinking_body = anthropic_thinking_body(request.thinking.as_ref());
-        let include_thinking = thinking_body.is_some();
+        let thinking_parts = anthropic_thinking_parts(model.as_str(), request.thinking.as_ref());
+        let include_thinking = thinking_parts.include_thinking();
 
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -663,7 +663,8 @@ impl ModelProvider for AnthropicProvider {
             tools,
             temperature: request.temperature,
             stream: None,
-            thinking: thinking_body,
+            thinking: thinking_parts.thinking,
+            output_config: thinking_parts.output_config,
             stop_sequences: request.stop_sequences.clone(),
             top_p: request.top_p,
             top_k: request.top_k,
@@ -784,6 +785,7 @@ impl ModelProvider for AnthropicProvider {
             messages.as_mut_slice(),
         );
 
+        let thinking_parts = anthropic_thinking_parts(model.as_str(), request.thinking.as_ref());
         let body = AnthropicMessagesRequest {
             model: model.to_string(),
             max_tokens: request.max_output_tokens.unwrap_or(4096),
@@ -792,7 +794,8 @@ impl ModelProvider for AnthropicProvider {
             tools,
             temperature: request.temperature,
             stream: Some(true),
-            thinking: anthropic_thinking_body(request.thinking.as_ref()),
+            thinking: thinking_parts.thinking,
+            output_config: thinking_parts.output_config,
             stop_sequences: request.stop_sequences.clone(),
             top_p: request.top_p,
             top_k: request.top_k,
@@ -823,7 +826,9 @@ impl ModelProvider for AnthropicProvider {
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(self.id.as_str());
         let model_name = model;
-        let include_thinking = anthropic_thinking_body(request.thinking.as_ref()).is_some();
+        let include_thinking =
+            anthropic_thinking_parts(model_name.as_str(), request.thinking.as_ref())
+                .include_thinking();
 
         let stream = async_stream::try_stream! {
             let mut pending_tool_calls: HashMap<usize, AnthropicToolCallState> = HashMap::new();
@@ -1027,12 +1032,20 @@ struct AnthropicMessagesRequest {
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_config: Option<AnthropicOutputConfig>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     stop_sequences: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_k: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct AnthropicOutputConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1193,32 +1206,136 @@ fn map_anthropic_usage(u: AnthropicUsage) -> CompletionUsage {
     .into()
 }
 
-fn anthropic_thinking_body(thinking: Option<&ThinkingRequest>) -> Option<serde_json::Value> {
-    let budget_tokens = match thinking? {
-        ThinkingRequest::Budget { budget_tokens } => *budget_tokens,
-        ThinkingRequest::Adaptive { effort } => match effort {
-            Some(crate::provider::ReasoningEffort::Minimal) => 1_024,
-            Some(crate::provider::ReasoningEffort::Low) => 4_000,
-            Some(crate::provider::ReasoningEffort::Medium) => 10_000,
-            Some(crate::provider::ReasoningEffort::High) | None => 16_000,
-            Some(crate::provider::ReasoningEffort::Xhigh)
-            | Some(crate::provider::ReasoningEffort::Max) => 31_999,
-        },
-        ThinkingRequest::Effort { effort } => match effort {
-            crate::provider::ReasoningEffort::Minimal => 1_024,
-            crate::provider::ReasoningEffort::Low => 4_000,
-            crate::provider::ReasoningEffort::Medium => 10_000,
-            crate::provider::ReasoningEffort::High => 16_000,
-            crate::provider::ReasoningEffort::Xhigh | crate::provider::ReasoningEffort::Max => {
-                31_999
+#[derive(Debug, Default)]
+struct AnthropicThinkingParts {
+    thinking: Option<serde_json::Value>,
+    output_config: Option<AnthropicOutputConfig>,
+}
+
+impl AnthropicThinkingParts {
+    fn include_thinking(&self) -> bool {
+        self.thinking.is_some()
+    }
+}
+
+fn anthropic_model_requires_adaptive_thinking(model: &str) -> bool {
+    let normalized = model.to_ascii_lowercase();
+    normalized.contains("claude-opus-4-7")
+        || normalized.contains("claude-opus-4.7")
+        || normalized.contains("claude-mythos-preview")
+}
+
+fn anthropic_model_supports_adaptive_thinking(model: &str) -> bool {
+    let normalized = model.to_ascii_lowercase();
+    anthropic_model_requires_adaptive_thinking(model)
+        || normalized.contains("claude-opus-4-6")
+        || normalized.contains("claude-opus-4.6")
+        || normalized.contains("claude-sonnet-4-6")
+        || normalized.contains("claude-sonnet-4.6")
+}
+
+fn anthropic_budget_for_effort(effort: crate::provider::ReasoningEffort) -> u32 {
+    match effort {
+        crate::provider::ReasoningEffort::Minimal => 1_024,
+        crate::provider::ReasoningEffort::Low => 4_000,
+        crate::provider::ReasoningEffort::Medium => 10_000,
+        crate::provider::ReasoningEffort::High => 16_000,
+        crate::provider::ReasoningEffort::Xhigh | crate::provider::ReasoningEffort::Max => 31_999,
+    }
+}
+
+fn anthropic_effort_for_budget(
+    model: &str,
+    budget_tokens: u32,
+) -> Option<crate::provider::ReasoningEffort> {
+    anthropic_model_requires_adaptive_thinking(model).then_some(if budget_tokens <= 4_000 {
+        crate::provider::ReasoningEffort::Low
+    } else if budget_tokens <= 10_000 {
+        crate::provider::ReasoningEffort::Medium
+    } else if budget_tokens <= 16_000 {
+        crate::provider::ReasoningEffort::High
+    } else if budget_tokens < 31_999 {
+        crate::provider::ReasoningEffort::Xhigh
+    } else {
+        crate::provider::ReasoningEffort::Max
+    })
+}
+
+fn anthropic_default_display(
+    model: &str,
+    explicit: Option<ThinkingDisplay>,
+) -> Option<ThinkingDisplay> {
+    explicit.or_else(|| {
+        anthropic_model_requires_adaptive_thinking(model).then_some(ThinkingDisplay::Summarized)
+    })
+}
+
+fn anthropic_adaptive_parts(
+    model: &str,
+    effort: Option<crate::provider::ReasoningEffort>,
+    display: Option<ThinkingDisplay>,
+) -> AnthropicThinkingParts {
+    let display = anthropic_default_display(model, display);
+    let mut thinking = serde_json::Map::new();
+    thinking.insert(
+        "type".to_owned(),
+        serde_json::Value::String("adaptive".to_owned()),
+    );
+    if let Some(display) = display {
+        thinking.insert(
+            "display".to_owned(),
+            serde_json::Value::String(display.as_str().to_owned()),
+        );
+    }
+
+    AnthropicThinkingParts {
+        thinking: Some(serde_json::Value::Object(thinking)),
+        output_config: effort.map(|effort| AnthropicOutputConfig {
+            effort: Some(effort.as_str()),
+        }),
+    }
+}
+
+fn anthropic_enabled_parts(budget_tokens: u32) -> AnthropicThinkingParts {
+    AnthropicThinkingParts {
+        thinking: Some(serde_json::json!({
+            "type": "enabled",
+            "budget_tokens": budget_tokens
+        })),
+        output_config: None,
+    }
+}
+
+fn anthropic_thinking_parts(
+    model: &str,
+    thinking: Option<&ThinkingRequest>,
+) -> AnthropicThinkingParts {
+    match thinking {
+        None | Some(ThinkingRequest::Disabled) => AnthropicThinkingParts::default(),
+        Some(ThinkingRequest::Budget { budget_tokens }) => {
+            if let Some(effort) = anthropic_effort_for_budget(model, *budget_tokens) {
+                anthropic_adaptive_parts(model, Some(effort), None)
+            } else {
+                anthropic_enabled_parts(*budget_tokens)
             }
-        },
-        ThinkingRequest::Disabled => return None,
-    };
-    Some(serde_json::json!({
-        "type": "enabled",
-        "budget_tokens": budget_tokens
-    }))
+        }
+        Some(ThinkingRequest::Adaptive { effort, display })
+            if anthropic_model_supports_adaptive_thinking(model) =>
+        {
+            anthropic_adaptive_parts(model, *effort, *display)
+        }
+        Some(ThinkingRequest::Adaptive { effort, .. }) => anthropic_enabled_parts(
+            anthropic_budget_for_effort(effort.unwrap_or(crate::provider::ReasoningEffort::High)),
+        ),
+        Some(ThinkingRequest::Effort { effort })
+            if anthropic_model_supports_adaptive_thinking(model) =>
+        {
+            anthropic_adaptive_parts(model, Some(*effort), None)
+        }
+        Some(ThinkingRequest::Effort { effort }) => {
+            anthropic_enabled_parts(anthropic_budget_for_effort(*effort))
+        }
+    }
 }
 
 fn merge_anthropic_usage(
@@ -1663,6 +1780,126 @@ mod tests {
         assert!(!provider.extra_headers.contains_key("anthropic-beta"));
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].eager_input_streaming, None);
+    }
+
+    #[test]
+    fn adaptive_thinking_on_opus_47_serializes_summarized_display_and_effort() {
+        let parts = anthropic_thinking_parts(
+            "claude-opus-4-7",
+            Some(&ThinkingRequest::Adaptive {
+                effort: Some(crate::provider::ReasoningEffort::Medium),
+                display: None,
+            }),
+        );
+
+        assert_eq!(
+            parts.thinking,
+            Some(serde_json::json!({
+                "type": "adaptive",
+                "display": "summarized",
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(parts.output_config).expect("serialize output config"),
+            serde_json::json!({
+                "effort": "medium",
+            })
+        );
+    }
+
+    #[test]
+    fn budget_thinking_on_opus_47_is_coerced_to_adaptive() {
+        let parts = anthropic_thinking_parts(
+            "claude-opus-4.7",
+            Some(&ThinkingRequest::Budget {
+                budget_tokens: 31_999,
+            }),
+        );
+
+        assert_eq!(
+            parts.thinking,
+            Some(serde_json::json!({
+                "type": "adaptive",
+                "display": "summarized",
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(parts.output_config).expect("serialize output config"),
+            serde_json::json!({
+                "effort": "max",
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_serializes_adaptive_thinking_request_for_opus_47() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/messages")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"thinking\\\":\\{\\\"display\\\":\\\"summarized\\\",\\\"type\\\":\\\"adaptive\\\"\\}"
+                    .to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"output_config\\\":\\{\\\"effort\\\":\\\"medium\\\"\\}".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "claude-opus-4-7",
+                    "stop_reason": "end_turn",
+                    "content": [{
+                        "type": "thinking",
+                        "text": "brief summary"
+                    }, {
+                        "type": "text",
+                        "text": "ok"
+                    }],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = AnthropicProvider::new(
+            reqwest::Client::new(),
+            "ak-test",
+            server.url(),
+            "claude-opus-4-7",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: crate::model::ModelId::new("claude-opus-4-7"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(128),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: Some(ThinkingRequest::Adaptive {
+                    effort: Some(crate::provider::ReasoningEffort::Medium),
+                    display: None,
+                }),
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+        assert_eq!(response.reasoning_text.as_deref(), Some("brief summary"));
     }
 
     #[tokio::test]

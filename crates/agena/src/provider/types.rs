@@ -17,6 +17,10 @@ pub enum ThinkingRequest {
     Budget {
         budget_tokens: u32,
     },
+    Adaptive {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<ReasoningEffort>,
+    },
     Effort {
         effort: ReasoningEffort,
     },
@@ -266,6 +270,23 @@ mod tests {
             ThinkingRequest::Budget {
                 budget_tokens: 4_096,
             }
+        );
+    }
+
+    #[test]
+    fn thinking_request_serializes_adaptive_variant_with_optional_effort() {
+        let value = ThinkingRequest::Adaptive {
+            effort: Some(super::ReasoningEffort::Low),
+        };
+
+        let json = serde_json::to_value(&value).expect("serialize adaptive thinking request");
+
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "adaptive",
+                "effort": "low",
+            })
         );
     }
 }

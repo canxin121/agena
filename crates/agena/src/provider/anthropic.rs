@@ -1196,6 +1196,14 @@ fn map_anthropic_usage(u: AnthropicUsage) -> CompletionUsage {
 fn anthropic_thinking_body(thinking: Option<&ThinkingRequest>) -> Option<serde_json::Value> {
     let budget_tokens = match thinking? {
         ThinkingRequest::Budget { budget_tokens } => *budget_tokens,
+        ThinkingRequest::Adaptive { effort } => match effort {
+            Some(crate::provider::ReasoningEffort::Minimal) => 1_024,
+            Some(crate::provider::ReasoningEffort::Low) => 4_000,
+            Some(crate::provider::ReasoningEffort::Medium) => 10_000,
+            Some(crate::provider::ReasoningEffort::High) | None => 16_000,
+            Some(crate::provider::ReasoningEffort::Xhigh)
+            | Some(crate::provider::ReasoningEffort::Max) => 31_999,
+        },
         ThinkingRequest::Effort { effort } => match effort {
             crate::provider::ReasoningEffort::Minimal => 1_024,
             crate::provider::ReasoningEffort::Low => 4_000,

@@ -2064,6 +2064,54 @@ body_patch = { response_format = "json_schema" }
     }
 
     #[tokio::test]
+    async fn run_options_to_core_resolves_adaptive_thinking_mode() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.bedrock]
+default_adapter = "amazon_bedrock"
+default_model = "anthropic.claude-opus-4-7"
+
+[providers.bedrock.auth]
+mode = "bedrock_sigv4"
+region = "us-east-1"
+access_key_id = "AKIDEXAMPLE"
+secret_access_key = "secret"
+
+[providers.bedrock.adapters.amazon_bedrock]
+enabled = true
+
+[providers.bedrock.adapters.amazon_bedrock.models."anthropic.claude-opus-4-7".thinking_modes.light]
+thinking = { type = "adaptive", effort = "low" }
+"#,
+            "adaptive-thinking-mode",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "adaptive thinking mode").await;
+        let options = RunOptions {
+            model: Some(ModelRef::new("bedrock", "anthropic.claude-opus-4-7")),
+            thinking_mode: Some("light".to_string()),
+            speed_mode: None,
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+
+        let core = run_options_to_core(&state, session_id, &options)
+            .await
+            .expect("adaptive thinking mode should resolve");
+
+        assert_eq!(core.thinking_mode.as_deref(), Some("light"));
+        assert_eq!(
+            core.thinking,
+            Some(agena::provider::ThinkingRequest::Adaptive {
+                effort: Some(agena::provider::ReasoningEffort::Low),
+            })
+        );
+    }
+
+    #[tokio::test]
     async fn run_options_to_core_rejects_unknown_model_thinking_mode() {
         let (state, workspace_root) = test_state_with_config(
             r#"

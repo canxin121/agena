@@ -31,7 +31,7 @@ use crate::{
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy,
-        prompt_cache,
+        ThinkingRequest, prompt_cache,
         remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
         sse, utils, wire_message,
     },
@@ -763,6 +763,10 @@ impl AmazonBedrockProvider {
                 system: (!system_chunks.is_empty()).then_some(system_chunks),
                 messages,
                 tools,
+                thinking: bedrock_anthropic_thinking_body(
+                    model.as_str(),
+                    request.thinking.as_ref(),
+                ),
                 temperature: request.temperature,
             },
         )
@@ -792,6 +796,16 @@ impl AmazonBedrockProvider {
         }
 
         headers
+    }
+
+    fn anthropic_model_uses_adaptive_thinking(model: &str) -> bool {
+        let normalized = model.to_ascii_lowercase();
+        normalized.contains("claude-opus-4-7")
+            || normalized.contains("claude-opus-4.7")
+            || normalized.contains("claude-opus-4-6")
+            || normalized.contains("claude-opus-4.6")
+            || normalized.contains("claude-sonnet-4-6")
+            || normalized.contains("claude-sonnet-4.6")
     }
 
     async fn complete_sigv4_anthropic(
@@ -1970,6 +1984,52 @@ fn signed_sigv4_headers(
     Ok(signing_request.headers().clone())
 }
 
+fn bedrock_anthropic_budget_for_effort(effort: crate::provider::ReasoningEffort) -> u32 {
+    match effort {
+        crate::provider::ReasoningEffort::Minimal => 1_024,
+        crate::provider::ReasoningEffort::Low => 4_000,
+        crate::provider::ReasoningEffort::Medium => 10_000,
+        crate::provider::ReasoningEffort::High => 16_000,
+        crate::provider::ReasoningEffort::Xhigh | crate::provider::ReasoningEffort::Max => 31_999,
+    }
+}
+
+fn bedrock_anthropic_thinking_body(
+    model: &str,
+    thinking: Option<&ThinkingRequest>,
+) -> Option<BedrockAnthropicThinkingConfig> {
+    match thinking? {
+        ThinkingRequest::Disabled => None,
+        ThinkingRequest::Budget { budget_tokens } => {
+            Some(BedrockAnthropicThinkingConfig::Enabled {
+                budget_tokens: *budget_tokens,
+            })
+        }
+        ThinkingRequest::Adaptive { effort }
+            if AmazonBedrockProvider::anthropic_model_uses_adaptive_thinking(model) =>
+        {
+            Some(BedrockAnthropicThinkingConfig::Adaptive {
+                effort: effort.map(crate::provider::ReasoningEffort::as_str),
+            })
+        }
+        ThinkingRequest::Adaptive { effort } => Some(BedrockAnthropicThinkingConfig::Enabled {
+            budget_tokens: bedrock_anthropic_budget_for_effort(
+                effort.unwrap_or(crate::provider::ReasoningEffort::High),
+            ),
+        }),
+        ThinkingRequest::Effort { effort }
+            if AmazonBedrockProvider::anthropic_model_uses_adaptive_thinking(model) =>
+        {
+            Some(BedrockAnthropicThinkingConfig::Adaptive {
+                effort: Some(effort.as_str()),
+            })
+        }
+        ThinkingRequest::Effort { effort } => Some(BedrockAnthropicThinkingConfig::Enabled {
+            budget_tokens: bedrock_anthropic_budget_for_effort(*effort),
+        }),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum OpenAiCompatibleModelList {
@@ -2108,7 +2168,21 @@ struct BedrockAnthropicMessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<BedrockAnthropicEntryDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<BedrockAnthropicThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BedrockAnthropicThinkingConfig {
+    Enabled {
+        budget_tokens: u32,
+    },
+    Adaptive {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effort: Option<&'static str>,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -2632,6 +2706,68 @@ mod tests {
         );
         assert_eq!(body.messages[2].role, "assistant");
         assert_eq!(body.messages[2].content[0].text.as_deref(), Some("After"));
+    }
+
+    #[test]
+    fn native_anthropic_request_includes_budget_thinking_for_legacy_models() {
+        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+            model: ModelId::new("anthropic.claude-sonnet-4-5-20250929-v1:0"),
+            system: None,
+            messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: Some(8_192),
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: Some(crate::provider::ThinkingRequest::Budget {
+                budget_tokens: 4_096,
+            }),
+            request_override: Default::default(),
+            response_format: None,
+        });
+
+        assert!(matches!(
+            body.thinking,
+            Some(BedrockAnthropicThinkingConfig::Enabled {
+                budget_tokens: 4_096
+            })
+        ));
+    }
+
+    #[test]
+    fn native_anthropic_request_includes_adaptive_thinking_for_supported_models() {
+        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+            model: ModelId::new("anthropic.claude-opus-4-7"),
+            system: None,
+            messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: Some(8_192),
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: Some(crate::provider::ThinkingRequest::Adaptive {
+                effort: Some(crate::provider::ReasoningEffort::Low),
+            }),
+            request_override: Default::default(),
+            response_format: None,
+        });
+
+        assert!(matches!(
+            body.thinking,
+            Some(BedrockAnthropicThinkingConfig::Adaptive {
+                effort: Some("low")
+            })
+        ));
     }
 
     #[test]

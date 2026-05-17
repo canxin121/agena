@@ -699,6 +699,19 @@ fn gemini_thinking_config(
     if normalized.contains("gemini-2.5") {
         let thinking_budget = match thinking {
             ThinkingRequest::Budget { budget_tokens } => Some(*budget_tokens),
+            ThinkingRequest::Adaptive { effort } => Some(match effort {
+                Some(ReasoningEffort::Minimal) => 1_024,
+                Some(ReasoningEffort::Low) => 4_096,
+                Some(ReasoningEffort::Medium) => 10_240,
+                Some(ReasoningEffort::High) | None => 16_384,
+                Some(ReasoningEffort::Xhigh) | Some(ReasoningEffort::Max) => {
+                    if normalized.contains("pro") && !normalized.contains("flash") {
+                        32_768
+                    } else {
+                        24_576
+                    }
+                }
+            }),
             ThinkingRequest::Effort { effort } => Some(match effort {
                 ReasoningEffort::Minimal => 1_024,
                 ReasoningEffort::Low => 4_096,
@@ -731,6 +744,15 @@ fn gemini_thinking_config(
                     Some("LOW")
                 }
             }
+            ThinkingRequest::Adaptive { effort } => Some(match effort {
+                Some(ReasoningEffort::High)
+                | Some(ReasoningEffort::Xhigh)
+                | Some(ReasoningEffort::Max)
+                | None => "HIGH",
+                Some(ReasoningEffort::Minimal)
+                | Some(ReasoningEffort::Low)
+                | Some(ReasoningEffort::Medium) => "LOW",
+            }),
             ThinkingRequest::Effort { effort } => Some(match effort {
                 ReasoningEffort::Minimal | ReasoningEffort::Low | ReasoningEffort::Medium => "LOW",
                 ReasoningEffort::High | ReasoningEffort::Xhigh | ReasoningEffort::Max => "HIGH",

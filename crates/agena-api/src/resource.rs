@@ -92,6 +92,8 @@ pub struct RuntimeOperatorResource {
     pub lsp: RuntimeLspResource,
     pub agents: RuntimeAgentsResource,
     pub skills: RuntimeSkillsResource,
+    #[serde(default)]
+    pub ui: agena::plugin::PluginUiCatalog,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

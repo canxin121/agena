@@ -2,13 +2,24 @@ import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import type { Router } from 'vue-router'
 
 import { buildRuntimeSectionPath, sectionTabNavigationItems } from '../pages/runtimePageStateModel'
-import type { RuntimeSkill } from './agenaApi'
+import type { PluginStudioCommand, PluginUiAction, RuntimeSkill } from './agenaApi'
 
-export type CommandSource = 'navigation' | 'runtime-skill' | 'runtime-command' | 'chat-action' | 'workspace-action'
+export type CommandSource =
+  | 'navigation'
+  | 'runtime-skill'
+  | 'runtime-command'
+  | 'plugin-studio'
+  | 'chat-action'
+  | 'workspace-action'
 
 export type CommandContext = {
   input: string
   args: string[]
+}
+
+export type CommandRunResult = {
+  submitText?: string
+  notice?: string
 }
 
 export type CommandItem = {
@@ -17,11 +28,13 @@ export type CommandItem = {
   description: string
   category: string
   source: CommandSource
+  pluginId?: string
+  action?: PluginUiAction
   slash?: string
   aliases?: string[]
   usage?: string
   sourceLabel?: string
-  run: (context?: CommandContext) => void | Promise<void>
+  run: (context?: CommandContext) => void | CommandRunResult | Promise<void | CommandRunResult>
 }
 
 export type CommandPaletteState = {
@@ -35,16 +48,27 @@ export type CommandPaletteState = {
   togglePalette: () => void
   moveHighlight: (delta: number) => void
   runHighlighted: () => Promise<boolean>
-  runSlashCommand: (input: string) => Promise<{ matched: boolean; command?: CommandItem }>
-  runLocalSlashCommand: (input: string) => Promise<{ matched: boolean; command?: CommandItem }>
+  runSlashCommand: (input: string) => Promise<{ matched: boolean; command?: CommandItem; result?: CommandRunResult }>
+  runLocalSlashCommand: (
+    input: string,
+  ) => Promise<{ matched: boolean; command?: CommandItem; result?: CommandRunResult }>
 }
 
 export type CommandPaletteCatalogInput = {
   router: Router
   runtimeSkills: ComputedRef<RuntimeSkill[]>
   runtimeCommands: ComputedRef<RuntimeSkill[]>
+  pluginCommands?: ComputedRef<PluginStudioCommand[]>
   localCommands?: ComputedRef<CommandItem[]>
-  onSelectRuntimeEntry?: (entry: { kind: 'skill' | 'command'; item: RuntimeSkill }) => void | Promise<void>
+  onSelectRuntimeEntry?: (entry: {
+    kind: 'skill' | 'command'
+    item: RuntimeSkill
+    context?: CommandContext
+  }) => void | CommandRunResult | Promise<void | CommandRunResult>
+  onRunPluginAction?: (entry: {
+    command: PluginStudioCommand
+    context?: CommandContext
+  }) => void | CommandRunResult | Promise<void | CommandRunResult>
 }
 
 function normalize(value: string): string {
@@ -73,6 +97,8 @@ export function sourceLabel(source: CommandSource): string {
       return 'Runtime Skill'
     case 'runtime-command':
       return 'Runtime Command'
+    case 'plugin-studio':
+      return 'Plugin UI'
     case 'chat-action':
       return 'Chat Action'
     case 'workspace-action':
@@ -218,6 +244,23 @@ function skillToCommand(skill: RuntimeSkill, source: 'runtime-skill' | 'runtime-
   }
 }
 
+function pluginStudioCommandToCommand(command: PluginStudioCommand): Omit<CommandItem, 'run'> {
+  const slash = command.slash?.trim() || undefined
+  return {
+    id: `plugin-studio.${command.plugin_id}.${command.id}`,
+    title: command.title,
+    description: command.description || 'Plugin-provided Studio command.',
+    category: command.category || 'Plugin',
+    source: 'plugin-studio',
+    pluginId: command.plugin_id,
+    action: command.action,
+    slash,
+    aliases: command.aliases || [],
+    usage: command.usage || slash,
+    sourceLabel: `${sourceLabel('plugin-studio')} · ${command.plugin_id}`,
+  }
+}
+
 function isLocalCommandSource(source: CommandSource): boolean {
   return source === 'navigation' || source === 'chat-action' || source === 'workspace-action'
 }
@@ -226,15 +269,21 @@ export function createCommandPaletteItems(input: CommandPaletteCatalogInput): Co
   return computed<CommandItem[]>(() => {
     const navigation = buildNavigationCommands(input.router)
     const local = input.localCommands?.value || []
+    const pluginCommands = (input.pluginCommands?.value || [])
+      .filter((command) => command.location === 'command_palette' || command.location === 'chat_palette')
+      .map((command) => ({
+        ...pluginStudioCommandToCommand(command),
+        run: (context?: CommandContext) => input.onRunPluginAction?.({ command, context }),
+      }))
     const runtimeSkillCommands = input.runtimeSkills.value.map((skill) => ({
       ...skillToCommand(skill, 'runtime-skill'),
-      run: () => input.onSelectRuntimeEntry?.({ kind: 'skill', item: skill }),
+      run: (context?: CommandContext) => input.onSelectRuntimeEntry?.({ kind: 'skill', item: skill, context }),
     }))
     const runtimeCommands = input.runtimeCommands.value.map((command) => ({
       ...skillToCommand(command, 'runtime-command'),
-      run: () => input.onSelectRuntimeEntry?.({ kind: 'command', item: command }),
+      run: (context?: CommandContext) => input.onSelectRuntimeEntry?.({ kind: 'command', item: command, context }),
     }))
-    return [...navigation, ...local, ...runtimeCommands, ...runtimeSkillCommands]
+    return [...navigation, ...local, ...pluginCommands, ...runtimeCommands, ...runtimeSkillCommands]
   })
 }
 
@@ -288,17 +337,25 @@ export function createCommandPalette(input: CommandPaletteCatalogInput): Command
     return true
   }
 
-  async function runSlashCommand(inputText: string): Promise<{ matched: boolean; command?: CommandItem }> {
+  async function runSlashCommand(inputText: string): Promise<{
+    matched: boolean
+    command?: CommandItem
+    result?: CommandRunResult
+  }> {
     const parsed = parseCommandInput(inputText)
     if (!parsed.slash) return { matched: false }
 
     const command = items.value.find((item) => normalize(item.slash || '') === parsed.slash)
     if (!command) return { matched: false }
-    await command.run({ input: String(inputText || '').trim(), args: parsed.args })
-    return { matched: true, command }
+    const result = (await command.run({ input: String(inputText || '').trim(), args: parsed.args })) || undefined
+    return { matched: true, command, result }
   }
 
-  async function runLocalSlashCommand(inputText: string): Promise<{ matched: boolean; command?: CommandItem }> {
+  async function runLocalSlashCommand(inputText: string): Promise<{
+    matched: boolean
+    command?: CommandItem
+    result?: CommandRunResult
+  }> {
     const parsed = parseCommandInput(inputText)
     if (!parsed.slash) return { matched: false }
 
@@ -306,8 +363,8 @@ export function createCommandPalette(input: CommandPaletteCatalogInput): Command
       (item) => isLocalCommandSource(item.source) && normalize(item.slash || '') === parsed.slash,
     )
     if (!command) return { matched: false }
-    await command.run({ input: String(inputText || '').trim(), args: parsed.args })
-    return { matched: true, command }
+    const result = (await command.run({ input: String(inputText || '').trim(), args: parsed.args })) || undefined
+    return { matched: true, command, result }
   }
 
   return {

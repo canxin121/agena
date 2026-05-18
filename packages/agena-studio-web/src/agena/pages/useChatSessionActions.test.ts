@@ -364,24 +364,25 @@ describe('useChatSessionActions', () => {
     )
   })
 
-  test('sendPrompt shows runtime command fallback notice without submitting a turn', async () => {
+  test('sendPrompt submits runtime command output as the next turn', async () => {
     const deps = createDeps()
     const { input, refreshCalls, syncCalls } = createInput()
     input.composer.value = '/review src/app.ts'
-    input.runSlashCommand = async () => ({ matched: true, command: { title: 'review', source: 'runtime-skill' } })
-    input.localCommandNotice.value =
-      'Runtime skill /review is available in the runtime catalog, but direct execution is not wired in Agena Web yet.'
+    input.runSlashCommand = async () => ({
+      matched: true,
+      command: { title: 'review', source: 'runtime-skill' },
+      result: { submitText: 'review prompt for src/app.ts' },
+    })
 
     const actions = useChatSessionActions(input, deps)
     await actions.sendPrompt()
 
     expect(input.composer.value).toBe('')
-    expect(input.localCommandNotice.value).toBe(
-      'Runtime skill /review is available in the runtime catalog, but direct execution is not wired in Agena Web yet.',
+    expect(deps.calls.includes('submitTurn:3:review prompt for src/app.ts:anthropic:anthropic:claude-opus-4-7::')).toBe(
+      true,
     )
-    expect(refreshCalls).toEqual([])
-    expect(syncCalls).toEqual([])
-    expect(deps.calls.some((item) => item.startsWith('submitTurn:'))).toBe(false)
+    expect(refreshCalls).toEqual([false])
+    expect(syncCalls).toEqual(['sync'])
   })
 
   test('sendPrompt allows local slash commands before a session is selected', async () => {

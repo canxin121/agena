@@ -1283,6 +1283,15 @@ impl Backend {
             .statusline_segments()
     }
 
+    pub fn plugin_tui_content_blocks(
+        &self,
+    ) -> Vec<agena::plugin::PluginTuiContentBlockCatalogItem> {
+        self.runtime
+            .current_snapshot()
+            .plugin_manager()
+            .tui_content_blocks()
+    }
+
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }

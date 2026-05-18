@@ -6246,6 +6246,10 @@ impl App {
                 "plugin"
             }
         ));
+        let tui_blocks = self.backend.plugin_tui_content_blocks().len();
+        if tui_blocks > 0 {
+            parts.push(format!("tui_blocks {tui_blocks}"));
+        }
         if let Some(theme) = self.plugin_theme.as_ref() {
             parts.push(format!("theme {}", theme.id));
         }

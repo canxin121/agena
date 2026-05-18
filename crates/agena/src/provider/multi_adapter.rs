@@ -132,10 +132,12 @@ impl MultiAdapterProvider {
         adapter_id: Option<&AdapterId>,
         request: &mut CompletionRequest,
     ) {
-        let field = self
-            .model_metadata_for_adapter(adapter_id, &request.model)
-            .assistant_reasoning_field;
-        chat_wire::backfill_assistant_reasoning_field_on_request(request, field.as_deref());
+        let metadata = self.model_metadata_for_adapter(adapter_id, &request.model);
+        chat_wire::backfill_assistant_reasoning_field_on_request(
+            request,
+            metadata.assistant_reasoning_field.as_deref(),
+            metadata.assistant_reasoning_interleaved.unwrap_or(false),
+        );
     }
 }
 

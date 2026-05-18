@@ -276,6 +276,9 @@ export type ModelCatalogEntry = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  default_temperature?: string | null
+  default_top_p?: string | null
+  default_top_k?: number | null
   assistant_reasoning_interleaved?: boolean | null
   assistant_reasoning_field?: string | null
   output_modalities?: string[] | null
@@ -334,6 +337,9 @@ export type ModelCatalogEntryWriteRequest = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  default_temperature?: string | null
+  default_top_p?: string | null
+  default_top_k?: number | null
   assistant_reasoning_interleaved?: boolean | null
   assistant_reasoning_field?: string | null
   output_modalities?: string[] | null
@@ -399,6 +405,9 @@ export type ProviderModelMetadata = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  default_temperature?: string | null
+  default_top_p?: string | null
+  default_top_k?: number | null
   assistant_reasoning_interleaved?: boolean | null
   assistant_reasoning_field?: string | null
   output_modalities?: string[] | null

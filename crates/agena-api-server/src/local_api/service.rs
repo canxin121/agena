@@ -1215,6 +1215,9 @@ impl ApiService {
                 .filter(|value| !value.is_empty())
                 .map(str::to_ascii_lowercase)
         });
+        let temperature = request
+            .temperature
+            .or_else(|| metadata.parsed_default_temperature());
 
         Ok(agena::session::SessionRunOptions {
             model,
@@ -1224,7 +1227,7 @@ impl ApiService {
             thinking,
             request_override,
             system: non_empty(request.system.as_deref()).map(ToOwned::to_owned),
-            temperature: request.temperature,
+            temperature,
             max_output_tokens: request.max_output_tokens,
             agent_profile: non_empty(request.agent_profile.as_deref()).map(ToOwned::to_owned),
             max_turn_loops: request.max_turn_loops,

@@ -69,6 +69,12 @@ pub struct CatalogModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_temperature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_p: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_interleaved: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
@@ -103,6 +109,9 @@ impl CatalogModelDefinition {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.default_temperature.is_none()
+            && self.default_top_p.is_none()
+            && self.default_top_k.is_none()
             && self.assistant_reasoning_interleaved.is_none()
             && self.assistant_reasoning_field.is_none()
             && self.output_modalities.is_empty()
@@ -130,6 +139,9 @@ impl CatalogModelDefinition {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity,
+            default_temperature: self.default_temperature,
+            default_top_p: self.default_top_p,
+            default_top_k: self.default_top_k,
             assistant_reasoning_interleaved: self.assistant_reasoning_interleaved,
             assistant_reasoning_field: self.assistant_reasoning_field,
             output_modalities: self.output_modalities,
@@ -192,6 +204,12 @@ pub struct ModelCatalogEntryRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_temperature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_p: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_interleaved: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
@@ -223,6 +241,9 @@ impl ModelCatalogEntryRecord {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity.clone(),
+            default_temperature: self.default_temperature.clone(),
+            default_top_p: self.default_top_p.clone(),
+            default_top_k: self.default_top_k,
             assistant_reasoning_interleaved: self.assistant_reasoning_interleaved,
             assistant_reasoning_field: self.assistant_reasoning_field.clone(),
             output_modalities: self.output_modalities.clone(),
@@ -330,6 +351,9 @@ impl ModelCatalogSnapshot {
             supports_parallel_tool_calls: definition.supports_parallel_tool_calls,
             supports_verbosity: definition.supports_verbosity,
             default_verbosity: definition.default_verbosity.clone(),
+            default_temperature: definition.default_temperature.clone(),
+            default_top_p: definition.default_top_p.clone(),
+            default_top_k: definition.default_top_k,
             assistant_reasoning_interleaved: definition.assistant_reasoning_interleaved,
             assistant_reasoning_field: definition.assistant_reasoning_field.clone(),
             output_modalities: definition.output_modalities.clone(),
@@ -811,6 +835,9 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         supports_parallel_tool_calls: model.metadata.supports_parallel_tool_calls,
         supports_verbosity: model.metadata.supports_verbosity,
         default_verbosity: model.metadata.default_verbosity.clone(),
+        default_temperature: model.metadata.default_temperature.clone(),
+        default_top_p: model.metadata.default_top_p.clone(),
+        default_top_k: model.metadata.default_top_k,
         assistant_reasoning_interleaved: model.metadata.assistant_reasoning_interleaved,
         assistant_reasoning_field: model.metadata.assistant_reasoning_field.clone(),
         output_modalities: model.metadata.output_modalities.clone(),
@@ -959,6 +986,15 @@ fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &Catalog
     }
     if current.default_verbosity.is_none() {
         current.default_verbosity = next.default_verbosity.clone();
+    }
+    if current.default_temperature.is_none() {
+        current.default_temperature = next.default_temperature.clone();
+    }
+    if current.default_top_p.is_none() {
+        current.default_top_p = next.default_top_p.clone();
+    }
+    if current.default_top_k.is_none() {
+        current.default_top_k = next.default_top_k;
     }
     if current.assistant_reasoning_interleaved.is_none() {
         current.assistant_reasoning_interleaved = next.assistant_reasoning_interleaved;
@@ -1130,6 +1166,15 @@ fn merge_public_source_catalog_definition(
     }
     if current.default_verbosity.is_none() {
         current.default_verbosity = next.default_verbosity.clone();
+    }
+    if current.default_temperature.is_none() {
+        current.default_temperature = next.default_temperature.clone();
+    }
+    if current.default_top_p.is_none() {
+        current.default_top_p = next.default_top_p.clone();
+    }
+    if current.default_top_k.is_none() {
+        current.default_top_k = next.default_top_k;
     }
     if current.assistant_reasoning_interleaved.is_none() {
         current.assistant_reasoning_interleaved = next.assistant_reasoning_interleaved;
@@ -2228,6 +2273,26 @@ mod tests {
             merged.appendable_model_ids.is_empty(),
             "official public sources should not append every catalog model into provider /models"
         );
+    }
+
+    #[test]
+    fn catalog_definition_from_model_preserves_sampling_defaults() {
+        let model = Model::new("openai", "google/gemini-2.5-pro").with_metadata(
+            crate::provider::ModelMetadata::default()
+                .with_default_temperature("1.0")
+                .with_default_top_p("0.95")
+                .with_default_top_k(64),
+        );
+
+        let definition = catalog_definition_from_model(&model);
+        assert_eq!(definition.default_temperature.as_deref(), Some("1.0"));
+        assert_eq!(definition.default_top_p.as_deref(), Some("0.95"));
+        assert_eq!(definition.default_top_k, Some(64));
+
+        let record = ModelCatalogSnapshot::entry_record("google/gemini-2.5-pro", &definition, false);
+        assert_eq!(record.default_temperature.as_deref(), Some("1.0"));
+        assert_eq!(record.default_top_p.as_deref(), Some("0.95"));
+        assert_eq!(record.default_top_k, Some(64));
     }
 
     #[test]

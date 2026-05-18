@@ -584,6 +584,12 @@ pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_temperature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_p: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_interleaved: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
@@ -615,6 +621,9 @@ impl ConfiguredModelDefinition {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.default_temperature.is_none()
+            && self.default_top_p.is_none()
+            && self.default_top_k.is_none()
             && self.assistant_reasoning_interleaved.is_none()
             && self.assistant_reasoning_field.is_none()
             && self.output_modalities.is_empty()
@@ -664,6 +673,15 @@ impl ConfiguredModelDefinition {
         }
         if let Some(default_verbosity) = self.default_verbosity.clone() {
             metadata = metadata.with_default_verbosity(default_verbosity);
+        }
+        if let Some(default_temperature) = self.default_temperature.clone() {
+            metadata = metadata.with_default_temperature(default_temperature);
+        }
+        if let Some(default_top_p) = self.default_top_p.clone() {
+            metadata = metadata.with_default_top_p(default_top_p);
+        }
+        if let Some(default_top_k) = self.default_top_k {
+            metadata = metadata.with_default_top_k(default_top_k);
         }
         if let Some(assistant_reasoning_interleaved) = self.assistant_reasoning_interleaved {
             metadata =

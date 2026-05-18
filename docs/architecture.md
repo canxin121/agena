@@ -317,6 +317,7 @@ Plugin manifest defines:
 - tags/search terms.
 - loading, plan-mode, and streaming policy.
 - host capabilities.
+- UI contributions split into TUI (`ui.tui`) and Studio (`ui.studio`) surfaces.
 
 Core registers runtime-provided static plugins during runtime build, including:
 
@@ -347,7 +348,7 @@ Plugin host can invoke hooks for:
 - pre_turn/post_turn.
 - notification.
 
-Host callbacks allow plugins to ask user input, spawn subagents, list/invoke entries, read and reload config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register entries/agents/hooks/themes/statusline segments, and more.
+Host callbacks allow plugins to ask user input, spawn subagents, list/invoke entries, read and reload config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register entries/agents/hooks/themes/statusline segments, and more. Static UI contributions live in the manifest, while dynamic statusline/theme updates still flow through host callbacks and are merged into the same UI catalog.
 
 ## Permission architecture
 
@@ -417,6 +418,8 @@ crates/agena runtime/session/event/db
 - optional UI password.
 - optional UI static directory.
 - optional CORS allowlist.
+
+Studio Web reads plugin UI from the runtime/plugin API rather than from a separate front-end registry. `GET /api/v1/runtime` includes `operator.ui` for bootstrap, `GET /api/v1/plugins/ui` returns the same unified catalog on demand, and plugin command/control actions are executed through `/api/v1/plugins/{plugin_id}/ui/actions/{action_id}`.
 
 UI auth is a Studio-level middleware:
 

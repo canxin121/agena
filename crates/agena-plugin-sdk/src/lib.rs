@@ -27,8 +27,11 @@ pub use host_api::{
 };
 pub use manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
-    PathAccessSpec, PathKind, PluginManifest, PluginToolDecl, ToolDescriptionMode,
-    ToolLoadPriority, ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    PathAccessSpec, PathKind, PluginManifest, PluginStudioCommand, PluginStudioControl,
+    PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView, PluginToolDecl,
+    PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
+    PluginUiContributions, PluginUiThemePalette, ToolDescriptionMode, ToolLoadPriority,
+    ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 

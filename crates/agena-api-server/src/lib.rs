@@ -106,7 +106,16 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/project/git/init", post(rest::init_git_repository))
             .route("/api/v1/vcs/diff/raw", get(rest::get_vcs_diff_raw))
             .route("/api/v1/plugins", get(rest::list_plugins))
+            .route("/api/v1/plugins/ui", get(rest::get_plugin_ui_catalog))
+            .route(
+                "/api/v1/plugins/ui/invoke-tool",
+                post(rest::invoke_plugin_ui_tool),
+            )
             .route("/api/v1/plugins/{plugin_id}", get(rest::get_plugin))
+            .route(
+                "/api/v1/plugins/{plugin_id}/ui/actions/{action_id}",
+                post(rest::run_plugin_ui_action),
+            )
             .route(
                 "/api/v1/plugins/{plugin_id}/logs",
                 get(rest::list_plugin_logs),

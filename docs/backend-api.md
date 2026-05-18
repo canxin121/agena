@@ -340,6 +340,7 @@ If-Match: <session.version>
 - `operator.lsp`
 - `operator.agents`
 - `operator.skills`
+- `operator.ui`
 
 ### Settings
 
@@ -416,8 +417,11 @@ Path 使用点分语法。带点的 table key 用引号包起来，例如 `plugi
 | Method | Path                                    | 说明                                              |
 | ------ | --------------------------------------- | ------------------------------------------------- |
 | GET    | `/api/v1/plugins`                       | plugin runtime status list                        |
+| GET    | `/api/v1/plugins/ui`                    | 当前 runtime 的统一 plugin UI catalog             |
+| POST   | `/api/v1/plugins/ui/invoke-tool`        | Studio/TUI 支持面直接调用 plugin tool             |
 | GET    | `/api/v1/plugins/{plugin_id}`           | plugin inspect，包含 status、manifest、authority  |
 | GET    | `/api/v1/plugins/{plugin_id}/logs`      | plugin retained logs，query: `after_seq`、`limit` |
+| POST   | `/api/v1/plugins/{plugin_id}/ui/actions/{action_id}` | 执行 manifest Studio UI action       |
 | POST   | `/api/v1/plugins/marketplace/search`    | 搜索 registry                                     |
 | POST   | `/api/v1/plugins/marketplace/sync`      | 同步 registry index                               |
 | GET    | `/api/v1/plugins/marketplace/installed` | 已安装 marketplace plugins                        |
@@ -425,6 +429,68 @@ Path 使用点分语法。带点的 table key 用引号包起来，例如 `plugi
 | POST   | `/api/v1/plugins/marketplace/install`   | 安装 plugin                                       |
 | POST   | `/api/v1/plugins/marketplace/uninstall` | 卸载 plugin                                       |
 | POST   | `/api/v1/plugins/marketplace/upgrade`   | 升级一个或全部 plugin                             |
+
+`GET /api/v1/plugins/ui` 返回 plugin host 聚合后的 UI catalog，形状为：
+
+```json
+{
+  "catalog": {
+    "tui": {
+      "statusline_segments": [],
+      "themes": [],
+      "content_blocks": []
+    },
+    "studio": {
+      "commands": [],
+      "controls": [],
+      "views": []
+    }
+  }
+}
+```
+
+`operator.ui` 在 `GET /api/v1/runtime` 中提供同一个 catalog，方便 Studio bootstrap 时一次拿到 runtime 状态和 plugin UI。
+
+`POST /api/v1/plugins/ui/invoke-tool` 请求：
+
+```json
+{
+  "plugin_id": "project-helper",
+  "tool": "summarize",
+  "input": { "scope": "workspace" },
+  "session_id": 42
+}
+```
+
+`plugin_id` 可省略；省略时 `tool` 按 exposed tool name 查找。带 `plugin_id` 时，`tool` 可以是 plugin manifest 中的原始 tool name，也可以是 registry 暴露名。`input` 必须是 JSON object 或 null。
+
+响应：
+
+```json
+{
+  "plugin_id": "project-helper",
+  "tool": "project-helper/summarize",
+  "title": "summarize",
+  "output_text": "Summary...",
+  "payload": {},
+  "metadata": {}
+}
+```
+
+`POST /api/v1/plugins/{plugin_id}/ui/actions/{action_id}` 执行 manifest 中 `ui.studio.commands`、`ui.studio.controls` 或 `ui.studio.views[*].controls` 对应的 action。请求 body 可传：
+
+```json
+{
+  "input": { "scope": "current-session" },
+  "session_id": 42
+}
+```
+
+如果 action 是 `invoke_tool`，后端会把 manifest action 自带的 `input` 和请求 `input` 合并，请求字段覆盖默认字段，然后通过 plugin host 执行 tool。`open_route`、`open_url`、`submit_prompt` 和 `none` 不在后端产生副作用，响应会原样返回 action，Studio 前端负责本地行为。
+
+Studio controls 会通过同一个 action endpoint 执行。按钮不额外传值；`select`、`toggle`/`checkbox`/`switch`、`text`、`number` 等输入型 controls 会把当前值放到请求 `input.value`，再按上面的合并规则交给 `invoke_tool` action。
+
+Direct UI invocation 会经过 tool registry 和 permission check。当前没有交互式 permission confirmation 响应通道；如果调用需要 ask 或被 deny，接口返回 409。
 
 Marketplace search/install 请求示例：
 

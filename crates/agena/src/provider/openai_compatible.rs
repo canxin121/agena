@@ -15,7 +15,7 @@ use crate::{
         CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, StreamResumePolicy,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
-            request_to_chat_messages, tools_to_chat_definitions,
+            tools_to_chat_definitions,
         },
         prompt_cache,
         remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
@@ -123,10 +123,12 @@ impl OpenAiCompatibleProvider {
     }
 
     fn is_dashscope_compatible(&self) -> bool {
-        url::Url::parse(self.base_url.as_str())
-            .ok()
-            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
-            .is_some_and(|host| host.contains("dashscope") && host.contains("aliyuncs.com"))
+        self.id.eq_ignore_ascii_case("alibaba-cn")
+            || self.id.to_ascii_lowercase().contains("dashscope")
+            || url::Url::parse(self.base_url.as_str())
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+                .is_some_and(|host| host.contains("dashscope") && host.contains("aliyuncs.com"))
     }
 
     fn dashscope_reasoning_profile(model: &str) -> Option<DashscopeReasoningProfile> {
@@ -157,6 +159,11 @@ impl OpenAiCompatibleProvider {
     fn is_dashscope_reasoning_model(&self, model: &ModelId) -> bool {
         self.is_dashscope_compatible()
             && Self::dashscope_reasoning_profile(model.as_str()).is_some()
+    }
+
+    fn assistant_reasoning_field_for_model(&self, model: &ModelId) -> Option<&'static str> {
+        self.is_dashscope_reasoning_model(model)
+            .then_some("reasoning_content")
     }
 
     fn apply_dashscope_reasoning_overrides(
@@ -882,6 +889,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
         let model = request.model.clone();
         let prompt_cache_key = request.prompt_cache_key.clone();
         let mut request_override = request.request_override.clone();
+        let assistant_reasoning_field = self.assistant_reasoning_field_for_model(&model);
         self.apply_dashscope_reasoning_overrides(
             &model,
             request.thinking.as_ref(),
@@ -890,7 +898,10 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
         let body = ChatCompletionRequest {
             model: model.to_string(),
-            messages: request_to_chat_messages(&request),
+            messages: chat_wire::request_to_chat_messages_with_assistant_reasoning_field(
+                &request,
+                assistant_reasoning_field,
+            ),
             tools: (!request.tools.is_empty())
                 .then(|| tools_to_chat_definitions(request.tools.as_slice())),
             temperature: request.temperature,
@@ -948,6 +959,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
         let model = request.model.clone();
         let prompt_cache_key = request.prompt_cache_key.clone();
         let mut request_override = request.request_override.clone();
+        let assistant_reasoning_field = self.assistant_reasoning_field_for_model(&model);
         self.apply_dashscope_reasoning_overrides(
             &model,
             request.thinking.as_ref(),
@@ -956,7 +968,10 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
         let body = ChatCompletionRequest {
             model: model.to_string(),
-            messages: request_to_chat_messages(&request),
+            messages: chat_wire::request_to_chat_messages_with_assistant_reasoning_field(
+                &request,
+                assistant_reasoning_field,
+            ),
             tools: (!request.tools.is_empty())
                 .then(|| tools_to_chat_definitions(request.tools.as_slice())),
             temperature: request.temperature,
@@ -1255,6 +1270,20 @@ mod tests {
 
     fn sample_png_data_url() -> &'static str {
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO9W7tYAAAAASUVORK5CYII="
+    }
+
+    fn assistant_message_with_reasoning(reasoning: &str, answer: &str) -> Message {
+        Message::prompt_parts(
+            crate::role::Role::Assistant,
+            vec![
+                PartContent::Reasoning(crate::message::ReasoningPart {
+                    summary: vec![reasoning.to_owned()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                }),
+                PartContent::text(answer),
+            ],
+        )
     }
 
     #[test]
@@ -2141,6 +2170,69 @@ mod tests {
                 thinking: Some(crate::provider::ThinkingRequest::Effort {
                     effort: crate::provider::ReasoningEffort::High,
                 }),
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+    }
+
+    #[tokio::test]
+    async fn complete_dashscope_round_trips_assistant_reasoning_content() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/compatible-mode/v1/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"reasoning_content\\\":\\\"Plan carefully\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"enable_thinking\\\":true".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "qwen-plus",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "alibaba-cn",
+            reqwest::Client::new(),
+            "sk-test",
+            format!("{}/compatible-mode/v1", server.url()),
+            "qwen-plus",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("qwen-plus"),
+                system: None,
+                messages: vec![
+                    assistant_message_with_reasoning("Plan carefully", "Intermediate answer"),
+                    Message::prompt_text(crate::role::Role::User, "continue"),
+                ],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
                 verbosity: None,
                 request_override: Default::default(),
                 response_format: None,

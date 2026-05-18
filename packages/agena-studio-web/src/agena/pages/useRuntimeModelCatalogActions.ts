@@ -40,6 +40,7 @@ export type ModelCatalogEditableDraft = {
   display_name: string
   origin: string
   description: string
+  assistant_reasoning_field: string
   output_modalities_json: string
   pricing_json: string
   tool_calling: boolean
@@ -192,6 +193,7 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
     display_name: '',
     origin: '',
     description: '',
+    assistant_reasoning_field: '',
     output_modalities_json: '',
     pricing_json: '',
     tool_calling: false,
@@ -283,6 +285,7 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     display_name: String(entry.display_name || ''),
     origin: String(entry.origin || ''),
     description: String(entry.description || ''),
+    assistant_reasoning_field: String(entry.assistant_reasoning_field || ''),
     output_modalities_json: stringifyJsonValue(entry.output_modalities || null),
     pricing_json: stringifyJsonValue(entry.pricing || null),
     tool_calling: readCapabilityFlag(entry, 'tool_calling'),
@@ -310,6 +313,7 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
     display_name: String(model.display_name || ''),
     origin: '',
     description: String(model.metadata?.description || ''),
+    assistant_reasoning_field: String(model.metadata?.assistant_reasoning_field || ''),
     output_modalities_json: stringifyJsonValue(model.metadata?.output_modalities || null),
     pricing_json: stringifyJsonValue(model.metadata?.pricing || null),
     tool_calling: readCapabilityFlag(model, 'tool_calling'),
@@ -451,6 +455,7 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
     display_name: normalizeOptionalText(draft.display_name),
     origin: normalizeOptionalText(draft.origin),
     description: normalizeOptionalText(draft.description),
+    assistant_reasoning_field: normalizeOptionalText(draft.assistant_reasoning_field),
     output_modalities: normalizeOptionalStringArray(draft.output_modalities_json, 'Output modalities'),
     pricing: normalizeOptionalJsonObject(draft.pricing_json, 'Pricing') as ProviderModelPricing | null,
     thinking_modes: buildModelCatalogThinkingModes(draft.thinking_modes),

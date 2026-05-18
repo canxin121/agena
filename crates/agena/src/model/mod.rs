@@ -478,6 +478,8 @@ pub struct ModelMetadata {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -497,6 +499,7 @@ impl ModelMetadata {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.assistant_reasoning_field.is_none()
             && self.output_modalities.is_empty()
             && self.pricing.is_none()
     }
@@ -548,6 +551,15 @@ impl ModelMetadata {
 
     pub fn with_default_verbosity(mut self, default_verbosity: impl Into<String>) -> Self {
         self.default_verbosity = Some(default_verbosity.into());
+        self
+    }
+
+    pub fn with_assistant_reasoning_field(
+        mut self,
+        assistant_reasoning_field: impl Into<String>,
+    ) -> Self {
+        self.assistant_reasoning_field =
+            normalize_assistant_reasoning_field(Some(assistant_reasoning_field.into()));
         self
     }
 
@@ -658,6 +670,9 @@ impl ModelMetadata {
         if self.default_verbosity.is_none() {
             self.default_verbosity = fallback.default_verbosity.clone();
         }
+        if self.assistant_reasoning_field.is_none() {
+            self.assistant_reasoning_field = fallback.assistant_reasoning_field.clone();
+        }
         if self.output_modalities.is_empty() {
             self.output_modalities = fallback.output_modalities.clone();
         }
@@ -671,6 +686,17 @@ impl ModelMetadata {
 fn model_only_supports_medium_verbosity(model_id: &str) -> bool {
     let lowered = model_id.trim().to_ascii_lowercase();
     lowered.contains("gpt-5") && lowered.contains("-chat")
+}
+
+fn normalize_assistant_reasoning_field(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let normalized = raw.trim().to_ascii_lowercase();
+        matches!(
+            normalized.as_str(),
+            "reasoning_content" | "reasoning_details"
+        )
+        .then_some(normalized)
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1258,6 +1284,7 @@ mod tests {
             .with_supports_parallel_tool_calls(true)
             .with_supports_verbosity(true)
             .with_default_verbosity("low")
+            .with_assistant_reasoning_field("reasoning_details")
             .with_output_modalities(["text".to_owned(), "image".to_owned()])
             .with_pricing(ModelPricing {
                 input_usd_per_million_tokens: Some("1.25".to_owned()),
@@ -1291,6 +1318,10 @@ mod tests {
         assert_eq!(merged.supports_parallel_tool_calls, Some(true));
         assert_eq!(merged.supports_verbosity, Some(true));
         assert_eq!(merged.default_verbosity.as_deref(), Some("low"));
+        assert_eq!(
+            merged.assistant_reasoning_field.as_deref(),
+            Some("reasoning_details")
+        );
         assert_eq!(merged.output_modalities, vec!["text", "image"]);
         assert_eq!(
             merged
@@ -1340,6 +1371,18 @@ mod tests {
 
         let supported = ModelMetadata::default().with_supports_parallel_tool_calls(true);
         assert!(supported.supports_parallel_tool_calls_for_model());
+    }
+
+    #[test]
+    fn model_metadata_normalizes_supported_assistant_reasoning_fields() {
+        let metadata = ModelMetadata::default().with_assistant_reasoning_field("Reasoning_Details");
+        assert_eq!(
+            metadata.assistant_reasoning_field.as_deref(),
+            Some("reasoning_details")
+        );
+
+        let invalid = ModelMetadata::default().with_assistant_reasoning_field("thinking_content");
+        assert_eq!(invalid.assistant_reasoning_field, None);
     }
 
     #[test]

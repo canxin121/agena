@@ -22,6 +22,7 @@ function sampleProviderModel(overrides: Partial<ProviderModel> = {}): ProviderMo
     metadata: {
       lifecycle: 'active',
       description: 'Latest flagship model',
+      assistant_reasoning_field: 'reasoning_details',
       output_modalities: ['text', 'image'],
       pricing: {
         input_usd_per_million_tokens: '1.25',
@@ -74,6 +75,7 @@ function sampleCatalogEntry(overrides: Partial<ModelCatalogEntry> = {}): ModelCa
     max_input_tokens: 200000,
     max_output_tokens: 8192,
     description: 'Catalog metadata',
+    assistant_reasoning_field: 'reasoning_content',
     capabilities: {
       features: {
         supported: ['tool_calling', 'streaming'],
@@ -202,6 +204,7 @@ describe('useRuntimeModelCatalogActions', () => {
       display_name: 'GPT-5',
       origin: '',
       description: 'Latest flagship model',
+      assistant_reasoning_field: 'reasoning_details',
       output_modalities_json: JSON.stringify(['text', 'image'], null, 2),
       pricing_json: JSON.stringify(
         {
@@ -299,6 +302,7 @@ describe('useRuntimeModelCatalogActions', () => {
     const draft = createEmptyModelCatalogDraft('anthropic', 'claude-sonnet-4-6')
     draft.origin = 'Anthropic'
     draft.max_input_tokens = '200000'
+    draft.assistant_reasoning_field = 'reasoning_content'
     draft.output_modalities_json = '["text","audio"]'
     draft.pricing_json = '{"input_usd_per_million_tokens":"3","output_usd_per_million_tokens":"15"}'
     draft.thinking_modes.push({
@@ -325,6 +329,7 @@ describe('useRuntimeModelCatalogActions', () => {
 
     expect(request.origin).toBe('Anthropic')
     expect(request.max_input_tokens).toBe(200000)
+    expect(request.assistant_reasoning_field).toBe('reasoning_content')
     expect(request.output_modalities).toEqual(['text', 'audio'])
     expect(request.pricing).toEqual({
       input_usd_per_million_tokens: '3',
@@ -474,6 +479,7 @@ describe('useRuntimeModelCatalogActions', () => {
       display_name: 'GPT-5',
       origin: null,
       description: 'Latest flagship model',
+      assistant_reasoning_field: 'reasoning_details',
       output_modalities: ['text', 'image'],
       pricing: {
         input_usd_per_million_tokens: '1.25',

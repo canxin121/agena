@@ -68,6 +68,8 @@ pub struct CatalogModelDefinition {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +101,7 @@ impl CatalogModelDefinition {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.assistant_reasoning_field.is_none()
             && self.output_modalities.is_empty()
             && self.pricing.is_none()
             && self.display_name.is_none()
@@ -124,6 +127,7 @@ impl CatalogModelDefinition {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity,
+            assistant_reasoning_field: self.assistant_reasoning_field,
             output_modalities: self.output_modalities,
             pricing: self.pricing,
             thinking_modes: self.thinking_modes,
@@ -183,6 +187,8 @@ pub struct ModelCatalogEntryRecord {
     pub supports_verbosity: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -211,6 +217,7 @@ impl ModelCatalogEntryRecord {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity.clone(),
+            assistant_reasoning_field: self.assistant_reasoning_field.clone(),
             output_modalities: self.output_modalities.clone(),
             pricing: self.pricing.clone(),
             display_name: self.display_name.clone(),
@@ -316,6 +323,7 @@ impl ModelCatalogSnapshot {
             supports_parallel_tool_calls: definition.supports_parallel_tool_calls,
             supports_verbosity: definition.supports_verbosity,
             default_verbosity: definition.default_verbosity.clone(),
+            assistant_reasoning_field: definition.assistant_reasoning_field.clone(),
             output_modalities: definition.output_modalities.clone(),
             pricing: definition.pricing.clone(),
             thinking_modes: definition.thinking_modes.clone(),
@@ -795,6 +803,7 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         supports_parallel_tool_calls: model.metadata.supports_parallel_tool_calls,
         supports_verbosity: model.metadata.supports_verbosity,
         default_verbosity: model.metadata.default_verbosity.clone(),
+        assistant_reasoning_field: model.metadata.assistant_reasoning_field.clone(),
         output_modalities: model.metadata.output_modalities.clone(),
         pricing: model.metadata.pricing.clone(),
         display_name: model.display_name.clone(),
@@ -942,6 +951,9 @@ fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &Catalog
     if current.default_verbosity.is_none() {
         current.default_verbosity = next.default_verbosity.clone();
     }
+    if current.assistant_reasoning_field.is_none() {
+        current.assistant_reasoning_field = next.assistant_reasoning_field.clone();
+    }
     merge_unique(&mut current.output_modalities, &next.output_modalities);
     merge_model_pricing(&mut current.pricing, next.pricing.as_ref());
     if current.display_name.is_none() {
@@ -980,7 +992,10 @@ fn merge_catalog_thinking_mode(
     if current.thinking.is_none() {
         current.thinking = next.thinking.clone();
     }
-    merge_speed_mode_request_override_fill_missing(&mut current.request_override, &next.request_override);
+    merge_speed_mode_request_override_fill_missing(
+        &mut current.request_override,
+        &next.request_override,
+    );
     for (adapter_id, override_patch) in &next.adapter_overrides {
         let current_patch = current
             .adapter_overrides
@@ -1103,6 +1118,9 @@ fn merge_public_source_catalog_definition(
     }
     if current.default_verbosity.is_none() {
         current.default_verbosity = next.default_verbosity.clone();
+    }
+    if current.assistant_reasoning_field.is_none() {
+        current.assistant_reasoning_field = next.assistant_reasoning_field.clone();
     }
     merge_unique(&mut current.output_modalities, &next.output_modalities);
     merge_model_pricing(&mut current.pricing, next.pricing.as_ref());
@@ -1856,6 +1874,9 @@ mod tests {
                                 "release_date": "2026-04-22",
                                 "last_updated": "2026-04-24",
                                 "open_weights": false,
+                                "interleaved": {
+                                    "field": "reasoning_content"
+                                },
                                 "reasoning": true,
                                 "tool_call": true,
                                 "structured_output": true,
@@ -2043,6 +2064,10 @@ mod tests {
         assert_eq!(gpt5.supports_parallel_tool_calls, Some(true));
         assert_eq!(gpt5.supports_verbosity, Some(true));
         assert_eq!(gpt5.default_verbosity.as_deref(), Some("low"));
+        assert_eq!(
+            gpt5.assistant_reasoning_field.as_deref(),
+            Some("reasoning_content")
+        );
         assert_eq!(gpt5.output_modalities, vec!["text", "image"]);
         assert_eq!(
             gpt5.pricing
@@ -2333,11 +2358,19 @@ mod tests {
             })
         );
         assert_eq!(
-            current.request_override.headers.get("x-base").map(String::as_str),
+            current
+                .request_override
+                .headers
+                .get("x-base")
+                .map(String::as_str),
             Some("one")
         );
         assert_eq!(
-            current.request_override.headers.get("x-extra").map(String::as_str),
+            current
+                .request_override
+                .headers
+                .get("x-extra")
+                .map(String::as_str),
             Some("three")
         );
         assert_eq!(

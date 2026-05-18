@@ -195,6 +195,9 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                 supports_parallel_tool_calls: None,
                 supports_verbosity: None,
                 default_verbosity: None,
+                assistant_reasoning_field: models_dev_assistant_reasoning_field(
+                    model.interleaved.as_ref(),
+                ),
                 output_modalities: models_dev_output_modalities(model.modalities.as_ref()),
                 pricing: models_dev_pricing(model.cost.as_ref()),
                 display_name: normalize_optional_string(model.name),
@@ -274,6 +277,7 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                 supports_parallel_tool_calls: None,
                 supports_verbosity: None,
                 default_verbosity: None,
+                assistant_reasoning_field: None,
                 output_modalities: Vec::new(),
                 pricing: None,
                 display_name: normalize_optional_string(model.display_name),
@@ -326,6 +330,7 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
             supports_parallel_tool_calls: model.supports_parallel_tool_calls,
             supports_verbosity: model.support_verbosity,
             default_verbosity: normalize_optional_string(model.default_verbosity),
+            assistant_reasoning_field: None,
             output_modalities: Vec::new(),
             pricing: None,
             display_name,
@@ -482,6 +487,23 @@ fn models_dev_speed_modes(
         );
     }
     modes
+}
+
+fn models_dev_assistant_reasoning_field(
+    interleaved: Option<&ModelsDevInterleaved>,
+) -> Option<String> {
+    match interleaved {
+        Some(ModelsDevInterleaved::Field(field)) => normalize_optional_string(field.field.clone())
+            .and_then(|value| match value.as_str() {
+                "reasoning_content" | "reasoning_details" => Some(value),
+                _ => None,
+            }),
+        Some(ModelsDevInterleaved::Enabled(enabled)) => {
+            let _enabled = *enabled;
+            None
+        }
+        _ => None,
+    }
 }
 
 fn models_dev_request_override(provider: &ModelsDevModeProvider) -> ModelSpeedModeRequestOverride {
@@ -1040,6 +1062,8 @@ struct ModelsDevModel {
     #[serde(default)]
     cost: Option<ModelsDevCost>,
     #[serde(default)]
+    interleaved: Option<ModelsDevInterleaved>,
+    #[serde(default)]
     experimental: Option<ModelsDevExperimental>,
 }
 
@@ -1109,6 +1133,19 @@ struct ModelsDevLimits {
 struct ModelsDevExperimental {
     #[serde(default)]
     modes: BTreeMap<String, ModelsDevMode>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ModelsDevInterleaved {
+    Enabled(bool),
+    Field(ModelsDevInterleavedField),
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsDevInterleavedField {
+    #[serde(default)]
+    field: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]

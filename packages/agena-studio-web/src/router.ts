@@ -26,6 +26,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('./agena/pages/WorkspacePage.vue'),
   },
   {
+    path: '/usage',
+    component: () => import('./agena/pages/UsagePage.vue'),
+  },
+  {
     path: sectionBasePaths.runtime,
     redirect: (to) => ({
       path: buildRuntimeSectionPath('runtime', resolveRuntimeTabFromRoute(to.path, to.query, 'runtime')),

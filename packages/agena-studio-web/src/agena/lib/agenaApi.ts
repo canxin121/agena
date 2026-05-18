@@ -331,6 +331,72 @@ export type RuntimeReloadResponse = {
   loaded_at: string
 }
 
+export type UsagePeriod = 'today' | 'last_7_days' | 'last_30_days' | 'month_to_date' | 'all_time'
+
+export type UsageTotals = {
+  turns: number
+  sessions: number
+  input_tokens: number
+  output_tokens: number
+  reasoning_tokens: number
+  cache_write_tokens: number
+  cache_read_tokens: number
+  total_tokens: number
+  cache_input_tokens: number
+  cache_hit_rate: number
+  total_cost_usd: number
+  recorded_cost_usd: number
+  estimated_cost_usd: number
+  unpriced_turns: number
+}
+
+export type UsageDailyBreakdown = UsageTotals & {
+  date: string
+}
+
+export type ProviderUsageBreakdown = UsageTotals & {
+  provider_id: string
+}
+
+export type ModelUsageBreakdown = UsageTotals & {
+  provider_id: string
+  model_id: string
+}
+
+export type SessionUsageBreakdown = UsageTotals & {
+  session_id: number
+  title: string
+  is_subagent: boolean
+  first_message_at: string
+  last_message_at: string
+}
+
+export type UsageStats = {
+  generated_at: string
+  period: UsagePeriod
+  period_label: string
+  from?: string | null
+  to?: string | null
+  totals: UsageTotals
+  by_day: UsageDailyBreakdown[]
+  by_provider: ProviderUsageBreakdown[]
+  by_model: ModelUsageBreakdown[]
+  by_session: SessionUsageBreakdown[]
+}
+
+export type ProviderSummary = {
+  provider_id: string
+  default_adapter?: string | null
+  default_model: string
+  adapters?: ProviderAdapterSummary[]
+}
+
+export type ProviderAdapterSummary = {
+  adapter_id: string
+  enabled: boolean
+  configured_model_count: number
+}
+
 export type ModelCatalogSourceKind = 'generated' | 'cache' | 'custom'
 export type ModelCatalogEntryKind = 'official' | 'custom'
 
@@ -876,6 +942,19 @@ export async function fetchStudioHealth(): Promise<StudioHealth> {
 
 export async function fetchRuntimeStatus(): Promise<RuntimeStatus> {
   return await apiJson<RuntimeStatus>('/api/v1/runtime')
+}
+
+export async function fetchUsageStats(input: {
+  period?: UsagePeriod
+  from?: string | null
+  to?: string | null
+} = {}): Promise<UsageStats> {
+  const params = new URLSearchParams()
+  if (input.period) params.set('period', input.period)
+  if (input.from) params.set('from', input.from)
+  if (input.to) params.set('to', input.to)
+  const suffix = params.toString()
+  return await apiJson<UsageStats>(`/api/v1/usage${suffix ? `?${suffix}` : ''}`)
 }
 
 export async function reloadRuntime(): Promise<RuntimeReloadResponse> {

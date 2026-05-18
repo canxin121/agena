@@ -78,6 +78,7 @@ pub fn router(state: AppState) -> Router {
             .route("/metrics", get(rest::metrics))
             .route("/api/v1/health", get(rest::health))
             .route("/api/v1/runtime", get(rest::get_runtime_status))
+            .route("/api/v1/usage", get(rest::get_usage_stats))
             .route("/api/v1/runtime/reload", post(rest::reload_runtime))
             .route(
                 "/api/v1/settings",

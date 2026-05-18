@@ -227,6 +227,14 @@ button {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.grid.four {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -775,6 +783,8 @@ button {
   .app-frame,
   .split-layout,
   .grid.two,
+  .grid.three,
+  .grid.four,
   .settings-toolbar,
   .settings-summary,
   .facts-grid,

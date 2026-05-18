@@ -41,6 +41,7 @@ use agena::config::{
 };
 use agena::event::{EventStore, StoreRange};
 use agena::provider::auth::{AuthManager, CopilotDeployment};
+use agena::session::{UsagePeriod, UsageStatsQuery};
 use agena_api::{
     queries::{
         ListEventsParams, ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams,
@@ -71,6 +72,16 @@ pub struct SessionEventListCompatQuery {
     pub limit: Option<u64>,
     #[serde(default)]
     pub after_seq: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct UsageStatsHttpQuery {
+    #[serde(default)]
+    pub period: Option<UsagePeriod>,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -302,6 +313,77 @@ pub async fn get_runtime_status(
         QueryResult::Runtime(runtime) => Ok(Json(runtime)),
         _ => unreachable!("runtime query returned unexpected result"),
     }
+}
+
+pub async fn get_usage_stats(
+    State(state): State<AppState>,
+    AxumQuery(query): AxumQuery<UsageStatsHttpQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    let manager = state.session_manager()?;
+    let usage_query = usage_stats_query_from_http(query)?;
+    Ok(Json(
+        manager
+            .usage_stats(usage_query)
+            .await
+            .map_err(ServerError::Core)?,
+    ))
+}
+
+fn usage_stats_query_from_http(query: UsageStatsHttpQuery) -> Result<UsageStatsQuery, ServerError> {
+    let has_custom_range = query.from.is_some() || query.to.is_some();
+    if has_custom_range {
+        let from = query
+            .from
+            .as_deref()
+            .map(|value| parse_usage_datetime(value, false))
+            .transpose()?;
+        let to = query
+            .to
+            .as_deref()
+            .map(|value| parse_usage_datetime(value, true))
+            .transpose()?
+            .or_else(|| Some(chrono::Utc::now()));
+        if let (Some(from), Some(to)) = (from.as_ref(), to.as_ref())
+            && from > to
+        {
+            return Err(ServerError::BadRequest(
+                "from must be earlier than or equal to to".to_string(),
+            ));
+        }
+        return Ok(UsageStatsQuery::custom(from, to));
+    }
+
+    Ok(UsageStatsQuery::for_period(
+        query.period.unwrap_or(UsagePeriod::Last7Days),
+        chrono::Utc::now(),
+    ))
+}
+
+fn parse_usage_datetime(
+    raw: &str,
+    end_of_day: bool,
+) -> Result<chrono::DateTime<chrono::Utc>, ServerError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(ServerError::BadRequest(
+            "usage date cannot be empty".to_string(),
+        ));
+    }
+    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(parsed.with_timezone(&chrono::Utc));
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+        let datetime = if end_of_day {
+            date.and_hms_milli_opt(23, 59, 59, 999)
+        } else {
+            date.and_hms_milli_opt(0, 0, 0, 0)
+        }
+        .expect("valid date boundary");
+        return Ok(datetime.and_utc());
+    }
+    Err(ServerError::BadRequest(format!(
+        "invalid usage date `{raw}`; expected YYYY-MM-DD or RFC3339"
+    )))
 }
 
 pub async fn reload_runtime(

@@ -77,6 +77,7 @@ async fn run_options_to_core(
                 thinking_mode: options.thinking_mode.clone(),
                 speed_mode: options.speed_mode.clone(),
                 verbosity: options.verbosity.clone(),
+                parallel_tool_calls: options.parallel_tool_calls,
                 agent_profile: options.agent_profile.clone(),
                 system: options.system.clone(),
                 temperature: options.temperature,
@@ -250,6 +251,7 @@ fn execution_context_from_http(
         model_thinking_mode: value.model_thinking_mode,
         model_speed_mode: value.model_speed_mode,
         model_verbosity: value.model_verbosity,
+        model_parallel_tool_calls: value.model_parallel_tool_calls,
         agent_run: value.agent_run,
         effective_workspace_root: value.effective_workspace_root,
         task_id: value.task_id,
@@ -1843,6 +1845,7 @@ enabled = true
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1887,6 +1890,7 @@ base_url = "http://localhost:11434"
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -1932,6 +1936,7 @@ base_url = "http://localhost:11434"
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: Some("be concise".into()),
             temperature: Some(0.7),
@@ -1978,6 +1983,7 @@ thinking = { type = "budget", budget_tokens = 30000 }
             thinking_mode: Some("deep".to_string()),
             speed_mode: None,
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2032,6 +2038,7 @@ headers = { x_reasoning_profile = "deep" }
             thinking_mode: Some("deep".to_string()),
             speed_mode: None,
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2099,6 +2106,7 @@ body_patch = { response_format = "json_schema" }
             thinking_mode: None,
             speed_mode: Some("fast".to_string()),
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2164,6 +2172,7 @@ thinking = { type = "adaptive", effort = "low" }
             thinking_mode: Some("light".to_string()),
             speed_mode: None,
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2214,6 +2223,7 @@ default_verbosity = "low"
             thinking_mode: None,
             speed_mode: None,
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2230,6 +2240,7 @@ default_verbosity = "low"
             thinking_mode: None,
             speed_mode: None,
             verbosity: Some("HIGH".to_string()),
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,
@@ -2240,6 +2251,62 @@ default_verbosity = "low"
             .await
             .expect("explicit verbosity should resolve");
         assert_eq!(explicit_core.verbosity.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn run_options_to_core_threads_parallel_tool_calls_into_request_override() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-5.4"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[providers.openai.adapters.openai.models."gpt-5.4"]
+supports_parallel_tool_calls = true
+"#,
+            "parallel-tool-calls",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "parallel tool calls").await;
+
+        let enabled_options = RunOptions {
+            model: Some(ModelRef::new("openai", "openai/gpt-5.4")),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            parallel_tool_calls: Some(true),
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+        let enabled_core = run_options_to_core(&state, session_id, &enabled_options)
+            .await
+            .expect("parallel tool calls enabled should resolve");
+        assert_eq!(
+            enabled_core.request_override.parallel_tool_calls(),
+            Some(true)
+        );
+
+        let disabled_options = RunOptions {
+            parallel_tool_calls: Some(false),
+            ..enabled_options
+        };
+        let disabled_core = run_options_to_core(&state, session_id, &disabled_options)
+            .await
+            .expect("parallel tool calls disabled should resolve");
+        assert_eq!(
+            disabled_core.request_override.parallel_tool_calls(),
+            Some(false)
+        );
     }
 
     #[tokio::test]
@@ -2269,6 +2336,7 @@ thinking = { type = "budget", budget_tokens = 3000 }
             thinking_mode: Some("deep".to_string()),
             speed_mode: None,
             verbosity: None,
+            parallel_tool_calls: None,
             agent_profile: None,
             system: None,
             temperature: None,

@@ -814,6 +814,26 @@ impl ModelSpeedModeRequestOverride {
         self.headers.is_empty() && self.body_patch.is_empty()
     }
 
+    pub fn parallel_tool_calls(&self) -> Option<bool> {
+        self.body_patch
+            .get("parallel_tool_calls")
+            .and_then(serde_json::Value::as_bool)
+    }
+
+    pub fn set_parallel_tool_calls(&mut self, enabled: Option<bool>) {
+        match enabled {
+            Some(enabled) => {
+                self.body_patch.insert(
+                    "parallel_tool_calls".to_owned(),
+                    serde_json::Value::Bool(enabled),
+                );
+            }
+            None => {
+                self.body_patch.remove("parallel_tool_calls");
+            }
+        }
+    }
+
     pub fn merged_with(&self, other: &Self) -> Self {
         let mut merged = self.clone();
         for (key, value) in &other.headers {

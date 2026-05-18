@@ -96,6 +96,7 @@ fn test_run_options() -> SessionRunOptions {
         model: ModelRef::new("test", "test-model"),
         thinking_mode: None,
         speed_mode: None,
+        verbosity: None,
         thinking: None,
         request_override: Default::default(),
         system: None,

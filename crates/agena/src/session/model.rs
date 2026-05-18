@@ -93,6 +93,8 @@ pub struct TurnRuntimeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_parallel_tool_calls: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_window_generation: Option<u64>,
@@ -129,6 +131,7 @@ impl TurnRuntimeState {
             && self.model_thinking_mode.is_none()
             && self.model_speed_mode.is_none()
             && self.model_verbosity.is_none()
+            && self.model_parallel_tool_calls.is_none()
             && self.prompt_cache_key.is_none()
             && self.prompt_window_generation.is_none()
             && self.latest_event_seq.is_none()
@@ -141,6 +144,7 @@ impl TurnRuntimeState {
         self.model_thinking_mode = None;
         self.model_speed_mode = None;
         self.model_verbosity = None;
+        self.model_parallel_tool_calls = None;
         self.prompt_cache_key = None;
         self.prompt_window_generation = None;
     }
@@ -153,6 +157,7 @@ impl TurnRuntimeState {
         model_thinking_mode: Option<String>,
         model_speed_mode: Option<String>,
         model_verbosity: Option<String>,
+        model_parallel_tool_calls: Option<bool>,
         prompt_cache_key: String,
         prompt_window_generation: u64,
     ) {
@@ -163,6 +168,7 @@ impl TurnRuntimeState {
         self.model_thinking_mode = model_thinking_mode.filter(|value| !value.trim().is_empty());
         self.model_speed_mode = model_speed_mode.filter(|value| !value.trim().is_empty());
         self.model_verbosity = model_verbosity.filter(|value| !value.trim().is_empty());
+        self.model_parallel_tool_calls = model_parallel_tool_calls;
         self.prompt_cache_key = Some(prompt_cache_key);
         self.prompt_window_generation = Some(prompt_window_generation);
     }
@@ -452,6 +458,8 @@ pub struct SessionExecutionContext {
     pub model_speed_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_parallel_tool_calls: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "crate::agent::AgentRunConfig::is_empty"
@@ -480,6 +488,7 @@ impl SessionExecutionContext {
             && self.model_thinking_mode.is_none()
             && self.model_speed_mode.is_none()
             && self.model_verbosity.is_none()
+            && self.model_parallel_tool_calls.is_none()
             && self.agent_run.is_empty()
             && self.effective_workspace_root.is_none()
             && self.task_id.is_none()
@@ -544,6 +553,10 @@ impl SessionRuntimeState {
         self.execution.model_verbosity.as_deref()
     }
 
+    pub fn model_parallel_tool_calls_override(&self) -> Option<bool> {
+        self.execution.model_parallel_tool_calls
+    }
+
     pub fn set_model_override(
         &mut self,
         provider_id: Option<String>,
@@ -560,10 +573,12 @@ impl SessionRuntimeState {
         thinking_mode: Option<String>,
         speed_mode: Option<String>,
         verbosity: Option<String>,
+        parallel_tool_calls: Option<bool>,
     ) {
         self.execution.model_thinking_mode = thinking_mode.filter(|value| !value.trim().is_empty());
         self.execution.model_speed_mode = speed_mode.filter(|value| !value.trim().is_empty());
         self.execution.model_verbosity = verbosity.filter(|value| !value.trim().is_empty());
+        self.execution.model_parallel_tool_calls = parallel_tool_calls;
     }
 
     pub fn provider_anchor(
@@ -1271,6 +1286,7 @@ mod tests {
             Some("high".to_owned()),
             Some("fast".to_owned()),
             Some("low".to_owned()),
+            None,
             "cache-key".to_owned(),
             42,
         );

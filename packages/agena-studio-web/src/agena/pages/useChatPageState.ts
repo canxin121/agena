@@ -41,6 +41,7 @@ export function useChatPageState() {
   const selectedThinkingMode = ref('')
   const selectedSpeedMode = ref('')
   const selectedVerbosity = ref('')
+  const selectedParallelToolCalls = ref('')
   const loading = ref(false)
   const sending = ref(false)
   const continuing = ref(false)
@@ -71,6 +72,7 @@ export function useChatPageState() {
     selectedThinkingMode,
     selectedSpeedMode,
     selectedVerbosity,
+    selectedParallelToolCalls,
     selectedSessionId,
     selectedWorkspaceId,
     sending,

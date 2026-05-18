@@ -56,6 +56,7 @@ export type ChatSessionActionsInput = {
   selectedThinkingMode: Ref<string>
   selectedSpeedMode: Ref<string>
   selectedVerbosity: Ref<string>
+  selectedParallelToolCalls: Ref<string>
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sending: Ref<boolean>
@@ -423,6 +424,12 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
           input.selectedProviderId.value && input.selectedModelId.value && input.selectedVerbosity.value
             ? input.selectedVerbosity.value
             : undefined,
+        parallelToolCalls:
+          input.selectedProviderId.value &&
+          input.selectedModelId.value &&
+          input.selectedParallelToolCalls.value
+            ? input.selectedParallelToolCalls.value === 'true'
+            : undefined,
       })
       input.sessionState.value = state
       input.composer.value = ''
@@ -460,6 +467,12 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         verbosity:
           input.selectedProviderId.value && input.selectedModelId.value && input.selectedVerbosity.value
             ? input.selectedVerbosity.value
+            : undefined,
+        parallelToolCalls:
+          input.selectedProviderId.value &&
+          input.selectedModelId.value &&
+          input.selectedParallelToolCalls.value
+            ? input.selectedParallelToolCalls.value === 'true'
             : undefined,
       })
       input.syncEventStream()

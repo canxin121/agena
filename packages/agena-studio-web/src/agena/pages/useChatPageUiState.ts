@@ -14,6 +14,7 @@ export type ChatPageUiStateInput = {
   selectedThinkingMode: Ref<string>
   selectedSpeedMode: Ref<string>
   selectedVerbosity: Ref<string>
+  selectedParallelToolCalls: Ref<string>
   selectedWorkspaceId: Ref<number | null>
   userInputDrafts: Record<string, Record<string, string>>
   workspaces: Ref<WorkspaceResource[]>
@@ -111,6 +112,15 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     }))
   }
 
+  function modelParallelToolCallsOptions(): Array<{ id: string; label: string; description: string }> {
+    const model = selectedProviderModel()
+    if (!model?.metadata?.supports_parallel_tool_calls && !input.selectedParallelToolCalls.value) return []
+    return [
+      { id: 'true', label: 'Enabled', description: 'Allow concurrent tool calls' },
+      { id: 'false', label: 'Disabled', description: 'Force serial tool calls' },
+    ]
+  }
+
   function formatMessageTime(value: string): string {
     const date = new Date(value)
     if (Number.isNaN(date.getTime())) return value
@@ -148,6 +158,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     input.selectedThinkingMode.value = ''
     input.selectedSpeedMode.value = ''
     input.selectedVerbosity.value = ''
+    input.selectedParallelToolCalls.value = ''
     if (!input.selectedAdapterId.value) {
       input.selectedAdapterId.value = providerDefaultAdapter(providerId)
     }
@@ -160,12 +171,14 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     input.selectedThinkingMode.value = ''
     input.selectedSpeedMode.value = ''
     input.selectedVerbosity.value = ''
+    input.selectedParallelToolCalls.value = ''
   })
 
   watch(input.selectedModelId, () => {
     input.selectedThinkingMode.value = ''
     input.selectedSpeedMode.value = ''
     input.selectedVerbosity.value = ''
+    input.selectedParallelToolCalls.value = ''
   })
 
   return {
@@ -179,6 +192,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     providerDefaultModel,
     providerModelLabel,
     providerModelOptions,
+    modelParallelToolCallsOptions,
     modelThinkingModeOptions,
     modelSpeedModeOptions,
     modelVerbosityOptions,

@@ -2080,6 +2080,7 @@ impl Backend {
             thinking_mode,
             speed_mode,
             verbosity,
+            parallel_tool_calls,
             agent_profile,
             system,
             temperature,
@@ -2096,17 +2097,13 @@ impl Backend {
         if let Some(model) = model {
             options.model = model;
         }
-        let resolved_adapter_id = options
-            .model
-            .adapter_id
-            .clone()
-            .or_else(|| {
-                let snapshot = self.runtime.current_snapshot();
-                let provider_registry = snapshot.provider_registry();
-                provider_registry
-                    .get(options.model.provider_id.as_str())
-                    .and_then(|provider| provider.default_adapter().cloned())
-            });
+        let resolved_adapter_id = options.model.adapter_id.clone().or_else(|| {
+            let snapshot = self.runtime.current_snapshot();
+            let provider_registry = snapshot.provider_registry();
+            provider_registry
+                .get(options.model.provider_id.as_str())
+                .and_then(|provider| provider.default_adapter().cloned())
+        });
 
         if let Some(thinking_mode) = thinking_mode
             .as_deref()
@@ -2160,6 +2157,11 @@ impl Backend {
             .filter(|value| !value.is_empty())
         {
             options.verbosity = Some(verbosity.to_ascii_lowercase());
+        }
+        if let Some(parallel_tool_calls) = parallel_tool_calls {
+            options
+                .request_override
+                .set_parallel_tool_calls(Some(parallel_tool_calls));
         }
 
         if let Some(system) = system {

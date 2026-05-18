@@ -590,7 +590,7 @@ Provider models:
 | ------ | ------------------------------- | --------------------------------------------------------------------- |
 | GET    | `/api/v1/model-catalog`         | paginated catalog query，支持 `q` / `kind` / `origin` / `offset` / `limit` |
 | POST   | `/api/v1/model-catalog/lookup`  | lookup 一组 `model_id`，返回最匹配的 catalog entries                   |
-| POST   | `/api/v1/model-catalog/refresh` | refresh official catalog，按 source 优先级重新拉 public sources 并 merge live discovery |
+| POST   | `/api/v1/model-catalog/refresh` | refresh official catalog，按 source 优先级重新拉 public sources 并 merge live provider model lists |
 | PUT    | `/api/v1/model-catalog/entries` | create or update a local catalog override                             |
 | DELETE | `/api/v1/model-catalog/entries` | delete a local catalog override                                       |
 
@@ -672,7 +672,7 @@ Model catalog list response:
 }
 ```
 
-`items` 同时包含官方条目和本地 override，按 `model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。官方 catalog 主要来自公开 online sources，再叠加 live provider discovery；catalog 会把 thinking 和 speed modes 保留在同一个 model entry 下，不会展开成新的模型 id。
+`items` 同时包含官方条目和本地 override，按 `model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。官方 catalog 主要来自公开 online sources，再叠加 live provider model lists；catalog 会把 thinking 和 speed modes 保留在同一个 model entry 下，不会展开成新的模型 id。
 
 Create/update local override:
 

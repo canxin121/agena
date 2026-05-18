@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, type Ref } from 'vue'
+import { computed, onMounted, reactive, ref, watchEffect, type Ref } from 'vue'
 
 import {
-  discoverDraftProviderAdapters,
-  discoverSavedProviderAdapters,
+  listDraftProviderAdapterModels,
+  listSavedProviderAdapterModels,
   listModelCatalogEntries,
   lookupModelCatalogEntries,
   patchSettings,
 } from '../lib/agenaApi'
 import {
+  adapterModelsMatchedModels,
+  adapterModelsUnmatchedModels,
   buildAdaptersPatchFromDraftSelection,
-  discoveryMatchedModels,
-  discoveryUnmatchedModels,
+  configuredProviderModelDefinitions,
   matchedCatalogModelDefinitions,
 } from './providersSettingsModel'
 import { buildAuthProviderFacts } from './runtimePageModel'
@@ -29,7 +30,7 @@ import type {
   AuthProvider,
   ModelCatalogEntry,
   ModelCatalogSummary,
-  ProviderAdapterDiscovery,
+  ProviderAdapterModels,
   ProviderModel,
   ProviderSummary,
 } from '@/agena/lib/agenaApi'
@@ -66,6 +67,7 @@ function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSumm
 }
 
 const ADAPTER_OPTIONS = ['openai', 'anthropic', 'gemini', 'ollama', 'gitlab', 'amazon_bedrock'] as const
+const SHARED_GATEWAY_MODEL_LIST_ADAPTERS = ['openai', 'anthropic', 'gemini'] as const
 const submittingConfig = ref(false)
 const catalogCopyProviderId = ref('')
 const catalogCopyAdapterId = ref('openai')
@@ -73,11 +75,12 @@ const catalogCopySetDefault = ref(false)
 const providerModelProviderId = ref('')
 const providerModelSetDefault = ref(false)
 const providerModelDraft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft('openai', ''))
-const draftAdapterDiscoveries = ref<ProviderAdapterDiscovery[]>([])
-const providerAdapterDiscoveries = reactive<Record<string, ProviderAdapterDiscovery[]>>({})
-const discoveringDraftAdapters = ref(false)
-const discoveringSavedProviderIds = reactive<Record<string, boolean>>({})
+const draftAdapterModelLists = ref<ProviderAdapterModels[]>([])
+const providerAdapterModelLists = reactive<Record<string, ProviderAdapterModels[]>>({})
+const listingDraftAdapters = ref(false)
+const listingSavedProviderIds = reactive<Record<string, boolean>>({})
 const draftSelectedAdapterIds = ref<string[]>([])
+const savedProviderSelectedAdapterIds = reactive<Record<string, string[]>>({})
 const catalogSearchEntries = ref<ModelCatalogEntry[]>(props.catalogEntries.map((entry) => ({ ...entry })))
 const catalogLookupEntries = ref<ModelCatalogEntry[]>([])
 const catalogSummary = ref<ModelCatalogSummary | null>(
@@ -174,6 +177,32 @@ function optionalText(value: string) {
   return normalized || undefined
 }
 
+function isSharedGatewayModelListAdapter(adapterId: string) {
+  return SHARED_GATEWAY_MODEL_LIST_ADAPTERS.includes(adapterId as (typeof SHARED_GATEWAY_MODEL_LIST_ADAPTERS)[number])
+}
+
+function adapterModelListOptionsForSavedProvider(providerId: string): string[] {
+  const provider = props.providers.find((item) => item.provider_id === providerId)
+  const configured = new Set(
+    (provider?.adapters || [])
+      .map((adapter) => String(adapter.adapter_id || '').trim())
+      .filter(Boolean),
+  )
+  const hasSharedGatewayAdapter = [...configured].some((adapterId) => isSharedGatewayModelListAdapter(adapterId))
+  if (configured.size === 0 || hasSharedGatewayAdapter) {
+    for (const adapterId of SHARED_GATEWAY_MODEL_LIST_ADAPTERS) configured.add(adapterId)
+  }
+  return [...configured].sort((left, right) => left.localeCompare(right))
+}
+
+watchEffect(() => {
+  for (const provider of props.providers) {
+    if (!savedProviderSelectedAdapterIds[provider.provider_id]) {
+      savedProviderSelectedAdapterIds[provider.provider_id] = []
+    }
+  }
+})
+
 function setConfigMessage(message: string) {
   props.actionError.value = ''
   props.actionMessage.value = message
@@ -239,67 +268,74 @@ async function ensureCatalogEntriesForModelIds(modelIds: string[]) {
   }
 }
 
-async function discoverCreateProviderAdapters() {
+async function listCreateProviderAdapterModels() {
   if (providerCreateDraft.auth_mode !== 'api') {
-    setConfigError('Draft adapter discovery currently requires api auth.')
+    setConfigError('Draft adapter model listing currently requires api auth.')
     return
   }
   if (!providerCreateDraft.base_url.trim()) {
-    setConfigError('Adapter discovery requires a base URL.')
+    setConfigError('Listing adapter models requires a base URL.')
     return
   }
-  discoveringDraftAdapters.value = true
+  const adapterIds = [...new Set(draftSelectedAdapterIds.value.map((value) => String(value || '').trim()).filter(Boolean))]
+  if (!adapterIds.length) {
+    setConfigError('Listing adapter models requires at least one explicit adapter selection.')
+    return
+  }
+  listingDraftAdapters.value = true
   try {
-    draftAdapterDiscoveries.value = await discoverDraftProviderAdapters({
+    draftAdapterModelLists.value = await listDraftProviderAdapterModels({
       providerId: providerCreateDraft.provider_id,
       baseUrl: providerCreateDraft.base_url,
       apiKey: providerCreateDraft.api_key,
       apiKeyEnv: providerCreateDraft.api_key_env,
+      adapterIds,
     })
-    draftSelectedAdapterIds.value = draftAdapterDiscoveries.value
-      .filter((discovery) => discovery.supported)
-      .map((discovery) => discovery.adapter_id)
     await ensureCatalogEntriesForModelIds(
-      draftAdapterDiscoveries.value.flatMap((discovery) =>
-        discovery.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
+      draftAdapterModelLists.value.flatMap((adapterModels) =>
+        adapterModels.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
       ),
     )
-    setConfigMessage(`Discovered ${draftAdapterDiscoveries.value.length} draft adapters.`)
+    setConfigMessage(`Listed adapter models for ${draftAdapterModelLists.value.length} draft adapters.`)
   } catch (err) {
-    draftAdapterDiscoveries.value = []
-    draftSelectedAdapterIds.value = []
+    draftAdapterModelLists.value = []
     setConfigError(err instanceof Error ? err.message : String(err))
   } finally {
-    discoveringDraftAdapters.value = false
+    listingDraftAdapters.value = false
   }
 }
 
-function useDiscoveredCreateModel(adapterId: string, model: ProviderModel) {
+function useListedCreateModel(adapterId: string, model: ProviderModel) {
   providerCreateDraft.adapter_id = adapterId
   providerCreateDraft.model_id = model.id
   providerCreateDraft.catalog_model_id = catalogLookupIdForProviderModel(model)
   setConfigMessage(`Loaded ${adapterId}/${model.id} into provider create draft.`)
 }
 
-async function discoverExistingProviderAdapters(providerId: string) {
-  discoveringSavedProviderIds[providerId] = true
+async function listExistingProviderAdapterModels(providerId: string) {
+  const adapterIds = [...new Set((savedProviderSelectedAdapterIds[providerId] || []).map((value) => String(value || '').trim()).filter(Boolean))]
+  if (!adapterIds.length) {
+    setConfigError(`Listing adapter models requires at least one explicit adapter selection for ${providerId}.`)
+    return
+  }
+  listingSavedProviderIds[providerId] = true
   try {
-    providerAdapterDiscoveries[providerId] = await discoverSavedProviderAdapters(providerId)
+    providerAdapterModelLists[providerId] = await listSavedProviderAdapterModels(providerId, { adapterIds })
     await ensureCatalogEntriesForModelIds(
-      providerAdapterDiscoveries[providerId].flatMap((discovery) =>
-        discovery.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
+      providerAdapterModelLists[providerId].flatMap((adapterModels) =>
+        adapterModels.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
       ),
     )
-    setConfigMessage(`Refreshed adapter discovery for ${providerId}.`)
+    setConfigMessage(`Listed adapter models for ${providerId}.`)
   } catch (err) {
-    providerAdapterDiscoveries[providerId] = []
+    providerAdapterModelLists[providerId] = []
     setConfigError(err instanceof Error ? err.message : String(err))
   } finally {
-    discoveringSavedProviderIds[providerId] = false
+    listingSavedProviderIds[providerId] = false
   }
 }
 
-function loadDiscoveredProviderModel(providerId: string, adapterId: string, model: ProviderModel) {
+function loadListedProviderModel(providerId: string, adapterId: string, model: ProviderModel) {
   providerModelProviderId.value = providerId
   providerModelDraft.value = createModelCatalogDraftFromProviderSelection(cachedCatalogEntries.value, {
     ...model,
@@ -313,13 +349,14 @@ function loadDiscoveredProviderModel(providerId: string, adapterId: string, mode
   setConfigMessage(`Loaded ${providerId}/${adapterId}/${model.id} into provider model draft.`)
 }
 
-async function addDiscoveredAdapterCatalogMatches(providerId: string, discovery: ProviderAdapterDiscovery) {
-  const matchedModels = matchedCatalogModelDefinitions(cachedCatalogEntries.value, discovery.models)
+async function saveListedAdapterModels(providerId: string, adapterModels: ProviderAdapterModels) {
+  const matchedModels = matchedCatalogModelDefinitions(cachedCatalogEntries.value, adapterModels.models)
+  const configuredModels = configuredProviderModelDefinitions(cachedCatalogEntries.value, adapterModels.models)
   const providerPatch: Record<string, unknown> = {
     adapters: {
-      [discovery.adapter_id]: {
+      [adapterModels.adapter_id]: {
         enabled: true,
-        ...(Object.keys(matchedModels).length ? { models: matchedModels } : {}),
+        models: configuredModels,
       },
     },
   }
@@ -334,9 +371,14 @@ async function addDiscoveredAdapterCatalogMatches(providerId: string, discovery:
       validate: true,
       reload: true,
     })
-    setConfigMessage(`Saved ${providerId}/${discovery.adapter_id} with ${Object.keys(matchedModels).length} catalog-matched model(s).`)
+    setConfigMessage(
+      `Saved ${providerId}/${adapterModels.adapter_id} with ${adapterModels.models.length} listed model(s); ${Object.keys(matchedModels).length} catalog matched.`,
+    )
     await props.load()
-    providerAdapterDiscoveries[providerId] = await discoverSavedProviderAdapters(providerId)
+    const refreshAdapterIds = [...new Set((savedProviderSelectedAdapterIds[providerId] || []).map((value) => String(value || '').trim()).filter(Boolean))]
+    providerAdapterModelLists[providerId] = refreshAdapterIds.length
+      ? await listSavedProviderAdapterModels(providerId, { adapterIds: refreshAdapterIds })
+      : []
   } catch (err) {
     setConfigError(err instanceof Error ? err.message : String(err))
   } finally {
@@ -420,14 +462,14 @@ async function createProvider() {
 
   await ensureCatalogEntriesForModelIds([
     providerCreateDraft.catalog_model_id.trim() || modelId,
-    ...draftAdapterDiscoveries.value.flatMap((discovery) =>
-      discovery.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
+    ...draftAdapterModelLists.value.flatMap((adapterModels) =>
+      adapterModels.models.map((model) => catalogLookupIdForProviderModel(model) || model.id),
     ),
   ])
 
   const adaptersPatch = buildAdaptersPatchFromDraftSelection({
     catalogEntries: cachedCatalogEntries.value,
-    discoveries: draftAdapterDiscoveries.value,
+    adapterModelLists: draftAdapterModelLists.value,
     selectedAdapterIds: draftSelectedAdapterIds.value,
     defaultAdapterId: adapterId,
     defaultModelId: modelId,
@@ -466,17 +508,6 @@ function loadCatalogEntryIntoProviderDraft(entry: ModelCatalogEntry) {
   providerModelProviderId.value = catalogCopyProviderId.value || providerModelProviderId.value
   providerModelSetDefault.value = catalogCopySetDefault.value
   setConfigMessage(`Loaded ${entry.model_id} into provider model draft.`)
-}
-
-async function loadLiveModelIntoProviderDraft(model: ProviderModel) {
-  await ensureCatalogEntriesForModelIds([catalogLookupIdForProviderModel(model) || model.id])
-  providerModelProviderId.value = model.provider_id
-  providerModelDraft.value = createModelCatalogDraftFromProviderSelection(cachedCatalogEntries.value, model)
-  providerModelDraft.value.adapter_id = providerModelDraft.value.adapter_id || String(model.adapter_id || '')
-  providerModelSetDefault.value = false
-  setConfigMessage(
-    `Loaded ${model.provider_id}/${model.adapter_id || 'adapter'}/${model.id} into provider model draft.`,
-  )
 }
 
 async function saveProviderModelDraft() {
@@ -542,10 +573,10 @@ onMounted(() => {
         <div class="button-row">
           <button
             class="button"
-            :disabled="submittingConfig || discoveringDraftAdapters"
-            @click="discoverCreateProviderAdapters"
+            :disabled="submittingConfig || listingDraftAdapters || !draftSelectedAdapterIds.length"
+            @click="listCreateProviderAdapterModels"
           >
-            {{ discoveringDraftAdapters ? 'Detecting…' : 'Detect Adapters' }}
+            {{ listingDraftAdapters ? 'Listing…' : 'List Adapter Models' }}
           </button>
           <button class="button primary" :disabled="submittingConfig" @click="createProvider">Create Provider</button>
         </div>
@@ -616,61 +647,75 @@ onMounted(() => {
       <p class="muted" style="margin-top: 12px">
         Provider auth keeps one base URL and one credential. HTTP adapters derive their own protocol endpoints from that root.
       </p>
+      <div class="field full" style="margin-top: 12px">
+        <label class="label">Adapters To List</label>
+        <div class="button-row" style="flex-wrap: wrap">
+          <label
+            v-for="adapterId in SHARED_GATEWAY_MODEL_LIST_ADAPTERS"
+            :key="`draft-adapter-model-list-${adapterId}`"
+            class="muted"
+            style="display: flex; gap: 8px; align-items: center"
+          >
+            <input v-model="draftSelectedAdapterIds" type="checkbox" :value="adapterId" />
+            {{ adapterId }}
+          </label>
+        </div>
+      </div>
 
-      <div v-if="draftAdapterDiscoveries.length" class="record-list" style="margin-top: 12px">
+      <div v-if="draftAdapterModelLists.length" class="record-list" style="margin-top: 12px">
         <article
-          v-for="adapter in draftAdapterDiscoveries"
-          :key="`draft-${adapter.adapter_id}`"
+          v-for="adapterModels in draftAdapterModelLists"
+          :key="`draft-${adapterModels.adapter_id}`"
           class="record-card"
         >
           <div class="record-header">
             <div>
               <p class="settings-panel-kicker">Draft Adapter</p>
-              <h3 class="record-title">{{ adapter.adapter_id }}</h3>
+              <h3 class="record-title">{{ adapterModels.adapter_id }}</h3>
               <div class="record-subtitle mono">
-                {{ adapter.resolved_base_url || 'no resolved base URL' }}
+                {{ adapterModels.resolved_base_url || 'no resolved base URL' }}
               </div>
             </div>
             <div class="record-meta">
-              <span class="badge" :class="adapter.supported ? 'success' : 'danger'">
-                {{ adapter.supported ? 'supported' : 'unsupported' }}
+              <span class="badge" :class="adapterModels.error ? 'danger' : 'success'">
+                {{ adapterModels.error ? 'error' : 'loaded' }}
               </span>
             </div>
           </div>
-          <label v-if="adapter.supported" class="muted" style="display: flex; gap: 8px; align-items: center">
-            <input v-model="draftSelectedAdapterIds" type="checkbox" :value="adapter.adapter_id" />
+          <label v-if="!adapterModels.error" class="muted" style="display: flex; gap: 8px; align-items: center">
+            <input v-model="draftSelectedAdapterIds" type="checkbox" :value="adapterModels.adapter_id" />
             Add this adapter when creating the provider
           </label>
-          <p v-if="adapter.error" class="muted">{{ adapter.error }}</p>
-          <p v-if="adapter.supported" class="muted">
-            Catalog matched: {{ discoveryMatchedModels(cachedCatalogEntries, adapter).length }} · unmatched:
-            {{ discoveryUnmatchedModels(cachedCatalogEntries, adapter).length }}
+          <p v-if="adapterModels.error" class="muted">{{ adapterModels.error }}</p>
+          <p v-if="!adapterModels.error" class="muted">
+            Catalog matched: {{ adapterModelsMatchedModels(cachedCatalogEntries, adapterModels).length }} · unmatched:
+            {{ adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).length }}
           </p>
-          <div v-if="adapter.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+          <div v-if="adapterModels.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
             <button
-              v-for="model in adapter.models"
-              :key="`${adapter.adapter_id}-${model.id}`"
+              v-for="model in adapterModels.models"
+              :key="`${adapterModels.adapter_id}-${model.id}`"
               class="button"
               :disabled="submittingConfig"
-              @click="useDiscoveredCreateModel(adapter.adapter_id, model)"
+              @click="useListedCreateModel(adapterModels.adapter_id, model)"
             >
               {{ model.display_name || model.id }}
             </button>
           </div>
-          <div v-if="adapter.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+          <div v-if="adapterModels.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
             <span
-              v-for="model in adapter.models"
-              :key="`${adapter.adapter_id}-${model.id}-catalog`"
+              v-for="model in adapterModels.models"
+              :key="`${adapterModels.adapter_id}-${model.id}-catalog`"
               class="badge"
               :class="modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'success' : 'warn'"
             >
               {{ model.id }} · {{ modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'catalog' : 'unmatched' }}
             </span>
           </div>
-          <p v-if="discoveryUnmatchedModels(cachedCatalogEntries, adapter).length" class="muted" style="margin-top: 10px">
-            Unmatched: {{ discoveryUnmatchedModels(cachedCatalogEntries, adapter).map((model) => model.id).join(', ') }}
+          <p v-if="adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).length" class="muted" style="margin-top: 10px">
+            Unmatched: {{ adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).map((model) => model.id).join(', ') }}
           </p>
-          <p v-else-if="adapter.supported" class="muted" style="margin-top: 10px">No models returned.</p>
+          <p v-else-if="!adapterModels.error" class="muted" style="margin-top: 10px">No models returned.</p>
         </article>
       </div>
     </section>
@@ -697,86 +742,88 @@ onMounted(() => {
           </div>
         </div>
 
+        <div class="field full" style="margin-top: 12px">
+          <label class="label">Adapters To List</label>
+          <div class="button-row" style="flex-wrap: wrap">
+            <label
+              v-for="adapterId in adapterModelListOptionsForSavedProvider(provider.provider_id)"
+              :key="`${provider.provider_id}-adapter-model-list-${adapterId}`"
+              class="muted"
+              style="display: flex; gap: 8px; align-items: center"
+            >
+              <input
+                v-model="savedProviderSelectedAdapterIds[provider.provider_id]"
+                type="checkbox"
+                :value="adapterId"
+              />
+              {{ adapterId }}
+            </label>
+          </div>
+        </div>
+
         <div class="button-row" style="margin-top: 12px">
           <button
             class="button"
-            :disabled="submittingConfig || !!discoveringSavedProviderIds[provider.provider_id]"
-            @click="discoverExistingProviderAdapters(provider.provider_id)"
+            :disabled="submittingConfig || !!listingSavedProviderIds[provider.provider_id] || !(savedProviderSelectedAdapterIds[provider.provider_id] || []).length"
+            @click="listExistingProviderAdapterModels(provider.provider_id)"
           >
-            {{ discoveringSavedProviderIds[provider.provider_id] ? 'Inspecting…' : 'Inspect Adapters' }}
+            {{ listingSavedProviderIds[provider.provider_id] ? 'Listing…' : 'List Adapter Models' }}
           </button>
         </div>
 
         <div
-          v-if="(props.providerModels[provider.provider_id] || []).length"
-          class="button-row"
-          style="margin-top: 12px; flex-wrap: wrap"
-        >
-          <button
-            v-for="model in props.providerModels[provider.provider_id] || []"
-            :key="model.id"
-            class="button"
-            :disabled="submittingConfig"
-            @click="loadLiveModelIntoProviderDraft(model)"
-          >
-            Edit {{ model.display_name || model.id }}
-          </button>
-        </div>
-        <p v-else class="muted" style="margin-top: 12px">No live models loaded for this provider.</p>
-
-        <div
-          v-if="(providerAdapterDiscoveries[provider.provider_id] || []).length"
+          v-if="(providerAdapterModelLists[provider.provider_id] || []).length"
           class="record-list"
           style="margin-top: 12px"
         >
           <article
-            v-for="adapter in providerAdapterDiscoveries[provider.provider_id] || []"
-            :key="`${provider.provider_id}-${adapter.adapter_id}`"
+            v-for="adapterModels in providerAdapterModelLists[provider.provider_id] || []"
+            :key="`${provider.provider_id}-${adapterModels.adapter_id}`"
             class="record-card"
           >
             <div class="record-header">
               <div>
-                <p class="settings-panel-kicker">Detected Adapter</p>
-                <h3 class="record-title">{{ adapter.adapter_id }}</h3>
+                <p class="settings-panel-kicker">Listed Adapter</p>
+                <h3 class="record-title">{{ adapterModels.adapter_id }}</h3>
                 <div class="record-subtitle mono">
-                  {{ adapter.resolved_base_url || 'no resolved base URL' }}
+                  {{ adapterModels.resolved_base_url || 'no resolved base URL' }}
                 </div>
               </div>
               <div class="record-meta">
-                <span class="badge" :class="adapter.supported ? 'success' : 'danger'">
-                  {{ adapter.supported ? 'supported' : 'unsupported' }}
+                <span class="badge" :class="adapterModels.error ? 'danger' : 'success'">
+                  {{ adapterModels.error ? 'error' : 'loaded' }}
                 </span>
               </div>
             </div>
-            <p v-if="adapter.error" class="muted">{{ adapter.error }}</p>
-            <p v-if="adapter.supported" class="muted">
-              Catalog matched: {{ discoveryMatchedModels(cachedCatalogEntries, adapter).length }} · unmatched:
-              {{ discoveryUnmatchedModels(cachedCatalogEntries, adapter).length }}
+            <p v-if="adapterModels.error" class="muted">{{ adapterModels.error }}</p>
+            <p v-if="!adapterModels.error" class="muted">
+              Catalog matched: {{ adapterModelsMatchedModels(cachedCatalogEntries, adapterModels).length }} · unmatched:
+              {{ adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).length }}
             </p>
             <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
               <button
                 class="button"
-                :disabled="submittingConfig || !discoveryMatchedModels(cachedCatalogEntries, adapter).length"
-                @click="addDiscoveredAdapterCatalogMatches(provider.provider_id, adapter)"
+                :disabled="submittingConfig || !adapterModels.models.length"
+                @click="saveListedAdapterModels(provider.provider_id, adapterModels)"
               >
-                Add Catalog Matches
+                Save Listed Models
               </button>
             </div>
-            <div v-if="adapter.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+            <div v-if="adapterModels.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
               <button
-                v-for="model in adapter.models"
-                :key="`${provider.provider_id}-${adapter.adapter_id}-${model.id}`"
+                v-for="model in adapterModels.models"
+                :key="`${provider.provider_id}-${adapterModels.adapter_id}-${model.id}`"
                 class="button"
                 :disabled="submittingConfig"
-                @click="loadDiscoveredProviderModel(provider.provider_id, adapter.adapter_id, model)"
+                @click="loadListedProviderModel(provider.provider_id, adapterModels.adapter_id, model)"
               >
                 {{ model.display_name || model.id }}
               </button>
             </div>
-            <div v-if="adapter.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+            <div v-if="adapterModels.models.length" class="button-row" style="margin-top: 10px; flex-wrap: wrap">
               <span
-                v-for="model in adapter.models"
-                :key="`${provider.provider_id}-${adapter.adapter_id}-${model.id}-catalog`"
+                v-for="model in adapterModels.models"
+                :key="`${provider.provider_id}-${adapterModels.adapter_id}-${model.id}-catalog`"
                 class="badge"
                 :class="modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'success' : 'warn'"
               >
@@ -784,13 +831,13 @@ onMounted(() => {
               </span>
             </div>
             <p
-              v-if="discoveryUnmatchedModels(cachedCatalogEntries, adapter).length"
+              v-if="adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).length"
               class="muted"
               style="margin-top: 10px"
             >
-              Unmatched: {{ discoveryUnmatchedModels(cachedCatalogEntries, adapter).map((model) => model.id).join(', ') }}
+              Unmatched: {{ adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).map((model) => model.id).join(', ') }}
             </p>
-            <p v-else-if="adapter.supported" class="muted" style="margin-top: 10px">No models returned.</p>
+            <p v-else-if="!adapterModels.error" class="muted" style="margin-top: 10px">No models returned.</p>
           </article>
         </div>
       </article>

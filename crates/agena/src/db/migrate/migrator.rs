@@ -8,6 +8,7 @@ use super::m20260509_000004_permission_rule_global_scope;
 use super::m20260515_000005_activity_projection;
 use super::m20260515_000005_session_goal;
 use super::m20260516_000006_session_goal_accounting;
+use super::m20260518_000007_model_catalog;
 
 pub struct Migrator;
 
@@ -23,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260515_000005_activity_projection::Migration),
             Box::new(m20260515_000005_session_goal::Migration),
             Box::new(m20260516_000006_session_goal_accounting::Migration),
+            Box::new(m20260518_000007_model_catalog::Migration),
         ]
     }
 }

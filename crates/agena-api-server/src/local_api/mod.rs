@@ -3,6 +3,11 @@ pub mod error;
 pub mod pagination;
 pub mod service;
 
+pub use agena_api::resource::{
+    ProviderAdapterModelsRequest, ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
+    SavedProviderAdapterModelsRequest,
+};
+
 pub use dto::{
     AuthApiKeyWriteRequest, AuthAtomGitBrowserPollRequest, AuthAtomGitBrowserStartRequest,
     AuthBrowserStartRequest, AuthBrowserStartResource, AuthCopilotDevicePollRequest,
@@ -21,16 +26,15 @@ pub use dto::{
     ModelCatalogLookupResponse, ModelCatalogResponse, ModelCatalogSourceKind, PartLoadMode,
     PermissionRuleListQuery, PermissionRuleResource, PermissionRuleRevokeRequest,
     PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
-    PluginStatusListResponse, ProviderAdapterDiscoveryRequest, ProviderAdapterDiscoveryResource,
-    ProviderAdapterDiscoveryResponse, ProviderModelsResponse, ProviderSummaryResource,
+    PluginStatusListResponse, ProviderModelsResponse, ProviderSummaryResource,
     RuntimeAgentResource, RuntimeAgentsResource, RuntimeAutomationResource, RuntimeLspResource,
     RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
     RuntimeOperatorResource, RuntimeReloadResponse, RuntimeSessionCacheResource,
     RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
-    SavedProviderAdapterDiscoveryRequest, ScheduledJobResource, ScheduledJobRunResource,
-    SessionAutomationResource, SessionContinueRequestBody, SessionCreateRequest,
-    SessionEventListQuery, SessionEventStreamQuery, SessionExecutionContextResource,
-    SessionExecutionResource, SessionGoalResource, SessionGoalSetRequest, SessionListQuery,
+    ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
+    SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
+    SessionEventStreamQuery, SessionExecutionContextResource, SessionExecutionResource,
+    SessionGoalResource, SessionGoalSetRequest, SessionListQuery,
     SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
     SessionRewindRequestBody, SessionRunOptionsRequest, SessionRunState, SessionTurnRequest,
     SessionUserInputReplyRequestBody, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,

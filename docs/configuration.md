@@ -159,8 +159,6 @@ AGENA_PROVIDER_RETRY_MAX_DELAY_MS
 AGENA_PROVIDER_STREAM_REPLAY_MAX_RETRIES
 AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS
 AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS
-AGENA_PROVIDER_MODELS_CACHE_DIR
-AGENA_PROVIDER_MODELS_CACHE_TTL_SECS
 ```
 
 插件通过 `[plugins.list.<id>]` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
@@ -319,16 +317,16 @@ ttl_secs = 900
 max_bytes = 67108864
 
 [runtime.model_catalog]
-cache_max_age_secs = 86400
+cache_max_age_secs = 604800
 ```
 
 全局默认项集中放在 `[default]`。`provider` 是默认逻辑 provider，`adapter` 是默认协议路由，`model` 是 backend-visible model id，`agent` 是新 root session 的默认 agent；未配置时默认 agent 是 `build`。
 
-Model catalog 按 model 管理元数据和本地模型覆盖，不再保存 default model。catalog 文件里的 model key 是真实 model id，例如 `models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由，也不再绑定某个 adapter。catalog model 定义支持一个纯展示用的 `origin` 字段，用来标记模型来源/厂商，便于 UI 分类；它不参与任何 provider/adapter/model 路由或能力推断。Agena 会在运行时优先从公开 online sources 拉 richer metadata，目前包括 `https://models.dev/api.json`、`https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json` 和 `https://models.router-for.me/models.json`，再叠加 live provider model lists 做 canonicalize / 去重 / origin 推断，最后把整理后的结果缓存在 workspace 的 `.agena/catalog/model-catalog-cache.json`；本地自定义项会写入 `.agena/catalog/model-catalog-custom.json`。公开 sources 会按优先级合并，当前顺序是 `models.dev` > `openai/codex models.json` > `router-for.me`，低优先级 source 只补缺，不会覆盖更高优先级 source 已经给出的 speed/thinking patch。 如果需要只依赖 live provider discovery，可以设置环境变量 `AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES=1`。
+Model catalog 按 model 管理元数据和本地模型覆盖，不再保存 default model。catalog key 是真实 model id，例如 `models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由，也不再绑定某个 adapter。catalog model 定义支持一个纯展示用的 `origin` 字段，用来标记模型来源/厂商，便于 UI 分类；它不参与任何 provider/adapter/model 路由或能力推断。Agena 会在运行时优先从公开 online sources 拉 richer metadata，目前包括 `https://models.dev/api.json`、`https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json` 和 `https://models.router-for.me/models.json`，再叠加 live provider model lists 做 canonicalize / 去重 / origin 推断，最后把整理后的 official catalog 和本地 custom overrides 存到运行时数据库中。公开 sources 会按优先级合并，当前顺序是 `models.dev` > `openai/codex models.json` > `router-for.me`，低优先级 source 只补缺，不会覆盖更高优先级 source 已经给出的 speed/thinking patch。`cache_max_age_secs` 控制 official catalog 的刷新过期时间，默认 7 天；可以通过 Runtime Overview 或 API 手动刷新。旧的 workspace `.agena/catalog/model-catalog-cache.json` 和 `.agena/catalog/model-catalog-custom.json` 会在数据库为空时迁移一次。如果需要只依赖 live provider model lists，可以设置环境变量 `AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES=1`。
 
 运行时 provider 会在 live model 列表里返回独立的 `adapter_id` 和真实 `model_id`，不会把二者拼成 provider-local route。`providers.<id>.default_adapter` 和 `providers.<id>.default_model` 可用作 provider 内部默认选择；如果该 provider 正好是 `default.provider` 且省略了 provider-local 默认值，解析器会分别使用 `default.adapter` 和 `default.model`。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存/删除 model-level 本地 override。Studio Settings / Providers 页面可以创建 provider，查看 provider 已启用 adapter 和 live models，把任意 catalog model 复制到某个 provider 的目标 adapter 下，也可以实时手动添加或修改 provider-local adapter model。
 
-Provider 的 live `/models` 列表还有独立磁盘缓存，用于减少启动 UI 或打开模型选择器时的 provider API 请求。默认位置是 `~/.agena/provider-models`，默认 TTL 是 15 分钟；可以通过 `AGENA_PROVIDER_MODELS_CACHE_DIR`、`AGENA_PROVIDER_MODELS_CACHE_TTL_SECS` 覆盖。如果 live `/models` 请求失败且没有可用缓存，请求会直接失败。
+Provider 的 live `/models` 列表是实时请求，不做磁盘缓存，也不会在失败时 fallback 到旧结果。请求失败会直接返回错误。
 
 校验规则：
 
@@ -414,6 +412,7 @@ sap_ai_core
 
 adapter 常见额外字段：
 
+- 通用：`model_discovery`，默认 `live`；设为 `configured_only` 时不调用远程模型列表，只展示该 adapter 下显式配置的 models。
 - `openai`：`backend`、`api_mode`、`stream_mode`、`models_url`、`realtime_ws_url`、`auth_header`、`auth_scheme`、`capability_family`、`extra_headers`
 - `anthropic`：`models_url`、`messages_url`、`auth_header`、`auth_scheme`、`extra_beta_header`、`eager_input_streaming`、`extra_headers`
 - `gemini`：`auth_header`、`auth_scheme`、`extra_headers`
@@ -504,6 +503,8 @@ enabled = true
 - `protocol_root`：派生 `/v1` 或 `/v1beta`
 - `provider_routed`：派生 `/api/provider/<provider>/...`
 - `auto`：按 URL 形状自动判断，默认值
+
+OpenCode Go / Zen 也是这类共享网关：Go 大多数模型走 OpenAI-compatible `/chat/completions`，MiniMax 模型走 Anthropic Messages `/messages`；Zen 还包含 OpenAI Responses 和 Gemini 路由。可复制配置见 [OpenCode 接入](opencode-go.md)。
 
 常见输入示例：
 

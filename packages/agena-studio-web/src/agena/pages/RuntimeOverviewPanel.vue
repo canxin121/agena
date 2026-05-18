@@ -10,17 +10,14 @@ import type {
   ProviderSummary,
   RuntimeStatus,
 } from '@/agena/lib/agenaApi'
-import { listModelCatalogEntries, lookupModelCatalogEntries } from '@/agena/lib/agenaApi'
+import { listModelCatalogEntries } from '@/agena/lib/agenaApi'
 
 import {
   MODEL_LIFECYCLE_OPTIONS,
-  catalogLookupIdForProviderModel,
   createEmptyModelCatalogDraft,
   createEmptyModelCatalogThinkingModeDraft,
   createEmptyModelCatalogSpeedModeDraft,
   createModelCatalogDraftFromEntry,
-  createModelCatalogDraftFromProviderModel,
-  findCatalogEntryForProviderModel,
   useRuntimeModelCatalogActions,
   type ModelCatalogEditableDraft,
 } from './useRuntimeModelCatalogActions'
@@ -253,17 +250,6 @@ async function runCatalogSearch() {
   await loadCatalogPage(0)
 }
 
-async function loadProviderModelDraft(model: ProviderModel) {
-  const exactEntries = await lookupModelCatalogEntries([catalogLookupIdForProviderModel(model) || model.id])
-  const matchingEntry = findCatalogEntryForProviderModel(exactEntries, model)
-  draft.value = matchingEntry
-    ? createModelCatalogDraftFromEntry(matchingEntry)
-    : createModelCatalogDraftFromProviderModel(model)
-  editingEntryKey.value = matchingEntry ? makeEntryKey(matchingEntry.model_id, matchingEntry.kind) : ''
-  actionError.value = ''
-  actionMessage.value = `Loaded ${model.provider_id}/${model.adapter_id || 'adapter'}/${model.id} into the draft editor.`
-}
-
 async function saveDraft() {
   submitting.value = true
   try {
@@ -393,24 +379,6 @@ onMounted(() => {
                 </div>
                 <div class="muted">Default adapter: {{ provider.default_adapter || 'auto' }}</div>
                 <div class="muted">Default model: {{ provider.default_model || 'unset' }}</div>
-                <div class="muted" style="margin-top: 8px">Live models:</div>
-                <div
-                  v-if="(props.providerModels[provider.provider_id] || []).length"
-                  class="button-row"
-                  style="margin-top: 8px; flex-wrap: wrap"
-                >
-                  <button
-                    v-for="model in props.providerModels[provider.provider_id] || []"
-                    :key="model.id"
-                    class="button"
-                    :disabled="submitting"
-                    :title="`${model.provider_id}/${model.id}`"
-                    @click="loadProviderModelDraft(model)"
-                  >
-                    Bring to Draft: {{ props.formatProviderModel(model) }}
-                  </button>
-                </div>
-                <div v-else class="muted">No live models loaded.</div>
               </div>
               <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
                 <button class="button" :disabled="submitting" @click="resetEditor(firstProviderAdapterId(provider))">
@@ -462,7 +430,7 @@ onMounted(() => {
         <p v-if="actionMessage" class="muted" style="margin-top: 12px">{{ actionMessage }}</p>
         <p v-if="actionError" class="muted" style="margin-top: 8px">{{ actionError }}</p>
         <p class="muted" style="margin-top: 12px">
-          Use the live model buttons above for the fastest draft path, then adjust any fields below before saving.
+          Search the paged catalog list above or start from a blank draft, then adjust fields before saving.
         </p>
 
         <div class="grid two" style="margin-top: 16px">

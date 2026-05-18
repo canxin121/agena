@@ -14,10 +14,11 @@ use super::{
     HttpProviderAdapterConfig, McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig,
     ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
-    ProviderGoogleAdcAuthConfig, ProviderSapAiCoreAuthConfig, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    RuntimeConfig, RuntimeModelCatalogConfig, SharedGatewayEndpointLayout, StreamTransportMode,
-    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
+    ProviderGoogleAdcAuthConfig, ProviderModelDiscoveryConfig, ProviderSapAiCoreAuthConfig,
+    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    ResolvedProviderModelConfig, RuntimeConfig, RuntimeModelCatalogConfig,
+    SharedGatewayEndpointLayout, StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig,
+    WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -1059,6 +1060,7 @@ impl Merge for RawProviderAuthConfig {
 pub(crate) struct RawProviderAdapterConfig {
     pub(crate) backend: Option<super::OpenAiBackendConfig>,
     pub(crate) enabled: Option<bool>,
+    pub(crate) model_discovery: Option<ProviderModelDiscoveryConfig>,
     pub(crate) base_url: Option<String>,
     pub(crate) models_url: Option<String>,
     pub(crate) capability_family: Option<ProviderCapabilityFamilyConfig>,
@@ -1082,6 +1084,7 @@ impl Merge for RawProviderAdapterConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.backend, overlay.backend);
         merge_option(&mut self.enabled, overlay.enabled);
+        merge_option(&mut self.model_discovery, overlay.model_discovery);
         merge_option(&mut self.base_url, overlay.base_url);
         merge_option(&mut self.models_url, overlay.models_url);
         merge_option(&mut self.capability_family, overlay.capability_family);
@@ -1280,6 +1283,7 @@ fn resolve_adapter(
         kind,
         raw.backend,
         raw.enabled,
+        raw.model_discovery,
         raw.base_url,
         raw.models_url,
         raw.capability_family,
@@ -1320,6 +1324,7 @@ fn resolve_adapter_config(
     kind: ProviderKind,
     backend: Option<super::OpenAiBackendConfig>,
     enabled: Option<bool>,
+    model_discovery: Option<ProviderModelDiscoveryConfig>,
     base_url: Option<String>,
     models_url: Option<String>,
     capability_family: Option<ProviderCapabilityFamilyConfig>,
@@ -1446,6 +1451,7 @@ fn resolve_adapter_config(
 
     Ok(ResolvedProviderAdapterConfig {
         enabled: enabled.unwrap_or(false),
+        model_discovery: model_discovery.unwrap_or_default(),
         definition,
     })
 }

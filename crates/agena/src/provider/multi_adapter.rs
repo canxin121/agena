@@ -34,6 +34,7 @@ pub struct MultiAdapterProvider {
     default_model: ModelId,
     adapters: BTreeMap<String, Arc<dyn ModelProvider>>,
     routes: BTreeMap<ProviderModelRouteKey, ProviderModelRoute>,
+    configured_only_adapters: BTreeSet<String>,
 }
 
 impl MultiAdapterProvider {
@@ -50,7 +51,13 @@ impl MultiAdapterProvider {
             default_model: ModelId::new(default_model),
             adapters,
             routes,
+            configured_only_adapters: BTreeSet::new(),
         }
+    }
+
+    pub fn with_configured_only_adapters(mut self, adapters: BTreeSet<String>) -> Self {
+        self.configured_only_adapters = adapters;
+        self
     }
 
     fn adapter(&self, adapter_id: &str) -> Result<Arc<dyn ModelProvider>, AppError> {
@@ -309,11 +316,15 @@ impl ModelProvider for MultiAdapterProvider {
 
         for (adapter_id, adapter) in &self.adapters {
             let adapter_id = AdapterId::new(adapter_id.clone());
-            let listed = match adapter.list_models().await {
-                Ok(models) => models,
-                Err(error) => {
-                    errors.push(format!("{adapter_id}: {error}"));
-                    Vec::new()
+            let listed = if self.configured_only_adapters.contains(adapter_id.as_str()) {
+                Vec::new()
+            } else {
+                match adapter.list_models().await {
+                    Ok(models) => models,
+                    Err(error) => {
+                        errors.push(format!("{adapter_id}: {error}"));
+                        Vec::new()
+                    }
                 }
             };
             for model in listed {
@@ -698,6 +709,47 @@ mod tests {
         assert_eq!(
             models[0].adapter_id.as_ref().map(AdapterId::as_str),
             Some("gitlab")
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_adapter_provider_can_list_configured_routes_only() {
+        let provider = MultiAdapterProvider::new(
+            "opencode-free",
+            "openai",
+            "deepseek-v4-flash-free",
+            BTreeMap::from([(
+                "openai".to_owned(),
+                Arc::new(StaticProvider {
+                    id: "opencode-free::openai".to_owned(),
+                    default_model: ModelId::new("deepseek-v4-flash-free"),
+                    models: vec![
+                        Model::new("opencode-free::openai", "gpt-5.5"),
+                        Model::new("opencode-free::openai", "deepseek-v4-flash-free"),
+                    ],
+                    list_models_error: None,
+                }) as Arc<dyn ModelProvider>,
+            )]),
+            BTreeMap::from([(
+                ("openai".to_owned(), "deepseek-v4-flash-free".to_owned()),
+                ProviderModelRoute {
+                    enabled: true,
+                    definition: ConfiguredModelDefinition::default(),
+                },
+            )]),
+        )
+        .with_configured_only_adapters(BTreeSet::from(["openai".to_owned()]));
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("configured-only routes should list");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "deepseek-v4-flash-free");
+        assert_eq!(
+            models[0].adapter_id.as_ref().map(AdapterId::as_str),
+            Some("openai")
         );
     }
 }

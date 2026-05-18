@@ -13,12 +13,15 @@ use agena_api::{
     },
     queries::{
         GetMessageParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
-        ListEventsParams, ListMessagesParams, ListPermissionRulesParams, ListProviderModelsParams,
-        ListSessionsParams, ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
+        ListEventsParams, ListMessagesParams, ListPermissionRulesParams,
+        ListProviderAdapterModelsParams, ListProviderModelsParams,
+        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
+        PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        HealthResponse, PartLoadMode, PermissionRuleResource, RunOptions, SessionExecutionResource,
-        SessionResource, WorkspaceResource,
+        HealthResponse, PartLoadMode, PermissionRuleResource, ProviderAdapterModelsRequest,
+        ProviderAdapterModelsResponse, RunOptions, SavedProviderAdapterModelsRequest,
+        SessionExecutionResource, SessionResource, WorkspaceResource,
     },
 };
 
@@ -129,6 +132,26 @@ impl AgenaClient {
 
     pub async fn health(&self) -> Result<HealthResponse, ClientError> {
         self.get_json("/api/v1/health").await
+    }
+
+    pub async fn list_provider_adapter_models(
+        &self,
+        request: ProviderAdapterModelsRequest,
+    ) -> Result<ProviderAdapterModelsResponse, ClientError> {
+        self.post_json("/api/v1/providers/models", serde_json::to_value(request)?)
+            .await
+    }
+
+    pub async fn list_saved_provider_adapter_models(
+        &self,
+        provider_id: &str,
+        request: SavedProviderAdapterModelsRequest,
+    ) -> Result<ProviderAdapterModelsResponse, ClientError> {
+        self.post_json(
+            &format!("/api/v1/providers/{provider_id}/models"),
+            serde_json::to_value(request)?,
+        )
+        .await
     }
 
     pub async fn create_session(
@@ -570,6 +593,34 @@ impl AgenaClient {
                         .await?,
                 ))
             }
+            Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {
+                provider_id,
+                base_url,
+                endpoint_layout,
+                api_key,
+                api_key_env,
+                adapter_ids,
+            }) => Ok(QueryResult::ProviderAdapterModels(
+                self.list_provider_adapter_models(ProviderAdapterModelsRequest {
+                    provider_id,
+                    base_url,
+                    endpoint_layout,
+                    api_key,
+                    api_key_env,
+                    adapter_ids,
+                })
+                .await?,
+            )),
+            Query::ListSavedProviderAdapterModels(ListSavedProviderAdapterModelsParams {
+                provider_id,
+                adapter_ids,
+            }) => Ok(QueryResult::ProviderAdapterModels(
+                self.list_saved_provider_adapter_models(
+                    provider_id.as_str(),
+                    SavedProviderAdapterModelsRequest { adapter_ids },
+                )
+                .await?,
+            )),
             Query::ListWorkspaces(ListWorkspacesParams {
                 cursor,
                 limit,

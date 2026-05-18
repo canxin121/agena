@@ -4,7 +4,6 @@ import {
   listPermissionRules,
   listPluginLogs,
   listPlugins,
-  listProviderModels,
   listProviders,
   listSessions,
   listWorkspaces,
@@ -52,14 +51,6 @@ export async function loadRuntimeSectionData(input: {
 }): Promise<RuntimeSectionData> {
   const [runtime, providers, workspaces] = await Promise.all([fetchRuntimeStatus(), listProviders(), listWorkspaces()])
 
-  const providerModels = Object.fromEntries(
-    await Promise.all(
-      providers.map(
-        async (provider) => [provider.provider_id, await listProviderModels(provider.provider_id)] as const,
-      ),
-    ),
-  ) as Record<string, ProviderModel[]>
-
   const selectedWorkspaceId = pickWorkspaceId(input.selectedWorkspaceId, workspaces)
   const sessions = selectedWorkspaceId ? await listSessions(selectedWorkspaceId) : []
   const selectedSessionId = pickSessionId(input.selectedSessionId, sessions)
@@ -67,7 +58,7 @@ export async function loadRuntimeSectionData(input: {
   return {
     runtime,
     providers,
-    providerModels,
+    providerModels: {},
     workspaces,
     sessions,
     selectedWorkspaceId,
@@ -82,19 +73,12 @@ export async function loadSettingsSectionData(permissionSearch: string): Promise
     fetchRuntimeStatus(),
     listProviders(),
   ])
-  const providerModels = Object.fromEntries(
-    await Promise.all(
-      providers.map(
-        async (provider) => [provider.provider_id, await listProviderModels(provider.provider_id)] as const,
-      ),
-    ),
-  ) as Record<string, ProviderModel[]>
 
   return {
     authProviders,
     runtime,
     providers,
-    providerModels,
+    providerModels: {},
     permissionRules,
   }
 }

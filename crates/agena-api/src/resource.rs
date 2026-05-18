@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use agena::{
     agent::{AgentMode, AgentPermissionConfig, AgentRunConfig, PermissionConfig},
     agents::AgentScope,
+    config::SharedGatewayEndpointLayout,
     message::{MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
     model_catalog::{CatalogModelDefinition, ModelCatalogEntrySourceKind},
@@ -618,6 +619,57 @@ pub struct ProviderSummaryResource {
 pub struct ProviderModelsResponse {
     pub provider_id: String,
     pub models: Vec<ProviderModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProviderAdapterModelsRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    pub base_url: String,
+    #[serde(default)]
+    pub endpoint_layout: SharedGatewayEndpointLayout,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub adapter_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SavedProviderAdapterModelsRequest {
+    #[serde(default)]
+    pub adapter_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderAdapterModelsResource {
+    pub adapter_id: String,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ProviderModel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl From<agena::config::ProviderAdapterModelsResult> for ProviderAdapterModelsResource {
+    fn from(value: agena::config::ProviderAdapterModelsResult) -> Self {
+        Self {
+            adapter_id: value.adapter_id,
+            enabled: value.enabled,
+            resolved_base_url: value.resolved_base_url,
+            models: value.models,
+            error: value.error,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderAdapterModelsResponse {
+    pub provider_id: String,
+    pub adapters: Vec<ProviderAdapterModelsResource>,
 }
 
 // Re-export the common payload types so clients don't need an explicit

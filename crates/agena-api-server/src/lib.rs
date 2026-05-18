@@ -35,6 +35,7 @@ pub mod ipc;
 #[cfg(feature = "jsonrpc")]
 pub mod jsonrpc;
 pub mod local_api;
+mod provider_queries;
 #[cfg(feature = "http")]
 pub mod rest;
 #[cfg(feature = "sse")]
@@ -193,16 +194,12 @@ pub fn router(state: AppState) -> Router {
             )
             .route("/api/v1/providers", get(rest::list_providers))
             .route(
-                "/api/v1/providers/discover",
-                post(rest::discover_provider_adapters),
+                "/api/v1/providers/models",
+                post(rest::list_provider_adapter_models),
             )
             .route(
                 "/api/v1/providers/{provider_id}/models",
-                get(rest::list_provider_models),
-            )
-            .route(
-                "/api/v1/providers/{provider_id}/discover",
-                post(rest::discover_saved_provider_adapters),
+                get(rest::list_provider_models).post(rest::list_saved_provider_adapter_models),
             )
             .route(
                 "/api/v1/workspaces",

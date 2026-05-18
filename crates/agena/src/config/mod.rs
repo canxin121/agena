@@ -1,3 +1,4 @@
+mod adapter_models;
 mod credential_store;
 mod edit;
 mod error;
@@ -22,14 +23,20 @@ pub use types::{
     OllamaProviderOptions, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
     PluginConfig, ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
-    ProviderGoogleAdcAuthConfig, ProviderHttpConfig, ProviderSapAiCoreAuthConfig,
-    RequestRetryConfig, ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    ResolvedProviderModelConfig, RuntimeConfig, RuntimeJanitorConfig, RuntimeModelCatalogConfig,
-    RuntimeReloadConfig, SessionCacheConfig, SharedGatewayEndpointLayout,
-    SimpleHttpProviderOptions, StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig,
-    WebSearchBackend, WebSearchBackendKind, WebSearchConfig, WebToolsConfig,
+    ProviderGoogleAdcAuthConfig, ProviderHttpConfig, ProviderModelDiscoveryConfig,
+    ProviderSapAiCoreAuthConfig, RequestRetryConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, ResolvedProviderModelConfig, RuntimeConfig, RuntimeJanitorConfig,
+    RuntimeModelCatalogConfig, RuntimeReloadConfig, SessionCacheConfig,
+    SharedGatewayEndpointLayout, SimpleHttpProviderOptions, StreamReplayConfig,
+    StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend, WebSearchBackendKind,
+    WebSearchConfig, WebToolsConfig,
 };
 
+pub use adapter_models::{
+    HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS, ProviderAdapterModelsTarget,
+    draft_provider_adapter_models_target, list_provider_adapter_models_for_target,
+    saved_provider_adapter_models_target,
+};
 pub use credential_store::{
     ProviderConfigCredentialStore, provider_auth_data, provider_gitlab_instance_url,
     provider_has_gitlab_adapter, provider_supports_api_key_write, provider_supports_atomgit_oauth,
@@ -51,5 +58,5 @@ pub(crate) use raw::{
     RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig,
     RawUiConfig,
 };
-pub use registry::ProviderAdapterProbeResult;
-pub use registry::probe_provider_adapters;
+pub use registry::ProviderAdapterModelsResult;
+pub use registry::list_provider_adapter_models;

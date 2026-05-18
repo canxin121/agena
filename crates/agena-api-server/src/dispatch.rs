@@ -40,12 +40,13 @@ use agena_api::{
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
         GetMessageParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
-        ListEventsParams, ListMessagesParams, ListPermissionRulesParams, ListProviderModelsParams,
-        ListSessionsParams, ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
+        ListEventsParams, ListMessagesParams, ListPermissionRulesParams,
+        ListProviderAdapterModelsParams, ListProviderModelsParams,
+        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
+        PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        ModelCatalogResponse, ProviderAdapterSummaryResource, ProviderModelsResponse,
-        ProviderSummaryResource, RunOptions, RuntimeAgentResource, RuntimeAgentsResource,
+        ModelCatalogResponse, RunOptions, RuntimeAgentResource, RuntimeAgentsResource,
         RuntimeAutomationResource, RuntimeLspResource, RuntimeLspServerResource,
         RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
         RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
@@ -580,57 +581,6 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             skills,
         },
     }
-}
-
-fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource> {
-    let snapshot = state.runtime().current_snapshot();
-    let registry = snapshot.provider_registry();
-    let mut providers = registry
-        .provider_ids()
-        .into_iter()
-        .filter_map(|provider_id| {
-            registry.get(provider_id.as_str()).map(|provider| {
-                let provider_config = snapshot
-                    .config_resolution()
-                    .config
-                    .providers
-                    .get(provider_id.as_str());
-                let adapters = provider_config
-                    .map(|provider| {
-                        provider
-                            .adapters
-                            .iter()
-                            .map(|(adapter_id, adapter)| ProviderAdapterSummaryResource {
-                                adapter_id: adapter_id.clone(),
-                                enabled: adapter.enabled,
-                                configured_model_count: provider
-                                    .models
-                                    .keys()
-                                    .filter(|model_id| {
-                                        model_id
-                                            .split_once('/')
-                                            .map(|(route_adapter_id, _)| {
-                                                route_adapter_id == adapter_id
-                                            })
-                                            .unwrap_or(false)
-                                    })
-                                    .count(),
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
-
-                ProviderSummaryResource {
-                    default_adapter: provider.default_adapter().map(ToString::to_string),
-                    default_model: provider.default_model().to_string(),
-                    adapters,
-                    provider_id,
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
-    providers
 }
 
 // ─── Command dispatch ───────────────────────────────────────────────────
@@ -1238,28 +1188,48 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             database_connected: true,
         })),
         Query::Runtime => Ok(QueryResult::Runtime(runtime_status_response(state).await)),
-        Query::ListProviders => Ok(QueryResult::Providers(list_providers_response(state))),
+        Query::ListProviders => Ok(QueryResult::Providers(
+            crate::provider_queries::list_providers_response(state),
+        )),
         Query::ListProviderModels(ListProviderModelsParams { provider_id }) => {
-            let snapshot = state.runtime().current_snapshot();
-            if snapshot
-                .provider_registry()
-                .get(provider_id.as_str())
-                .is_none()
-            {
-                return Err(ServerError::NotFound(format!(
-                    "provider {provider_id} not found"
-                )));
-            }
-
-            let models = snapshot
-                .list_provider_models(provider_id.as_str())
-                .await
-                .map_err(ServerError::Core)?;
-            Ok(QueryResult::ProviderModels(ProviderModelsResponse {
-                provider_id,
-                models,
-            }))
+            Ok(QueryResult::ProviderModels(
+                crate::provider_queries::list_provider_models_response(state, provider_id).await?,
+            ))
         }
+        Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {
+            provider_id,
+            base_url,
+            endpoint_layout,
+            api_key,
+            api_key_env,
+            adapter_ids,
+        }) => Ok(QueryResult::ProviderAdapterModels(
+            crate::provider_queries::list_provider_adapter_models_response(
+                state,
+                ListProviderAdapterModelsParams {
+                    provider_id,
+                    base_url,
+                    endpoint_layout,
+                    api_key,
+                    api_key_env,
+                    adapter_ids,
+                },
+            )
+            .await?,
+        )),
+        Query::ListSavedProviderAdapterModels(ListSavedProviderAdapterModelsParams {
+            provider_id,
+            adapter_ids,
+        }) => Ok(QueryResult::ProviderAdapterModels(
+            crate::provider_queries::list_saved_provider_adapter_models_response(
+                state,
+                ListSavedProviderAdapterModelsParams {
+                    provider_id,
+                    adapter_ids,
+                },
+            )
+            .await?,
+        )),
         Query::GetSessionState(GetSessionParams { session_id }) => {
             let session = manager.get_session(session_id).await?;
             let state_resource = state

@@ -257,24 +257,25 @@ fn live_provider_id(prefix: &str) -> String {
     format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
 }
 
-fn live_provider_discovery_request(provider_id: &str) -> serde_json::Value {
+fn live_provider_adapter_models_request(provider_id: &str) -> serde_json::Value {
     serde_json::json!({
         "provider_id": provider_id,
         "base_url": LIVE_PROVIDER_GATEWAY_BASE_URL,
-        "api_key_env": LIVE_PROVIDER_GATEWAY_KEY_ENV
+        "api_key_env": LIVE_PROVIDER_GATEWAY_KEY_ENV,
+        "adapter_ids": ["openai", "anthropic", "gemini"]
     })
 }
 
-fn select_supported_live_adapter_and_model(discovery: &serde_json::Value) -> (String, String) {
-    let adapters = discovery
+fn select_live_adapter_and_model(adapter_models: &serde_json::Value) -> (String, String) {
+    let adapters = adapter_models
         .get("adapters")
         .and_then(|value| value.as_array())
-        .expect("discovery response should include adapters array");
+        .expect("adapter models response should include adapters array");
 
     for preferred in ["openai", "anthropic", "gemini"] {
         if let Some(model_id) = adapters.iter().find_map(|adapter| {
             if adapter.get("adapter_id").and_then(|value| value.as_str()) != Some(preferred)
-                || adapter.get("supported").and_then(|value| value.as_bool()) != Some(true)
+                || adapter.get("error").is_some()
             {
                 return None;
             }
@@ -293,22 +294,22 @@ fn select_supported_live_adapter_and_model(discovery: &serde_json::Value) -> (St
     }
 
     panic!(
-        "cxits live discovery should return at least one supported adapter with models: {discovery:?}"
+        "cxits live adapter model listing should return at least one adapter with models: {adapter_models:?}"
     );
 }
 
-fn build_live_provider_patch_from_discovery(
-    discovery: &serde_json::Value,
+fn build_live_provider_patch_from_adapter_models(
+    adapter_models: &serde_json::Value,
     default_adapter: &str,
     default_model: &str,
 ) -> serde_json::Value {
     let mut adapters = serde_json::Map::new();
-    for adapter in discovery
+    for adapter in adapter_models
         .get("adapters")
         .and_then(|value| value.as_array())
-        .expect("discovery response should include adapters array")
+        .expect("adapter models response should include adapters array")
     {
-        if adapter.get("supported").and_then(|value| value.as_bool()) != Some(true) {
+        if adapter.get("error").is_some() {
             continue;
         }
         let Some(adapter_id) = adapter.get("adapter_id").and_then(|value| value.as_str()) else {
@@ -379,6 +380,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
                 ..CatalogModelDefinition::default()
             },
         )
+        .await
         .expect("custom catalog entry should be written");
     state
         .runtime()
@@ -392,6 +394,7 @@ async fn runtime_and_model_catalog_endpoints_expose_catalog_payload() {
                 ..CatalogModelDefinition::default()
             },
         )
+        .await
         .expect("slash alias catalog entry should be written");
     let app = router(state);
 
@@ -652,6 +655,7 @@ async fn model_catalog_delete_accepts_visible_model_ids_with_slashes() {
             "openai/google/gemini-2.5-pro",
             CatalogModelDefinition::default(),
         )
+        .await
         .expect("custom catalog entry should be written");
 
     let app = router(state);
@@ -730,6 +734,7 @@ enabled = true
                 ..CatalogModelDefinition::default()
             },
         )
+        .await
         .expect("custom catalog entry should be written");
 
     let app = router(state);
@@ -846,6 +851,7 @@ enabled = true
                 ..CatalogModelDefinition::default()
             },
         )
+        .await
         .expect("canonical catalog entry should be written");
 
     let app = router(state);
@@ -956,6 +962,7 @@ enabled = true
                 ..CatalogModelDefinition::default()
             },
         )
+        .await
         .expect("custom catalog entry should be written");
 
     let app = router(state);
@@ -1016,7 +1023,7 @@ enabled = true
 }
 
 #[tokio::test]
-async fn provider_discovery_endpoint_probes_shared_gateway_adapters() {
+async fn provider_adapter_models_endpoint_lists_shared_gateway_models() {
     let mut server = mockito::Server::new_async().await;
     let _openai = server
         .mock("GET", "/v1/models")
@@ -1068,13 +1075,14 @@ async fn provider_discovery_endpoint_probes_shared_gateway_adapters() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/providers/discover")
+                .uri("/api/v1/providers/models")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
                         "provider_id": "draft-gateway",
                         "base_url": server.url(),
-                        "api_key": "sk-test"
+                        "api_key": "sk-test",
+                        "adapter_ids": ["openai", "anthropic", "gemini"]
                     })
                     .to_string(),
                 ))
@@ -1089,7 +1097,7 @@ async fn provider_discovery_endpoint_probes_shared_gateway_adapters() {
     let adapters = value
         .get("adapters")
         .and_then(|items| items.as_array())
-        .expect("discovery response should include adapters");
+        .expect("adapter models response should include adapters");
     assert_eq!(
         adapters.len(),
         3,
@@ -1097,7 +1105,7 @@ async fn provider_discovery_endpoint_probes_shared_gateway_adapters() {
     );
     assert!(adapters.iter().any(|adapter| {
         adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("openai")
-            && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+            && adapter.get("error").is_none()
             && adapter
                 .get("resolved_base_url")
                 .and_then(|value| value.as_str())
@@ -1116,7 +1124,7 @@ async fn provider_discovery_endpoint_probes_shared_gateway_adapters() {
     }));
     assert!(adapters.iter().any(|adapter| {
         adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("anthropic")
-            && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+            && adapter.get("error").is_none()
             && adapter
                 .get("models")
                 .and_then(|value| value.as_array())
@@ -1132,7 +1140,7 @@ async fn provider_discovery_endpoint_probes_shared_gateway_adapters() {
     }));
     assert!(adapters.iter().any(|adapter| {
         adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("gemini")
-            && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+            && adapter.get("error").is_none()
             && adapter
                 .get("resolved_base_url")
                 .and_then(|value| value.as_str())
@@ -1152,7 +1160,7 @@ async fn provider_discovery_endpoint_probes_shared_gateway_adapters() {
 }
 
 #[tokio::test]
-async fn saved_provider_discovery_endpoint_filters_to_requested_adapters() {
+async fn saved_provider_adapter_models_endpoint_filters_to_requested_adapters() {
     let mut server = mockito::Server::new_async().await;
     let _openai = server
         .mock("GET", "/v1/models")
@@ -1208,7 +1216,7 @@ enabled = true
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/providers/gateway/discover")
+                .uri("/api/v1/providers/gateway/models")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
@@ -1227,7 +1235,7 @@ enabled = true
     let adapters = value
         .get("adapters")
         .and_then(|items| items.as_array())
-        .expect("saved discovery response should include adapters");
+        .expect("saved adapter models response should include adapters");
     assert_eq!(
         adapters.len(),
         1,
@@ -1239,16 +1247,57 @@ enabled = true
             .and_then(|value| value.as_str()),
         Some("anthropic")
     );
-    assert_eq!(
-        adapters[0]
-            .get("supported")
-            .and_then(|value| value.as_bool()),
-        Some(true)
+    assert!(
+        adapters[0].get("error").is_none(),
+        "adapter listing should succeed: {value:?}"
     );
 }
 
 #[tokio::test]
-async fn saved_provider_discovery_endpoint_includes_supported_unconfigured_http_adapters() {
+async fn saved_provider_adapter_models_endpoint_requires_explicit_adapter_ids() {
+    let config = r#"
+[providers.gateway]
+default_adapter = "openai"
+default_model = "gpt-4.1-mini"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "https://example.com/v1"
+api_key = "sk-test"
+
+[providers.gateway.adapters.openai]
+enabled = true
+"#;
+
+    let (state, _, _) = build_state_with_config(config).await;
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/providers/gateway/models")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        value
+            .get("message")
+            .and_then(|message| message.as_str())
+            .is_some_and(|message| message
+                .contains("saved provider adapter model listing requires explicit adapter_ids")),
+        "expected strict adapter_ids validation error: {value:?}"
+    );
+}
+
+#[tokio::test]
+async fn saved_provider_adapter_models_endpoint_includes_explicit_unconfigured_http_adapters() {
     let mut server = mockito::Server::new_async().await;
     let _openai = server
         .mock("GET", "/v1/models")
@@ -1317,9 +1366,14 @@ enabled = true
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/providers/gateway/discover")
+                .uri("/api/v1/providers/gateway/models")
                 .header("content-type", "application/json")
-                .body(Body::from("{}"))
+                .body(Body::from(
+                    serde_json::json!({
+                        "adapter_ids": ["openai", "anthropic", "gemini"]
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -1331,26 +1385,26 @@ enabled = true
     let adapters = value
         .get("adapters")
         .and_then(|items| items.as_array())
-        .expect("saved discovery response should include adapters");
+        .expect("saved adapter models response should include adapters");
     assert!(
         adapters.iter().any(|adapter| {
             adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("anthropic")
-                && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+                && adapter.get("error").is_none()
         }),
-        "saved discovery should include unconfigured anthropic adapter: {value:?}"
+        "saved adapter model listing should include unconfigured anthropic adapter: {value:?}"
     );
     assert!(
         adapters.iter().any(|adapter| {
             adapter.get("adapter_id").and_then(|value| value.as_str()) == Some("gemini")
-                && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+                && adapter.get("error").is_none()
         }),
-        "saved discovery should include unconfigured gemini adapter: {value:?}"
+        "saved adapter model listing should include unconfigured gemini adapter: {value:?}"
     );
 }
 
 #[tokio::test]
 #[ignore = "real integration test against api.cxits.cn"]
-async fn cxits_live_provider_creation_flow_discovers_gateway_root() {
+async fn cxits_live_provider_creation_flow_lists_gateway_models_from_root() {
     let _api_key = live_provider_gateway_key();
     let provider_id = live_provider_id("cxits_draft");
     let (state, _, _) = build_state().await;
@@ -1360,10 +1414,10 @@ async fn cxits_live_provider_creation_flow_discovers_gateway_root() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/providers/discover")
+                .uri("/api/v1/providers/models")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    live_provider_discovery_request(provider_id.as_str()).to_string(),
+                    live_provider_adapter_models_request(provider_id.as_str()).to_string(),
                 ))
                 .unwrap(),
         )
@@ -1380,20 +1434,20 @@ async fn cxits_live_provider_creation_flow_discovers_gateway_root() {
     let adapters = value
         .get("adapters")
         .and_then(|items| items.as_array())
-        .expect("discovery response should include adapters");
+        .expect("adapter models response should include adapters");
     assert!(
         adapters.iter().any(|adapter| {
-            adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+            adapter.get("error").is_none()
                 && adapter
                     .get("models")
                     .and_then(|value| value.as_array())
                     .map(|models| !models.is_empty())
                     == Some(true)
         }),
-        "cxits discovery should yield at least one supported adapter with models: {value:?}"
+        "cxits adapter model listing should yield at least one adapter with models: {value:?}"
     );
 
-    let (adapter_id, model_id) = select_supported_live_adapter_and_model(&value);
+    let (adapter_id, model_id) = select_live_adapter_and_model(&value);
     let selected_adapter = adapters
         .iter()
         .find(|adapter| {
@@ -1429,32 +1483,33 @@ async fn cxits_live_provider_creation_flow_can_save_provider_and_list_models() {
     let (state, _, _) = build_state().await;
     let app = router(state);
 
-    let draft_discovery = app
+    let draft_adapter_models = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/providers/discover")
+                .uri("/api/v1/providers/models")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    live_provider_discovery_request(provider_id.as_str()).to_string(),
+                    live_provider_adapter_models_request(provider_id.as_str()).to_string(),
                 ))
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(draft_discovery.status(), StatusCode::OK);
+    assert_eq!(draft_adapter_models.status(), StatusCode::OK);
 
-    let discovery_body = draft_discovery
+    let adapter_models_body = draft_adapter_models
         .into_body()
         .collect()
         .await
         .unwrap()
         .to_bytes();
-    let discovery_value: serde_json::Value = serde_json::from_slice(&discovery_body).unwrap();
-    let (adapter_id, model_id) = select_supported_live_adapter_and_model(&discovery_value);
-    let provider_patch = build_live_provider_patch_from_discovery(
-        &discovery_value,
+    let adapter_models_value: serde_json::Value =
+        serde_json::from_slice(&adapter_models_body).unwrap();
+    let (adapter_id, model_id) = select_live_adapter_and_model(&adapter_models_value);
+    let provider_patch = build_live_provider_patch_from_adapter_models(
+        &adapter_models_value,
         adapter_id.as_str(),
         model_id.as_str(),
     );
@@ -1534,12 +1589,12 @@ async fn cxits_live_provider_creation_flow_can_save_provider_and_list_models() {
         "runtime should include saved cxits provider: {runtime_value:?}"
     );
 
-    let saved_discovery = app
+    let saved_adapter_models = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/api/v1/providers/{provider_id}/discover"))
+                .uri(format!("/api/v1/providers/{provider_id}/models"))
                 .header("content-type", "application/json")
                 .body(Body::from(
                     serde_json::json!({
@@ -1551,25 +1606,25 @@ async fn cxits_live_provider_creation_flow_can_save_provider_and_list_models() {
         )
         .await
         .unwrap();
-    assert_eq!(saved_discovery.status(), StatusCode::OK);
+    assert_eq!(saved_adapter_models.status(), StatusCode::OK);
 
-    let saved_discovery_body = saved_discovery
+    let saved_adapter_models_body = saved_adapter_models
         .into_body()
         .collect()
         .await
         .unwrap()
         .to_bytes();
-    let saved_discovery_value: serde_json::Value =
-        serde_json::from_slice(&saved_discovery_body).unwrap();
+    let saved_adapter_models_value: serde_json::Value =
+        serde_json::from_slice(&saved_adapter_models_body).unwrap();
     assert!(
-        saved_discovery_value
+        saved_adapter_models_value
             .get("adapters")
             .and_then(|value| value.as_array())
             .is_some_and(|adapters| {
                 adapters.iter().any(|adapter| {
                     adapter.get("adapter_id").and_then(|value| value.as_str())
                         == Some(adapter_id.as_str())
-                        && adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
+                        && adapter.get("error").is_none()
                         && adapter
                             .get("models")
                             .and_then(|value| value.as_array())
@@ -1582,7 +1637,7 @@ async fn cxits_live_provider_creation_flow_can_save_provider_and_list_models() {
                             == Some(true)
                 })
             }),
-        "saved provider discovery should include the selected live adapter/model: {saved_discovery_value:?}"
+        "saved provider adapter model listing should include the selected live adapter/model: {saved_adapter_models_value:?}"
     );
 
     let models_response = app
@@ -1673,9 +1728,14 @@ enabled = true
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/v1/providers/cxits_gateway/discover")
+                .uri("/api/v1/providers/cxits_gateway/models")
                 .header("content-type", "application/json")
-                .body(Body::from("{}"))
+                .body(Body::from(
+                    serde_json::json!({
+                        "adapter_ids": ["openai", "anthropic", "gemini"]
+                    })
+                    .to_string(),
+                ))
                 .unwrap(),
         )
         .await
@@ -1687,29 +1747,29 @@ enabled = true
     let adapters = value
         .get("adapters")
         .and_then(|value| value.as_array())
-        .expect("cxits discovery response should include adapters");
+        .expect("cxits adapter models response should include adapters");
 
-    let supported_adapters = adapters
+    let listed_adapters = adapters
         .iter()
-        .filter(|adapter| adapter.get("supported").and_then(|value| value.as_bool()) == Some(true))
+        .filter(|adapter| adapter.get("error").is_none())
         .collect::<Vec<_>>();
     assert!(
-        !supported_adapters.is_empty(),
-        "cxits discovery should return at least one supported adapter: {value:?}"
+        !listed_adapters.is_empty(),
+        "cxits adapter model listing should return at least one successful adapter: {value:?}"
     );
 
     let mut raw_models = std::collections::BTreeSet::new();
     let mut matched_raw_models = std::collections::BTreeSet::new();
     let mut matched_catalog_ids = std::collections::BTreeSet::new();
     let mut unmatched = Vec::new();
-    let mut discovery_entry_count = 0_usize;
+    let mut listed_entry_count = 0_usize;
 
-    for adapter in supported_adapters {
+    for adapter in listed_adapters.iter().copied() {
         let models = adapter
             .get("models")
             .and_then(|value| value.as_array())
-            .expect("supported adapter should include models");
-        discovery_entry_count += models.len();
+            .expect("successful adapter listing should include models");
+        listed_entry_count += models.len();
         for model in models {
             let Some(raw_model_id) = model.get("id").and_then(|value| value.as_str()) else {
                 continue;
@@ -1750,14 +1810,12 @@ enabled = true
     };
 
     eprintln!(
-        "cxits catalog coverage: supported_adapters={} discovery_entries={} unique_models={} matched_unique_models={} unmatched_unique_models={} matched_catalog_ids={} catalog_entries={}",
+        "cxits catalog coverage: listed_adapters={} listed_entries={} unique_models={} matched_unique_models={} unmatched_unique_models={} matched_catalog_ids={} catalog_entries={}",
         adapters
             .iter()
-            .filter(
-                |adapter| adapter.get("supported").and_then(|value| value.as_bool()) == Some(true)
-            )
+            .filter(|adapter| adapter.get("error").is_none())
             .count(),
-        discovery_entry_count,
+        listed_entry_count,
         raw_models.len(),
         matched_raw_models.len(),
         unmatched.len(),
@@ -1768,7 +1826,7 @@ enabled = true
 
     assert!(
         !matched_raw_models.is_empty(),
-        "cxits live catalog coverage should match at least one discovered model"
+        "cxits live catalog coverage should match at least one listed model"
     );
 }
 

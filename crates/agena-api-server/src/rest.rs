@@ -2,11 +2,7 @@
 //! return the plain JSON resources the current web client already consumes,
 //! while WS/SSE protocol traffic continues to route through `dispatch`.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    convert::Infallible,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, convert::Infallible, sync::Arc};
 
 use crate::local_api::{
     AuthApiKeyWriteRequest, AuthAtomGitBrowserPollRequest, AuthAtomGitBrowserStartRequest,
@@ -25,35 +21,32 @@ use crate::local_api::{
     ModelCatalogListResponse, ModelCatalogLookupRequest, ModelCatalogLookupResponse,
     ModelCatalogResponse, PartLoadMode, PermissionRuleListQuery, PermissionRuleRevokeRequest,
     PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
-    PluginStatusListResponse, ProviderAdapterDiscoveryRequest, ProviderAdapterDiscoveryResource,
-    ProviderAdapterDiscoveryResponse, RuntimeReloadResponse, SavedProviderAdapterDiscoveryRequest,
-    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery,
-    SessionGoalSetRequest, SessionListQuery, SessionPermissionReplyRequestBody,
-    SessionReplaceRequest, SessionRewindRequestBody, SessionRunOptionsRequest, SessionTurnRequest,
-    SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery,
-    WorkspaceResolveRequest, WorkspaceWriteRequest,
+    PluginStatusListResponse, RuntimeReloadResponse, SessionContinueRequestBody,
+    SessionCreateRequest, SessionEventStreamQuery, SessionGoalSetRequest, SessionListQuery,
+    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
+    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::config::{
     ConfigError, ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
     ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
     ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateInput, HttpProviderAdapterConfig,
-    OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions, ProcessEnvironment,
-    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
-    ProviderConfigCredentialStore, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    SimpleHttpProviderOptions, StreamTransportMode, delete_file_setting, get_json_path,
-    list_file_settings, list_json_path, patch_file_settings, probe_provider_adapters,
-    provider_auth_data, provider_gitlab_instance_url, provider_has_gitlab_adapter,
-    provider_supports_api_key_write, provider_supports_atomgit_oauth,
-    provider_supports_copilot_device, provider_supports_openai_oauth, read_file_setting,
-    set_file_setting, validate_file_settings,
+    ConfigSettingsSource, ConfigSettingsValidateInput, ProviderAuthConfig,
+    ProviderConfigCredentialStore, ResolvedProviderConfig, delete_file_setting, get_json_path,
+    list_file_settings, list_json_path, patch_file_settings, provider_auth_data,
+    provider_gitlab_instance_url, provider_has_gitlab_adapter, provider_supports_api_key_write,
+    provider_supports_atomgit_oauth, provider_supports_copilot_device,
+    provider_supports_openai_oauth, read_file_setting, set_file_setting, validate_file_settings,
 };
 use agena::event::{EventStore, StoreRange};
-use agena::provider::{
-    ProviderRegistry,
-    auth::{AuthManager, CopilotDeployment},
+use agena::provider::auth::{AuthManager, CopilotDeployment};
+use agena_api::{
+    queries::{
+        ListEventsParams, ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams,
+        Query, QueryResult,
+    },
+    resource::{ProviderAdapterModelsRequest, SavedProviderAdapterModelsRequest},
 };
-use agena_api::queries::{ListEventsParams, Query, QueryResult};
 use async_stream::stream;
 use axum::{
     Json,
@@ -688,6 +681,7 @@ pub async fn upsert_model_catalog_entry(
     snapshot
         .model_catalog()
         .upsert_custom_entry(request.model_id, request.definition)
+        .await
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
     let snapshot = state.runtime().current_snapshot();
@@ -703,6 +697,7 @@ pub async fn delete_model_catalog_entry(
     snapshot
         .model_catalog()
         .remove_custom_entry(query.model_id.as_str())
+        .await
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;
     let snapshot = state.runtime().current_snapshot();
@@ -1594,203 +1589,45 @@ pub async fn list_provider_models(
     }
 }
 
-pub async fn discover_provider_adapters(
+pub async fn list_provider_adapter_models(
     State(state): State<AppState>,
-    Json(request): Json<ProviderAdapterDiscoveryRequest>,
+    Json(request): Json<ProviderAdapterModelsRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let provider_id = request
-        .provider_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("draft");
-    let auth = ProviderAuthConfig::Api(ProviderApiAuthConfig {
-        base_url: request.base_url,
-        endpoint_layout: request.endpoint_layout,
-        api_key: request.api_key,
-        api_key_env: request.api_key_env,
-    });
-    let adapters = draft_discovery_adapters(&request.adapter_ids)?;
-    Ok(Json(
-        discover_provider_adapters_with_config(&state, provider_id, &auth, adapters).await?,
-    ))
+    match dispatch::dispatch_query(
+        &state,
+        Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {
+            provider_id: request.provider_id,
+            base_url: request.base_url,
+            endpoint_layout: request.endpoint_layout,
+            api_key: request.api_key,
+            api_key_env: request.api_key_env,
+            adapter_ids: request.adapter_ids,
+        }),
+    )
+    .await?
+    {
+        QueryResult::ProviderAdapterModels(response) => Ok(Json(response)),
+        _ => unreachable!("provider adapter models query returned unexpected result"),
+    }
 }
 
-pub async fn discover_saved_provider_adapters(
+pub async fn list_saved_provider_adapter_models(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
-    Json(request): Json<SavedProviderAdapterDiscoveryRequest>,
+    Json(request): Json<SavedProviderAdapterModelsRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
-    let resolved = snapshot
-        .config_resolution()
-        .config
-        .providers
-        .get(provider_id.as_str())
-        .ok_or_else(|| ServerError::NotFound(format!("provider {provider_id} not found")))?;
-    let adapters = saved_discovery_adapters(
-        provider_id.as_str(),
-        resolved,
-        &resolved.auth,
-        &request.adapter_ids,
-    )?;
-    Ok(Json(
-        discover_provider_adapters_with_config(
-            &state,
-            provider_id.as_str(),
-            &resolved.auth,
-            adapters,
-        )
-        .await?,
-    ))
-}
-
-async fn discover_provider_adapters_with_config(
-    state: &AppState,
-    provider_id: &str,
-    auth: &ProviderAuthConfig,
-    adapters: BTreeMap<String, ResolvedProviderAdapterConfig>,
-) -> Result<ProviderAdapterDiscoveryResponse, ServerError> {
-    let client = ProviderRegistry::build_http_client(
-        state
-            .runtime()
-            .config_resolution()
-            .config
-            .provider_http_client_config(),
+    match dispatch::dispatch_query(
+        &state,
+        Query::ListSavedProviderAdapterModels(ListSavedProviderAdapterModelsParams {
+            provider_id,
+            adapter_ids: request.adapter_ids,
+        }),
     )
-    .map_err(ServerError::Core)?;
-    let probes =
-        probe_provider_adapters(provider_id, auth, &adapters, client, &ProcessEnvironment).await;
-    Ok(ProviderAdapterDiscoveryResponse {
-        provider_id: provider_id.to_owned(),
-        adapters: probes
-            .into_iter()
-            .map(|probe| ProviderAdapterDiscoveryResource {
-                adapter_id: probe.adapter_id,
-                enabled: probe.enabled,
-                supported: probe.supported,
-                resolved_base_url: probe.resolved_base_url,
-                models: probe.models,
-                error: probe.error,
-            })
-            .collect(),
-    })
-}
-
-fn draft_discovery_adapters(
-    adapter_ids: &[String],
-) -> Result<BTreeMap<String, ResolvedProviderAdapterConfig>, ServerError> {
-    let requested = if adapter_ids.is_empty() {
-        vec![
-            "openai".to_owned(),
-            "anthropic".to_owned(),
-            "gemini".to_owned(),
-        ]
-    } else {
-        adapter_ids.to_vec()
-    };
-    let mut adapters = BTreeMap::new();
-    for adapter_id in requested {
-        let trimmed = adapter_id.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let config = match trimmed {
-            "openai" => ResolvedProviderAdapterConfig {
-                enabled: true,
-                model_discovery: Default::default(),
-                definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
-                    extra_headers: BTreeMap::new(),
-                    options: OpenAiProviderOptions {
-                        backend: OpenAiBackendConfig::Api,
-                        api_mode: OpenAiApiModeConfig::Auto,
-                        api_mode_explicit: false,
-                        stream_mode: StreamTransportMode::Sse,
-                        realtime_ws_url: None,
-                        models_url: None,
-                        auth_header: "authorization".to_owned(),
-                        auth_scheme: Some("Bearer".to_owned()),
-                        capability_family: None,
-                    },
-                }),
-            },
-            "anthropic" => ResolvedProviderAdapterConfig {
-                enabled: true,
-                model_discovery: Default::default(),
-                definition: ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
-                    extra_headers: BTreeMap::new(),
-                    options: agena::config::AnthropicProviderOptions {
-                        models_url: None,
-                        messages_url: None,
-                        auth_header: "x-api-key".to_owned(),
-                        auth_scheme: None,
-                        extra_beta_header: None,
-                        eager_input_streaming: None,
-                    },
-                }),
-            },
-            "gemini" => ResolvedProviderAdapterConfig {
-                enabled: true,
-                model_discovery: Default::default(),
-                definition: ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
-                    extra_headers: BTreeMap::new(),
-                    options: SimpleHttpProviderOptions {
-                        auth_header: None,
-                        auth_scheme: None,
-                    },
-                }),
-            },
-            _ => {
-                return Err(ServerError::BadRequest(format!(
-                    "draft adapter discovery does not support `{trimmed}`"
-                )));
-            }
-        };
-        adapters.insert(trimmed.to_owned(), config);
+    .await?
+    {
+        QueryResult::ProviderAdapterModels(response) => Ok(Json(response)),
+        _ => unreachable!("saved provider adapter models query returned unexpected result"),
     }
-    Ok(adapters)
-}
-
-fn saved_discovery_adapters(
-    provider_id: &str,
-    resolved: &ResolvedProviderConfig,
-    auth: &ProviderAuthConfig,
-    adapter_ids: &[String],
-) -> Result<BTreeMap<String, ResolvedProviderAdapterConfig>, ServerError> {
-    if adapter_ids.is_empty() {
-        let mut adapters = resolved.adapters.clone();
-        if matches!(
-            auth,
-            ProviderAuthConfig::Api(_)
-                | ProviderAuthConfig::GoogleAdc(_)
-                | ProviderAuthConfig::SapAiCore(_)
-        ) {
-            for (adapter_id, adapter) in draft_discovery_adapters(&[])? {
-                adapters.entry(adapter_id).or_insert(adapter);
-            }
-        }
-        return Ok(adapters);
-    }
-    let mut adapters = BTreeMap::new();
-    for adapter_id in adapter_ids {
-        let trimmed = adapter_id.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let adapter = match resolved.adapters.get(trimmed).cloned() {
-            Some(adapter) => adapter,
-            None => {
-                let mut discovered = draft_discovery_adapters(&[trimmed.to_owned()])?;
-                discovered.remove(trimmed).ok_or_else(|| {
-                    ServerError::BadRequest(format!(
-                        "provider {provider_id} does not define adapter `{trimmed}`"
-                    ))
-                })?
-            }
-        };
-        adapters.insert(trimmed.to_owned(), adapter);
-    }
-    Ok(adapters)
 }
 
 pub async fn list_workspaces(

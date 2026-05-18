@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
-import type { ModelCatalogEntry, ProviderAdapterDiscovery } from '../lib/agenaApi'
+import type { ModelCatalogEntry, ProviderAdapterModels } from '../lib/agenaApi'
 import {
+  adapterModelsMatchedModels,
+  adapterModelsUnmatchedModels,
   buildAdaptersPatchFromDraftSelection,
-  discoveryMatchedModels,
-  discoveryUnmatchedModels,
+  configuredProviderModelDefinitions,
   preferredCatalogEntryForProviderModel,
   preferredCatalogEntryForModelId,
 } from './providersSettingsModel'
@@ -36,11 +37,10 @@ function customEntry(modelId: string, displayName: string): ModelCatalogEntry {
   }
 }
 
-function discovery(adapterId: string): ProviderAdapterDiscovery {
+function adapterModels(adapterId: string): ProviderAdapterModels {
   return {
     adapter_id: adapterId,
     enabled: true,
-    supported: true,
     models: [
       { provider_id: 'gateway', adapter_id: adapterId, id: 'gpt-5', display_name: 'GPT-5' },
       { provider_id: 'gateway', adapter_id: adapterId, id: 'gpt-unknown', display_name: 'Unknown GPT' },
@@ -59,15 +59,15 @@ describe('providersSettingsModel', () => {
     expect(selected?.display_name).toBe('GPT-5 Custom')
   })
 
-  test('discoveryMatchedModels and discoveryUnmatchedModels split model ids by catalog presence', () => {
+  test('adapterModelsMatchedModels and adapterModelsUnmatchedModels split model ids by catalog presence', () => {
     const entries = [officialEntry('gpt-5', 'GPT-5 Official')]
-    const result = discovery('openai')
+    const result = adapterModels('openai')
 
-    expect(discoveryMatchedModels(entries, result).map((model) => model.id)).toEqual(['gpt-5'])
-    expect(discoveryUnmatchedModels(entries, result).map((model) => model.id)).toEqual(['gpt-unknown'])
+    expect(adapterModelsMatchedModels(entries, result).map((model) => model.id)).toEqual(['gpt-5'])
+    expect(adapterModelsUnmatchedModels(entries, result).map((model) => model.id)).toEqual(['gpt-unknown'])
   })
 
-  test('preferredCatalogEntryForProviderModel uses canonical catalog ids from discovery models', () => {
+  test('preferredCatalogEntryForProviderModel uses canonical catalog ids from listed adapter models', () => {
     const entry = preferredCatalogEntryForProviderModel(
       [officialEntry('gpt-oss-120b', 'GPT OSS 120B')],
       {
@@ -86,7 +86,7 @@ describe('providersSettingsModel', () => {
     const entries = [officialEntry('gpt-5', 'GPT-5 Official')]
     const patch = buildAdaptersPatchFromDraftSelection({
       catalogEntries: entries,
-      discoveries: [discovery('openai'), discovery('anthropic')],
+      adapterModelLists: [adapterModels('openai'), adapterModels('anthropic')],
       selectedAdapterIds: ['openai', 'anthropic'],
       defaultAdapterId: 'openai',
       defaultModelId: 'gpt-unknown',
@@ -98,18 +98,17 @@ describe('providersSettingsModel', () => {
     expect(patch.openai?.models?.['gpt-5']?.display_name).toBe('GPT-5 Official')
     expect(patch.openai?.models?.['gpt-5']?.description).toBe('GPT-5 Official description')
     expect(patch.anthropic?.models?.['gpt-5']?.display_name).toBe('GPT-5 Official')
-    expect(patch.openai?.models?.['gpt-unknown']).toEqual({})
-    expect('gpt-unknown' in (patch.anthropic?.models || {})).toBe(false)
+    expect(patch.openai?.models?.['gpt-unknown']?.display_name).toBe('Unknown GPT')
+    expect(patch.anthropic?.models?.['gpt-unknown']?.display_name).toBe('Unknown GPT')
   })
 
   test('buildAdaptersPatchFromDraftSelection matches canonical default model ids', () => {
     const patch = buildAdaptersPatchFromDraftSelection({
       catalogEntries: [officialEntry('gpt-oss-120b', 'GPT OSS 120B')],
-      discoveries: [
+      adapterModelLists: [
         {
           adapter_id: 'openai',
           enabled: true,
-          supported: true,
           models: [
             {
               provider_id: 'gateway',
@@ -128,5 +127,24 @@ describe('providersSettingsModel', () => {
     })
 
     expect(patch.openai?.models?.['openai/gpt-oss-120b']?.display_name).toBe('GPT OSS 120B')
+  })
+
+  test('configuredProviderModelDefinitions falls back to weaker provider model metadata and empty objects', () => {
+    const definitions = configuredProviderModelDefinitions([], [
+      {
+        provider_id: 'gateway',
+        adapter_id: 'openai',
+        id: 'fallback-model',
+        display_name: 'Fallback Model',
+      },
+      {
+        provider_id: 'gateway',
+        adapter_id: 'openai',
+        id: 'empty-model',
+      },
+    ])
+
+    expect(definitions['fallback-model']?.display_name).toBe('Fallback Model')
+    expect(definitions['empty-model']).toEqual({})
   })
 })

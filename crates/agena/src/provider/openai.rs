@@ -18,9 +18,7 @@ use crate::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
             request_to_chat_messages, tools_to_chat_definitions,
         },
-        prompt_cache,
-        remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
-        sse, utils, wire_message,
+        prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -1590,45 +1588,34 @@ impl ModelProvider for OpenAiProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let source = RemoteModelCatalogSource::new(
-            self.id.as_str(),
-            self.model_endpoint()?,
-            self.api_key.prompt_cache_scope(),
-        );
-        RemoteModelCatalogCache::default()
-            .get_or_fetch(&source, || async {
-                let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-                    let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
-                    self.apply_headers(
-                        self.client
-                            .get(
-                                self.model_endpoint()
-                                    .expect("model endpoint should resolve"),
-                            )
-                            .header(self.auth_header.as_str(), auth_value),
-                        RequestHeaderContext::none(),
-                    )
-                })
-                .await?;
+        let endpoint = self.model_endpoint()?;
+        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
+            self.apply_headers(
+                self.client
+                    .get(endpoint.as_str())
+                    .header(self.auth_header.as_str(), auth_value),
+                RequestHeaderContext::none(),
+            )
+        })
+        .await?;
 
-                let payload: OpenAiModelListResponse =
-                    utils::parse_json_response(self.id.as_str(), response).await?;
-                Ok(payload
-                    .into_items()
-                    .into_iter()
-                    .map(|m| {
-                        let model = ProviderModel::new(self.id.as_str(), m.id);
-                        let capabilities = self.model_capabilities(&model.id);
-                        let model = model.with_capabilities(capabilities);
-                        if let Some(name) = m.name {
-                            model.with_display_name(name)
-                        } else {
-                            model
-                        }
-                    })
-                    .collect())
+        let payload: OpenAiModelListResponse =
+            utils::parse_json_response(self.id.as_str(), response).await?;
+        Ok(payload
+            .into_items()
+            .into_iter()
+            .map(|m| {
+                let model = ProviderModel::new(self.id.as_str(), m.id);
+                let capabilities = self.model_capabilities(&model.id);
+                let model = model.with_capabilities(capabilities);
+                if let Some(name) = m.name {
+                    model.with_display_name(name)
+                } else {
+                    model
+                }
             })
-            .await
+            .collect())
     }
 
     #[tracing::instrument(
@@ -1665,9 +1652,12 @@ impl ModelProvider for OpenAiProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
-            text: request.verbosity.as_ref().map(|verbosity| OpenAiResponsesTextConfig {
-                verbosity: verbosity.clone(),
-            }),
+            text: request
+                .verbosity
+                .as_ref()
+                .map(|verbosity| OpenAiResponsesTextConfig {
+                    verbosity: verbosity.clone(),
+                }),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -1762,9 +1752,12 @@ impl ModelProvider for OpenAiProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
-            text: request.verbosity.as_ref().map(|verbosity| OpenAiResponsesTextConfig {
-                verbosity: verbosity.clone(),
-            }),
+            text: request
+                .verbosity
+                .as_ref()
+                .map(|verbosity| OpenAiResponsesTextConfig {
+                    verbosity: verbosity.clone(),
+                }),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -2329,7 +2322,7 @@ fn normalize_domain(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
 
     use super::*;
     use futures_util::StreamExt;
@@ -2342,43 +2335,6 @@ mod tests {
     use crate::model::ModelId;
     use crate::plugin::PluginToolDecl;
     use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let previous = std::env::var(key).ok();
-            // SAFETY: tests serialize env mutation through `env_lock()`.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(previous) = self.previous.as_ref() {
-                // SAFETY: tests serialize env mutation through `env_lock()`.
-                unsafe {
-                    std::env::set_var(self.key, previous);
-                }
-            } else {
-                // SAFETY: tests serialize env mutation through `env_lock()`.
-                unsafe {
-                    std::env::remove_var(self.key);
-                }
-            }
-        }
-    }
 
     fn sample_tool_definition() -> RegistryPluginEntry {
         RegistryPluginEntry::new(
@@ -2534,7 +2490,9 @@ mod tests {
         let _chat = server
             .mock("POST", "/chat/completions")
             .expect(1)
-            .match_body(mockito::Matcher::Regex("\\\"verbosity\\\":\\\"low\\\"".to_owned()))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"verbosity\\\":\\\"low\\\"".to_owned(),
+            ))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -2594,7 +2552,9 @@ mod tests {
         let _chat = server
             .mock("POST", "/chat/completions")
             .expect(1)
-            .match_body(mockito::Matcher::Regex("\\\"verbosity\\\":\\\"high\\\"".to_owned()))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"verbosity\\\":\\\"high\\\"".to_owned(),
+            ))
             .with_status(200)
             .with_header("content-type", "text/event-stream")
             .with_body(body)
@@ -4341,56 +4301,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_models_uses_disk_cache_after_first_fetch() {
-        let _env_lock = env_lock().lock().expect("env lock should succeed");
-        let dir = tempfile::tempdir().expect("tempdir should create");
-        let _cache_dir =
-            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
-
+    async fn list_models_fetches_live_each_time() {
         let mut server = mockito::Server::new_async().await;
-        {
-            let _mock = server
-                .mock("GET", "/models")
-                .match_header("authorization", "Bearer sk-test")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    serde_json::json!({
-                        "data": [{ "id": "gpt-5" }]
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-
-            let provider =
-                OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
-            let models = provider
-                .list_models()
-                .await
-                .expect("initial list_models should succeed");
-            assert_eq!(models.len(), 1);
-            assert_eq!(models[0].id.as_str(), "gpt-5");
-        }
+        let _mock = server
+            .mock("GET", "/models")
+            .match_header("authorization", "Bearer sk-test")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "data": [{ "id": "gpt-5" }]
+                })
+                .to_string(),
+            )
+            .expect(2)
+            .create_async()
+            .await;
 
         let provider =
             OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
         let models = provider
             .list_models()
             .await
-            .expect("cached list_models should succeed");
+            .expect("initial list_models should succeed");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "gpt-5");
+
+        let provider =
+            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let models = provider
+            .list_models()
+            .await
+            .expect("second live list_models should succeed");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id.as_str(), "gpt-5");
     }
 
     #[tokio::test]
     async fn chatgpt_codex_list_models_uses_live_models_endpoint() {
-        let _env_lock = env_lock().lock().expect("env lock should succeed");
-        let dir = tempfile::tempdir().expect("tempdir should create");
-        let _cache_dir =
-            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
-
         let auth_data = Arc::new(tokio::sync::Mutex::new(
             crate::provider::auth::AuthData::OAuth {
                 issuer: Some(crate::provider::auth::CredentialIssuer::OpenaiChatgpt),

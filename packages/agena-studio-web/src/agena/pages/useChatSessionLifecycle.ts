@@ -6,7 +6,6 @@ import {
   getSessionState,
   getSessionTree,
   listMessages,
-  listProviderModels,
   listProviders,
   listRewindCheckpoints,
   listSessionTimeline,
@@ -62,7 +61,6 @@ export type ChatSessionLifecycleDeps = {
   getSessionState: typeof getSessionState
   getSessionTree: typeof getSessionTree
   listMessages: typeof listMessages
-  listProviderModels: typeof listProviderModels
   listProviders: typeof listProviders
   listRewindCheckpoints: typeof listRewindCheckpoints
   listSessionTimeline: typeof listSessionTimeline
@@ -77,7 +75,6 @@ const defaultDeps: ChatSessionLifecycleDeps = {
   getSessionState,
   getSessionTree,
   listMessages,
-  listProviderModels,
   listProviders,
   listRewindCheckpoints,
   listSessionTimeline,
@@ -143,12 +140,6 @@ export function useChatSessionLifecycle(
     input.runtime.value = runtimeData
     input.providers.value = providerData
     input.workspaces.value = workspaceData
-
-    await Promise.all(
-      providerData.map(async (provider) => {
-        input.providerModels[provider.provider_id] = await deps.listProviderModels(provider.provider_id)
-      }),
-    )
 
     if (!input.selectedProviderId.value && providerData.length === 1) {
       input.selectedProviderId.value = providerData[0]?.provider_id || ''

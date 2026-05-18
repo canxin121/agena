@@ -2,8 +2,8 @@
 
 OpenCode 目前有两类值得单独配置的入口：
 
-- OpenCode Go：订阅式低价模型网关，base URL 是 `https://opencode.ai/zen/go/v1`
-- OpenCode Zen：OpenCode 内置模型网关，base URL 是 `https://opencode.ai/zen/v1`，没有 key 时可用 `api_key = "public"` 调免费模型
+- OpenCode Go：订阅式低价模型网关，共享根路径是 `https://opencode.ai/zen/go`
+- OpenCode Zen：OpenCode 内置模型网关，共享根路径是 `https://opencode.ai/zen`，没有 key 时可用 `api_key = "public"` 调免费模型
 
 这两类入口都不需要新增 Agena credential issuer。运行时请求只需要 `provider.auth.mode = "api"`、`base_url` 和 `api_key` / `api_key_env`。以后如果要做 OpenCode 登录、keyring 自动同步或账户状态展示，可以再加 `credential` issuer；模型调用本身不依赖它。
 
@@ -51,8 +51,7 @@ default_model = "kimi-k2.6"
 
 [providers."opencode-go".auth]
 mode = "api"
-base_url = "https://opencode.ai/zen/go/v1"
-endpoint_layout = "protocol_root"
+base_url = "https://opencode.ai/zen/go"
 api_key_env = "OPENCODE_API_KEY"
 
 [providers."opencode-go".adapters.openai]
@@ -121,7 +120,7 @@ enabled = false
 
 ## 为什么这样配置
 
-`base_url = "https://opencode.ai/zen/go/v1"` 配合 `endpoint_layout = "protocol_root"` 后，Agena 会把 OpenAI-compatible adapter 的请求拼到 `/chat/completions`，把 Anthropic adapter 的请求拼到 `/messages`。OpenCode Go 的官方 `/models` endpoint 返回 Go 套餐下的模型列表，但这个列表不区分协议，所以配置里需要对 MiniMax 和非 MiniMax 模型做 adapter 级别的启用/禁用。
+这里的 `base_url` 表示共享根路径，不再直接带协议前缀。Agena 会把 OpenAI-compatible adapter 组装成 `https://opencode.ai/zen/go/v1/chat/completions`，把 Anthropic adapter 组装成 `https://opencode.ai/zen/go/v1/messages`。OpenCode Go 的官方 `/models` endpoint 返回 Go 套餐下的模型列表，但这个列表不区分协议，所以配置里需要对 MiniMax 和非 MiniMax 模型做 adapter 级别的启用/禁用。
 
 如果只需要 Kimi、GLM、DeepSeek、Qwen、MiMo、Hunyuan 等 OpenAI-compatible 路由模型，可以只保留 `openai` adapter，并删除整个 `anthropic` adapter 段。需要 MiniMax M2.7 / M2.5 时再启用 `anthropic` adapter。
 
@@ -159,9 +158,11 @@ default_model = "deepseek-v4-flash-free"
 
 [providers."opencode-free".auth]
 mode = "api"
-base_url = "https://opencode.ai/zen/v1"
-endpoint_layout = "direct"
+base_url = "https://opencode.ai/zen"
 api_key = "public"
+
+[providers."opencode-free".auth.protocol_paths]
+gemini = "/v1"
 
 [providers."opencode-free".adapters.openai]
 enabled = true
@@ -255,9 +256,11 @@ default_model = "gpt-5.5"
 
 [providers."opencode-zen".auth]
 mode = "api"
-base_url = "https://opencode.ai/zen/v1"
-endpoint_layout = "direct"
+base_url = "https://opencode.ai/zen"
 api_key_env = "OPENCODE_API_KEY"
+
+[providers."opencode-zen".auth.protocol_paths]
+gemini = "/v1"
 
 [providers."opencode-zen".adapters.openai]
 enabled = true
@@ -292,4 +295,4 @@ model_discovery = "configured_only"
 enabled = true
 ```
 
-`endpoint_layout = "direct"` 对 Zen 很重要。OpenCode Zen 的 Gemini 路径是 `/zen/v1/models/<model>:generateContent`，不是 Google 原生的 `/v1beta/...`；使用 `direct` 可以让三个 adapter 都从同一个 `/zen/v1` root 下拼接自己的协议路径。
+Zen 需要显式把 Gemini 协议前缀改成 `/v1`。OpenCode Zen 的 Gemini 路径是 `/zen/v1/models/<model>:generateContent`，不是 Google 原生的 `/v1beta/...`；因此 `auth.protocol_paths.gemini = "/v1"` 必须单独写出来。

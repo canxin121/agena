@@ -42,7 +42,7 @@ enabled = true
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
@@ -88,7 +88,7 @@ CLI、HTTP API、Studio、session 持久化、model ref 都围绕 `provider_id` 
 - provider-local metadata，例如 Copilot enterprise host、ChatGPT account id
 - 给同一个 provider 下所有 adapters 共享认证上下文
 
-当一个 auth 网关同时暴露多种协议时，`auth.base_url` 表示用户填写的共享入口，不一定是某个 adapter 的最终协议 base。运行时会根据 `auth.endpoint_layout` 和 adapter kind 自动派生协议后缀。
+当一个 auth 网关同时暴露多种协议时，`auth.base_url` 表示共享根路径，`auth.protocol_paths` 显式声明每种协议挂在哪条前缀上。运行时不会再根据 URL 形状做自动推导。
 
 `auth` 不再拆成独立 connection 对象，也不放在 adapter 上。
 
@@ -202,38 +202,31 @@ sap_ai_core
 ```toml
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 ```
 
 字段：
 
 - `base_url`
-- `endpoint_layout`
+- `protocol_paths`
 - `api_key`
 - `api_key_env`
 
-`endpoint_layout` 可选值：
+`protocol_paths` 是 auth 级的协议前缀表，默认值是：
 
-- `auto`
-- `direct`
-- `protocol_root`
-- `provider_routed`
+- `openai = "/v1"`
+- `anthropic = "/v1"`
+- `gemini = "/v1beta"`
 
-含义：
+如果某个网关需要自定义前缀，就显式写出来：
 
-- `direct`：`base_url` 已经是当前 provider 直接要使用的最终协议 base
-- `protocol_root`：把 `base_url` 当成共享网关入口，为不同 adapter 自动派生 `/v1` 或 `/v1beta`
-- `provider_routed`：把 `base_url` 当成 provider-routed 共享网关入口，为不同 adapter 自动派生 `/api/provider/<provider>/...`
-- `auto`：运行时根据填写的 URL 形状自动推断，默认值就是它
-
-`auto` 的判断大致是：
-
-- `https://api.cxits.cn` -> 按 `direct` 不改动
-- `https://api.cxits.cn/v1` -> 按 `protocol_root`
-- `https://api.cxits.cn/v1/messages` -> 按 `protocol_root`
-- `https://api.cxits.cn/v1beta/models/gemini-2.5-pro:generateContent` -> 按 `protocol_root`
-- `https://api.cxits.cn/api/provider/openai/v1` -> 按 `provider_routed`
+```toml
+[providers.shared.auth.protocol_paths]
+openai = "/api/provider/openai/v1"
+anthropic = "/api/provider/anthropic/v1"
+gemini = "/api/provider/google/v1beta"
+```
 
 ### `credential`
 
@@ -251,7 +244,7 @@ credential = { type = "oauth", issuer = "github_copilot", refresh = "...", acces
 - `issuer`
 - `credential`
 
-注意：credential 模式下不接受 `base_url`、`api_key`、`api_key_env`。
+注意：credential 模式下不接受 `base_url`、`protocol_paths`、`api_key`、`api_key_env`。
 
 `credential` 必须带 issuer 信息，这样运行时才能知道这份 credential 是谁的，例如：
 
@@ -279,8 +272,10 @@ profile = "prod"
 ```toml
 [providers.vertex.auth]
 mode = "google_adc"
-base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
-endpoint_layout = "direct"
+base_url = "https://us-central1-aiplatform.googleapis.com"
+
+[providers.vertex.auth.protocol_paths]
+openai = "/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
 ```
 
 ### `sap_ai_core`
@@ -321,7 +316,7 @@ default_model = "gpt-5"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
@@ -421,8 +416,12 @@ default_model = "gpt-4.1-mini"
 [providers.shared.auth]
 mode = "api"
 base_url = "https://gateway.example.com"
-endpoint_layout = "protocol_root"
 api_key_env = "SHARED_GATEWAY_API_KEY"
+
+[providers.shared.auth.protocol_paths]
+openai = "/v1"
+anthropic = "/v1"
+gemini = "/v1beta"
 
 [providers.shared.adapters.openai]
 enabled = true
@@ -442,9 +441,9 @@ enabled = true
 
 这里：
 
-- `openai` 会自动派生到 `https://gateway.example.com/v1`
-- `anthropic` 会自动派生到 `https://gateway.example.com/v1`
-- `gemini` 如果启用，会自动派生到 `https://gateway.example.com/v1beta`
+- `openai` 会走 `https://gateway.example.com/v1`
+- `anthropic` 会走 `https://gateway.example.com/v1`
+- `gemini` 如果启用，会走 `https://gateway.example.com/v1beta`
 
 ### Provider-Routed Shared Gateway
 
@@ -455,9 +454,13 @@ default_model = "gpt-4.1-mini"
 
 [providers.provider_gateway.auth]
 mode = "api"
-base_url = "https://api.cxits.cn/api/provider/openai/v1"
-endpoint_layout = "provider_routed"
+base_url = "https://api.cxits.cn"
 api_key_env = "CX_API_KEY"
+
+[providers.provider_gateway.auth.protocol_paths]
+openai = "/api/provider/openai/v1"
+anthropic = "/api/provider/anthropic/v1"
+gemini = "/api/provider/google/v1beta"
 
 [providers.provider_gateway.adapters.openai]
 enabled = true
@@ -478,16 +481,11 @@ enabled = true
 enabled = true
 ```
 
-即使你填的是 `.../api/provider/openai/v1`，运行时也会先回退到共享 gateway root，再自动为其他 adapter 派生：
+这里不再需要回退和猜测。共享根路径就是 `https://api.cxits.cn`，其余协议前缀由 `protocol_paths` 显式给出：
 
 - `openai` -> `/api/provider/openai/v1`
 - `anthropic` -> `/api/provider/anthropic/v1`
 - `gemini` -> `/api/provider/google/v1beta`
-
-如果你填的是完整协议 endpoint，运行时也会先把它收敛成共享入口，再按 adapter 重新拼：
-
-- `https://api.cxits.cn/v1/messages` 会收敛成 `https://api.cxits.cn`
-- `https://api.cxits.cn/v1beta/models/gemini-2.5-pro:generateContent` 会收敛成 `https://api.cxits.cn`
 
 ### Amazon Bedrock SigV4
 

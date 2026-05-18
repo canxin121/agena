@@ -11397,7 +11397,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "test"
 
 [providers.openai.adapters.openai]
@@ -11476,7 +11476,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "test"
 
 [providers.openai.adapters.openai]
@@ -11548,7 +11548,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "test"
 
 [providers.openai.adapters.openai]

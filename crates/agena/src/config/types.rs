@@ -347,14 +347,22 @@ pub enum ProviderAuthConfig {
     SapAiCore(ProviderSapAiCoreAuthConfig),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum SharedGatewayEndpointLayout {
-    #[default]
-    Auto,
-    Direct,
-    ProtocolRoot,
-    ProviderRouted,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderProtocolPathsConfig {
+    pub openai: String,
+    pub anthropic: String,
+    pub gemini: String,
+}
+
+impl Default for ProviderProtocolPathsConfig {
+    fn default() -> Self {
+        Self {
+            openai: "/v1".to_owned(),
+            anthropic: "/v1".to_owned(),
+            gemini: "/v1beta".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -368,8 +376,8 @@ pub enum ProviderModelDiscoveryConfig {
 #[derive(Clone, PartialEq, Eq, Serialize, Default)]
 pub struct ProviderApiAuthConfig {
     pub base_url: String,
-    #[serde(skip_serializing_if = "is_default")]
-    pub endpoint_layout: SharedGatewayEndpointLayout,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub protocol_paths: ProviderProtocolPathsConfig,
     pub api_key: Option<String>,
     pub api_key_env: Option<String>,
 }
@@ -378,7 +386,7 @@ impl fmt::Debug for ProviderApiAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderApiAuthConfig")
             .field("base_url", &self.base_url)
-            .field("endpoint_layout", &self.endpoint_layout)
+            .field("protocol_paths", &self.protocol_paths)
             .field("api_key", &redacted(self.api_key.as_deref()))
             .field("api_key_env", &self.api_key_env)
             .finish()
@@ -388,15 +396,15 @@ impl fmt::Debug for ProviderApiAuthConfig {
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct ProviderGoogleAdcAuthConfig {
     pub base_url: String,
-    #[serde(skip_serializing_if = "is_default")]
-    pub endpoint_layout: SharedGatewayEndpointLayout,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub protocol_paths: ProviderProtocolPathsConfig,
 }
 
 impl fmt::Debug for ProviderGoogleAdcAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ProviderGoogleAdcAuthConfig")
             .field("base_url", &self.base_url)
-            .field("endpoint_layout", &self.endpoint_layout)
+            .field("protocol_paths", &self.protocol_paths)
             .finish()
     }
 }
@@ -606,22 +614,6 @@ impl From<ProviderCapabilityFamilyConfig> for CapabilityFamily {
             ProviderCapabilityFamilyConfig::Gemini => CapabilityFamily::Gemini,
             ProviderCapabilityFamilyConfig::Bedrock => CapabilityFamily::Bedrock,
             ProviderCapabilityFamilyConfig::Gitlab => CapabilityFamily::Gitlab,
-        }
-    }
-}
-
-impl FromStr for SharedGatewayEndpointLayout {
-    type Err = ConfigError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.trim() {
-            "auto" => Ok(Self::Auto),
-            "direct" => Ok(Self::Direct),
-            "protocol_root" => Ok(Self::ProtocolRoot),
-            "provider_routed" => Ok(Self::ProviderRouted),
-            _ => Err(ConfigError::InvalidOverride(format!(
-                "unknown endpoint layout `{value}`"
-            ))),
         }
     }
 }

@@ -3,7 +3,7 @@ use std::str::FromStr;
 use super::{
     ConfigError, RawConfig, RawDefaultConfig, RawProviderHttpConfig, RawRequestRetryConfig,
     RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig,
-    RawUiConfig, SharedGatewayEndpointLayout, parse_numeric,
+    RawUiConfig, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,9 +31,10 @@ pub enum ConfigOverride {
         provider_id: String,
         value: String,
     },
-    ProviderAuthEndpointLayout {
+    ProviderAuthProtocolPath {
         provider_id: String,
-        value: SharedGatewayEndpointLayout,
+        protocol: String,
+        value: String,
     },
     ProviderAuthApiKey {
         provider_id: String,
@@ -219,14 +220,24 @@ impl ConfigOverride {
                     .get_or_insert_with(Default::default)
                     .base_url = Some(value.clone());
             }
-            Self::ProviderAuthEndpointLayout { provider_id, value } => {
-                config
+            Self::ProviderAuthProtocolPath {
+                provider_id,
+                protocol,
+                value,
+            } => {
+                let auth = config
                     .providers
                     .entry(provider_id.clone())
                     .or_default()
                     .auth
-                    .get_or_insert_with(Default::default)
-                    .endpoint_layout = Some(*value);
+                    .get_or_insert_with(Default::default);
+                let protocol_paths = auth.protocol_paths.get_or_insert_with(Default::default);
+                match protocol.as_str() {
+                    "openai" => protocol_paths.openai = Some(value.clone()),
+                    "anthropic" => protocol_paths.anthropic = Some(value.clone()),
+                    "gemini" => protocol_paths.gemini = Some(value.clone()),
+                    _ => {}
+                }
             }
             Self::ProviderAuthApiKey { provider_id, value } => {
                 config
@@ -282,12 +293,24 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
             };
             match auth_field {
                 "base_url" => Ok(ConfigOverride::ProviderAuthBaseUrl { provider_id, value }),
-                "endpoint_layout" => Ok(ConfigOverride::ProviderAuthEndpointLayout {
-                    provider_id,
-                    value: raw_value.parse()?,
-                }),
                 "api_key" => Ok(ConfigOverride::ProviderAuthApiKey { provider_id, value }),
                 "api_key_env" => Ok(ConfigOverride::ProviderAuthApiKeyEnv { provider_id, value }),
+                _ if auth_field.starts_with("protocol_paths.") => {
+                    let protocol = auth_field
+                        .trim_start_matches("protocol_paths.")
+                        .trim()
+                        .to_owned();
+                    match protocol.as_str() {
+                        "openai" | "anthropic" | "gemini" => {
+                            Ok(ConfigOverride::ProviderAuthProtocolPath {
+                                provider_id,
+                                protocol,
+                                value,
+                            })
+                        }
+                        _ => Err(ConfigError::InvalidOverride(key.to_owned())),
+                    }
+                }
                 _ => Err(ConfigError::InvalidOverride(key.to_owned())),
             }
         }

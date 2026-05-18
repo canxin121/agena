@@ -73,7 +73,7 @@ pub struct ListProviderAdapterModelsParams {
     pub provider_id: Option<String>,
     pub base_url: String,
     #[serde(default)]
-    pub endpoint_layout: agena::config::SharedGatewayEndpointLayout,
+    pub protocol_paths: agena::config::ProviderProtocolPathsConfig,
     #[serde(default)]
     pub api_key: Option<String>,
     #[serde(default)]

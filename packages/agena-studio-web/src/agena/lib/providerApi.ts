@@ -1,6 +1,10 @@
 import { apiJson } from '../../lib/api'
 
-export type SharedGatewayEndpointLayout = 'auto' | 'direct' | 'protocol_root' | 'provider_routed'
+export type ProviderProtocolPaths = {
+  openai?: string
+  anthropic?: string
+  gemini?: string
+}
 
 export type ProviderAdapterSummaryResource = {
   adapter_id: string
@@ -133,7 +137,7 @@ export type ProviderAdapterModels = ProviderAdapterModelsResource
 export type ProviderAdapterModelsRequest = {
   provider_id?: string | null
   base_url: string
-  endpoint_layout?: SharedGatewayEndpointLayout
+  protocol_paths?: ProviderProtocolPaths
   api_key?: string | null
   api_key_env?: string | null
   adapter_ids: string[]
@@ -162,7 +166,7 @@ export async function listProviderAdapterModels(
     body: JSON.stringify({
       ...(String(request.provider_id || '').trim() ? { provider_id: String(request.provider_id).trim() } : {}),
       base_url: String(request.base_url || '').trim(),
-      ...(String(request.endpoint_layout || '').trim() ? { endpoint_layout: String(request.endpoint_layout).trim() } : {}),
+      ...(request.protocol_paths ? { protocol_paths: request.protocol_paths } : {}),
       ...(String(request.api_key || '').trim() ? { api_key: String(request.api_key).trim() } : {}),
       ...(String(request.api_key_env || '').trim() ? { api_key_env: String(request.api_key_env).trim() } : {}),
       adapter_ids: adapterIds,
@@ -190,7 +194,7 @@ export async function listSavedProviderAdapterModelsResponse(
 export async function listDraftProviderAdapterModels(input: {
   providerId?: string
   baseUrl: string
-  endpointLayout?: SharedGatewayEndpointLayout
+  protocolPaths?: ProviderProtocolPaths
   apiKey?: string
   apiKeyEnv?: string
   adapterIds: string[]
@@ -198,7 +202,7 @@ export async function listDraftProviderAdapterModels(input: {
   const response = await listProviderAdapterModels({
     provider_id: input.providerId?.trim() || undefined,
     base_url: input.baseUrl.trim(),
-    endpoint_layout: input.endpointLayout,
+    protocol_paths: input.protocolPaths,
     api_key: input.apiKey?.trim() || undefined,
     api_key_env: input.apiKeyEnv?.trim() || undefined,
     adapter_ids: input.adapterIds,

@@ -95,7 +95,7 @@ pub async fn list_provider_adapter_models_response(
     let target = draft_provider_adapter_models_target(
         params.provider_id.as_deref(),
         params.base_url.as_str(),
-        params.endpoint_layout,
+        params.protocol_paths,
         params.api_key.as_deref(),
         params.api_key_env.as_deref(),
         &params.adapter_ids,

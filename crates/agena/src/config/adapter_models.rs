@@ -5,8 +5,8 @@ use crate::error::AppError;
 use super::{
     AnthropicProviderOptions, ConfigEnvironment, ConfigError, HttpProviderAdapterConfig,
     OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, SharedGatewayEndpointLayout, SimpleHttpProviderOptions,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderProtocolPathsConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, SimpleHttpProviderOptions,
     StreamTransportMode, list_provider_adapter_models,
 };
 
@@ -22,7 +22,7 @@ pub struct ProviderAdapterModelsTarget {
 pub fn draft_provider_adapter_models_target(
     provider_id: Option<&str>,
     base_url: &str,
-    endpoint_layout: SharedGatewayEndpointLayout,
+    protocol_paths: ProviderProtocolPathsConfig,
     api_key: Option<&str>,
     api_key_env: Option<&str>,
     adapter_ids: &[String],
@@ -36,7 +36,7 @@ pub fn draft_provider_adapter_models_target(
         provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
         auth: ProviderAuthConfig::Api(ProviderApiAuthConfig {
             base_url: base_url.to_owned(),
-            endpoint_layout,
+            protocol_paths,
             api_key: optional_trimmed(api_key).map(ToOwned::to_owned),
             api_key_env: optional_trimmed(api_key_env).map(ToOwned::to_owned),
         }),
@@ -215,8 +215,8 @@ mod tests {
     fn draft_target_requires_explicit_adapter_ids() {
         let error = draft_provider_adapter_models_target(
             Some("gateway"),
-            "https://example.com/v1",
-            SharedGatewayEndpointLayout::Auto,
+            "https://example.com",
+            ProviderProtocolPathsConfig::default(),
             None,
             Some("OPENAI_API_KEY"),
             &[],
@@ -234,8 +234,8 @@ mod tests {
     fn draft_target_accepts_explicit_http_adapter_ids() {
         let target = draft_provider_adapter_models_target(
             Some("gateway"),
-            "https://example.com/v1",
-            SharedGatewayEndpointLayout::Auto,
+            "https://example.com",
+            ProviderProtocolPathsConfig::default(),
             None,
             Some("OPENAI_API_KEY"),
             &HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS
@@ -265,8 +265,8 @@ mod tests {
             default_adapter: "openai".to_owned(),
             default_model: "gpt-5".to_owned(),
             auth: ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: "https://example.com/v1".to_owned(),
-                endpoint_layout: SharedGatewayEndpointLayout::Auto,
+                base_url: "https://example.com".to_owned(),
+                protocol_paths: ProviderProtocolPathsConfig::default(),
                 api_key: None,
                 api_key_env: Some("OPENAI_API_KEY".to_owned()),
             }),
@@ -293,8 +293,8 @@ mod tests {
             default_adapter: "openai".to_owned(),
             default_model: "gpt-5".to_owned(),
             auth: ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: "https://example.com/v1".to_owned(),
-                endpoint_layout: SharedGatewayEndpointLayout::Auto,
+                base_url: "https://example.com".to_owned(),
+                protocol_paths: ProviderProtocolPathsConfig::default(),
                 api_key: None,
                 api_key_env: Some("OPENAI_API_KEY".to_owned()),
             }),

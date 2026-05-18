@@ -33,7 +33,7 @@ agent = "build"
 
 [providers.anthropic.auth]
 mode = "api"
-base_url = "https://api.anthropic.com/v1"
+base_url = "https://api.anthropic.com"
 api_key_env = "ANTHROPIC_API_KEY"
 
 [providers.anthropic.adapters.anthropic]
@@ -43,7 +43,7 @@ enabled = true
 #
 # [providers.openai.auth]
 # mode = "api"
-# base_url = "https://api.openai.com/v1"
+# base_url = "https://api.openai.com"
 # api_key_env = "OPENAI_API_KEY"
 #
 # [providers.openai.adapters.openai]
@@ -53,7 +53,7 @@ enabled = true
 #
 # [providers.gemini.auth]
 # mode = "api"
-# base_url = "https://generativelanguage.googleapis.com/v1beta"
+# base_url = "https://generativelanguage.googleapis.com"
 # api_key_env = "GEMINI_API_KEY"
 #
 # [providers.gemini.adapters.gemini]
@@ -98,8 +98,12 @@ enabled = true
 # [providers.shared.auth]
 # mode = "api"
 # base_url = "https://api.cxits.cn/"
-# endpoint_layout = "protocol_root"
 # api_key_env = "CX_API_KEY"
+#
+# [providers.shared.auth.protocol_paths]
+# openai = "/v1"
+# anthropic = "/v1"
+# gemini = "/v1beta"
 #
 # [providers.shared.adapters.openai]
 # enabled = true
@@ -120,8 +124,7 @@ enabled = true
 #
 # [providers."opencode-go".auth]
 # mode = "api"
-# base_url = "https://opencode.ai/zen/go/v1"
-# endpoint_layout = "protocol_root"
+# base_url = "https://opencode.ai/zen/go"
 # api_key_env = "OPENCODE_API_KEY"
 #
 # [providers."opencode-go".adapters.openai]
@@ -155,9 +158,11 @@ enabled = true
 #
 # [providers."opencode-free".auth]
 # mode = "api"
-# base_url = "https://opencode.ai/zen/v1"
-# endpoint_layout = "direct"
+# base_url = "https://opencode.ai/zen"
 # api_key = "public"
+#
+# [providers."opencode-free".auth.protocol_paths]
+# gemini = "/v1"
 #
 # [providers."opencode-free".adapters.openai]
 # enabled = true

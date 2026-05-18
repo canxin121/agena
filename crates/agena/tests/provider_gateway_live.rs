@@ -1059,6 +1059,21 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
                 case.provider_id
             )
         });
+    assert_ne!(
+        rewound.id, source.id,
+        "{} rewind should return a forked session",
+        case.provider_id
+    );
+    assert_eq!(rewound.parent_id, Some(source.id));
+    assert!(
+        rewound
+            .messages
+            .iter()
+            .any(|message| message.role == Role::User
+                && message.as_text_lossy().contains("turn one")),
+        "{} rewound fork should retain turn one",
+        case.provider_id
+    );
     assert!(
         !rewound
             .messages
@@ -1073,16 +1088,11 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
         .list_rewind_checkpoints(source.id)
         .await
         .expect("list rewind checkpoints");
-    let checkpoint = checkpoints
-        .last()
-        .unwrap_or_else(|| panic!("{} rewind should record a checkpoint", case.provider_id));
-    assert_eq!(checkpoint.target_message_id, first_user_message_id);
     assert!(
-        checkpoint
-            .dropped
+        checkpoints
             .iter()
-            .any(|entry| entry.preview.contains("turn two")),
-        "{} rewind checkpoint should include the dropped second turn",
+            .all(|checkpoint| checkpoint.target_message_id != first_user_message_id),
+        "{} rewind should not mutate the source session or record a same-session checkpoint",
         case.provider_id
     );
 
@@ -1099,13 +1109,14 @@ async fn assert_session_lifecycle(case: LiveProviderCase) {
                 case.provider_id
             )
         });
+    assert_eq!(unrewound.id, source.id);
     assert!(
         unrewound
             .messages
             .iter()
             .any(|message| message.role == Role::User
                 && message.as_text_lossy().contains("turn two")),
-        "{} unrewound session should restore turn two",
+        "{} source session should retain turn two across rewind/unrewind",
         case.provider_id
     );
 

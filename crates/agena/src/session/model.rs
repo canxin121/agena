@@ -13,7 +13,6 @@ use crate::{
     role::Role,
 };
 
-pub(crate) const MESSAGE_TAG_PROMPT_COMPACTED: &str = "prompt_compacted";
 pub(crate) const MESSAGE_TAG_PROMPT_SUMMARY: &str = "prompt_summary";
 pub(crate) const MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED: &str = "attachment_payload_stripped";
 pub(crate) const MESSAGE_TAG_TOOL_RESULT_PRUNED: &str = "tool_result_pruned";

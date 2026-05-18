@@ -38,18 +38,16 @@ use std::path::PathBuf;
 
 use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
-use super::compaction_worker::CompactionWorker;
 use super::control::{TurnControl, TurnControlError, TurnRegistry};
 use super::cost::SessionCostSummary;
 use super::history::{
-    FinishReason, MessageId as HistoryMessageId, MessageRevised, RevisionKind, ToolCallCompleted,
+    FinishReason, MessageId as HistoryMessageId, ToolCallCompleted,
     ToolCallId as HistoryToolCallId, TranscriptContent, TranscriptToolOutput, TurnAbortReason,
     TurnAborted, TurnCompleted, TurnId as HistoryTurnId, TurnStarted, UserMessageAppended,
 };
 use super::model::{
-    GoalStatus, GoalSteeringKind, MESSAGE_TAG_PROMPT_SUMMARY, ProviderPromptAnchor, SessionGoal,
-    SessionListRequest, SessionPendingTool, SessionStatus, SessionSummary,
-    validate_session_goal_objective,
+    GoalStatus, GoalSteeringKind, ProviderPromptAnchor, SessionGoal, SessionListRequest,
+    SessionPendingTool, SessionStatus, SessionSummary, validate_session_goal_objective,
 };
 use super::processor::SessionRunRequest;
 use super::prompt_window::{self, PromptRequestOptions};
@@ -193,8 +191,9 @@ pub struct SessionRewindRequest {
     pub expected_version: Option<i64>,
 }
 
-/// Reverses a prior [`SessionRewindRequest`] on the same session by
-/// re-admitting every still-compacted message at or after `message_id`.
+/// Legacy request shape for undoing a rewind. Rewinds now create a forked
+/// session instead of mutating the source session's provider-visible prompt,
+/// so unrewind is intentionally a no-op on the source session.
 #[derive(Debug, Clone)]
 pub struct SessionUnrewindRequest {
     pub session_id: i64,
@@ -295,7 +294,6 @@ struct PendingHostUserInput {
 struct SessionManagerState {
     processor: SessionProcessor,
     tool_executor: ToolExecutor,
-    compaction_worker: CompactionWorker,
     config: SessionManagerConfig,
 }
 
@@ -308,7 +306,6 @@ impl SessionManagerState {
         Self {
             processor,
             tool_executor,
-            compaction_worker: CompactionWorker,
             config,
         }
     }
@@ -1268,38 +1265,13 @@ impl SessionManager {
 
     pub async fn compact_session(
         &self,
-        session_id: i64,
-        options: SessionRunOptions,
+        _session_id: i64,
+        _options: SessionRunOptions,
     ) -> Result<Session, AppError> {
-        let state = self.execution_state();
-        let session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
-        let options = self.apply_execution_context_to_run_options(&session, options)?;
-        let active_messages = prompt_window::active_prompt_messages(&session);
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&session.runtime.execution);
-        let tools = scoped_executor.available_tools_for_messages_and_loaded(
-            active_messages.as_slice(),
-            session.runtime.loaded_deferred_tools(),
-        );
-        let prompt_budget =
-            self.prompt_budget_for_turn(&session, &options, tools.as_slice(), state.as_ref());
-
-        if !prompt_window::can_compact(
-            active_messages.as_slice(),
-            state.processor.keep_tail_messages(),
-            prompt_budget.max_prompt_chars,
-        ) {
-            return Err(AppError::Internal(
-                "prompt window cannot be compacted further".to_string(),
-            ));
-        }
-
-        self.compact_prompt_window(session, &options, active_messages.as_slice(), state)
-            .await
+        Err(AppError::Internal(
+            "prompt compaction is disabled because provider prompts are append-only for cache stability"
+                .to_string(),
+        ))
     }
 
     pub async fn spawn_subtask(
@@ -1520,15 +1492,25 @@ impl SessionManager {
 
     pub async fn rewind_session(&self, request: SessionRewindRequest) -> Result<Session, AppError> {
         let state = self.execution_state();
+        let source = self
+            .store
+            .load_session(request.session_id, state.cache_policy())
+            .await?;
         if let Some(expected) = request.expected_version {
-            self.assert_session_version(request.session_id, expected)
-                .await?;
+            if source.version != expected {
+                return Err(AppError::Conflict {
+                    session_id: request.session_id,
+                    expected,
+                    current: source.version,
+                });
+            }
         }
+        let title = format!("Rewind of {}", source.title);
         self.store
-            .rewind_to_message(
-                request.session_id,
-                request.message_id,
-                request.expected_version,
+            .fork_session(
+                source,
+                Some(request.message_id),
+                title,
                 state.cache_policy(),
             )
             .await
@@ -1539,18 +1521,25 @@ impl SessionManager {
         request: SessionUnrewindRequest,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
+        let session = self
+            .store
+            .load_session(request.session_id, state.cache_policy())
+            .await?;
         if let Some(expected) = request.expected_version {
-            self.assert_session_version(request.session_id, expected)
-                .await?;
+            if session.version != expected {
+                return Err(AppError::Conflict {
+                    session_id: request.session_id,
+                    expected,
+                    current: session.version,
+                });
+            }
         }
-        self.store
-            .unrewind_to_message(
-                request.session_id,
-                request.message_id,
-                request.expected_version,
-                state.cache_policy(),
-            )
-            .await
+        tracing::warn!(
+            session_id = request.session_id,
+            message_id = request.message_id,
+            "session unrewind is disabled; same-session provider prompts are append-only"
+        );
+        Ok(session)
     }
 
     /// Reload `session_id` and bail with [`AppError::Conflict`] if the live
@@ -1577,10 +1566,9 @@ impl SessionManager {
 
     /// Return every persisted rewind audit entry for this session.
     ///
-    /// Each entry mirrors a prior `rewind_to_message` call — the message id
-    /// the user rewound to, when it happened, and short previews of every
-    /// message that got dropped. Use this to render "rewound past N
-    /// messages — undo?" affordances without re-folding the event log.
+    /// These entries are legacy audit data from older same-session rewind
+    /// behavior. New rewind requests create forked sessions and do not append
+    /// checkpoints to the source session.
     pub async fn list_rewind_checkpoints(
         &self,
         session_id: i64,
@@ -2123,13 +2111,22 @@ impl SessionManager {
                 .broadcast_pre_turn(pre_turn_input)
                 .await;
 
+            let mut model_session = session;
+            if let Some(directive) = goal_turn_directive.as_ref() {
+                model_session = self
+                    .append_goal_turn_directive_message(
+                        model_session,
+                        directive,
+                        &current_options,
+                        state.clone(),
+                    )
+                    .await?;
+            }
+
             match self
                 .run_model_turn(
-                    session,
+                    model_session,
                     &current_options,
-                    goal_turn_directive
-                        .as_ref()
-                        .map(|directive| directive.prompt.as_str()),
                     state.clone(),
                     control.clone(),
                 )
@@ -2193,7 +2190,6 @@ impl SessionManager {
         &self,
         mut session: Session,
         options: &SessionRunOptions,
-        goal_context: Option<&str>,
         state: Arc<SessionManagerState>,
         control: Arc<TurnControl>,
     ) -> Result<Session, AppError> {
@@ -2203,8 +2199,6 @@ impl SessionManager {
             provider_id = %options.model.provider_id,
             model_id = %options.model.model_id,
         );
-        let mut compacted_rounds = 0_u8;
-
         loop {
             let active_messages = prompt_window::active_prompt_messages(&session);
             let scoped_executor = state
@@ -2224,7 +2218,6 @@ impl SessionManager {
                 provider_id: options.model.provider_id.as_str(),
                 model_id: options.model.model_id.as_str(),
                 system: options.system.as_deref(),
-                goal_context,
                 temperature: options.temperature,
                 max_output_tokens: options.max_output_tokens,
                 tools: tools.as_slice(),
@@ -2238,48 +2231,21 @@ impl SessionManager {
                 active_messages.as_slice(),
                 prompt_fingerprints.system_fingerprint.as_str(),
                 prompt_fingerprints.request_options_fingerprint.as_str(),
-                goal_context,
             )
             .is_some_and(|estimate| estimate.total_tokens > prompt_budget.max_prompt_tokens);
-            if let Some(plan) =
-                prompt_window::plan_attachment_payload_stripping(active_messages.as_slice())
-            {
-                session = self
-                    .strip_prompt_attachment_payloads(session, plan, state.clone())
-                    .await?;
-                continue;
-            }
-
-            if let Some(plan) = prompt_window::plan_tool_result_pruning(active_messages.as_slice())
-            {
-                session = self
-                    .prune_tool_result_history(session, plan, state.clone())
-                    .await?;
-                continue;
-            }
-
-            if (should_compact_from_runtime
+            if should_compact_from_runtime
                 || state.processor.should_compact_prompt_with_budget(
                     active_messages.as_slice(),
                     prompt_budget.max_prompt_chars,
-                ))
-                && prompt_window::can_compact(
-                    active_messages.as_slice(),
-                    state.processor.keep_tail_messages(),
-                    prompt_budget.max_prompt_chars,
                 )
-                && state.processor.can_retry_compaction(compacted_rounds)
             {
-                compacted_rounds += 1;
-                session = self
-                    .compact_prompt_window(
-                        session,
-                        options,
-                        active_messages.as_slice(),
-                        state.clone(),
-                    )
-                    .await?;
-                continue;
+                tracing::warn!(
+                    session_id = session.id,
+                    prompt_message_count = active_messages.len(),
+                    max_prompt_chars = prompt_budget.max_prompt_chars,
+                    max_prompt_tokens = prompt_budget.max_prompt_tokens,
+                    "prompt exceeds configured budget; preserving append-only provider prefix and sending the full prompt"
+                );
             }
 
             let prepared = prompt_window::build_prepared_prompt(&session, prompt_request_options);
@@ -2307,7 +2273,6 @@ impl SessionManager {
                 provider_request_shape_change_keys = ?provider_shape_change_keys,
                 prompt_message_count = prepared.messages.len(),
                 system_included = prepared.system.is_some(),
-                goal_context_present = goal_context.is_some(),
                 "prepared prompt for session turn"
             );
 
@@ -2409,7 +2374,6 @@ impl SessionManager {
                         provider_id: options.model.provider_id.as_str(),
                         model_id: options.model.model_id.as_str(),
                         system: options.system.as_deref(),
-                        goal_context,
                         temperature: options.temperature,
                         max_output_tokens: options.max_output_tokens,
                         tools: request_tools.as_slice(),
@@ -2529,26 +2493,6 @@ impl SessionManager {
 
                     return Ok(persisted_session);
                 }
-                Err(err)
-                    if state
-                        .processor
-                        .should_retry_with_compaction(&err, compacted_rounds)
-                        && prompt_window::can_compact(
-                            active_messages.as_slice(),
-                            state.processor.keep_tail_messages(),
-                            prompt_budget.max_prompt_chars,
-                        ) =>
-                {
-                    compacted_rounds += 1;
-                    session = self
-                        .compact_prompt_window(
-                            session,
-                            options,
-                            active_messages.as_slice(),
-                            state.clone(),
-                        )
-                        .await?;
-                }
                 Err(err) => {
                     if is_user_cancelled_error(&err) {
                         if control.is_superseded() {
@@ -2597,238 +2541,6 @@ impl SessionManager {
             max_prompt_tokens: prompt_window::approximate_tokens_from_chars(max_prompt_chars),
             model_context_window_tokens: context_window_tokens,
         }
-    }
-
-    async fn prune_tool_result_history(
-        &self,
-        mut session: Session,
-        plan: prompt_window::ToolResultPrunePlan,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let pruned_ids = plan.pruned_message_ids.into_iter().collect::<HashSet<_>>();
-        let mut items = Vec::new();
-
-        for message in &session.messages {
-            if !pruned_ids.contains(&message.id) {
-                continue;
-            }
-            for part in &message.parts {
-                if matches!(part.content, Some(PartContent::Operation(_))) {
-                    let Some(op_id) = part.operation_id.as_deref() else {
-                        continue;
-                    };
-                    items.push(EventKind::MessageRevised(MessageRevised {
-                        target_message_id: message.id,
-                        kind: RevisionKind::ToolResultPruned {
-                            call_id: HistoryToolCallId::new(op_id),
-                            replacement: crate::provider::PRUNED_TOOL_RESULT_PLACEHOLDER
-                                .to_string(),
-                        },
-                    }));
-                }
-            }
-        }
-
-        if items.is_empty() {
-            return Ok(session);
-        }
-
-        self.invalidate_prompt_window_runtime(&mut session);
-        self.store
-            .append_history_items(session, items, state.cache_policy())
-            .await
-    }
-
-    async fn strip_prompt_attachment_payloads(
-        &self,
-        mut session: Session,
-        plan: prompt_window::AttachmentPayloadStripPlan,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let stripped_ids = plan
-            .stripped_message_ids
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let mut items = Vec::new();
-
-        for message in &session.messages {
-            if !stripped_ids.contains(&message.id) {
-                continue;
-            }
-            for part in &message.parts {
-                if matches!(part.content, Some(PartContent::Attachment(_))) {
-                    items.push(EventKind::MessageRevised(MessageRevised {
-                        target_message_id: message.id,
-                        kind: RevisionKind::AttachmentStripped { part_id: part.id },
-                    }));
-                }
-            }
-        }
-
-        if items.is_empty() {
-            return Ok(session);
-        }
-
-        self.invalidate_prompt_window_runtime(&mut session);
-        self.store
-            .append_history_items(session, items, state.cache_policy())
-            .await
-    }
-
-    async fn compact_prompt_window(
-        &self,
-        mut session: Session,
-        options: &SessionRunOptions,
-        active_messages: &[Message],
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&session.runtime.execution);
-        let tools = scoped_executor.available_tools_for_messages_and_loaded(
-            active_messages,
-            session.runtime.loaded_deferred_tools(),
-        );
-        let prompt_budget =
-            self.prompt_budget_for_turn(&session, options, tools.as_slice(), state.as_ref());
-        let Some(mut plan) = state
-            .compaction_worker
-            .plan_compaction(
-                active_messages.to_vec(),
-                state.processor.keep_tail_messages(),
-                prompt_budget.max_prompt_chars,
-            )
-            .await?
-        else {
-            return Err(AppError::Internal(
-                "prompt window cannot be compacted further".to_string(),
-            ));
-        };
-
-        // Plugin hook: session.compacting — notify plugins that compaction is
-        // about to happen. (Fire-and-forget; patch is accepted but not applied
-        // to the already-computed plan since replanning would be expensive.)
-        {
-            let sdk_messages = active_messages
-                .iter()
-                .filter_map(|msg| {
-                    let content = serde_json::to_value(&msg.parts).ok()?;
-                    let role = match msg.role {
-                        Role::User => "user",
-                        Role::Assistant => "assistant",
-                        Role::System => "system",
-                    };
-                    Some(crate::plugin::ChatMessage {
-                        role: role.to_string(),
-                        content,
-                    })
-                })
-                .collect::<Vec<_>>();
-            let compacting_input = crate::plugin::SessionCompactingInput {
-                session_id: session.id,
-                messages: sdk_messages,
-                strategy: "summarize".to_string(),
-            };
-            match state
-                .tool_executor
-                .plugin_manager()
-                .dispatch_session_compacting(compacting_input)
-                .await
-            {
-                Ok(outcome) => {
-                    if let Some(text) = outcome.summary {
-                        let trimmed = text.trim();
-                        if !trimmed.is_empty() {
-                            tracing::debug!(
-                                target: "agena_plugin_host::session_compacting",
-                                session_id = session.id,
-                                "compaction summary replaced by plugin"
-                            );
-                            plan.summary_text = trimmed.to_string();
-                        }
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        target: "agena_plugin_host::session_compacting",
-                        "session.compacting hook failed (continuing): {err}"
-                    );
-                }
-            }
-        }
-
-        let compacted_message_ids = plan.compacted_message_ids.clone();
-        let messages_before = active_messages.len();
-
-        let summary_message = build_message(
-            self.store.reserve_message_ids(1).await?,
-            Role::System,
-            MessageStatus::Completed,
-            vec![PartContent::text(plan.summary_text)],
-            MessageMetadata {
-                source: MessageSource::System,
-                parent_message_id: active_messages.last().map(|message| message.id),
-                generated_by_call_id: None,
-                model_provider_id: options.model.provider_id.to_string(),
-                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: options.model.model_id.to_string(),
-                model_thinking_mode: None,
-                model_speed_mode: None,
-                provider_metadata: None,
-                tags: vec![MESSAGE_TAG_PROMPT_SUMMARY.to_string()],
-            },
-        );
-
-        session.messages.push(summary_message.clone());
-        self.invalidate_prompt_window_runtime(&mut session);
-        let summary_text = summary_message.as_text_lossy();
-        let messages_after = session.messages.len();
-        let mut items: Vec<EventKind> = compacted_message_ids
-            .into_iter()
-            .map(|target_message_id| {
-                EventKind::MessageRevised(MessageRevised {
-                    target_message_id,
-                    kind: RevisionKind::Compacted,
-                })
-            })
-            .collect();
-        items.push(EventKind::SystemNoticeAppended(
-            super::history::SystemNoticeAppended {
-                message_id: super::history::MessageId(summary_message.id),
-                created_at: summary_message.created_at,
-                kind: super::history::SystemNoticeKind::CompactionSummary,
-                text: summary_text.clone(),
-            },
-        ));
-
-        let result = self
-            .store
-            .append_history_items(session, items, state.cache_policy())
-            .await?;
-
-        // Plugin notification: session.compacted (fire-and-forget).
-        {
-            let compacted_input = crate::plugin::SessionCompactedInput {
-                session_id: result.id,
-                strategy: "summarize".to_string(),
-                summary: summary_text,
-                messages_before,
-                messages_after,
-            };
-            state
-                .tool_executor
-                .plugin_manager()
-                .broadcast_session_compacted(compacted_input)
-                .await;
-        }
-
-        Ok(result)
-    }
-
-    fn invalidate_prompt_window_runtime(&self, session: &mut Session) {
-        session.runtime.prompt_window.generation += 1;
-        session.runtime.clear_provider_anchors();
-        session.runtime.clear_prompt_tokens();
     }
 
     async fn resolve_pending_tools(
@@ -3829,6 +3541,75 @@ impl SessionManager {
                 None
             }
         }
+    }
+
+    async fn append_goal_turn_directive_message(
+        &self,
+        mut session: Session,
+        directive: &GoalTurnDirective,
+        options: &SessionRunOptions,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let ids = self.store.reserve_message_ids(1).await?;
+        let text = format!(
+            "<goal_context>\n{}\n</goal_context>",
+            directive.prompt.trim()
+        );
+        let goal_message = build_message(
+            ids,
+            Role::User,
+            MessageStatus::Completed,
+            vec![PartContent::text(text)],
+            MessageMetadata {
+                source: MessageSource::System,
+                parent_message_id: session
+                    .last_conversation_message()
+                    .map(|message| message.id),
+                generated_by_call_id: None,
+                model_provider_id: options.model.provider_id.to_string(),
+                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
+                model_id: options.model.model_id.to_string(),
+                model_thinking_mode: options.thinking_mode.clone(),
+                model_speed_mode: options.speed_mode.clone(),
+                provider_metadata: None,
+                tags: Vec::new(),
+            },
+        );
+        session.messages.push(goal_message.clone());
+        session = self
+            .persist_session_changes(
+                session,
+                vec![goal_message.clone()],
+                Vec::new(),
+                None,
+                state.clone(),
+            )
+            .await?;
+
+        let turn_id = HistoryTurnId::new();
+        let history_items = vec![
+            EventKind::TurnStarted(TurnStarted {
+                turn_id,
+                model_id: options.model.model_id.as_str().into(),
+                provider_id: options.model.provider_id.as_str().into(),
+                request_digest: None,
+            }),
+            EventKind::UserMessageAppended(UserMessageAppended {
+                message_id: HistoryMessageId(goal_message.id),
+                turn_id,
+                created_at: goal_message.created_at,
+                content: TranscriptContent::from_message_lossy(&goal_message),
+                parts: goal_message.parts.clone(),
+                metadata: goal_message.metadata.clone(),
+            }),
+            EventKind::TurnCompleted(TurnCompleted {
+                turn_id,
+                finish_reason: FinishReason::Stop,
+            }),
+        ];
+        self.store
+            .append_history_items(session, history_items, state.cache_policy())
+            .await
     }
 
     fn apply_goal_turn_directive(
@@ -6844,8 +6625,24 @@ mod tests {
         assert_eq!(received.reason, crate::plugin::SessionEndReason::Other);
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn streaming_tool_execution_persists_in_progress_output() {
+    #[test]
+    fn streaming_tool_execution_persists_in_progress_output() {
+        std::thread::Builder::new()
+            .name("streaming-tool-execution-test".to_string())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test runtime should build")
+                    .block_on(streaming_tool_execution_persists_in_progress_output_impl())
+            })
+            .expect("test thread should spawn")
+            .join()
+            .expect("test thread should complete");
+    }
+
+    async fn streaming_tool_execution_persists_in_progress_output_impl() {
         let workspace = TempWorkspace::new();
         let db = open_temp_database(&workspace.root, "streaming_tool_execution.db").await;
         let (plugins, chunk_sent, finish) = build_streaming_plugin_host(&workspace.root).await;
@@ -8060,6 +7857,137 @@ mod tests {
         assert!(forked.messages.is_empty());
     }
 
+    #[tokio::test]
+    async fn rewind_session_forks_without_mutating_source() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let source = service
+            .create_session(SessionCreateRequest {
+                title: "source".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create source session");
+        service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: source.id,
+                options: run_options(),
+                parts: vec![PartContent::text("first")],
+            })
+            .await
+            .expect("submit first turn");
+        let first_user_message_id = service
+            .get_session(source.id)
+            .await
+            .expect("reload source")
+            .messages
+            .iter()
+            .find(|message| message.role == Role::User && message.as_text_lossy() == "first")
+            .expect("first user message")
+            .id;
+        service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: source.id,
+                options: run_options(),
+                parts: vec![PartContent::text("second")],
+            })
+            .await
+            .expect("submit second turn");
+
+        let rewound = service
+            .rewind_session(SessionRewindRequest {
+                session_id: source.id,
+                message_id: first_user_message_id,
+                expected_version: None,
+            })
+            .await
+            .expect("rewind should create fork");
+        let reloaded_source = service
+            .get_session(source.id)
+            .await
+            .expect("reload source session");
+
+        assert_ne!(rewound.id, source.id);
+        assert_eq!(rewound.parent_id, Some(source.id));
+        assert!(
+            rewound.messages.iter().any(|message| {
+                message.role == Role::User && message.as_text_lossy() == "first"
+            })
+        );
+        assert!(
+            !rewound.messages.iter().any(|message| {
+                message.role == Role::User && message.as_text_lossy() == "second"
+            })
+        );
+        assert!(
+            reloaded_source.messages.iter().any(|message| {
+                message.role == Role::User && message.as_text_lossy() == "second"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn unrewind_session_is_noop_for_append_only_source() {
+        let workspace = TempWorkspace::new();
+        let service = build_manager(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+        )
+        .await;
+
+        let source = service
+            .create_session(SessionCreateRequest {
+                title: "source".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create source session");
+        service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: source.id,
+                options: run_options(),
+                parts: vec![PartContent::text("first")],
+            })
+            .await
+            .expect("submit first turn");
+        let before = service
+            .get_session(source.id)
+            .await
+            .expect("reload source before unrewind");
+        let target = before.messages.first().expect("message exists").id;
+
+        let after = service
+            .unrewind_session(SessionUnrewindRequest {
+                session_id: source.id,
+                message_id: target,
+                expected_version: Some(before.version),
+            })
+            .await
+            .expect("unrewind should be a no-op");
+
+        assert_eq!(after.id, before.id);
+        assert_eq!(after.version, before.version);
+        assert_eq!(
+            after
+                .messages
+                .iter()
+                .map(Message::as_text_lossy)
+                .collect::<Vec<_>>(),
+            before
+                .messages
+                .iter()
+                .map(Message::as_text_lossy)
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn cache_skips_entries_larger_than_byte_budget() {
         let state = cache_state(1, "x".repeat(256));
@@ -8101,7 +8029,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn follow_up_requests_reuse_prompt_cache_key_and_previous_response_id() {
+    async fn follow_up_requests_reuse_prompt_cache_key_and_send_full_prefix() {
         let workspace = TempWorkspace::new();
         let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
         let service = build_manager_with_provider(
@@ -8154,15 +8082,16 @@ mod tests {
             Some(expected_cache_key.as_str())
         );
         assert_eq!(recorded[0].previous_response_id, None);
-        assert_eq!(recorded[1].previous_response_id.as_deref(), Some("resp_1"));
-        assert_eq!(recorded[1].system, None);
-        assert_eq!(recorded[1].messages.len(), 1);
-        assert_eq!(recorded[1].messages[0].as_text_lossy(), "second");
+        assert_eq!(recorded[1].previous_response_id, None);
+        assert_eq!(recorded[1].system.as_deref(), Some("system"));
+        assert_eq!(recorded[1].messages.len(), 3);
+        assert_eq!(recorded[1].messages[0].as_text_lossy(), "first");
+        assert_eq!(recorded[1].messages[1].as_text_lossy(), "recorded");
+        assert_eq!(recorded[1].messages[2].as_text_lossy(), "second");
     }
 
     #[tokio::test]
-    async fn follow_up_requests_reuse_previous_response_id_when_shape_appears_after_first_response()
-    {
+    async fn follow_up_requests_send_full_prefix_when_shape_appears_after_first_response() {
         let workspace = TempWorkspace::new();
         let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
         let service = build_manager_with_provider(
@@ -8209,10 +8138,12 @@ mod tests {
 
         assert_eq!(recorded.len(), 2);
         assert_eq!(recorded[0].previous_response_id, None);
-        assert_eq!(recorded[1].previous_response_id.as_deref(), Some("resp_1"));
-        assert_eq!(recorded[1].system, None);
-        assert_eq!(recorded[1].messages.len(), 1);
-        assert_eq!(recorded[1].messages[0].as_text_lossy(), "second");
+        assert_eq!(recorded[1].previous_response_id, None);
+        assert_eq!(recorded[1].system.as_deref(), Some("system"));
+        assert_eq!(recorded[1].messages.len(), 3);
+        assert_eq!(recorded[1].messages[0].as_text_lossy(), "first");
+        assert_eq!(recorded[1].messages[1].as_text_lossy(), "recorded");
+        assert_eq!(recorded[1].messages[2].as_text_lossy(), "second");
     }
 
     #[tokio::test]
@@ -8287,10 +8218,12 @@ mod tests {
             recorded[2].prompt_cache_key.as_deref(),
             Some(expected_cache_key.as_str())
         );
-        assert_eq!(recorded[2].previous_response_id.as_deref(), Some("resp_1"));
-        assert_eq!(recorded[2].system, None);
-        assert_eq!(recorded[2].messages.len(), 1);
-        assert_eq!(recorded[2].messages[0].as_text_lossy(), "hello again");
+        assert_eq!(recorded[2].previous_response_id, None);
+        assert_eq!(recorded[2].system.as_deref(), Some("system"));
+        assert_eq!(recorded[2].messages.len(), 3);
+        assert_eq!(recorded[2].messages[0].as_text_lossy(), "hello one");
+        assert_eq!(recorded[2].messages[1].as_text_lossy(), "recorded");
+        assert_eq!(recorded[2].messages[2].as_text_lossy(), "hello again");
     }
 
     /// Sub-task C: verify that `submit_user_turn` writes the new append-only
@@ -9237,7 +9170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_model_turn_injects_hidden_goal_context_into_provider_request() {
+    async fn run_model_turn_uses_persisted_goal_context_message() {
         let workspace = TempWorkspace::new();
         let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
         let service = build_manager_with_provider(
@@ -9304,15 +9237,13 @@ mod tests {
             .goal_turn_directive(&session, false)
             .expect("objective-updated directive should be queued");
         assert_eq!(directive.kind, GoalTurnDirectiveKind::ObjectiveUpdated);
+        session = service
+            .append_goal_turn_directive_message(session, &directive, &options, state.clone())
+            .await
+            .expect("persist goal context message");
         let (control, _steer_rx) = service.turn_registry.register(created.id).await;
         let completed = service
-            .run_model_turn(
-                session,
-                &options,
-                Some(directive.prompt.as_str()),
-                state,
-                control.clone(),
-            )
+            .run_model_turn(session, &options, state, control.clone())
             .await
             .expect("run one model turn");
         service
@@ -9328,7 +9259,7 @@ mod tests {
             .messages
             .iter()
             .find(|message| message.as_text_lossy().contains("<goal_context>"))
-            .expect("provider request should include synthesized goal context");
+            .expect("provider request should include persisted goal context");
         assert_eq!(hidden_goal_message.role, Role::User);
         assert!(
             hidden_goal_message
@@ -9336,11 +9267,11 @@ mod tests {
                 .contains("finish the migration")
         );
         assert!(
-            !completed
+            completed
                 .messages
                 .iter()
                 .any(|message| message.as_text_lossy().contains("<goal_context>")),
-            "hidden goal context must not be persisted into session history"
+            "goal context should be persisted once so future prompts remain append-only"
         );
     }
 
@@ -9447,7 +9378,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_goal_on_idle_session_starts_one_hidden_goal_turn() {
+    async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
         let workspace = TempWorkspace::new();
         let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
         let manager = build_manager_with_provider(
@@ -9513,7 +9444,7 @@ mod tests {
                 let session = manager
                     .get_session(created.id)
                     .await
-                    .expect("reload session during hidden goal turn");
+                    .expect("reload session during goal turn");
                 if session.status() == SessionStatus::Idle
                     && !manager.is_turn_active(created.id).await
                     && session
@@ -9525,7 +9456,7 @@ mod tests {
                 }
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            panic!("hidden goal turn should settle within 10s");
+            panic!("goal turn should settle within 10s");
         }
         .await;
 
@@ -9535,37 +9466,57 @@ mod tests {
         assert_eq!(
             recorded.len(),
             1,
-            "goal creation should trigger exactly one hidden goal turn"
+            "goal creation should trigger exactly one goal turn"
         );
         let request = &recorded[0];
         assert_eq!(request.system.as_deref(), Some("system"));
         assert_eq!(request.temperature, Some(0.2));
         assert_eq!(request.max_output_tokens, Some(256));
 
-        let hidden_goal_message = request
+        let goal_directive_message = request
             .messages
             .iter()
             .find(|message| message.role == Role::User)
-            .expect("provider request should include hidden goal context");
-        let hidden_goal_text = hidden_goal_message.as_text_lossy();
+            .expect("provider request should include persisted goal context");
+        let goal_directive_text = goal_directive_message.as_text_lossy();
         assert!(
-            hidden_goal_text.contains("An active runtime goal has been set or updated."),
-            "unexpected hidden goal prompt: {}",
-            hidden_goal_text
+            goal_directive_text.contains("An active runtime goal has been set or updated."),
+            "unexpected goal prompt: {}",
+            goal_directive_text
         );
         assert!(
-            hidden_goal_text.contains("keep shipping"),
-            "hidden goal prompt should include the objective"
+            goal_directive_text.contains("keep shipping"),
+            "goal prompt should include the objective"
         );
 
+        let persisted_goal_messages = final_session
+            .messages
+            .iter()
+            .filter(|message| {
+                message.role == Role::User
+                    && message.metadata.source == MessageSource::System
+                    && message
+                        .as_text_lossy()
+                        .contains("An active runtime goal has been set or updated.")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            persisted_goal_messages.len(),
+            1,
+            "goal context must be persisted so future provider prompts stay append-only"
+        );
+        assert!(
+            persisted_goal_messages[0]
+                .as_text_lossy()
+                .contains("keep shipping")
+        );
         assert_eq!(
             final_session
                 .messages
                 .iter()
                 .filter(|message| message.role == Role::User)
                 .count(),
-            0,
-            "hidden goal context must not be persisted into session history"
+            1
         );
         assert_eq!(
             final_session

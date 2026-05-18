@@ -176,21 +176,18 @@
    - 让 `[`、`]`、`s`、`/resume`、`/children`、`/parent` 形成闭环，而不是分散快捷键。
 
 3. rewind / backtrack API 设计与前端接线
-   - 先明确 Agenta session service 是否需要新增“truncate to event/message”的后端接口。
-   - 如果需要后端变更，优先做最小接口：
-     - rewind 到某条 message
-     - rewind 到某个 event seq
+   - Agena session service 不应提供“truncate to event/message”的同一 session 变更接口。
+   - Rewind 到某条 message 时创建 fork，保留原分支完整历史和 provider prompt cache 前缀。
    - UI 层需要预留 command、picker、confirmation overlay 和 flash。
 
 4. rewind confirmation 流程
-   - 在 TUI 中加入二次确认，明确提示会丢弃哪一段后续消息。
+   - 在 TUI 中加入二次确认，明确提示会从哪一段后续消息之前创建新分支。
    - 如果当前 composer 有草稿，先走草稿保存。
    - rewind 成功后自动刷新 transcript、timeline 和 session tree。
 
 5. rewind 之后的 fork / continue 策略
-   - 允许 rewind 后继续在原分支执行。
-   - 允许 rewind 后先 fork 再继续，保留原分支完整历史。
-   - UI 上要让“在原分支继续”和“从这里开新分支”都是显式动作。
+   - Rewind 结果直接进入新分支继续执行。
+   - 原分支继续保留完整历史，可从 lineage/tree 显式返回。
 
 6. transcript pager mode 第二阶段
    - 支持 pager 打开 markdown 版 transcript，而不只是 plain text。

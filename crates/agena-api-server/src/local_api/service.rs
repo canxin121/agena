@@ -1184,6 +1184,21 @@ impl ApiService {
         let metadata = provider_registry
             .model_metadata(&model)
             .map_err(api_error_from_app)?;
+        let supported_verbosity_levels =
+            metadata.supported_verbosity_levels_for_model(&model.model_id);
+        if let Some(verbosity) = requested_verbosity.as_deref()
+            && !metadata.supports_verbosity_level_for_model(&model.model_id, verbosity)
+        {
+            return Err(ApiError::bad_request(format!(
+                "model `{}` does not support verbosity `{verbosity}`; supported values: {}",
+                model,
+                if supported_verbosity_levels.is_empty() {
+                    "none".to_owned()
+                } else {
+                    supported_verbosity_levels.join(", ")
+                }
+            )));
+        }
         let verbosity = requested_verbosity.or_else(|| {
             metadata
                 .default_verbosity

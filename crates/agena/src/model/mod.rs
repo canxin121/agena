@@ -591,6 +591,37 @@ impl ModelMetadata {
         self
     }
 
+    pub fn supported_verbosity_levels_for_model(&self, model_id: &ModelId) -> Vec<String> {
+        let default_verbosity = self
+            .default_verbosity
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase);
+        if !self.supports_verbosity.unwrap_or(false) && default_verbosity.is_none() {
+            return Vec::new();
+        }
+
+        let mut levels = if model_only_supports_medium_verbosity(model_id.as_str()) {
+            vec!["medium".to_owned()]
+        } else {
+            vec!["low".to_owned(), "medium".to_owned(), "high".to_owned()]
+        };
+        if let Some(default_verbosity) = default_verbosity
+            && !levels.iter().any(|value| value == &default_verbosity)
+        {
+            levels.push(default_verbosity);
+        }
+        levels
+    }
+
+    pub fn supports_verbosity_level_for_model(&self, model_id: &ModelId, verbosity: &str) -> bool {
+        let normalized = verbosity.trim().to_ascii_lowercase();
+        self.supported_verbosity_levels_for_model(model_id)
+            .into_iter()
+            .any(|candidate| candidate == normalized)
+    }
+
     pub fn with_fallbacks_from(mut self, fallback: &Self) -> Self {
         if self.lifecycle.is_none() {
             self.lifecycle = fallback.lifecycle;
@@ -631,6 +662,11 @@ impl ModelMetadata {
         }
         self
     }
+}
+
+fn model_only_supports_medium_verbosity(model_id: &str) -> bool {
+    let lowered = model_id.trim().to_ascii_lowercase();
+    lowered.contains("gpt-5") && lowered.contains("-chat")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1262,6 +1298,34 @@ mod tests {
         assert_eq!(
             merged.pricing.as_ref().map(|pricing| pricing.tiers.len()),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn model_metadata_supported_verbosity_levels_default_to_three_tiers() {
+        let metadata = ModelMetadata::default()
+            .with_supports_verbosity(true)
+            .with_default_verbosity("low");
+        let levels = metadata.supported_verbosity_levels_for_model(&ModelId::new("gpt-5.4"));
+        assert_eq!(levels, vec!["low", "medium", "high"]);
+        assert!(metadata.supports_verbosity_level_for_model(&ModelId::new("gpt-5.4"), "HIGH"));
+    }
+
+    #[test]
+    fn model_metadata_supported_verbosity_levels_restrict_chat_models_to_medium() {
+        let metadata = ModelMetadata::default()
+            .with_supports_verbosity(true)
+            .with_default_verbosity("medium");
+        let levels =
+            metadata.supported_verbosity_levels_for_model(&ModelId::new("gpt-5.2-chat-latest"));
+        assert_eq!(levels, vec!["medium"]);
+        assert!(
+            metadata
+                .supports_verbosity_level_for_model(&ModelId::new("gpt-5.2-chat-latest"), "medium")
+        );
+        assert!(
+            !metadata
+                .supports_verbosity_level_for_model(&ModelId::new("gpt-5.2-chat-latest"), "low")
         );
     }
 

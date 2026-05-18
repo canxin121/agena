@@ -26,6 +26,16 @@ function createInput() {
         },
       },
     ],
+    openai: [
+      {
+        provider_id: 'openai',
+        id: 'gpt-5.2-chat-latest',
+        metadata: {
+          supports_verbosity: true,
+          default_verbosity: 'medium',
+        },
+      },
+    ],
   }
   const providers = ref<ProviderSummary[]>([
     {
@@ -33,6 +43,12 @@ function createInput() {
       default_adapter: 'anthropic',
       default_model: 'claude-opus-4-7',
       adapters: [{ adapter_id: 'anthropic', enabled: true, configured_model_count: 2 }],
+    },
+    {
+      provider_id: 'openai',
+      default_adapter: 'openai',
+      default_model: 'gpt-5.2-chat-latest',
+      adapters: [{ adapter_id: 'openai', enabled: true, configured_model_count: 1 }],
     },
   ])
   const workspaces = ref<WorkspaceResource[]>([
@@ -109,6 +125,15 @@ describe('useChatPageUiState', () => {
     expect(ui.modelSpeedModeOptions()).toEqual([])
     expect(ui.modelVerbosityOptions()).toEqual([])
     expect(ui.modelParallelToolCallsOptions()).toEqual([])
+  })
+
+  test('verbosity options respect model-specific constraints', () => {
+    const { input, ui } = createInput()
+
+    input.selectedProviderId.value = 'openai'
+    input.selectedModelId.value = 'gpt-5.2-chat-latest'
+
+    expect(ui.modelVerbosityOptions().map((item) => item.id)).toEqual(['medium'])
   })
 
   test('watch selects provider default model when model is empty', async () => {

@@ -2156,6 +2156,24 @@ impl Backend {
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
+            let snapshot = self.runtime.current_snapshot();
+            let provider_registry = snapshot.provider_registry();
+            let metadata = provider_registry
+                .model_metadata(&options.model)
+                .context("failed to resolve selected model verbosity metadata")?;
+            if !metadata.supports_verbosity_level_for_model(&options.model.model_id, verbosity) {
+                let supported =
+                    metadata.supported_verbosity_levels_for_model(&options.model.model_id);
+                let supported_text = if supported.is_empty() {
+                    "none".to_owned()
+                } else {
+                    supported.join(", ")
+                };
+                return Err(anyhow!(
+                    "model {} does not support verbosity {verbosity}; supported values: {supported_text}",
+                    options.model
+                ));
+            }
             options.verbosity = Some(verbosity.to_ascii_lowercase());
         }
         if let Some(parallel_tool_calls) = parallel_tool_calls {

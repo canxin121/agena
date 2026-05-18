@@ -107,6 +107,9 @@ function catalogEntrySearchText(entry: ModelCatalogEntry) {
     entry.display_name,
     entry.origin,
     entry.description,
+    entry.default_temperature,
+    entry.default_top_p,
+    entry.default_top_k == null ? '' : String(entry.default_top_k),
     Array.isArray(entry.output_modalities) ? entry.output_modalities.join(',') : '',
     entry.pricing ? JSON.stringify(entry.pricing) : '',
     entry.kind,
@@ -205,6 +208,18 @@ function formatPricingSummary(pricing: ProviderModelPricing | null | undefined) 
   if (pricing.cache_write_usd_per_million_tokens)
     parts.push(`cache write ${pricing.cache_write_usd_per_million_tokens}`)
   if (Array.isArray(pricing.tiers) && pricing.tiers.length) parts.push(`${pricing.tiers.length} tier`)
+  return parts.join(' · ')
+}
+
+function formatSamplingSummary(
+  temperature: string | number | null | undefined,
+  topP: string | number | null | undefined,
+  topK: string | number | null | undefined,
+) {
+  const parts: string[] = []
+  if (temperature != null && String(temperature).trim()) parts.push(`temp ${String(temperature).trim()}`)
+  if (topP != null && String(topP).trim()) parts.push(`top_p ${String(topP).trim()}`)
+  if (topK != null && String(topK).trim()) parts.push(`top_k ${String(topK).trim()}`)
   return parts.join(' · ')
 }
 
@@ -503,6 +518,41 @@ onMounted(() => {
               class="input mono"
               inputmode="numeric"
               placeholder="8192"
+            />
+          </div>
+        </div>
+
+        <div class="grid two" style="margin-top: 12px">
+          <div class="field">
+            <label class="label" for="catalog-default-temperature">Default Temperature</label>
+            <input
+              id="catalog-default-temperature"
+              v-model="draft.default_temperature"
+              class="input mono"
+              inputmode="decimal"
+              placeholder="0.55"
+            />
+          </div>
+
+          <div class="field">
+            <label class="label" for="catalog-default-top-p">Default Top P</label>
+            <input
+              id="catalog-default-top-p"
+              v-model="draft.default_top_p"
+              class="input mono"
+              inputmode="decimal"
+              placeholder="0.95"
+            />
+          </div>
+
+          <div class="field">
+            <label class="label" for="catalog-default-top-k">Default Top K</label>
+            <input
+              id="catalog-default-top-k"
+              v-model="draft.default_top_k"
+              class="input mono"
+              inputmode="numeric"
+              placeholder="64"
             />
           </div>
         </div>
@@ -890,6 +940,13 @@ onMounted(() => {
                 </div>
                 <div v-if="formatPricingSummary(entry.pricing)" class="muted">
                   Pricing: {{ formatPricingSummary(entry.pricing) }}
+                </div>
+                <div
+                  v-if="formatSamplingSummary(entry.default_temperature, entry.default_top_p, entry.default_top_k)"
+                  class="muted"
+                >
+                  Sampling:
+                  {{ formatSamplingSummary(entry.default_temperature, entry.default_top_p, entry.default_top_k) }}
                 </div>
                 <div
                   v-if="entry.context_window_tokens || entry.max_input_tokens || entry.max_output_tokens"

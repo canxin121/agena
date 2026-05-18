@@ -2254,6 +2254,53 @@ default_verbosity = "low"
     }
 
     #[tokio::test]
+    async fn run_options_to_core_resolves_default_and_explicit_temperature() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_model = "qwen/qwen3-next-80b-a3b"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+            "model-temperature",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "temperature").await;
+
+        let default_options = RunOptions {
+            model: Some(ModelRef::new("openai", "qwen/qwen3-next-80b-a3b")),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            parallel_tool_calls: None,
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+        let default_core = run_options_to_core(&state, session_id, &default_options)
+            .await
+            .expect("default temperature should resolve");
+        assert_eq!(default_core.temperature, Some(0.55));
+
+        let explicit_options = RunOptions {
+            temperature: Some(0.2),
+            ..default_options
+        };
+        let explicit_core = run_options_to_core(&state, session_id, &explicit_options)
+            .await
+            .expect("explicit temperature should resolve");
+        assert_eq!(explicit_core.temperature, Some(0.2));
+    }
+
+    #[tokio::test]
     async fn run_options_to_core_rejects_unsupported_chat_model_verbosity() {
         let (state, workspace_root) = test_state_with_config(
             r#"

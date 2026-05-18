@@ -199,6 +199,12 @@ pub struct ModelCatalogEntryResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_temperature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_top_p: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_interleaved: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
@@ -267,6 +273,9 @@ impl ModelCatalogEntryResource {
             supports_parallel_tool_calls: value.supports_parallel_tool_calls,
             supports_verbosity: value.supports_verbosity,
             default_verbosity: value.default_verbosity,
+            default_temperature: value.default_temperature,
+            default_top_p: value.default_top_p,
+            default_top_k: value.default_top_k,
             assistant_reasoning_interleaved: value.assistant_reasoning_interleaved,
             assistant_reasoning_field: value.assistant_reasoning_field,
             output_modalities: value.output_modalities,

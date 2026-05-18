@@ -4041,6 +4041,13 @@ impl SessionManager {
                 .temperature
                 .map(|value| value.0);
         }
+        if options.temperature.is_none() {
+            let execution = self.execution_state();
+            let provider_registry = execution.processor.provider_registry();
+            if let Ok(metadata) = provider_registry.model_metadata(&options.model) {
+                options.temperature = metadata.parsed_default_temperature();
+            }
+        }
         if options.max_output_tokens.is_none() {
             options.max_output_tokens = session.runtime.execution.agent_run.max_output_tokens;
         }
@@ -8011,6 +8018,112 @@ mod tests {
             .expect("apply execution context");
         assert_eq!(options.model.provider_id.as_ref(), "scripted");
         assert_eq!(options.model.model_id.as_ref(), "claude-sonnet-4-6");
+    }
+
+    #[tokio::test]
+    async fn apply_execution_context_to_run_options_uses_model_default_temperature_last() {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let service = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)).with_metadata(
+                crate::provider::ModelMetadata::default().with_default_temperature("0.55"),
+            ),
+        )
+        .await;
+
+        let session = service
+            .create_session(SessionCreateRequest {
+                title: "default temperature".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let options = service
+            .apply_execution_context_to_run_options(
+                &session,
+                SessionRunOptions {
+                    model: recording_model_ref(),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                    agent_profile: None,
+                    max_turn_loops: None,
+                },
+            )
+            .expect("apply execution context");
+        assert_eq!(options.temperature, Some(0.55));
+    }
+
+    #[tokio::test]
+    async fn apply_execution_context_to_run_options_prefers_agent_temperature_over_model_default() {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let manager = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)).with_metadata(
+                crate::provider::ModelMetadata::default().with_default_temperature("0.55"),
+            ),
+        )
+        .await;
+
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "agent temperature".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let state = manager.execution_state();
+        let mut seeded = manager
+            .get_session(created.id)
+            .await
+            .expect("reload session");
+        seeded.runtime.execution.agent_run = crate::agent::AgentRunConfig {
+            temperature: Some(crate::agent::AgentTemperature(0.2)),
+            max_output_tokens: None,
+            steps: None,
+        };
+        let _ = manager
+            .persist_session_changes(seeded, Vec::new(), Vec::new(), None, state)
+            .await
+            .expect("persist session");
+
+        let reloaded = manager
+            .get_session(created.id)
+            .await
+            .expect("reload session after persist");
+        let options = manager
+            .apply_execution_context_to_run_options(
+                &reloaded,
+                SessionRunOptions {
+                    model: recording_model_ref(),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                    agent_profile: None,
+                    max_turn_loops: None,
+                },
+            )
+            .expect("apply execution context");
+        assert_eq!(options.temperature, Some(0.2));
     }
 
     #[tokio::test]

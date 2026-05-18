@@ -479,6 +479,12 @@ pub struct ModelMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_temperature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_p: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_top_k: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_interleaved: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
@@ -501,6 +507,9 @@ impl ModelMetadata {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.default_temperature.is_none()
+            && self.default_top_p.is_none()
+            && self.default_top_k.is_none()
             && self.assistant_reasoning_interleaved.is_none()
             && self.assistant_reasoning_field.is_none()
             && self.output_modalities.is_empty()
@@ -554,6 +563,28 @@ impl ModelMetadata {
 
     pub fn with_default_verbosity(mut self, default_verbosity: impl Into<String>) -> Self {
         self.default_verbosity = Some(default_verbosity.into());
+        self
+    }
+
+    pub fn with_default_temperature(mut self, default_temperature: impl Into<String>) -> Self {
+        self.default_temperature =
+            normalize_optional_decimal(Some(default_temperature.into()), |parsed| {
+                parsed.is_finite() && parsed >= 0.0
+            });
+        self
+    }
+
+    pub fn with_default_top_p(mut self, default_top_p: impl Into<String>) -> Self {
+        self.default_top_p = normalize_optional_decimal(Some(default_top_p.into()), |parsed| {
+            parsed.is_finite() && parsed > 0.0 && parsed <= 1.0
+        });
+        self
+    }
+
+    pub fn with_default_top_k(mut self, default_top_k: u32) -> Self {
+        if default_top_k > 0 {
+            self.default_top_k = Some(default_top_k);
+        }
         self
     }
 
@@ -649,6 +680,18 @@ impl ModelMetadata {
         self.supports_parallel_tool_calls.unwrap_or(false)
     }
 
+    pub fn parsed_default_temperature(&self) -> Option<f32> {
+        parse_optional_f32(self.default_temperature.as_deref(), |parsed| {
+            parsed.is_finite() && parsed >= 0.0
+        })
+    }
+
+    pub fn parsed_default_top_p(&self) -> Option<f32> {
+        parse_optional_f32(self.default_top_p.as_deref(), |parsed| {
+            parsed.is_finite() && parsed > 0.0 && parsed <= 1.0
+        })
+    }
+
     pub fn with_fallbacks_from(mut self, fallback: &Self) -> Self {
         if self.lifecycle.is_none() {
             self.lifecycle = fallback.lifecycle;
@@ -681,6 +724,15 @@ impl ModelMetadata {
         if self.default_verbosity.is_none() {
             self.default_verbosity = fallback.default_verbosity.clone();
         }
+        if self.default_temperature.is_none() {
+            self.default_temperature = fallback.default_temperature.clone();
+        }
+        if self.default_top_p.is_none() {
+            self.default_top_p = fallback.default_top_p.clone();
+        }
+        if self.default_top_k.is_none() {
+            self.default_top_k = fallback.default_top_k;
+        }
         if self.assistant_reasoning_interleaved.is_none() {
             self.assistant_reasoning_interleaved = fallback.assistant_reasoning_interleaved;
         }
@@ -700,6 +752,29 @@ impl ModelMetadata {
 fn model_only_supports_medium_verbosity(model_id: &str) -> bool {
     let lowered = model_id.trim().to_ascii_lowercase();
     lowered.contains("gpt-5") && lowered.contains("-chat")
+}
+
+fn normalize_optional_decimal(
+    value: Option<String>,
+    predicate: impl Fn(f32) -> bool,
+) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        trimmed
+            .parse::<f32>()
+            .ok()
+            .filter(|parsed| predicate(*parsed))
+            .map(|_| trimmed.to_owned())
+    })
+}
+
+fn parse_optional_f32(value: Option<&str>, predicate: impl Fn(f32) -> bool) -> Option<f32> {
+    value
+        .and_then(|raw| raw.trim().parse::<f32>().ok())
+        .filter(|parsed| predicate(*parsed))
 }
 
 fn normalize_assistant_reasoning_field(value: Option<String>) -> Option<String> {
@@ -1298,6 +1373,9 @@ mod tests {
             .with_supports_parallel_tool_calls(true)
             .with_supports_verbosity(true)
             .with_default_verbosity("low")
+            .with_default_temperature("0.55")
+            .with_default_top_p("0.95")
+            .with_default_top_k(64)
             .with_assistant_reasoning_interleaved(true)
             .with_assistant_reasoning_field("reasoning_details")
             .with_output_modalities(["text".to_owned(), "image".to_owned()])
@@ -1333,6 +1411,9 @@ mod tests {
         assert_eq!(merged.supports_parallel_tool_calls, Some(true));
         assert_eq!(merged.supports_verbosity, Some(true));
         assert_eq!(merged.default_verbosity.as_deref(), Some("low"));
+        assert_eq!(merged.default_temperature.as_deref(), Some("0.55"));
+        assert_eq!(merged.default_top_p.as_deref(), Some("0.95"));
+        assert_eq!(merged.default_top_k, Some(64));
         assert_eq!(merged.assistant_reasoning_interleaved, Some(true));
         assert_eq!(
             merged.assistant_reasoning_field.as_deref(),
@@ -1387,6 +1468,30 @@ mod tests {
 
         let supported = ModelMetadata::default().with_supports_parallel_tool_calls(true);
         assert!(supported.supports_parallel_tool_calls_for_model());
+    }
+
+    #[test]
+    fn model_metadata_parses_default_sampling_values() {
+        let metadata = ModelMetadata::default()
+            .with_default_temperature("1.0")
+            .with_default_top_p("0.95")
+            .with_default_top_k(64);
+        assert_eq!(metadata.parsed_default_temperature(), Some(1.0));
+        assert_eq!(metadata.parsed_default_top_p(), Some(0.95));
+        assert_eq!(metadata.default_top_k, Some(64));
+    }
+
+    #[test]
+    fn model_metadata_drops_invalid_default_sampling_values() {
+        let metadata = ModelMetadata::default()
+            .with_default_temperature("not-a-number")
+            .with_default_top_p("1.5")
+            .with_default_top_k(0);
+        assert_eq!(metadata.default_temperature, None);
+        assert_eq!(metadata.default_top_p, None);
+        assert_eq!(metadata.default_top_k, None);
+        assert_eq!(metadata.parsed_default_temperature(), None);
+        assert_eq!(metadata.parsed_default_top_p(), None);
     }
 
     #[test]

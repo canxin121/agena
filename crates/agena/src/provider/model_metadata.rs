@@ -19,6 +19,15 @@ impl ModelMetadataRegistry {
         {
             metadata = metadata.with_context_window_tokens(context_window_tokens);
         }
+        if let Some(default_temperature) = detect_default_temperature(normalized_model.as_str()) {
+            metadata = metadata.with_default_temperature(default_temperature);
+        }
+        if let Some(default_top_p) = detect_default_top_p(normalized_model.as_str()) {
+            metadata = metadata.with_default_top_p(default_top_p);
+        }
+        if let Some(default_top_k) = detect_default_top_k(normalized_model.as_str()) {
+            metadata = metadata.with_default_top_k(default_top_k);
+        }
 
         metadata
     }
@@ -70,6 +79,64 @@ fn detect_context_window_tokens(model: &str) -> Option<u32> {
     .find_map(|(pattern, tokens)| model.contains(pattern).then_some(tokens))
 }
 
+fn detect_default_temperature(model: &str) -> Option<&'static str> {
+    if model.contains("qwen") {
+        return Some("0.55");
+    }
+    if model.contains("claude") {
+        return None;
+    }
+    if model.contains("gemini")
+        || model.contains("glm-4.6")
+        || model.contains("glm-4.7")
+        || model.contains("minimax-m2")
+    {
+        return Some("1.0");
+    }
+    if model.contains("kimi-k2") {
+        if ["thinking", "k2.", "k2p", "k2-5"]
+            .into_iter()
+            .any(|pattern| model.contains(pattern))
+        {
+            return Some("1.0");
+        }
+        return Some("0.6");
+    }
+    None
+}
+
+fn detect_default_top_p(model: &str) -> Option<&'static str> {
+    if model.contains("qwen") {
+        return Some("1.0");
+    }
+    if [
+        "minimax-m2",
+        "gemini",
+        "kimi-k2.5",
+        "kimi-k2p5",
+        "kimi-k2-5",
+    ]
+    .into_iter()
+    .any(|pattern| model.contains(pattern))
+    {
+        return Some("0.95");
+    }
+    None
+}
+
+fn detect_default_top_k(model: &str) -> Option<u32> {
+    if model.contains("minimax-m2") {
+        if ["m2.", "m25", "m21"]
+            .into_iter()
+            .any(|pattern| model.contains(pattern))
+        {
+            return Some(40);
+        }
+        return Some(20);
+    }
+    model.contains("gemini").then_some(64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +160,41 @@ mod tests {
         let metadata = default_model_metadata_registry()
             .metadata_for_family(CapabilityFamily::Anthropic, "claude-3-7-sonnet-latest");
         assert_eq!(metadata.lifecycle, Some(ModelLifecycle::Deprecated));
+    }
+
+    #[test]
+    fn infers_qwen_sampling_defaults() {
+        let metadata = default_model_metadata_registry()
+            .metadata_for_family(CapabilityFamily::OpenAi, "qwen/qwen3-next-80b-a3b");
+        assert_eq!(metadata.default_temperature.as_deref(), Some("0.55"));
+        assert_eq!(metadata.default_top_p.as_deref(), Some("1.0"));
+        assert_eq!(metadata.default_top_k, None);
+    }
+
+    #[test]
+    fn infers_gemini_sampling_defaults() {
+        let metadata = default_model_metadata_registry()
+            .metadata_for_family(CapabilityFamily::Gemini, "google/gemini-2.5-pro");
+        assert_eq!(metadata.default_temperature.as_deref(), Some("1.0"));
+        assert_eq!(metadata.default_top_p.as_deref(), Some("0.95"));
+        assert_eq!(metadata.default_top_k, Some(64));
+    }
+
+    #[test]
+    fn infers_kimi_and_minimax_sampling_defaults() {
+        let kimi = default_model_metadata_registry()
+            .metadata_for_family(CapabilityFamily::OpenAi, "moonshotai/kimi-k2-instruct");
+        assert_eq!(kimi.default_temperature.as_deref(), Some("0.6"));
+        assert_eq!(kimi.default_top_p, None);
+
+        let kimi_thinking = default_model_metadata_registry()
+            .metadata_for_family(CapabilityFamily::OpenAi, "moonshotai/kimi-k2-thinking");
+        assert_eq!(kimi_thinking.default_temperature.as_deref(), Some("1.0"));
+
+        let minimax = default_model_metadata_registry()
+            .metadata_for_family(CapabilityFamily::OpenAi, "minimax/minimax-m2.5");
+        assert_eq!(minimax.default_temperature.as_deref(), Some("1.0"));
+        assert_eq!(minimax.default_top_p.as_deref(), Some("0.95"));
+        assert_eq!(minimax.default_top_k, Some(40));
     }
 }

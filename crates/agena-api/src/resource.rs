@@ -264,6 +264,12 @@ pub struct ModelCatalogEntryResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_temperature: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_top_p: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_interleaved: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,

@@ -506,6 +506,12 @@ fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryRe
             .as_ref()
             .and_then(|value| serde_json::to_string(value).ok())
             .unwrap_or_default(),
+        entry.default_temperature.clone().unwrap_or_default(),
+        entry.default_top_p.clone().unwrap_or_default(),
+        entry
+            .default_top_k
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
         match entry.kind {
             crate::local_api::ModelCatalogEntryKind::Official => "official".to_owned(),
             crate::local_api::ModelCatalogEntryKind::Custom => "custom".to_owned(),

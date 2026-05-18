@@ -2198,6 +2198,13 @@ impl Backend {
         }
         if let Some(temperature) = temperature {
             options.temperature = Some(temperature);
+        } else if options.temperature.is_none() {
+            let snapshot = self.runtime.current_snapshot();
+            let provider_registry = snapshot.provider_registry();
+            let metadata = provider_registry
+                .model_metadata(&options.model)
+                .context("failed to resolve selected model temperature metadata")?;
+            options.temperature = metadata.parsed_default_temperature();
         }
         if let Some(max_output_tokens) = max_output_tokens {
             options.max_output_tokens = Some(max_output_tokens);
@@ -2591,6 +2598,24 @@ fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> J
             JsonValue::String(default_verbosity.to_owned()),
         );
     }
+    if let Some(default_temperature) = non_empty(entry.default_temperature.as_deref()) {
+        value.insert(
+            "default_temperature".to_owned(),
+            JsonValue::String(default_temperature.to_owned()),
+        );
+    }
+    if let Some(default_top_p) = non_empty(entry.default_top_p.as_deref()) {
+        value.insert(
+            "default_top_p".to_owned(),
+            JsonValue::String(default_top_p.to_owned()),
+        );
+    }
+    if let Some(default_top_k) = entry.default_top_k {
+        value.insert(
+            "default_top_k".to_owned(),
+            JsonValue::Number(default_top_k.into()),
+        );
+    }
     if let Some(assistant_reasoning_interleaved) = entry.assistant_reasoning_interleaved {
         value.insert(
             "assistant_reasoning_interleaved".to_owned(),
@@ -2708,6 +2733,24 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
         value.insert(
             "default_verbosity".to_owned(),
             JsonValue::String(default_verbosity.to_owned()),
+        );
+    }
+    if let Some(default_temperature) = non_empty(model.metadata.default_temperature.as_deref()) {
+        value.insert(
+            "default_temperature".to_owned(),
+            JsonValue::String(default_temperature.to_owned()),
+        );
+    }
+    if let Some(default_top_p) = non_empty(model.metadata.default_top_p.as_deref()) {
+        value.insert(
+            "default_top_p".to_owned(),
+            JsonValue::String(default_top_p.to_owned()),
+        );
+    }
+    if let Some(default_top_k) = model.metadata.default_top_k {
+        value.insert(
+            "default_top_k".to_owned(),
+            JsonValue::Number(default_top_k.into()),
         );
     }
     if let Some(assistant_reasoning_interleaved) = model.metadata.assistant_reasoning_interleaved {

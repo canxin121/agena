@@ -17,7 +17,11 @@ pub use ids::{MessageId, PartId, ToolCallId, TurnId};
 
 pub use context_governor::ContextGovernor;
 pub use context_policy::ContextPolicy;
-pub use cost::{ModelCostBreakdown, SessionCostSummary};
+pub use cost::{
+    ModelCostBreakdown, ModelUsageBreakdown, ProviderUsageBreakdown, SessionCostSummary,
+    SessionUsageBreakdown, UsageDailyBreakdown, UsagePeriod, UsageStatRecord, UsageStats,
+    UsageStatsQuery, UsageTotals,
+};
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
     SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,

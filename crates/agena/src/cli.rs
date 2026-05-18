@@ -53,7 +53,7 @@ use crate::{
     session::{
         Session, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
         SessionListRequest, SessionManager, SessionRunOptions, SessionRuntimeStatus,
-        SessionSummary, SessionUserTurnRequest,
+        SessionSummary, SessionUserTurnRequest, UsagePeriod, UsageStatsQuery,
     },
     storage::StorageConfig,
     tool::{ApplyPatchExecution, ToolExecutor, ToolPayloadInput},
@@ -119,6 +119,7 @@ pub enum AgenaCommand {
     Exec(ExecArgs),
     Fork(ForkArgs),
     Cost(CostArgs),
+    Usage(UsageArgs),
     Git(GitArgs),
     Login(LoginArgs),
     Memory(MemoryCommand),
@@ -163,6 +164,42 @@ pub struct CostArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
     pub last: bool,
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    pub format: ConfigOutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum UsagePeriodArg {
+    Today,
+    Week,
+    ThirtyDays,
+    Month,
+    All,
+}
+
+impl UsagePeriodArg {
+    fn into_usage_period(self) -> UsagePeriod {
+        match self {
+            Self::Today => UsagePeriod::Today,
+            Self::Week => UsagePeriod::Last7Days,
+            Self::ThirtyDays => UsagePeriod::Last30Days,
+            Self::Month => UsagePeriod::MonthToDate,
+            Self::All => UsagePeriod::AllTime,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct UsageArgs {
+    /// Preset reporting window. Use --from/--to for an exact custom range.
+    #[arg(long, value_enum, default_value_t = UsagePeriodArg::Week)]
+    pub period: UsagePeriodArg,
+    /// Start of a custom range. Accepts YYYY-MM-DD or RFC3339.
+    #[arg(long)]
+    pub from: Option<String>,
+    /// End of a custom range. Accepts YYYY-MM-DD or RFC3339.
+    #[arg(long)]
+    pub to: Option<String>,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
     pub format: ConfigOutputFormat,
 }
@@ -1201,6 +1238,7 @@ impl AgenaCli {
             Some(AgenaCommand::Exec(args)) => self.run_exec(args).await,
             Some(AgenaCommand::Fork(args)) => self.run_fork(args).await,
             Some(AgenaCommand::Cost(args)) => self.run_cost(args).await,
+            Some(AgenaCommand::Usage(args)) => self.run_usage(args).await,
             Some(AgenaCommand::Git(args)) => self.run_git(args).await,
             Some(AgenaCommand::Login(args)) => self.run_login(loader, args).await,
             Some(AgenaCommand::Logout(args)) => self.run_logout(loader, args),
@@ -1793,6 +1831,12 @@ impl AgenaCli {
         Ok(())
     }
 
+    async fn run_usage(self, args: UsageArgs) -> Result<(), AppError> {
+        let output = self.render_usage_command(args).await?;
+        println!("{output}");
+        Ok(())
+    }
+
     async fn run_permissions(self, args: PermissionsArgs) -> Result<(), AppError> {
         let output = self.render_permissions_command(args).await?;
         println!("{output}");
@@ -2194,6 +2238,16 @@ impl AgenaCli {
             session: session_detail(&session, latest_event_seq),
             summary: crate::session::cost::summarize(&session.messages),
         };
+        render_serialized(args.format, &output)
+    }
+
+    async fn render_usage_command(&self, args: UsageArgs) -> Result<String, AppError> {
+        let runtime = self.session_runtime().await?;
+        let manager = runtime
+            .session_manager()
+            .ok_or_else(session_storage_error)?;
+        let query = usage_stats_query_from_args(&args)?;
+        let output = manager.usage_stats(query).await?;
         render_serialized(args.format, &output)
     }
 
@@ -3781,6 +3835,59 @@ async fn selected_session_id(
         .ok_or_else(|| AppError::Config("no sessions found".to_owned()))
 }
 
+fn usage_stats_query_from_args(args: &UsageArgs) -> Result<UsageStatsQuery, AppError> {
+    let has_custom_range = args.from.is_some() || args.to.is_some();
+    let mut query = UsageStatsQuery::for_period(args.period.into_usage_period(), Utc::now());
+    if has_custom_range {
+        query = UsageStatsQuery::custom(
+            args.from
+                .as_deref()
+                .map(|value| parse_usage_datetime(value, false))
+                .transpose()?,
+            args.to
+                .as_deref()
+                .map(|value| parse_usage_datetime(value, true))
+                .transpose()?
+                .or_else(|| Some(Utc::now())),
+        );
+    }
+
+    if let (Some(from), Some(to)) = (query.from.as_ref(), query.to.as_ref())
+        && from > to
+    {
+        return Err(AppError::Config(
+            "--from must be earlier than or equal to --to".to_string(),
+        ));
+    }
+
+    Ok(query)
+}
+
+fn parse_usage_datetime(raw: &str, end_of_day: bool) -> Result<DateTime<Utc>, AppError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Config("usage date cannot be empty".to_string()));
+    }
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(parsed.with_timezone(&Utc));
+    }
+
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+        let datetime = if end_of_day {
+            date.and_hms_milli_opt(23, 59, 59, 999)
+        } else {
+            date.and_hms_milli_opt(0, 0, 0, 0)
+        }
+        .expect("valid date boundary");
+        return Ok(datetime.and_utc());
+    }
+
+    Err(AppError::Config(format!(
+        "invalid usage date `{raw}`; expected YYYY-MM-DD or RFC3339"
+    )))
+}
+
 async fn latest_event_seq(
     manager: &crate::session::SessionManager,
     session_id: i64,
@@ -4693,6 +4800,23 @@ enabled = true
         assert!(args.last);
         assert_eq!(args.format, ConfigOutputFormat::Json);
 
+        let usage = AgenaCli::parse_from([
+            "agena",
+            "usage",
+            "--period",
+            "thirty-days",
+            "--from",
+            "2026-05-01",
+            "--format",
+            "json",
+        ]);
+        let Some(AgenaCommand::Usage(args)) = usage.command else {
+            unreachable!("expected usage command after successful parse");
+        };
+        assert_eq!(args.period, UsagePeriodArg::ThirtyDays);
+        assert_eq!(args.from.as_deref(), Some("2026-05-01"));
+        assert_eq!(args.format, ConfigOutputFormat::Json);
+
         let permissions = AgenaCli::parse_from([
             "agena",
             "permissions",
@@ -4817,6 +4941,39 @@ enabled = true
         assert_eq!(value["summary"]["turns"], 0);
         assert_eq!(value["summary"]["input_tokens"], 0);
         assert_eq!(value["summary"]["by_model"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn usage_command_renders_workspace_usage_summary() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        let db_path = std::env::temp_dir().join(format!("agena-cli-usage-{suffix}.db"));
+        let config_path = write_temp_config("");
+        let cli = AgenaCli {
+            config: Some(config_path),
+            overrides: Vec::new(),
+            database_url: Some(format!("sqlite://{}?mode=rwc", db_path.display())),
+            database_path: None,
+            command: None,
+        };
+        let _runtime = cli.session_runtime().await.expect("runtime should build");
+
+        let output = cli
+            .render_usage_command(UsageArgs {
+                period: UsagePeriodArg::Week,
+                from: None,
+                to: None,
+                format: ConfigOutputFormat::Json,
+            })
+            .await
+            .expect("usage command should render");
+        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
+        assert_eq!(value["period"], "last_7_days");
+        assert_eq!(value["totals"]["turns"], 0);
+        assert_eq!(value["totals"]["cache_hit_rate"], 0.0);
+        assert!(value["by_day"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]

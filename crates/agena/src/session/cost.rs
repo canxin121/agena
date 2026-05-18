@@ -30,6 +30,8 @@ impl ModelCostBreakdown {
         self.input_tokens
             .saturating_add(self.output_tokens)
             .saturating_add(self.reasoning_tokens)
+            .saturating_add(self.cache_write_tokens)
+            .saturating_add(self.cache_read_tokens)
     }
 
     fn fold(&mut self, usage: &MessageUsage) {
@@ -64,6 +66,8 @@ impl SessionCostSummary {
         self.input_tokens
             .saturating_add(self.output_tokens)
             .saturating_add(self.reasoning_tokens)
+            .saturating_add(self.cache_write_tokens)
+            .saturating_add(self.cache_read_tokens)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -71,14 +75,20 @@ impl SessionCostSummary {
     }
 
     /// One-line human summary, e.g.
-    /// `1,234 in + 567 out + 12 reasoning = 1,813 tokens · $0.0420 over 4 turns`.
+    /// `1,234 in + 100 cache + 567 out + 12 reasoning = 1,913 tokens · $0.0420 over 4 turns`.
     pub fn one_line(&self) -> String {
         if self.is_empty() {
             return "no usage recorded yet".to_string();
         }
+        let cache_tokens = self.cache_write_tokens.saturating_add(self.cache_read_tokens);
         format!(
-            "{} in + {} out{} = {} tokens · ${:.4} over {} turn{}",
+            "{} in{} + {} out{} = {} tokens · ${:.4} over {} turn{}",
             format_count(self.input_tokens),
+            if cache_tokens > 0 {
+                format!(" + {} cache", format_count(cache_tokens))
+            } else {
+                String::new()
+            },
             format_count(self.output_tokens),
             if self.reasoning_tokens > 0 {
                 format!(" + {} reasoning", format_count(self.reasoning_tokens))
@@ -283,14 +293,18 @@ mod tests {
             input_tokens: 1234,
             output_tokens: 567,
             reasoning_tokens: 12,
+            cache_write_tokens: 40,
+            cache_read_tokens: 60,
             total_cost: 0.042,
             ..Default::default()
         };
         let summary = summarize(&[assistant("anthropic", "claude-haiku-4-5", usage)]);
         let line = summary.one_line();
         assert!(line.contains("1,234 in"));
+        assert!(line.contains("100 cache"));
         assert!(line.contains("567 out"));
         assert!(line.contains("12 reasoning"));
+        assert!(line.contains("1,913 tokens"));
         assert!(line.contains("$0.0420"));
         assert!(line.contains("1 turn"));
     }

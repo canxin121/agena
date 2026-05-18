@@ -429,13 +429,18 @@ pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     // the codebase follows Anthropic's convention where `input_tokens`
     // names only the uncached portion. Subtract to match.
     let input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
+    let reasoning_tokens = usage
+        .output_tokens_details
+        .and_then(|d| d.reasoning_tokens)
+        .unwrap_or_default();
+    let output_tokens = usage
+        .completion_tokens
+        .unwrap_or_default()
+        .saturating_sub(reasoning_tokens);
     MessageUsage {
         input_tokens,
-        output_tokens: usage.completion_tokens.unwrap_or_default(),
-        reasoning_tokens: usage
-            .output_tokens_details
-            .and_then(|d| d.reasoning_tokens)
-            .unwrap_or_default(),
+        output_tokens,
+        reasoning_tokens,
         cache_write_tokens: 0,
         cache_read_tokens,
         total_cost: 0.0,

@@ -1036,16 +1036,21 @@ impl OpenAiProvider {
                 .input_tokens_details
                 .and_then(|d| d.cached_tokens)
                 .unwrap_or_default();
+            let reasoning_tokens = u
+                .output_tokens_details
+                .and_then(|d| d.reasoning_tokens)
+                .unwrap_or_default();
             // Match Anthropic's convention: `input_tokens` is the uncached
             // portion only. OpenAI's `input_tokens` is inclusive of cache.
             let input_tokens = input_tokens_raw.saturating_sub(cache_read_tokens);
+            let output_tokens = u
+                .output_tokens
+                .unwrap_or_default()
+                .saturating_sub(reasoning_tokens);
             MessageUsage {
                 input_tokens,
-                output_tokens: u.output_tokens.unwrap_or_default(),
-                reasoning_tokens: u
-                    .output_tokens_details
-                    .and_then(|d| d.reasoning_tokens)
-                    .unwrap_or_default(),
+                output_tokens,
+                reasoning_tokens,
                 cache_write_tokens: 0,
                 cache_read_tokens,
                 total_cost: 0.0,

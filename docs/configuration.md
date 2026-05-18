@@ -107,7 +107,7 @@ Provider 覆盖：
 ```text
 providers.<id>.default_model
 providers.<id>.auth.base_url
-providers.<id>.auth.endpoint_layout
+providers.<id>.auth.protocol_paths.<adapter>
 providers.<id>.auth.api_key
 providers.<id>.auth.api_key_env
 providers.<id>.enabled
@@ -357,7 +357,7 @@ enabled = true
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
@@ -404,9 +404,9 @@ sap_ai_core
 
 常用字段：
 
-- `api`：`base_url`、`endpoint_layout`、`api_key`、`api_key_env`
+- `api`：`base_url`、`protocol_paths`、`api_key`、`api_key_env`
 - `credential`：`issuer`、`credential`
-- `google_adc`：`base_url`、`endpoint_layout`
+- `google_adc`：`base_url`、`protocol_paths`
 - `bedrock_sigv4`：`base_url`、`region`、`profile`、`access_key_id`、`secret_access_key`、`session_token`
 - `sap_ai_core`：`base_url`、`api_key`、`api_key_env`、`service_key_env`
 
@@ -481,8 +481,12 @@ default_model = "gpt-4.1-mini"
 [providers.shared.auth]
 mode = "api"
 base_url = "https://gateway.example.com"
-endpoint_layout = "protocol_root"
 api_key_env = "SHARED_GATEWAY_API_KEY"
+
+[providers.shared.auth.protocol_paths]
+openai = "/v1"
+anthropic = "/v1"
+gemini = "/v1beta"
 
 [providers.shared.adapters.openai]
 enabled = true
@@ -497,20 +501,13 @@ enabled = true
 enabled = true
 ```
 
-当一个 auth 网关同时提供多种协议时，`base_url` 表示共享入口，运行时会根据 `endpoint_layout` 自动派生各 adapter 的真实协议 base：
+当一个 auth 网关同时提供多种协议时，`base_url` 表示共享根路径，`auth.protocol_paths` 显式指定每个 adapter 的协议前缀。默认值是：
 
-- `direct`：直接使用填写的 `base_url`
-- `protocol_root`：派生 `/v1` 或 `/v1beta`
-- `provider_routed`：派生 `/api/provider/<provider>/...`
-- `auto`：按 URL 形状自动判断，默认值
+- `openai = "/v1"`
+- `anthropic = "/v1"`
+- `gemini = "/v1beta"`
 
 OpenCode Go / Zen 也是这类共享网关：Go 大多数模型走 OpenAI-compatible `/chat/completions`，MiniMax 模型走 Anthropic Messages `/messages`；Zen 还包含 OpenAI Responses 和 Gemini 路由。可复制配置见 [OpenCode 接入](opencode-go.md)。
-
-常见输入示例：
-
-- `https://api.cxits.cn/v1/messages` 会被收敛成共享入口 `https://api.cxits.cn`
-- `https://api.cxits.cn/v1beta/models/gemini-2.5-pro:generateContent` 也会先收敛成 `https://api.cxits.cn`
-- `https://api.cxits.cn/api/provider/openai/v1` 会被识别成 `provider_routed` 共享入口
 
 ### Model metadata 和 modes
 

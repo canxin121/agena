@@ -496,7 +496,7 @@ impl Backend {
         let target = draft_provider_adapter_models_target(
             Some(draft.provider_id.as_str()),
             draft.base_url.as_str(),
-            agena::config::SharedGatewayEndpointLayout::Auto,
+            agena::config::ProviderProtocolPathsConfig::default(),
             Some(draft.api_key.as_str()),
             Some(draft.api_key_env.as_str()),
             adapter_ids,

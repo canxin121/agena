@@ -14,11 +14,10 @@ use super::{
     HttpProviderAdapterConfig, McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig,
     ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
-    ProviderGoogleAdcAuthConfig, ProviderModelDiscoveryConfig, ProviderSapAiCoreAuthConfig,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    ResolvedProviderModelConfig, RuntimeConfig, RuntimeModelCatalogConfig,
-    SharedGatewayEndpointLayout, StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig,
-    WebToolsConfig,
+    ProviderGoogleAdcAuthConfig, ProviderModelDiscoveryConfig, ProviderProtocolPathsConfig,
+    ProviderSapAiCoreAuthConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, ResolvedProviderModelConfig, RuntimeConfig, RuntimeModelCatalogConfig,
+    StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -1019,10 +1018,27 @@ pub(crate) enum ProviderAuthMode {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct RawProviderProtocolPathsConfig {
+    pub(crate) openai: Option<String>,
+    pub(crate) anthropic: Option<String>,
+    pub(crate) gemini: Option<String>,
+}
+
+impl Merge for RawProviderProtocolPathsConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.openai, overlay.openai);
+        merge_option(&mut self.anthropic, overlay.anthropic);
+        merge_option(&mut self.gemini, overlay.gemini);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct RawProviderAuthConfig {
     pub(crate) mode: Option<ProviderAuthMode>,
     pub(crate) base_url: Option<String>,
-    pub(crate) endpoint_layout: Option<SharedGatewayEndpointLayout>,
+    pub(crate) protocol_paths: Option<RawProviderProtocolPathsConfig>,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env: Option<String>,
     pub(crate) issuer: Option<CredentialIssuer>,
@@ -1040,7 +1056,7 @@ impl Merge for RawProviderAuthConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.mode, overlay.mode);
         merge_option(&mut self.base_url, overlay.base_url);
-        merge_option(&mut self.endpoint_layout, overlay.endpoint_layout);
+        merge_option_struct(&mut self.protocol_paths, overlay.protocol_paths);
         merge_option(&mut self.api_key, overlay.api_key);
         merge_option(&mut self.api_key_env, overlay.api_key_env);
         merge_option(&mut self.issuer, overlay.issuer);
@@ -1478,20 +1494,25 @@ fn resolve_provider_auth<'a>(
             }
             Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig {
                 base_url,
-                endpoint_layout: raw_auth.endpoint_layout.unwrap_or_default(),
+                protocol_paths: resolve_protocol_paths(
+                    provider_id,
+                    raw_auth.protocol_paths,
+                    "protocol_paths",
+                )?,
                 api_key: normalize_optional(raw_auth.api_key),
                 api_key_env: normalize_optional(raw_auth.api_key_env),
             }))
         }
         ProviderAuthMode::Credential => {
             if normalize_optional(raw_auth.base_url.clone()).is_some()
+                || raw_auth.protocol_paths.is_some()
                 || normalize_optional(raw_auth.api_key.clone()).is_some()
                 || normalize_optional(raw_auth.api_key_env.clone()).is_some()
             {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message:
-                        "auth mode `credential` does not accept `base_url`, `api_key`, or `api_key_env`"
+                        "auth mode `credential` does not accept `base_url`, `protocol_paths`, `api_key`, or `api_key_env`"
                             .to_owned(),
                 });
             }
@@ -1532,14 +1553,22 @@ fn resolve_provider_auth<'a>(
         ProviderAuthMode::GoogleAdc => {
             Ok(ProviderAuthConfig::GoogleAdc(ProviderGoogleAdcAuthConfig {
                 base_url: required_string(provider_id, "base_url", raw_auth.base_url)?,
-                endpoint_layout: raw_auth.endpoint_layout.unwrap_or_default(),
+                protocol_paths: resolve_protocol_paths(
+                    provider_id,
+                    raw_auth.protocol_paths,
+                    "protocol_paths",
+                )?,
             }))
         }
         ProviderAuthMode::SapAiCore => {
             Ok(ProviderAuthConfig::SapAiCore(ProviderSapAiCoreAuthConfig {
                 api: ProviderApiAuthConfig {
                     base_url: required_string(provider_id, "base_url", raw_auth.base_url)?,
-                    endpoint_layout: raw_auth.endpoint_layout.unwrap_or_default(),
+                    protocol_paths: resolve_protocol_paths(
+                        provider_id,
+                        raw_auth.protocol_paths,
+                        "protocol_paths",
+                    )?,
                     api_key: normalize_optional(raw_auth.api_key),
                     api_key_env: normalize_optional(raw_auth.api_key_env),
                 },
@@ -1550,6 +1579,49 @@ fn resolve_provider_auth<'a>(
     }
 }
 
+fn resolve_protocol_paths(
+    provider_id: &str,
+    raw: Option<RawProviderProtocolPathsConfig>,
+    field: &str,
+) -> Result<ProviderProtocolPathsConfig, ConfigError> {
+    let raw = raw.unwrap_or_default();
+    Ok(ProviderProtocolPathsConfig {
+        openai: normalize_protocol_path(
+            provider_id,
+            format!("{field}.openai").as_str(),
+            raw.openai.unwrap_or_else(|| "/v1".to_owned()),
+        )?,
+        anthropic: normalize_protocol_path(
+            provider_id,
+            format!("{field}.anthropic").as_str(),
+            raw.anthropic.unwrap_or_else(|| "/v1".to_owned()),
+        )?,
+        gemini: normalize_protocol_path(
+            provider_id,
+            format!("{field}.gemini").as_str(),
+            raw.gemini.unwrap_or_else(|| "/v1beta".to_owned()),
+        )?,
+    })
+}
+
+fn normalize_protocol_path(
+    provider_id: &str,
+    field: &str,
+    value: String,
+) -> Result<String, ConfigError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "/" {
+        return Ok(String::new());
+    }
+    if trimmed.contains("://") || trimmed.contains('?') || trimmed.contains('#') {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: format!("provider auth {field} must be a relative path, got `{trimmed}`"),
+        });
+    }
+    Ok(format!("/{}", trimmed.trim_matches('/')))
+}
+
 fn infer_provider_auth_mode(
     raw_auth: &RawProviderAuthConfig,
     adapters: &[&ResolvedProviderAdapterConfig],
@@ -1557,7 +1629,11 @@ fn infer_provider_auth_mode(
     if raw_auth.credential.is_some() || raw_auth.issuer.is_some() {
         return ProviderAuthMode::Credential;
     }
-    if raw_auth.base_url.is_some() || raw_auth.api_key.is_some() || raw_auth.api_key_env.is_some() {
+    if raw_auth.base_url.is_some()
+        || raw_auth.protocol_paths.is_some()
+        || raw_auth.api_key.is_some()
+        || raw_auth.api_key_env.is_some()
+    {
         return ProviderAuthMode::Api;
     }
     if raw_auth.access_key_id.is_some()

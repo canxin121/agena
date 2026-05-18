@@ -49,15 +49,19 @@ fn cli_override_parser_supports_default_fields() {
 }
 
 #[test]
-fn cli_override_parser_supports_provider_auth_endpoint_layout() {
-    let parsed = "providers.shared.auth.endpoint_layout=provider_routed"
+fn cli_override_parser_supports_provider_auth_protocol_paths() {
+    let parsed = "providers.shared.auth.protocol_paths.openai=/api/provider/openai/v1"
         .parse::<ConfigOverride>()
         .expect("override should parse");
     assert!(matches!(
         parsed,
-        ConfigOverride::ProviderAuthEndpointLayout { provider_id, value }
-            if provider_id == "shared"
-                && value == SharedGatewayEndpointLayout::ProviderRouted
+        ConfigOverride::ProviderAuthProtocolPath {
+            provider_id,
+            protocol,
+            value
+        } if provider_id == "shared"
+            && protocol == "openai"
+            && value == "/api/provider/openai/v1"
     ));
 }
 
@@ -73,7 +77,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -110,7 +114,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -215,7 +219,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 
 [providers.openai.adapters.openai]
 enabled = true
@@ -244,7 +248,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 
 [providers.openai.adapters.openai]
 enabled = true
@@ -276,7 +280,7 @@ default_model = "openai/gpt-5"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 
 [providers.openai.adapters.openai]
 enabled = true
@@ -334,7 +338,7 @@ default_model = "openai/gpt-5"
 
 [providers.api.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.api.adapters.openai]
@@ -359,7 +363,7 @@ enabled = true
     assert_eq!(provider.default_model, "openai/gpt-5");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://api.openai.com/v1");
+            assert_eq!(api.base_url, "https://api.openai.com");
             assert_eq!(api.api_key.as_deref(), Some("sk-test"));
             assert!(api.api_key_env.is_none());
         }
@@ -444,7 +448,7 @@ default_model = "openai/gpt-5.3-codex"
 
 [providers.chatgpt.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.chatgpt.adapters.openai]
@@ -732,7 +736,7 @@ enabled = true
     assert_eq!(provider.default_model, "gpt-4.1-mini");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://gateway.example.com/v1");
+            assert_eq!(api.base_url, "https://gateway.example.com");
             assert_eq!(api.api_key_env.as_deref(), Some("SHARED_GATEWAY_API_KEY"));
         }
         other => panic!("expected shared api auth, got {other:?}"),
@@ -756,7 +760,7 @@ enabled = true
 }
 
 #[test]
-fn multi_adapter_provider_supports_shared_endpoint_layout() {
+fn multi_adapter_provider_supports_shared_protocol_paths() {
     let path = write_temp_config(
         r#"
 [providers.shared]
@@ -765,9 +769,13 @@ default_model = "gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
-base_url = "https://gateway.example.com/api/provider/openai/v1"
-endpoint_layout = "provider_routed"
+base_url = "https://gateway.example.com"
 api_key_env = "SHARED_GATEWAY_API_KEY"
+
+[providers.shared.auth.protocol_paths]
+openai = "/api/provider/openai/v1"
+anthropic = "/api/provider/anthropic/v1"
+gemini = "/api/provider/google/v1beta"
 
 [providers.shared.adapters.openai]
 enabled = true
@@ -796,10 +804,9 @@ enabled = true
 
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(
-                api.endpoint_layout,
-                SharedGatewayEndpointLayout::ProviderRouted
-            );
+            assert_eq!(api.protocol_paths.openai, "/api/provider/openai/v1");
+            assert_eq!(api.protocol_paths.anthropic, "/api/provider/anthropic/v1");
+            assert_eq!(api.protocol_paths.gemini, "/api/provider/google/v1beta");
         }
         other => panic!("expected api auth, got {other:?}"),
     }
@@ -815,8 +822,7 @@ default_model = "kimi-k2.6"
 
 [providers."opencode-go".auth]
 mode = "api"
-base_url = "https://opencode.ai/zen/go/v1"
-endpoint_layout = "protocol_root"
+base_url = "https://opencode.ai/zen/go"
 api_key_env = "OPENCODE_API_KEY"
 
 [providers."opencode-go".adapters.openai]
@@ -858,11 +864,10 @@ enabled = false
     assert_eq!(provider.default_model, "kimi-k2.6");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://opencode.ai/zen/go/v1");
-            assert_eq!(
-                api.endpoint_layout,
-                SharedGatewayEndpointLayout::ProtocolRoot
-            );
+            assert_eq!(api.base_url, "https://opencode.ai/zen/go");
+            assert_eq!(api.protocol_paths.openai, "/v1");
+            assert_eq!(api.protocol_paths.anthropic, "/v1");
+            assert_eq!(api.protocol_paths.gemini, "/v1beta");
             assert_eq!(api.api_key_env.as_deref(), Some("OPENCODE_API_KEY"));
         }
         other => panic!("expected opencode-go api auth, got {other:?}"),
@@ -930,9 +935,11 @@ default_model = "deepseek-v4-flash-free"
 
 [providers."opencode-free".auth]
 mode = "api"
-base_url = "https://opencode.ai/zen/v1"
-endpoint_layout = "direct"
+base_url = "https://opencode.ai/zen"
 api_key = "public"
+
+[providers."opencode-free".auth.protocol_paths]
+gemini = "/v1"
 
 [providers."opencode-free".adapters.openai]
 enabled = true
@@ -967,8 +974,10 @@ enabled = true
 
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://opencode.ai/zen/v1");
-            assert_eq!(api.endpoint_layout, SharedGatewayEndpointLayout::Direct);
+            assert_eq!(api.base_url, "https://opencode.ai/zen");
+            assert_eq!(api.protocol_paths.openai, "/v1");
+            assert_eq!(api.protocol_paths.anthropic, "/v1");
+            assert_eq!(api.protocol_paths.gemini, "/v1");
             assert_eq!(api.api_key.as_deref(), Some("public"));
         }
         other => panic!("expected opencode-free api auth, got {other:?}"),
@@ -1064,7 +1073,7 @@ default_model = "openai/gpt-4.1"
 
 [providers.primary.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-primary"
 
 [providers.primary.adapters.openai]
@@ -1075,7 +1084,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.secondary.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-secondary"
 
 [providers.secondary.adapters.openai]
@@ -1232,7 +1241,7 @@ default_model = "openai/gpt-4.1-mini"
 enabled = true
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-inline"
 "#,
     );
@@ -1252,7 +1261,7 @@ api_key = "sk-inline"
         .expect("openai provider should exist");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://api.openai.com/v1");
+            assert_eq!(api.base_url, "https://api.openai.com");
             assert_eq!(api.api_key.as_deref(), Some("sk-inline"));
         }
         other => panic!("unexpected auth config: {other:?}"),
@@ -1268,7 +1277,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -1654,7 +1663,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -1698,7 +1707,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -1733,7 +1742,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -1766,7 +1775,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -1947,7 +1956,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -1999,7 +2008,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "sk-test"
 
 [providers.openai.adapters.openai]
@@ -2222,7 +2231,7 @@ default_model = "openai/gpt-5"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2275,7 +2284,7 @@ agent = "planner"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]

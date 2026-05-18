@@ -1199,7 +1199,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
         Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {
             provider_id,
             base_url,
-            endpoint_layout,
+            protocol_paths,
             api_key,
             api_key_env,
             adapter_ids,
@@ -1209,7 +1209,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 ListProviderAdapterModelsParams {
                     provider_id,
                     base_url,
-                    endpoint_layout,
+                    protocol_paths,
                     api_key,
                     api_key_env,
                     adapter_ids,
@@ -1421,7 +1421,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -1519,7 +1519,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -1598,7 +1598,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -1700,7 +1700,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -1800,7 +1800,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -1838,7 +1838,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -1884,7 +1884,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -1932,7 +1932,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -1984,7 +1984,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2050,7 +2050,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2173,7 +2173,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2232,7 +2232,7 @@ default_model = "qwen/qwen3-next-80b-a3b"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2279,7 +2279,7 @@ default_model = "openai/gpt-5.2-chat-latest"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2336,7 +2336,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2392,7 +2392,7 @@ default_model = "openai/gpt-4.1-mini"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2442,7 +2442,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]
@@ -2486,7 +2486,7 @@ default_model = "openai/gpt-5.4"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key = "dummy"
 
 [providers.openai.adapters.openai]

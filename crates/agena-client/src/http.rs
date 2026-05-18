@@ -596,7 +596,7 @@ impl AgenaClient {
             Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {
                 provider_id,
                 base_url,
-                endpoint_layout,
+                protocol_paths,
                 api_key,
                 api_key_env,
                 adapter_ids,
@@ -604,7 +604,7 @@ impl AgenaClient {
                 self.list_provider_adapter_models(ProviderAdapterModelsRequest {
                     provider_id,
                     base_url,
-                    endpoint_layout,
+                    protocol_paths,
                     api_key,
                     api_key_env,
                     adapter_ids,

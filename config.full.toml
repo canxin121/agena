@@ -234,7 +234,7 @@ default_model = "gpt-5.5"
 
 [providers.openai.auth]
 mode = "api"
-base_url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 
 [providers.openai.adapters.openai]
@@ -264,7 +264,7 @@ stream_mode = "sse"
 #
 # [providers.openai-reasoning.auth]
 # mode = "api"
-# base_url = "https://api.openai.com/v1"
+# base_url = "https://api.openai.com"
 # api_key_env = "OPENAI_API_KEY"
 #
 # [providers.openai-reasoning.adapters.openai]
@@ -290,7 +290,7 @@ stream_mode = "sse"
 #
 # [providers.anthropic.auth]
 # mode = "api"
-# base_url = "https://api.anthropic.com/v1"
+# base_url = "https://api.anthropic.com"
 # api_key_env = "ANTHROPIC_API_KEY"
 #
 # [providers.anthropic.adapters.anthropic]
@@ -321,7 +321,7 @@ stream_mode = "sse"
 #
 # [providers.lmstudio.auth]
 # mode = "api"
-# base_url = "http://localhost:1234/v1"
+# base_url = "http://localhost:1234"
 # api_key = "local"
 #
 # [providers.lmstudio.adapters.openai]
@@ -334,7 +334,7 @@ stream_mode = "sse"
 #
 # [providers.openrouter.auth]
 # mode = "api"
-# base_url = "https://openrouter.ai/api/v1"
+# base_url = "https://openrouter.ai/api"
 # api_key_env = "OPENROUTER_API_KEY"
 #
 # [providers.openrouter.adapters.openai]
@@ -347,8 +347,7 @@ stream_mode = "sse"
 #
 # [providers."opencode-go".auth]
 # mode = "api"
-# base_url = "https://opencode.ai/zen/go/v1"
-# endpoint_layout = "protocol_root"
+# base_url = "https://opencode.ai/zen/go"
 # api_key_env = "OPENCODE_API_KEY"
 #
 # [providers."opencode-go".adapters.openai]
@@ -418,9 +417,11 @@ stream_mode = "sse"
 #
 # [providers."opencode-free".auth]
 # mode = "api"
-# base_url = "https://opencode.ai/zen/v1"
-# endpoint_layout = "direct"
+# base_url = "https://opencode.ai/zen"
 # api_key = "public"
+#
+# [providers."opencode-free".auth.protocol_paths]
+# gemini = "/v1"
 #
 # [providers."opencode-free".adapters.openai]
 # enabled = true
@@ -455,9 +456,11 @@ stream_mode = "sse"
 #
 # [providers."opencode-zen".auth]
 # mode = "api"
-# base_url = "https://opencode.ai/zen/v1"
-# endpoint_layout = "direct"
+# base_url = "https://opencode.ai/zen"
 # api_key_env = "OPENCODE_API_KEY"
+#
+# [providers."opencode-zen".auth.protocol_paths]
+# gemini = "/v1"
 #
 # [providers."opencode-zen".adapters.openai]
 # enabled = true
@@ -517,8 +520,11 @@ stream_mode = "sse"
 #
 # [providers."google-vertex".auth]
 # mode = "api"
-# base_url = "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/endpoints/openapi"
+# base_url = "https://aiplatform.googleapis.com"
 # api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
+#
+# [providers."google-vertex".auth.protocol_paths]
+# openai = "/v1/projects/my-project/locations/global/endpoints/openapi"
 #
 # [providers."google-vertex".adapters.openai]
 # enabled = true
@@ -605,8 +611,12 @@ default_model = "gpt-4.1-mini"
 [providers.shared-gateway.auth]
 mode = "api"
 base_url = "https://api.cxits.cn/"
-endpoint_layout = "protocol_root"
 api_key_env = "CX_API_KEY"
+
+[providers.shared-gateway.auth.protocol_paths]
+openai = "/v1"
+anthropic = "/v1"
+gemini = "/v1beta"
 
 [providers.shared-gateway.adapters.openai]
 enabled = true
@@ -629,9 +639,11 @@ default_model = "google/gemini-2.5-flash"
 
 [providers."google-vertex".auth]
 mode = "api"
-base_url = "https://us-central1-aiplatform.googleapis.com/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
-endpoint_layout = "direct"
+base_url = "https://us-central1-aiplatform.googleapis.com"
 api_key_env = "GOOGLE_VERTEX_ACCESS_TOKEN"
+
+[providers."google-vertex".auth.protocol_paths]
+openai = "/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
 
 [providers."google-vertex".adapters.openai]
 enabled = true

@@ -9,28 +9,8 @@ impl App {
             .constraints([Constraint::Min(8), Constraint::Length(composer_height)])
             .split(area);
 
-        let main = vertical[0];
+        let transcript_host_area = vertical[0];
         let composer = vertical[1];
-
-        let stacked_sessions = should_stack_sessions_layout(main.width);
-        let sessions_area;
-        let transcript_host_area;
-        if stacked_sessions {
-            let stacked = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(adaptive_sessions_split(main.height))
-                .split(main);
-            sessions_area = stacked[0];
-            transcript_host_area = stacked[1];
-        } else {
-            let sessions_width = adaptive_sessions_width(main.width);
-            let horizontal = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Length(sessions_width), Constraint::Min(24)])
-                .split(main);
-            sessions_area = horizontal[0];
-            transcript_host_area = horizontal[1];
-        }
 
         let transcript_layout = transcript_surface_layout(transcript_host_area);
         self.layout = LayoutCache {
@@ -42,156 +22,9 @@ impl App {
             self.layout.transcript_body.height,
         );
 
-        self.render_sessions(frame, sessions_area, stacked_sessions);
         self.render_transcript_surface(frame, transcript_host_area);
         self.render_composer(frame, composer);
         self.render_overlay(frame, area);
-    }
-
-    fn render_sessions(&mut self, frame: &mut Frame, area: Rect, stacked: bool) {
-        let frame_block = Block::default().borders(if stacked {
-            Borders::BOTTOM
-        } else {
-            Borders::RIGHT
-        });
-        let horizontal_padding = u16::from(area.width > 24);
-        let vertical_padding = u16::from(area.height > 6);
-        let inner = inset_rect(
-            frame_block.inner(area),
-            horizontal_padding,
-            vertical_padding,
-        );
-        frame.render_widget(frame_block, area);
-
-        if inner.width == 0 || inner.height == 0 {
-            return;
-        }
-
-        let header_height = session_sidebar_header_height(inner.height);
-        let constraints = vec![Constraint::Length(header_height), Constraint::Min(1)];
-        let sections = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(constraints)
-            .split(inner);
-        let header_area = sections[0];
-        let list_area = sections[1];
-
-        let header_frame = Block::default().borders(Borders::BOTTOM);
-        let header_inner = inset_rect(header_frame.inner(header_area), 0, 0);
-        frame.render_widget(header_frame, header_area);
-
-        if header_inner.width > 0 && header_inner.height > 0 {
-            let header_constraints = vec![Constraint::Length(1)];
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(header_constraints)
-                .split(header_inner);
-
-            let mut summary_right = vec![
-                self.workspace_context_label(),
-                self.sessions.items.len().to_string(),
-            ];
-            if self.sessions.loading {
-                summary_right.push(ui_text::t(&self.i18n, "transcript-header-loading"));
-            } else if self.sessions.loading_more {
-                summary_right.push(ui_text::t(&self.i18n, "sessions-loading-more"));
-            }
-
-            self.render_header_row(
-                frame,
-                rows[0],
-                ui_text::t(&self.i18n, "pane-sessions"),
-                summary_right.join("  ·  "),
-                Style::default().add_modifier(Modifier::BOLD),
-                Style::default().fg(Color::DarkGray),
-            );
-        }
-
-        let current_session_id = self.transcript.session_id;
-        let current_parent_id = self.current_parent_session_id();
-        let session_depths = session_depth_map(self.sessions.items.as_slice());
-
-        let mut items = self
-            .sessions
-            .items
-            .iter()
-            .map(|session| {
-                let is_open = self.transcript.session_id == Some(session.id);
-                let is_busy = self.session_is_busy(session.id);
-                let lineage_relation = self
-                    .current_lineage_item(session.id)
-                    .map(|item| item.relation);
-                let is_current_child =
-                    current_session_id.is_some_and(|id| session.parent_id == Some(id));
-                let is_current_parent = current_parent_id == Some(session.id);
-                let depth = session_depths.get(&session.id).copied().unwrap_or_default();
-                let mut title_style = Style::default().add_modifier(Modifier::BOLD);
-                if is_open {
-                    title_style = title_style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
-                } else if is_busy {
-                    title_style = title_style.fg(Color::Magenta);
-                }
-
-                let marker_style = if is_open {
-                    Style::default().fg(Color::Cyan)
-                } else if matches!(lineage_relation, Some(LineageRelation::Ancestor))
-                    || is_current_parent
-                {
-                    Style::default().fg(Color::Magenta)
-                } else if matches!(lineage_relation, Some(LineageRelation::Child))
-                    || is_current_child
-                {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                let mut title_spans = vec![Span::styled(
-                    format!(
-                        "{}{}",
-                        "  ".repeat(depth),
-                        if depth == 0 { "◆ " } else { "↳ " }
-                    ),
-                    marker_style,
-                )];
-                title_spans.push(Span::styled(
-                    sanitize_display_text(session.title.as_str()),
-                    title_style,
-                ));
-                if is_busy {
-                    title_spans.push(Span::styled(" *", Style::default().fg(Color::Magenta)));
-                }
-
-                ListItem::new(Line::from(title_spans))
-            })
-            .collect::<Vec<_>>();
-
-        if self.sessions.loading_more {
-            items.push(ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "sessions-loading-more"),
-                Style::default().fg(Color::DarkGray),
-            ))));
-        } else if self.sessions.has_more {
-            items.push(ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "sessions-more"),
-                Style::default().fg(Color::DarkGray),
-            ))));
-        }
-
-        if self.sessions.items.is_empty() && self.sessions.initialized {
-            frame.render_widget(
-                Paragraph::new(ui_text::t(&self.i18n, "sessions-empty"))
-                    .alignment(Alignment::Center),
-                list_area,
-            );
-        } else {
-            let list = List::new(items)
-                .highlight_style(selection_highlight_style())
-                .highlight_symbol("> ");
-
-            let mut state = ListState::default();
-            state.select(self.sessions.selection_for_render());
-            frame.render_stateful_widget(list, list_area, &mut state);
-        }
     }
 
     fn render_transcript_surface(&mut self, frame: &mut Frame, area: Rect) {
@@ -224,7 +57,13 @@ impl App {
         }
 
         let lines = if self.transcript.session_id.is_none() {
-            vec![Line::from(ui_text::t(&self.i18n, "no-session-selected"))]
+            vec![
+                Line::from(ui_text::t(&self.i18n, "no-session-selected")),
+                Line::from(Span::styled(
+                    ui_text::t(&self.i18n, "no-session-selected-hint"),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
         } else {
             let rendered = self.transcript.rendered(layout.body.width).clone();
             let matches = rendered.search_matches.clone();
@@ -272,6 +111,7 @@ impl App {
         } else if self.transcript.loading_older {
             top_right.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
         }
+        top_right.push(self.workspace_context_label());
         if !self.transcript.search_query.trim().is_empty() {
             top_right.push(ui_text::transcript_search_summary(
                 &self.i18n,
@@ -595,25 +435,15 @@ impl App {
             }
             parts.push(segment.content.clone());
         }
+        if parts.is_empty() {
+            parts.push(ui_text::t(&self.i18n, "status-global"));
+        }
 
         parts.join("  |  ")
     }
 
     fn should_render_composer_footer(&self) -> bool {
-        self.flash.is_some()
-            || self.transcript.submitting
-            || !self.queue.is_empty()
-            || self.run_options.summary().is_some()
-            || self
-                .status_line
-                .as_ref()
-                .and_then(|status_line| status_line.text.as_ref())
-                .is_some_and(|text| !text.trim().is_empty())
-            || self
-                .backend
-                .plugin_statusline_segments()
-                .iter()
-                .any(|segment| !segment.content.trim().is_empty())
+        true
     }
 
     fn slash_command_suggestion_rows(&self) -> u16 {
@@ -774,9 +604,7 @@ impl App {
                     .wrap(Wrap { trim: false });
                 frame.render_widget(widget, area);
             }
-            Overlay::SessionSearch(dialog)
-            | Overlay::TranscriptSearch(dialog)
-            | Overlay::SessionRename(dialog) => {
+            Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                 self.render_line_overlay(frame, area, dialog);
             }
             Overlay::PermissionRuleEdit(dialog) => {
@@ -2197,10 +2025,6 @@ fn transcript_surface_layout(area: Rect) -> TranscriptSurfaceLayout {
     }
 }
 
-pub(super) fn session_sidebar_header_height(total_height: u16) -> u16 {
-    min(2, total_height)
-}
-
 pub(super) fn truncate_display_text(text: &str, max_width: usize) -> String {
     if max_width == 0 {
         return String::new();
@@ -2268,24 +2092,6 @@ pub(super) fn adaptive_detail_split(
 pub(super) fn should_stack_detail_layout(total_width: u16, left_min: u16, right_min: u16) -> bool {
     let available = total_width.saturating_sub(2);
     available < left_min.saturating_add(right_min).saturating_add(8)
-}
-
-pub(super) fn should_stack_sessions_layout(total_width: u16) -> bool {
-    total_width < 92
-}
-
-pub(super) fn adaptive_sessions_height(total_height: u16) -> u16 {
-    min(10, max(6, total_height.saturating_div(3)))
-}
-
-pub(super) fn adaptive_sessions_split(total_height: u16) -> [Constraint; 2] {
-    let sessions_height = adaptive_sessions_height(total_height);
-    let available = total_height.saturating_sub(2);
-    if available < sessions_height.saturating_add(12).saturating_add(3) {
-        [Constraint::Percentage(50), Constraint::Percentage(50)]
-    } else {
-        [Constraint::Length(sessions_height), Constraint::Min(12)]
-    }
 }
 
 pub(super) fn adaptive_vertical_split(

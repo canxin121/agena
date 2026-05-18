@@ -92,6 +92,7 @@ const TOOL_CARD_PREVIEW_LINES: usize = 8;
 const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
 const PROMPT_SUMMARY_TAG: &str = "prompt_summary";
 const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
+const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;
 
 #[derive(Debug, Clone, Default)]
 pub struct LaunchOptions {
@@ -123,6 +124,17 @@ enum DraftSlot {
 #[derive(Debug, Clone, Default)]
 struct DraftStore {
     drafts: BTreeMap<DraftSlot, ComposerDraft>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PromptHistory {
+    entries: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PromptHistoryDirection {
+    Older,
+    Newer,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +182,12 @@ pub struct App {
     draft_store_last_persist_at: Instant,
     draft_store_reported_error: Option<String>,
     pending_draft_store_error: Option<String>,
+    prompt_history: PromptHistory,
+    prompt_history_path: PathBuf,
+    prompt_history_recall_original: Option<ComposerDraft>,
+    prompt_history_recall_index: Option<usize>,
+    prompt_history_reported_error: Option<String>,
+    pending_prompt_history_error: Option<String>,
     submitting_session_ids: HashSet<i64>,
     layout: LayoutCache,
     bootstrap_done: bool,
@@ -368,7 +386,6 @@ type UiResult<T> = std::result::Result<T, String>;
 #[derive(Debug, Clone)]
 enum Overlay {
     Help,
-    SessionSearch(LineInputOverlay),
     TranscriptSearch(LineInputOverlay),
     SessionRename(LineInputOverlay),
     PermissionRuleEdit(PermissionRuleEditOverlay),
@@ -681,7 +698,6 @@ struct SessionLineageSummary {
 #[derive(Debug, Clone)]
 struct CurrentLineageState {
     session_id: i64,
-    items: Vec<LineageSessionItem>,
     summary: SessionLineageSummary,
 }
 
@@ -854,6 +870,11 @@ struct PersistentComposerDraftElement {
     end: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PersistentPromptHistoryEntry {
+    text: String,
+}
+
 #[derive(Debug, Clone)]
 struct RenderedTranscript {
     width: u16,
@@ -941,6 +962,15 @@ impl App {
                 Some(format!("failed to load composer drafts: {error}")),
             ),
         };
+        let prompt_history_path = default_prompt_history_path();
+        let (prompt_history, pending_prompt_history_error) =
+            match PromptHistory::load(&prompt_history_path) {
+                Ok(history) => (history, None),
+                Err(error) => (
+                    PromptHistory::default(),
+                    Some(format!("failed to load prompt history: {error}")),
+                ),
+            };
         let keybindings = launch.tui_config.keybindings.clone();
         let status_line = StatusLineState::new(&launch.tui_config.status_line);
         let double_esc_window = Duration::from_millis(launch.tui_config.double_esc_window_ms);
@@ -978,6 +1008,12 @@ impl App {
                 .unwrap_or_else(Instant::now),
             draft_store_reported_error: None,
             pending_draft_store_error,
+            prompt_history,
+            prompt_history_path,
+            prompt_history_recall_original: None,
+            prompt_history_recall_index: None,
+            prompt_history_reported_error: None,
+            pending_prompt_history_error,
             submitting_session_ids: HashSet::new(),
             layout: LayoutCache::default(),
             bootstrap_done: false,
@@ -1077,6 +1113,9 @@ impl App {
         if let Some(error) = self.pending_draft_store_error.take() {
             self.report_draft_store_error(error);
         }
+        if let Some(error) = self.pending_prompt_history_error.take() {
+            self.report_prompt_history_error(error);
+        }
 
         if self
             .flash
@@ -1125,6 +1164,13 @@ impl App {
             return;
         }
 
+        if key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
+        {
+            self.open_resume_session_picker();
+            return;
+        }
+
         // ESC while a turn is in flight has global priority. Cancel the
         // active turn before falling through to focus-specific Esc.
         if matches!(key.code, KeyCode::Esc)
@@ -1158,7 +1204,7 @@ impl App {
             self.focus = match self.focus {
                 Focus::Sessions => Focus::Transcript,
                 Focus::Transcript => Focus::Composer,
-                Focus::Composer => Focus::Sessions,
+                Focus::Composer => Focus::Transcript,
             };
             self.slash_command_suggestions = None;
             return;
@@ -1167,7 +1213,7 @@ impl App {
         if matches!(key.code, KeyCode::BackTab) {
             self.focus = match self.focus {
                 Focus::Sessions => Focus::Composer,
-                Focus::Transcript => Focus::Sessions,
+                Focus::Transcript => Focus::Composer,
                 Focus::Composer => Focus::Transcript,
             };
             self.slash_command_suggestions = None;
@@ -1175,19 +1221,17 @@ impl App {
         }
 
         if matches!(key.code, KeyCode::Char('/')) && self.focus != Focus::Composer {
-            self.overlay = Some(match self.focus {
-                Focus::Sessions => Overlay::SessionSearch(LineInputOverlay {
-                    title: ui_text::t(&self.i18n, "overlay-session-search-title"),
-                    prompt: ui_text::t(&self.i18n, "overlay-session-search-prompt"),
-                    input: Editor::from_text(self.sessions.search_query.clone()),
-                }),
-                Focus::Transcript => Overlay::TranscriptSearch(LineInputOverlay {
-                    title: ui_text::t(&self.i18n, "overlay-transcript-search-title"),
-                    prompt: ui_text::t(&self.i18n, "overlay-transcript-search-prompt"),
-                    input: Editor::from_text(self.transcript.search_query.clone()),
-                }),
+            match self.focus {
+                Focus::Sessions => self.open_resume_session_picker(),
+                Focus::Transcript => {
+                    self.overlay = Some(Overlay::TranscriptSearch(LineInputOverlay {
+                        title: ui_text::t(&self.i18n, "overlay-transcript-search-title"),
+                        prompt: ui_text::t(&self.i18n, "overlay-transcript-search-prompt"),
+                        input: Editor::from_text(self.transcript.search_query.clone()),
+                    }));
+                }
                 Focus::Composer => unreachable!("composer focus is excluded above"),
-            });
+            }
             return;
         }
 
@@ -1323,9 +1367,6 @@ impl App {
                 key.code,
                 KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
             ),
-            Overlay::SessionSearch(dialog) => {
-                self.handle_line_overlay_key(key, dialog, OverlayCommit::SessionSearch)
-            }
             Overlay::TranscriptSearch(dialog) => {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }
@@ -1364,10 +1405,6 @@ impl App {
                 dialog.input.flush_all_pending_input();
                 let value = dialog.input.text().trim().to_string();
                 match commit {
-                    OverlayCommit::SessionSearch => {
-                        self.sessions.search_query = value;
-                        self.refresh_sessions_after_query_change();
-                    }
                     OverlayCommit::TranscriptSearch => {
                         self.transcript.set_search_query(value);
                         self.jump_search_match(true);
@@ -1967,9 +2004,7 @@ impl App {
         let backend = self.backend.clone();
         if let Some(overlay) = &mut self.overlay {
             match overlay {
-                Overlay::SessionSearch(dialog)
-                | Overlay::TranscriptSearch(dialog)
-                | Overlay::SessionRename(dialog) => {
+                Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                 }
@@ -2018,6 +2053,7 @@ impl App {
         }
 
         if self.focus == Focus::Composer {
+            self.reset_prompt_history_recall();
             self.composer.flush_all_pending_input();
             if self.try_stage_pasted_path(text.as_str()) {
                 return;
@@ -2087,6 +2123,8 @@ impl App {
             self.copy_loaded_transcript();
         } else if matches!(key.code, KeyCode::Char('Y')) {
             self.copy_visible_transcript();
+        } else if matches!(key.code, KeyCode::Char('c')) {
+            self.copy_last_assistant_message();
         } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) {
             self.transcript.scroll_by_lines(width, height, -1);
             self.maybe_request_older_messages();
@@ -2137,6 +2175,14 @@ impl App {
             self.handle_composer_esc();
             return;
         }
+        if matches!(key.code, KeyCode::Up) && key.modifiers.contains(KeyModifiers::ALT) {
+            self.recall_prompt_history(PromptHistoryDirection::Older);
+            return;
+        }
+        if matches!(key.code, KeyCode::Down) && key.modifiers.contains(KeyModifiers::ALT) {
+            self.recall_prompt_history(PromptHistoryDirection::Newer);
+            return;
+        }
         // Configurable bindings take precedence over the legacy hardcoded
         // map. The defaults preserve the user's stated preference:
         // Enter = queue, Ctrl+Enter = submit, Shift+Enter / Ctrl+J = newline.
@@ -2151,12 +2197,14 @@ impl App {
                     return;
                 }
                 ComposerAction::Newline => {
+                    self.reset_prompt_history_recall();
                     self.composer.insert_explicit_newline();
                     self.sync_slash_command_suggestions();
                     return;
                 }
                 ComposerAction::EditQueue => {
                     if self.try_pop_queue_into_editor() {
+                        self.reset_prompt_history_recall();
                         self.sync_slash_command_suggestions();
                         return;
                     }
@@ -2167,29 +2215,37 @@ impl App {
         }
         match key.code {
             KeyCode::F(3) => {
+                self.reset_prompt_history_recall();
                 self.open_file_attach_overlay();
             }
             KeyCode::F(4) => {
+                self.reset_prompt_history_recall();
                 self.composer.flush_all_pending_input();
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
             }
             KeyCode::F(6) => {
+                self.reset_prompt_history_recall();
                 self.pending_ui_action = Some(UiAction::AttachClipboardImage);
             }
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.reset_prompt_history_recall();
                 self.open_file_attach_overlay();
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.reset_prompt_history_recall();
                 self.composer.flush_all_pending_input();
                 self.pending_ui_action = Some(UiAction::EditComposerExternally);
             }
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.reset_prompt_history_recall();
                 self.open_file_attach_overlay();
             }
             KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.reset_prompt_history_recall();
                 self.pending_ui_action = Some(UiAction::AttachClipboardImage);
             }
             _ => {
+                self.reset_prompt_history_recall();
                 self.composer.handle_multiline_input_key(key);
                 self.sync_composer_items_with_editor();
                 self.sync_slash_command_suggestions();
@@ -2204,7 +2260,9 @@ impl App {
 
         match key {
             KeyEvent {
-                code: KeyCode::Up, ..
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
             }
             | KeyEvent {
                 code: KeyCode::Char('p'),
@@ -2216,6 +2274,7 @@ impl App {
             }
             KeyEvent {
                 code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
                 ..
             }
             | KeyEvent {
@@ -2400,6 +2459,7 @@ impl App {
             .map(|prev| now.duration_since(prev) <= self.double_esc_window)
             .unwrap_or(false);
         if double {
+            self.reset_prompt_history_recall();
             self.composer = Editor::default();
             self.composer_items.clear();
             self.slash_command_suggestions = None;
@@ -3029,7 +3089,6 @@ impl App {
                 {
                     self.current_lineage = Some(CurrentLineageState {
                         session_id,
-                        items: items.clone(),
                         summary,
                     });
                 }
@@ -3674,6 +3733,7 @@ impl App {
                 return;
             }
         };
+        self.record_prompt_history_from_draft(&draft);
 
         let backend = self.backend.clone();
         let tx = self.tx.clone();
@@ -3732,6 +3792,7 @@ impl App {
         parts: Vec<PartContent>,
         draft: ComposerDraft,
     ) {
+        self.record_prompt_history_from_draft(&draft);
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -3937,6 +3998,7 @@ impl App {
         if draft.is_empty() {
             return;
         }
+        self.reset_prompt_history_recall();
         // Slash-commands always run locally regardless of AI state.
         if self.is_local_command(draft.text.as_str()) {
             self.restore_composer_draft(draft);
@@ -3982,6 +4044,7 @@ impl App {
         if draft.is_empty() {
             return;
         }
+        self.reset_prompt_history_recall();
         // Slash-commands always run locally — never queue.
         if self.is_local_command(draft.text.as_str()) {
             self.restore_composer_draft(draft);
@@ -4004,6 +4067,7 @@ impl App {
             self.restore_composer_draft(draft);
             return;
         }
+        self.reset_prompt_history_recall();
 
         if let Some(parsed) = commands::parse_command(draft.text.as_str()) {
             if !draft.items.is_empty() {
@@ -4368,12 +4432,18 @@ impl App {
     }
 
     fn open_resume_session_picker(&mut self) {
+        self.open_resume_session_picker_with_query("");
+    }
+
+    fn open_resume_session_picker_with_query(&mut self, query: &str) {
+        let mut input = Editor::from_text(query.trim().to_string());
+        input.cursor = input.text().len();
         self.overlay = Some(Overlay::Picker(PickerOverlay {
             title: ui_text::t(&self.i18n, "overlay-resume-title"),
             prompt: ui_text::t(&self.i18n, "overlay-resume-prompt"),
             empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
             footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
+            input,
             all_items: Vec::new(),
             items: Vec::new(),
             selected: 0,
@@ -5281,15 +5351,6 @@ impl App {
         self.transcript.execution.as_ref()?.session.parent_id
     }
 
-    fn current_lineage_item(&self, session_id: i64) -> Option<&LineageSessionItem> {
-        let lineage = self.current_lineage.as_ref()?;
-        (lineage.session_id == self.transcript.session_id?).then_some(())?;
-        lineage
-            .items
-            .iter()
-            .find(|item| item.session.id == session_id)
-    }
-
     fn current_lineage_context_parts(&self) -> Vec<String> {
         let Some(lineage) = self.current_lineage.as_ref() else {
             return Vec::new();
@@ -5390,21 +5451,11 @@ impl App {
             CommandId::Commands => self.open_command_palette(),
             CommandId::New => self.create_session(None),
             CommandId::Sessions => self.handle_sessions_command(spec, args),
-            CommandId::Resume => self.open_resume_session_picker(),
+            CommandId::Resume => self.open_resume_session_picker_with_query(args.trim()),
             CommandId::Lineage => self.open_lineage_picker(),
             CommandId::Rewind => self.open_rewind_messages_picker(),
             CommandId::Search => {
-                self.focus = Focus::Sessions;
-                if args.trim().is_empty() {
-                    self.overlay = Some(Overlay::SessionSearch(LineInputOverlay {
-                        title: ui_text::t(&self.i18n, "overlay-session-search-title"),
-                        prompt: ui_text::t(&self.i18n, "overlay-session-search-prompt"),
-                        input: Editor::from_text(self.sessions.search_query.clone()),
-                    }));
-                } else {
-                    self.sessions.search_query = args.trim().to_string();
-                    self.refresh_sessions_after_query_change();
-                }
+                self.open_resume_session_picker_with_query(args.trim());
             }
             CommandId::Find => {
                 self.focus = Focus::Transcript;
@@ -5456,6 +5507,7 @@ impl App {
                 self.pending_ui_action = Some(UiAction::AttachClipboardImage);
             }
             CommandId::Copy => self.copy_loaded_transcript(),
+            CommandId::CopyMessage => self.copy_last_assistant_message(),
             CommandId::CopyVisible => self.copy_visible_transcript(),
             CommandId::Providers => self.open_provider_picker(ProviderPickerPurpose::SetProvider),
             CommandId::Provider => self.handle_provider_command(args),
@@ -5950,11 +6002,10 @@ impl App {
         }
     }
 
-    fn handle_sessions_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        self.focus = Focus::Sessions;
+    fn handle_sessions_command(&mut self, _spec: &'static CommandSpec, args: &str) {
         let trimmed = args.trim();
         if trimmed.is_empty() {
-            self.request_sessions(false);
+            self.open_resume_session_picker();
             return;
         }
 
@@ -5963,14 +6014,12 @@ impl App {
             "roots" | "root" => SessionViewMode::Roots,
             "subtree" | "tree" | "branch" => SessionViewMode::Subtree,
             _ => {
-                self.flash_warning(self.i18n.text_args(
-                    "flash-command-usage",
-                    &crate::fl_args!("usage" => spec.invocation()),
-                ));
+                self.open_resume_session_picker_with_query(trimmed);
                 return;
             }
         };
         self.set_session_view_mode(next_mode);
+        self.open_resume_session_picker();
     }
 
     fn set_session_view_mode(&mut self, mode: SessionViewMode) {
@@ -5979,7 +6028,6 @@ impl App {
             return;
         }
         self.sessions.view_mode = mode;
-        self.focus = Focus::Sessions;
         self.flash_success(self.i18n.text_args(
             "flash-session-view-mode",
             &crate::fl_args!("mode" => self.current_session_view_summary()),
@@ -5989,19 +6037,6 @@ impl App {
 
     fn cycle_session_view_mode(&mut self) {
         self.set_session_view_mode(self.sessions.view_mode.next());
-    }
-
-    fn refresh_sessions_after_query_change(&mut self) {
-        let preferred_id = self
-            .sessions
-            .current_selected_id()
-            .or(self.transcript.session_id)
-            .or(self.launch.initial_session_id);
-        if self.sessions.initialized && !self.sessions.source_items.is_empty() {
-            self.rebuild_visible_sessions(preferred_id);
-        } else {
-            self.request_sessions(false);
-        }
     }
 
     fn rebuild_visible_sessions(&mut self, preferred_id: Option<i64>) {
@@ -6374,9 +6409,7 @@ impl App {
         self.sync_slash_command_suggestions();
         if let Some(overlay) = &mut self.overlay {
             match overlay {
-                Overlay::SessionSearch(dialog)
-                | Overlay::TranscriptSearch(dialog)
-                | Overlay::SessionRename(dialog) => {
+                Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
                 Overlay::PermissionRuleEdit(dialog) => {
@@ -6643,6 +6676,110 @@ impl App {
         }
     }
 
+    fn record_prompt_history_from_draft(&mut self, draft: &ComposerDraft) {
+        if !draft.items.is_empty() || !draft.elements.is_empty() {
+            return;
+        }
+        let Some(text) = PromptHistory::normalized_text(draft.text.as_str()) else {
+            return;
+        };
+        self.reset_prompt_history_recall();
+        if !self.prompt_history.push(text) {
+            return;
+        }
+        if let Err(error) = self.prompt_history.persist(&self.prompt_history_path) {
+            self.report_prompt_history_error(format!("failed to save prompt history: {error}"));
+        } else {
+            self.prompt_history_reported_error = None;
+        }
+    }
+
+    fn report_prompt_history_error(&mut self, error: String) {
+        let should_report = self.prompt_history_reported_error.as_deref() != Some(error.as_str());
+        self.prompt_history_reported_error = Some(error.clone());
+        if should_report {
+            self.flash_error(error);
+        }
+    }
+
+    fn reset_prompt_history_recall(&mut self) {
+        self.prompt_history_recall_original = None;
+        self.prompt_history_recall_index = None;
+    }
+
+    fn replace_composer_draft(&mut self, draft: ComposerDraft) {
+        cleanup_temporary_composer_items(self.composer_items.as_slice());
+        self.clear_composer_state();
+        self.restore_composer_draft(draft);
+    }
+
+    fn recall_prompt_history(&mut self, direction: PromptHistoryDirection) {
+        self.composer.flush_all_pending_input();
+        self.sync_composer_items_with_editor();
+        if !self.composer_items.is_empty() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-prompt-history-items"));
+            return;
+        }
+        if self.prompt_history.is_empty() {
+            self.flash_info(ui_text::t(&self.i18n, "flash-prompt-history-empty"));
+            return;
+        }
+
+        match direction {
+            PromptHistoryDirection::Older => self.recall_older_prompt_history(),
+            PromptHistoryDirection::Newer => self.recall_newer_prompt_history(),
+        }
+    }
+
+    fn recall_older_prompt_history(&mut self) {
+        let len = self.prompt_history.len();
+        if self.prompt_history_recall_index.is_none() {
+            self.prompt_history_recall_original = Some(self.current_composer_draft());
+            self.prompt_history_recall_index = Some(len);
+        }
+
+        let Some(current) = self.prompt_history_recall_index else {
+            return;
+        };
+        if current == 0 {
+            return;
+        }
+        let next = current - 1;
+        let Some(text) = self.prompt_history.get(next).map(str::to_string) else {
+            return;
+        };
+        self.prompt_history_recall_index = Some(next);
+        self.replace_composer_draft(ComposerDraft {
+            text,
+            ..ComposerDraft::default()
+        });
+    }
+
+    fn recall_newer_prompt_history(&mut self) {
+        let Some(current) = self.prompt_history_recall_index else {
+            return;
+        };
+        let next = current + 1;
+        if next >= self.prompt_history.len() {
+            self.prompt_history_recall_index = None;
+            let draft = self
+                .prompt_history_recall_original
+                .take()
+                .unwrap_or_default();
+            self.replace_composer_draft(draft);
+            return;
+        }
+
+        let Some(text) = self.prompt_history.get(next).map(str::to_string) else {
+            return;
+        };
+        self.prompt_history_recall_index = Some(next);
+        self.replace_composer_draft(ComposerDraft {
+            text,
+            ..ComposerDraft::default()
+        });
+    }
+
     fn cleanup_temporary_draft_store_items(&self) {
         for draft in self.draft_store.drafts.values() {
             cleanup_temporary_composer_items(draft.items.as_slice());
@@ -6858,6 +6995,32 @@ impl App {
         }
     }
 
+    fn copy_last_assistant_message(&mut self) {
+        let Some(message) = self
+            .transcript
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == MessageRole::Assistant)
+        else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message"));
+            return;
+        };
+
+        let Some(text) = assistant_message_text(message) else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message-text"));
+            return;
+        };
+
+        match set_clipboard_text(text.as_str()) {
+            Ok(()) => self.flash_success(ui_text::t(&self.i18n, "flash-copied-assistant-message")),
+            Err(error) => self.flash_error(self.i18n.text_args(
+                "flash-clipboard-copy-failed",
+                &crate::fl_args!("error" => error.to_string()),
+            )),
+        }
+    }
+
     fn copy_visible_transcript(&mut self) {
         let text = self.visible_transcript_text();
         if text.trim().is_empty() {
@@ -7050,7 +7213,7 @@ impl App {
         if self.transcript.session_id.is_none() {
             return [
                 "No session selected.",
-                "Use the session pane or start typing in the composer to create one.",
+                "Press Alt+S to pick a session, or start typing in the composer to create one.",
             ]
             .join("\n");
         }
@@ -7106,7 +7269,6 @@ impl App {
 
 #[derive(Debug, Clone, Copy)]
 enum OverlayCommit {
-    SessionSearch,
     TranscriptSearch,
 }
 
@@ -7312,10 +7474,6 @@ impl SessionListState {
             false
         }
     }
-
-    fn selection_for_render(&self) -> Option<usize> {
-        (!self.items.is_empty()).then_some(self.selected)
-    }
 }
 
 impl DraftStore {
@@ -7380,6 +7538,103 @@ impl DraftStore {
 
     fn clear(&mut self, slot: DraftSlot) -> bool {
         self.drafts.remove(&slot).is_some()
+    }
+}
+
+impl PromptHistory {
+    fn load(path: &Path) -> UiResult<Self> {
+        let raw = match fs::read_to_string(path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+
+        let mut history = Self::default();
+        for (index, line) in raw.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let entry =
+                serde_json::from_str::<PersistentPromptHistoryEntry>(line).map_err(|error| {
+                    format!(
+                        "invalid prompt history {}:{}: {error}",
+                        path.display(),
+                        index + 1
+                    )
+                })?;
+            if let Some(text) = Self::normalized_text(entry.text.as_str()) {
+                history.push(text);
+            }
+        }
+        Ok(history)
+    }
+
+    fn persist(&self, path: &Path) -> UiResult<()> {
+        if self.entries.is_empty() {
+            match fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.to_string()),
+            }
+            return Ok(());
+        }
+
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+
+        let mut raw = String::new();
+        for text in &self.entries {
+            let line = serde_json::to_string(&PersistentPromptHistoryEntry { text: text.clone() })
+                .map_err(|error| error.to_string())?;
+            raw.push_str(line.as_str());
+            raw.push('\n');
+        }
+
+        let tmp_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| format!("{name}.tmp"))
+            .unwrap_or_else(|| "tui-prompt-history.jsonl.tmp".to_string());
+        let tmp_path = path.with_file_name(tmp_name);
+        fs::write(&tmp_path, raw).map_err(|error| error.to_string())?;
+        fs::rename(&tmp_path, path).map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    fn normalized_text(text: &str) -> Option<String> {
+        let trimmed = text.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+
+    fn push(&mut self, text: String) -> bool {
+        if self.entries.last().is_some_and(|entry| entry == &text) {
+            return false;
+        }
+        self.entries.retain(|entry| entry != &text);
+        self.entries.push(text);
+        if self.entries.len() > MAX_PROMPT_HISTORY_ENTRIES {
+            let excess = self.entries.len() - MAX_PROMPT_HISTORY_ENTRIES;
+            self.entries.drain(0..excess);
+        }
+        true
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn get(&self, index: usize) -> Option<&str> {
+        self.entries.get(index).map(String::as_str)
     }
 }
 
@@ -8772,6 +9027,22 @@ fn message_sort_key(message: &MessageResource) -> (i64, i64) {
     (message.created_at.timestamp_millis(), message.id)
 }
 
+fn assistant_message_text(message: &MessageResource) -> Option<String> {
+    let parts = message.parts.as_ref()?;
+    let text = parts
+        .iter()
+        .filter_map(|part| match part.content.as_ref()? {
+            PartContent::Text(text) if !text.synthetic && !text.ignored => {
+                let trimmed = text.text.trim();
+                (!trimmed.is_empty()).then_some(trimmed)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    (!text.trim().is_empty()).then_some(text)
+}
+
 fn permission_overlay_choice(selected: usize) -> PermissionOverlayChoice {
     match selected {
         0 => PermissionOverlayChoice {
@@ -9635,28 +9906,6 @@ fn append_session_subtree(
     }
 }
 
-fn session_depth_map(items: &[SessionResource]) -> BTreeMap<i64, usize> {
-    let by_id = items
-        .iter()
-        .map(|session| (session.id, session.parent_id))
-        .collect::<BTreeMap<_, _>>();
-    let mut depths = BTreeMap::new();
-    for session in items {
-        let mut depth = 0_usize;
-        let mut current = session.parent_id;
-        let mut seen = HashSet::new();
-        while let Some(parent_id) = current {
-            if !seen.insert(parent_id) || !by_id.contains_key(&parent_id) {
-                break;
-            }
-            depth = depth.saturating_add(1);
-            current = by_id.get(&parent_id).copied().flatten();
-        }
-        depths.insert(session.id, depth);
-    }
-    depths
-}
-
 fn lineage_relation_tag_key(relation: LineageRelation) -> &'static str {
     match relation {
         LineageRelation::Ancestor => "session-tag-ancestor",
@@ -9901,17 +10150,6 @@ fn truncate_display_width(text: &str, max_width: usize) -> String {
         text.chars().take(max_width).collect()
     } else {
         out
-    }
-}
-
-fn adaptive_sessions_width(total_width: u16) -> u16 {
-    match total_width {
-        0..=79 => min(
-            total_width.saturating_div(3).max(20),
-            total_width.saturating_sub(24),
-        ),
-        80..=119 => min(28, total_width.saturating_sub(24)),
-        _ => min(34, total_width.saturating_sub(32)),
     }
 }
 
@@ -10443,6 +10681,16 @@ fn default_draft_store_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."));
     base.push(".agena");
     base.push("tui-drafts.json");
+    base
+}
+
+fn default_prompt_history_path() -> PathBuf {
+    let mut base = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    base.push(".agena");
+    base.push("tui-prompt-history.jsonl");
     base
 }
 
@@ -11254,6 +11502,51 @@ mod tests {
         assert!(lines.iter().any(|line| line.text.contains("alpha beta")));
     }
 
+    #[test]
+    fn assistant_message_text_joins_loaded_text_parts() {
+        let now = Utc::now();
+        let message = MessageResource {
+            id: 10,
+            session_id: 42,
+            role: MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now,
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: None,
+            part_count: 3,
+            parts: Some(vec![
+                MessagePart::with_content(
+                    11,
+                    10,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text(" first answer "),
+                ),
+                MessagePart::with_content(
+                    12,
+                    10,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::reasoning_summary("hidden reasoning"),
+                ),
+                MessagePart::with_content(
+                    13,
+                    10,
+                    now,
+                    ExecutionStatus::Completed,
+                    PartContent::text("\nsecond answer\n"),
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            assistant_message_text(&message).as_deref(),
+            Some("first answer\n\nsecond answer")
+        );
+    }
+
     #[tokio::test]
     async fn draw_sanitizes_shell_chrome_and_renders_workspace_label() {
         let path = write_test_runtime_config(
@@ -11334,7 +11627,7 @@ enabled = true
     }
 
     #[tokio::test]
-    async fn draw_compact_layout_handles_stacked_sessions_without_panic() {
+    async fn draw_conversation_first_layout_hides_session_sidebar() {
         let path = write_test_runtime_config(
             r#"
 [providers.openai]
@@ -11397,9 +11690,26 @@ enabled = true
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(rendered.contains("Sessions"));
+        assert!(!rendered.contains("Sessions"));
+        assert!(!rendered.contains("Root Session"));
         assert!(rendered.contains("Child Session"));
+        assert!(rendered.contains("Alt+S sessions"));
         assert!(rendered.contains("ws "));
+
+        app.focus = Focus::Composer;
+        app.clear_composer_state();
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+        assert_eq!(app.focus, Focus::Transcript);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
+        assert_eq!(app.focus, Focus::Composer);
+        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT));
+        assert!(matches!(
+            app.overlay,
+            Some(Overlay::Picker(PickerOverlay {
+                kind: PickerKind::WorkspaceSessions,
+                ..
+            }))
+        ));
 
         runtime.shutdown();
         let _ = fs::remove_file(path);
@@ -11788,6 +12098,97 @@ enabled = true
     }
 
     #[test]
+    fn prompt_history_round_trips_dedupes_and_caps_entries() {
+        let dir = tempfile::tempdir().expect("tempdir should exist");
+        let path = dir.path().join("prompt-history.jsonl");
+        let mut history = PromptHistory::default();
+
+        assert!(history.push("alpha".to_string()));
+        assert!(history.push("beta".to_string()));
+        assert!(history.push("alpha".to_string()));
+        assert!(!history.push("alpha".to_string()));
+        assert_eq!(
+            history.entries,
+            vec!["beta".to_string(), "alpha".to_string()]
+        );
+
+        history
+            .persist(path.as_path())
+            .expect("prompt history should persist");
+        let loaded = PromptHistory::load(path.as_path()).expect("prompt history should load");
+        assert_eq!(loaded.entries, history.entries);
+
+        let mut capped = PromptHistory::default();
+        for index in 0..MAX_PROMPT_HISTORY_ENTRIES + 3 {
+            assert!(capped.push(format!("prompt {index}")));
+        }
+        assert_eq!(capped.len(), MAX_PROMPT_HISTORY_ENTRIES);
+        assert_eq!(capped.get(0), Some("prompt 3"));
+    }
+
+    #[tokio::test]
+    async fn composer_alt_arrows_recall_prompt_history_and_restore_draft() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        app.prompt_history = PromptHistory::default();
+        app.prompt_history.push("first prompt".to_string());
+        app.prompt_history.push("second prompt".to_string());
+        app.composer.set_text("/".to_string());
+        app.sync_slash_command_suggestions();
+        assert!(app.slash_command_suggestions.is_some());
+
+        app.handle_composer_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert_eq!(app.composer.text(), "second prompt");
+        app.handle_composer_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+        assert_eq!(app.composer.text(), "first prompt");
+        app.handle_composer_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+        assert_eq!(app.composer.text(), "second prompt");
+        app.handle_composer_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
+        assert_eq!(app.composer.text(), "/");
+        assert!(app.prompt_history_recall_index.is_none());
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn ctrl_a_and_ctrl_e_cross_line_boundaries_like_shell_editors() {
         let mut editor = Editor::from_text("alpha\nbeta".to_string());
         editor.cursor = "alpha\n".len();
@@ -12079,13 +12480,6 @@ enabled = true
     }
 
     #[test]
-    fn adaptive_sessions_width_preserves_transcript_space() {
-        assert_eq!(adaptive_sessions_width(70), 23);
-        assert_eq!(adaptive_sessions_width(100), 28);
-        assert_eq!(adaptive_sessions_width(160), 34);
-    }
-
-    #[test]
     fn adaptive_modal_size_expands_to_available_space_on_small_terminals() {
         assert_eq!(view::adaptive_modal_width(60, 92), 58);
         assert_eq!(view::adaptive_modal_height(16, 24), 14);
@@ -12117,31 +12511,10 @@ enabled = true
     }
 
     #[test]
-    fn sessions_stack_above_transcript_on_narrow_terminals() {
-        assert!(view::should_stack_sessions_layout(80));
-        assert!(view::should_stack_sessions_layout(91));
-        assert!(!view::should_stack_sessions_layout(92));
-    }
-
-    #[test]
-    fn adaptive_sessions_height_stays_within_compact_bounds() {
-        assert_eq!(view::adaptive_sessions_height(15), 6);
-        assert_eq!(view::adaptive_sessions_height(24), 8);
-        assert_eq!(view::adaptive_sessions_height(40), 10);
-    }
-
-    #[test]
     fn transcript_surface_header_height_stays_minimal() {
         assert_eq!(view::transcript_surface_header_height(8), 2);
         assert_eq!(view::transcript_surface_header_height(14), 2);
         assert_eq!(view::transcript_surface_header_height(24), 2);
-    }
-
-    #[test]
-    fn session_sidebar_header_height_stays_minimal() {
-        assert_eq!(view::session_sidebar_header_height(4), 2);
-        assert_eq!(view::session_sidebar_header_height(6), 2);
-        assert_eq!(view::session_sidebar_header_height(9), 2);
     }
 
     #[test]

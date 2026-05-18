@@ -74,6 +74,7 @@ pub trait ModelProvider: Send + Sync {
                 family,
                 None,
                 model.as_str(),
+                &self.model_metadata(model),
             ),
             None => BTreeMap::new(),
         }
@@ -89,6 +90,7 @@ pub trait ModelProvider: Send + Sync {
                 family,
                 adapter_id,
                 model.as_str(),
+                &self.model_metadata_for_adapter(adapter_id, model),
             ),
             None => self.model_thinking_modes(model),
         }

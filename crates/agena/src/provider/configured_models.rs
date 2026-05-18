@@ -782,9 +782,24 @@ impl ConfiguredModelsProvider {
             .unwrap_or(base)
     }
 
-    fn configured_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+    fn configured_thinking_modes_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelThinkingMode> {
+        let mut base = self
+            .target
+            .model_thinking_modes_for_adapter(adapter_id, model);
+        if let Some(family) = self.target.capability_family() {
+            let metadata = self.model_metadata_for_adapter(adapter_id, model);
+            for (name, mode) in crate::provider::default_model_mode_registry()
+                .thinking_modes_for_family(family, adapter_id, model.as_str(), &metadata)
+            {
+                base.entry(name).or_insert(mode);
+            }
+        }
         apply_configured_thinking_modes(
-            self.target.model_thinking_modes(model),
+            base,
             self.configured_model(model)
                 .map(|configured| configured.thinking_modes.iter())
                 .into_iter()
@@ -857,7 +872,7 @@ impl ModelProvider for ConfiguredModelsProvider {
     }
 
     fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
-        self.configured_thinking_modes(model)
+        self.configured_thinking_modes_for_adapter(None, model)
     }
 
     fn model_thinking_modes_for_adapter(
@@ -865,8 +880,7 @@ impl ModelProvider for ConfiguredModelsProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelThinkingMode> {
-        let _ = adapter_id;
-        self.configured_thinking_modes(model)
+        self.configured_thinking_modes_for_adapter(adapter_id, model)
     }
 
     fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
@@ -927,7 +941,8 @@ impl ModelProvider for ConfiguredModelsProvider {
                     &metadata_fallback,
                 );
             } else {
-                model.thinking_modes = self.configured_thinking_modes(&model.id);
+                model.thinking_modes = self
+                    .configured_thinking_modes_for_adapter(model.adapter_id.as_ref(), &model.id);
                 model.speed_modes = self.configured_speed_modes(&model.id);
             }
         }
@@ -1004,6 +1019,7 @@ mod tests {
         listed_models: Vec<Model>,
         fallback_capabilities: ModelCapabilities,
         fallback_metadata: ModelMetadata,
+        capability_family: Option<crate::provider::CapabilityFamily>,
     }
 
     #[async_trait::async_trait]
@@ -1014,6 +1030,10 @@ mod tests {
 
         fn default_model(&self) -> &ModelId {
             &self.default_model
+        }
+
+        fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
+            self.capability_family
         }
 
         fn model_capabilities(&self, _model: &ModelId) -> ModelCapabilities {
@@ -1086,6 +1106,7 @@ mod tests {
             fallback_capabilities: ModelCapabilities::default()
                 .with_streaming(CapabilitySupport::Supported),
             fallback_metadata: ModelMetadata::default().with_description("fallback metadata"),
+            capability_family: None,
         });
 
         let provider = ConfiguredModelsProvider::new(
@@ -1142,6 +1163,7 @@ mod tests {
             ],
             fallback_capabilities: ModelCapabilities::default(),
             fallback_metadata: ModelMetadata::default(),
+            capability_family: None,
         });
 
         let provider = ConfiguredModelsProvider::new(
@@ -1208,6 +1230,33 @@ mod tests {
             .expect("other model should be listed");
         assert!(!other_model.thinking_modes.contains_key("deep"));
         assert!(!other_model.speed_modes.contains_key("fast"));
+    }
+
+    #[tokio::test]
+    async fn configured_provider_uses_config_metadata_to_enrich_release_gated_thinking_modes() {
+        let target = std::sync::Arc::new(StaticProvider {
+            default_model: ModelId::new("gpt-5"),
+            listed_models: vec![Model::new("test-provider", "gpt-5")],
+            fallback_capabilities: ModelCapabilities::default(),
+            fallback_metadata: ModelMetadata::default(),
+            capability_family: Some(crate::provider::CapabilityFamily::OpenAi),
+        });
+
+        let provider = ConfiguredModelsProvider::new(
+            target,
+            BTreeMap::from([(
+                "gpt-5".to_owned(),
+                ConfiguredModelDefinition {
+                    release_date: Some("2025-12-04".to_owned()),
+                    ..ConfiguredModelDefinition::default()
+                },
+            )]),
+        );
+
+        let modes = provider.model_thinking_modes(&ModelId::new("gpt-5"));
+        assert!(modes.contains_key("no-thinking"));
+        assert!(modes.contains_key("thinking-xhigh"));
+        assert!(modes.contains_key("thinking-minimal"));
     }
 
     #[test]

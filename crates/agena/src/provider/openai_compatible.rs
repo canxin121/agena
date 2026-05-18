@@ -835,6 +835,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
             crate::provider::CapabilityFamily::OpenAiCompatible,
             adapter_id,
             model.as_str(),
+            &self.model_metadata_for_adapter(adapter_id, model),
         );
         if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
             return Self::dashscope_thinking_modes(model);

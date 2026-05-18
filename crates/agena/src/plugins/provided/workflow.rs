@@ -58,6 +58,18 @@ enum WorkflowToolInput {
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 enum ToolsToolInput {
     Search(ToolSearchToolInput),
+    Help(ToolsHelpInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+struct ToolsHelpInput {
+    pub tool: String,
+    #[serde(default = "default_include_schema")]
+    pub include_schema: bool,
+}
+
+fn default_include_schema() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -285,7 +297,10 @@ impl WorkflowPlugin {
     fn searchable_tool_from_descriptor(descriptor: ToolDescriptor) -> tool_search::SearchableTool {
         tool_search::SearchableTool {
             name: descriptor.name,
-            description: descriptor.description.unwrap_or_default(),
+            description: descriptor
+                .summary
+                .or(descriptor.description)
+                .unwrap_or_default(),
             tags: descriptor.tags,
             deferred: descriptor.deferred,
         }
@@ -583,6 +598,81 @@ impl WorkflowPlugin {
             .map_err(|err| PluginError::invalid_params(err.to_string()))?;
         Ok(crate::plugins::provided::router::tool_execution_to_invoke_output(execution))
     }
+
+    async fn invoke_tool_help(&self, input: &ToolsHelpInput) -> SdkResult<ToolInvokeOutput> {
+        let requested = input.tool.trim();
+        if requested.is_empty() {
+            return Err(PluginError::invalid_params(
+                "tools help requires a non-empty tool name",
+            ));
+        }
+        let tools = self.host()?.list_tools().await?;
+        let mut exact = None;
+        let mut case_insensitive = None;
+        for tool in tools {
+            if tool.name == requested {
+                exact = Some(tool);
+                break;
+            }
+            if case_insensitive.is_none() && tool.name.eq_ignore_ascii_case(requested) {
+                case_insensitive = Some(tool);
+            }
+        }
+        let Some(descriptor) = exact.or(case_insensitive) else {
+            return Err(PluginError::invalid_params(format!(
+                "unknown tool '{requested}'"
+            )));
+        };
+
+        let mut lines = vec![format!("Tool: {}", descriptor.name)];
+        if let Some(plugin_id) = descriptor.plugin_id.as_deref() {
+            lines.push(format!("Plugin: {plugin_id}"));
+        }
+        if descriptor.deferred {
+            lines.push("Load priority: deferred".to_string());
+        }
+        if !descriptor.tags.is_empty() {
+            let tags = descriptor
+                .tags
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("Tags: {tags}"));
+        }
+        if let Some(summary) = descriptor
+            .summary
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            lines.push(format!("Summary: {summary}"));
+        }
+        if let Some(description) = descriptor
+            .description
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            lines.push(format!("Description: {description}"));
+        }
+        if let Some(help) = descriptor.help.as_deref().filter(|value| !value.is_empty()) {
+            lines.push("Help:".to_string());
+            lines.push(help.to_string());
+        }
+        if input.include_schema
+            && let Some(schema) = descriptor.input_schema.as_ref()
+        {
+            lines.push("Input schema:".to_string());
+            lines.push(
+                serde_json::to_string_pretty(schema)
+                    .map_err(|err| PluginError::new(err.to_string()))?,
+            );
+        }
+
+        Ok(
+            ToolInvokeOutput::text(lines.join("\n"))
+                .with_title(format!("{} help", descriptor.name)),
+        )
+    }
 }
 
 pub(crate) fn new_plugin() -> WorkflowPlugin {
@@ -616,6 +706,7 @@ impl Plugin for WorkflowPlugin {
             }
             "tools" => match serde_json::from_value::<ToolsToolInput>(input.input)? {
                 ToolsToolInput::Search(args) => self.invoke_tool_search(&args).await,
+                ToolsToolInput::Help(args) => self.invoke_tool_help(&args).await,
             },
             "agent" => match serde_json::from_value::<AgentToolInput>(input.input)? {
                 AgentToolInput::Switch(args) => self.invoke_agent_switch(&args).await,
@@ -780,7 +871,9 @@ fn entries() -> Vec<PluginToolDecl> {
             "tools",
             crate::entry::definition::json_schema_for::<ToolsToolInput>(),
         )
-        .description("Tool catalog command. Set command to search to find or load deferred tools.")
+        .description("Tool catalog command. Set command to search to find/load deferred tools, or help to fetch detailed usage for a tool.")
+        .summary("Search tools or fetch detailed tool help.")
+        .help("Use command `search` with query/load/limit to discover tools and load deferred tools. Use command `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool.")
         .tags([ToolTag::ReadOnly, ToolTag::Discovery])
         .always_load()
         .concurrency_safe(true)
@@ -1005,6 +1098,10 @@ mod tests {
             Ok(vec![ToolDescriptor {
                 name: "shell".to_string(),
                 description: Some("Execute shell commands".to_string()),
+                summary: Some("Shell commands".to_string()),
+                help: Some("Execute shell commands.".to_string()),
+                input_schema: Some(serde_json::json!({"type": "object"})),
+                description_mode: None,
                 tags: vec![
                     crate::plugin::sdk::ToolTag::Mutating,
                     crate::plugin::sdk::ToolTag::Shell,
@@ -1702,6 +1799,28 @@ mod tests {
             }
             other => panic!("unexpected output: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn tools_help_returns_registered_help_and_schema() {
+        let (plugin, _) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_command(
+                "tools",
+                "help",
+                ToolsHelpInput {
+                    tool: "shell".to_string(),
+                    include_schema: true,
+                },
+            ))
+            .await
+            .expect("tools help invoke");
+
+        assert!(output.output_text.contains("Tool: shell"));
+        assert!(output.output_text.contains("Help:"));
+        assert!(output.output_text.contains("Execute shell commands."));
+        assert!(output.output_text.contains("Input schema:"));
+        assert!(output.output_text.contains("\"type\": \"object\""));
     }
 
     #[tokio::test]

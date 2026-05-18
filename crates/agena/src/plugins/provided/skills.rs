@@ -87,18 +87,21 @@ impl SkillsPlugin {
         if entry.alias {
             tags.push(ToolTag::custom("alias").expect("alias tag is valid"));
         }
-        PluginToolDecl::new(
-            name.to_string(),
-            crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
-        )
-        .description(if entry.skill.frontmatter.description.trim().is_empty() {
+        let description = if entry.skill.frontmatter.description.trim().is_empty() {
             format!(
                 "Generate the '{}' {label} prompt.",
                 entry.skill.frontmatter.name
             )
         } else {
             entry.skill.frontmatter.description.clone()
-        })
+        };
+        PluginToolDecl::new(
+            name.to_string(),
+            crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
+        )
+        .description(description.clone())
+        .summary(description)
+        .help(entry.skill.body.clone())
         .tags(tags)
         .concurrency_safe(true)
         .deferred_load()

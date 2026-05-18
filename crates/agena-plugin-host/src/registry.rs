@@ -44,6 +44,14 @@ impl PluginEntry {
         self.decl.description_text()
     }
 
+    pub fn summary_text(&self) -> Option<&str> {
+        self.decl.summary_text()
+    }
+
+    pub fn help_text(&self) -> Option<&str> {
+        self.decl.help_text()
+    }
+
     pub fn sanitized_input_schema(&self) -> serde_json::Value {
         self.decl.sanitized_input_schema()
     }

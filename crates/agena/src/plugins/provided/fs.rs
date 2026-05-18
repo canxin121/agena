@@ -47,6 +47,8 @@ fn entries() -> Vec<PluginToolDecl> {
         .description(
             "Filesystem read/search command. Set command to read, view_file, glob, or grep; pass that command's payload in args.",
         )
+        .summary("Read, view, glob, or grep workspace files.")
+        .help("Use `read` for raw file content, `view_file` for line-oriented viewing, `glob` for path discovery, and `grep` for regex text search. Pass the selected command payload under `args`.")
         .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead])
         .concurrency_safe(true)
         .always_load(),
@@ -57,6 +59,8 @@ fn entries() -> Vec<PluginToolDecl> {
         .description(
             "Filesystem edit command. Set command to apply_patch or notebook_edit; pass that command's payload in args.",
         )
+        .summary("Apply file patches or edit notebooks.")
+        .help("Use `apply_patch` for text patch operations and `notebook_edit` for notebook cell edits. Pass the selected command payload under `args`; this tool mutates files and remains deferred until loaded.")
         .tags([ToolTag::Mutating, ToolTag::FilesystemWrite])
         .concurrency_safe(false)
         .deferred_load(),

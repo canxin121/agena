@@ -521,6 +521,18 @@ impl Merge for PluginConfig {
             self.list = overlay.list;
         }
         self.timeouts = overlay.timeouts;
+        if !overlay.quotas.is_empty() {
+            self.quotas = overlay.quotas;
+        }
+        if !overlay.trusted_keys.is_empty() {
+            self.trusted_keys = overlay.trusted_keys;
+        }
+        if overlay.default_quota != Default::default() {
+            self.default_quota = overlay.default_quota;
+        }
+        if !overlay.tool_presentation.is_default() {
+            self.tool_presentation = overlay.tool_presentation;
+        }
     }
 }
 

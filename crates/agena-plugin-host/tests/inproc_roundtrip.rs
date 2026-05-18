@@ -56,6 +56,10 @@ impl HostClient for FakeHostClient {
         Ok(vec![ToolDescriptor {
             name: "demo".into(),
             description: None,
+            summary: None,
+            help: None,
+            input_schema: None,
+            description_mode: None,
             tags: vec![ToolTag::ReadOnly],
             deferred: false,
             plugin_id: Some("demo".into()),
@@ -280,6 +284,7 @@ async fn static_plugin_round_trips_every_hook() {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         })
         .register_static("test", TestPlugin)
         .build()

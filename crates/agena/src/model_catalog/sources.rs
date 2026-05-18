@@ -195,6 +195,9 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                 supports_parallel_tool_calls: None,
                 supports_verbosity: None,
                 default_verbosity: None,
+                assistant_reasoning_interleaved: models_dev_assistant_reasoning_interleaved(
+                    model.interleaved.as_ref(),
+                ),
                 assistant_reasoning_field: models_dev_assistant_reasoning_field(
                     model.interleaved.as_ref(),
                 ),
@@ -277,6 +280,7 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                 supports_parallel_tool_calls: None,
                 supports_verbosity: None,
                 default_verbosity: None,
+                assistant_reasoning_interleaved: None,
                 assistant_reasoning_field: None,
                 output_modalities: Vec::new(),
                 pricing: None,
@@ -330,6 +334,7 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
             supports_parallel_tool_calls: model.supports_parallel_tool_calls,
             supports_verbosity: model.support_verbosity,
             default_verbosity: normalize_optional_string(model.default_verbosity),
+            assistant_reasoning_interleaved: None,
             assistant_reasoning_field: None,
             output_modalities: Vec::new(),
             pricing: None,
@@ -503,6 +508,16 @@ fn models_dev_assistant_reasoning_field(
             None
         }
         _ => None,
+    }
+}
+
+fn models_dev_assistant_reasoning_interleaved(
+    interleaved: Option<&ModelsDevInterleaved>,
+) -> Option<bool> {
+    match interleaved {
+        Some(ModelsDevInterleaved::Enabled(enabled)) => Some(*enabled),
+        Some(ModelsDevInterleaved::Field(_)) => Some(true),
+        None => None,
     }
 }
 

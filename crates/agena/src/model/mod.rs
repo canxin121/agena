@@ -479,6 +479,8 @@ pub struct ModelMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_interleaved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
@@ -499,6 +501,7 @@ impl ModelMetadata {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.assistant_reasoning_interleaved.is_none()
             && self.assistant_reasoning_field.is_none()
             && self.output_modalities.is_empty()
             && self.pricing.is_none()
@@ -551,6 +554,14 @@ impl ModelMetadata {
 
     pub fn with_default_verbosity(mut self, default_verbosity: impl Into<String>) -> Self {
         self.default_verbosity = Some(default_verbosity.into());
+        self
+    }
+
+    pub fn with_assistant_reasoning_interleaved(
+        mut self,
+        assistant_reasoning_interleaved: bool,
+    ) -> Self {
+        self.assistant_reasoning_interleaved = Some(assistant_reasoning_interleaved);
         self
     }
 
@@ -669,6 +680,9 @@ impl ModelMetadata {
         }
         if self.default_verbosity.is_none() {
             self.default_verbosity = fallback.default_verbosity.clone();
+        }
+        if self.assistant_reasoning_interleaved.is_none() {
+            self.assistant_reasoning_interleaved = fallback.assistant_reasoning_interleaved;
         }
         if self.assistant_reasoning_field.is_none() {
             self.assistant_reasoning_field = fallback.assistant_reasoning_field.clone();
@@ -1284,6 +1298,7 @@ mod tests {
             .with_supports_parallel_tool_calls(true)
             .with_supports_verbosity(true)
             .with_default_verbosity("low")
+            .with_assistant_reasoning_interleaved(true)
             .with_assistant_reasoning_field("reasoning_details")
             .with_output_modalities(["text".to_owned(), "image".to_owned()])
             .with_pricing(ModelPricing {
@@ -1318,6 +1333,7 @@ mod tests {
         assert_eq!(merged.supports_parallel_tool_calls, Some(true));
         assert_eq!(merged.supports_verbosity, Some(true));
         assert_eq!(merged.default_verbosity.as_deref(), Some("low"));
+        assert_eq!(merged.assistant_reasoning_interleaved, Some(true));
         assert_eq!(
             merged.assistant_reasoning_field.as_deref(),
             Some("reasoning_details")

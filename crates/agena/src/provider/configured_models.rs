@@ -584,6 +584,8 @@ pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_interleaved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
@@ -613,6 +615,7 @@ impl ConfiguredModelDefinition {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.assistant_reasoning_interleaved.is_none()
             && self.assistant_reasoning_field.is_none()
             && self.output_modalities.is_empty()
             && self.pricing.is_none()
@@ -661,6 +664,10 @@ impl ConfiguredModelDefinition {
         }
         if let Some(default_verbosity) = self.default_verbosity.clone() {
             metadata = metadata.with_default_verbosity(default_verbosity);
+        }
+        if let Some(assistant_reasoning_interleaved) = self.assistant_reasoning_interleaved {
+            metadata =
+                metadata.with_assistant_reasoning_interleaved(assistant_reasoning_interleaved);
         }
         if let Some(assistant_reasoning_field) = self.assistant_reasoning_field.clone() {
             metadata = metadata.with_assistant_reasoning_field(assistant_reasoning_field);

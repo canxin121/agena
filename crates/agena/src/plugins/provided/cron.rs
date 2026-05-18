@@ -120,6 +120,8 @@ fn schedule_decl() -> PluginToolDecl {
         crate::entry::definition::json_schema_for::<ScheduleToolInput>(),
     )
     .description("Schedule read command. Set command to list; pass that command's payload in args.")
+    .summary("List scheduled jobs and wakeups.")
+    .help("Use command `list` to inspect registered cron jobs and one-shot wakeups for the active runtime.")
     .tags([ToolTag::ReadOnly, ToolTag::Scheduler])
     .concurrency_safe(true)
     .deferred_load()
@@ -134,6 +136,8 @@ fn schedule_edit_decl() -> PluginToolDecl {
     .description(
         "Schedule edit command. Set command to create, delete, or wakeup; pass that command's payload in args.",
     )
+    .summary("Create, delete, or trigger scheduled work.")
+    .help("Use command `create` for cron jobs, `delete` to remove a scheduled job, and `wakeup` for a one-shot wakeup. This tool mutates scheduler state and remains deferred until loaded.")
     .tags([ToolTag::Mutating, ToolTag::Scheduler])
     .concurrency_safe(false)
     .deferred_load()

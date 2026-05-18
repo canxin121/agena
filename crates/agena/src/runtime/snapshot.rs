@@ -575,6 +575,7 @@ fn build_tool_executor(
 
     let mut executor = ToolExecutor::new(workspace_root.to_path_buf(), agent)
         .with_plugin_manager(plugins)
+        .with_tool_presentation(resolution.config.plugins.tool_presentation.clone())
         .with_subagent_registry(agents)
         .with_web_search_backend(resolution.config.web.search.resolve())
         .with_plan_registry(crate::tool::plan_registry_for_executor())

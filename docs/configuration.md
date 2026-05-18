@@ -1018,6 +1018,27 @@ timeouts = { tool_invoke = "30s" }
 - `default_quota`
 - `quotas`
 - `trusted_keys`
+- `tool_presentation`: 控制模型请求里的 tool 说明是完整发送，还是只发送短说明并引导调用 `tools help`。
+
+Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
+
+- `detailed`: 使用 tool manifest / `tool.definition` hook 给出的完整 `description`。
+- `help`: 只发送短说明和 help 引导，完整用法通过 `tools` tool 的 `help` 子命令读取。
+
+```toml
+[plugins.tool_presentation]
+default_mode = "help"
+
+[plugins.tool_presentation.plugins]
+"agena.skills" = "help"
+"agena.mcp" = "help"
+
+[plugins.tool_presentation.tools]
+fs = "detailed"
+"agena.workflow/tools" = "detailed"
+```
+
+按 tool 覆盖可以使用模型可见名（如 `fs`）、`plugin_id/tool_name`（如 `agena.workflow/tools`），或无冲突的原始 tool 名。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
 
 Plugin transport kind：
 

@@ -277,6 +277,7 @@ async fn http_transport_round_trip_via_plugin_host() {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         })
         .build()
         .await
@@ -324,6 +325,7 @@ async fn http_transport_streams_via_callbacks() {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         })
         .build()
         .await

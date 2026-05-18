@@ -16,6 +16,7 @@ pub mod transport;
 pub use agena_plugin_sdk as sdk;
 pub use config::{
     HttpAuth, PluginEntry, PluginSignature, PluginsConfig, RestartPolicy, TimeoutsConfig,
+    ToolPresentationConfig,
 };
 pub use error::{HostError, TransportError};
 pub use host::{LoadedPlugin, PluginHost, PluginHostBuilder, PluginInspect, ToolInvokeStream};
@@ -39,7 +40,7 @@ pub use sdk::{
     ProviderListPatch, SessionCompactedInput, SessionCompactingInput, SessionCompactingPatch,
     SessionEndInput, SessionEndReason, SessionStartInput, SessionStartPatch, SessionStartSource,
     ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolPermissionNetworksInput, ToolPermissionPathsInput, UserPromptSubmitInput,
-    UserPromptSubmitPatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolDescriptionMode, ToolFailureInput,
+    ToolInvokeInput, ToolInvokeOutput, ToolPermissionNetworksInput, ToolPermissionPathsInput,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };

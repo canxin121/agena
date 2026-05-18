@@ -176,6 +176,18 @@ pub struct PluginToolDecl {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Short model-visible one-line description. Hosts may use this when a
+    /// tool is exposed in help mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Detailed usage help returned by host/tool catalog help flows. When
+    /// omitted, hosts fall back to `description` plus the input schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    /// Preferred model-visible description mode for this tool. Host config can
+    /// override it per plugin or per tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_mode: Option<ToolDescriptionMode>,
     #[serde(default)]
     pub input_schema: serde_json::Value,
     /// Declarative path-permission specs. The host extracts paths from the
@@ -221,6 +233,20 @@ pub struct PluginToolDecl {
 impl PluginToolDecl {
     pub fn description_text(&self) -> &str {
         self.description.as_deref().unwrap_or("")
+    }
+
+    pub fn summary_text(&self) -> Option<&str> {
+        self.summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn help_text(&self) -> Option<&str> {
+        self.help
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     }
 
     pub fn sanitized_input_schema(&self) -> serde_json::Value {
@@ -284,6 +310,14 @@ pub enum ToolStreamingMode {
     #[default]
     Buffered,
     Streaming,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDescriptionMode {
+    #[default]
+    Detailed,
+    Help,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -611,6 +645,9 @@ impl PluginToolDecl {
         Self {
             name: name.into(),
             description: None,
+            summary: None,
+            help: None,
+            description_mode: None,
             input_schema: schema,
             input_paths: Vec::new(),
             input_networks: Vec::new(),
@@ -627,6 +664,21 @@ impl PluginToolDecl {
 
     pub fn description(mut self, d: impl Into<String>) -> Self {
         self.description = Some(d.into());
+        self
+    }
+
+    pub fn summary(mut self, summary: impl Into<String>) -> Self {
+        self.summary = Some(summary.into());
+        self
+    }
+
+    pub fn help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
+    }
+
+    pub fn description_mode(mut self, mode: ToolDescriptionMode) -> Self {
+        self.description_mode = Some(mode);
         self
     }
 

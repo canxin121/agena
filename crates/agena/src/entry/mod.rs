@@ -178,6 +178,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
         trusted_keys: Default::default(),
         default_quota: Default::default(),
         quotas: Default::default(),
+        tool_presentation: Default::default(),
     };
     mcp::block_on(async move {
         PluginHostBuilder::new(workspace_root, env!("CARGO_PKG_VERSION"))
@@ -277,6 +278,44 @@ pub enum ToolError {
     UnsupportedInvocation(String),
 }
 
+fn present_tool_entry(
+    mut entry: RegistryPluginEntry,
+    presentation: &crate::plugin::ToolPresentationConfig,
+) -> RegistryPluginEntry {
+    let mode = presentation.mode_for(
+        entry.plugin_name.as_str(),
+        entry.original_name.as_str(),
+        entry.exposed_name.as_str(),
+        entry.decl.description_mode,
+    );
+    if mode == crate::plugin::ToolDescriptionMode::Help {
+        entry.decl.description = Some(compact_tool_description(&entry));
+    }
+    entry.decl.help = None;
+    entry
+}
+
+fn compact_tool_description(entry: &RegistryPluginEntry) -> String {
+    format!(
+        "{} Full usage is available from the `tools` tool: call command `help` with tool `{}`.",
+        tool_summary(entry),
+        entry.exposed_name
+    )
+}
+
+fn tool_summary(entry: &RegistryPluginEntry) -> String {
+    if let Some(summary) = entry.summary_text() {
+        return summary.to_string();
+    }
+    entry
+        .description_text()
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| format!("Tool `{}`.", entry.exposed_name))
+}
+
 #[derive(Clone)]
 pub struct ToolExecutor {
     workspace_root: PathBuf,
@@ -292,6 +331,7 @@ pub struct ToolExecutor {
     scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     permission_mode: PermissionEnforcementMode,
+    tool_presentation: crate::plugin::ToolPresentationConfig,
 }
 
 impl ToolExecutor {
@@ -310,6 +350,7 @@ impl ToolExecutor {
             scheduler: None,
             lsp_registry: None,
             permission_mode: PermissionEnforcementMode::Enforced,
+            tool_presentation: crate::plugin::ToolPresentationConfig::default(),
         }
     }
 
@@ -339,6 +380,14 @@ impl ToolExecutor {
 
     pub fn with_plugin_manager(mut self, manager: Arc<PluginHost>) -> Self {
         self.plugins = manager;
+        self
+    }
+
+    pub fn with_tool_presentation(
+        mut self,
+        presentation: crate::plugin::ToolPresentationConfig,
+    ) -> Self {
+        self.tool_presentation = presentation;
         self
     }
 
@@ -483,7 +532,7 @@ impl ToolExecutor {
         ToolCatalog::for_model(self.model_id.as_deref())
     }
 
-    fn catalogued_tools(&self) -> Vec<RegistryPluginEntry> {
+    fn catalogued_tools_raw(&self) -> Vec<RegistryPluginEntry> {
         let catalog = self.tool_catalog();
         let mut tools = self
             .plugins
@@ -508,11 +557,17 @@ impl ToolExecutor {
                         tool_name: entry.exposed_name.clone(),
                         plugin_name: entry.plugin_name.clone(),
                         description: entry.description_text().to_string(),
+                        summary: entry.decl.summary.clone(),
+                        help: entry.decl.help.clone(),
+                        description_mode: entry.decl.description_mode,
                         input_schema: entry.sanitized_input_schema(),
                     };
                     match self.plugins.dispatch_tool_definition_blocking(input) {
                         Ok(patched) => {
                             entry.decl.description = Some(patched.description);
+                            entry.decl.summary = patched.summary;
+                            entry.decl.help = patched.help;
+                            entry.decl.description_mode = patched.description_mode;
                             entry.decl.input_schema = patched.input_schema;
                             entry
                         }
@@ -530,6 +585,17 @@ impl ToolExecutor {
         }
 
         tools
+    }
+
+    fn catalogued_tools(&self) -> Vec<RegistryPluginEntry> {
+        self.catalogued_tools_raw()
+            .into_iter()
+            .map(|entry| present_tool_entry(entry, &self.tool_presentation))
+            .collect()
+    }
+
+    pub fn detailed_tools(&self) -> Vec<RegistryPluginEntry> {
+        self.catalogued_tools_raw()
     }
 
     pub fn searchable_tools(&self) -> Vec<RegistryPluginEntry> {
@@ -1986,6 +2052,10 @@ mod tests {
             Ok(vec![ToolDescriptor {
                 name: "fs_edit".to_string(),
                 description: Some("Patch files in the workspace".to_string()),
+                summary: Some("Patch files".to_string()),
+                help: Some("Patch files in the workspace.".to_string()),
+                input_schema: Some(serde_json::json!({"type": "object"})),
+                description_mode: None,
                 tags: vec![
                     crate::plugin::sdk::ToolTag::Mutating,
                     crate::plugin::sdk::ToolTag::FilesystemWrite,
@@ -2051,6 +2121,8 @@ mod tests {
                         }),
                     )
                     .description("Echo a message from the plugin.")
+                    .summary("Echo a plugin message.")
+                    .help("Detailed fixture help for plugin_echo.")
                     .tag(crate::plugin::sdk::ToolTag::ReadOnly),
                 )
                 .tool(
@@ -2247,6 +2319,7 @@ mod tests {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         };
         test_plugin_runtime().block_on(async {
             PluginHostBuilder::new(root, "test")
@@ -2301,6 +2374,7 @@ mod tests {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         };
         test_plugin_runtime().block_on(async {
             PluginHostBuilder::new(root, "test")
@@ -2730,6 +2804,41 @@ mod tests {
             .filter(|tool| tool.exposed_name == "fs")
             .count();
         assert_eq!(fs_count, 1);
+    }
+
+    #[test]
+    fn help_mode_compacts_model_visible_tool_descriptions() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_plugin_manager(&workspace.root))
+            .with_tool_presentation(crate::plugin::ToolPresentationConfig {
+                default_mode: crate::plugin::ToolDescriptionMode::Help,
+                ..Default::default()
+            });
+
+        let visible = executor
+            .available_tools()
+            .into_iter()
+            .find(|tool| tool.exposed_name == "plugin_echo")
+            .expect("plugin_echo should be model-visible");
+        assert_eq!(
+            visible.description_text(),
+            "Echo a plugin message. Full usage is available from the `tools` tool: call command `help` with tool `plugin_echo`."
+        );
+        assert!(
+            visible.decl.help.is_none(),
+            "detailed help should not be carried in provider-visible tool definitions"
+        );
+
+        let detailed = executor
+            .detailed_tools()
+            .into_iter()
+            .find(|tool| tool.exposed_name == "plugin_echo")
+            .expect("plugin_echo should have detailed help");
+        assert_eq!(
+            detailed.help_text(),
+            Some("Detailed fixture help for plugin_echo.")
+        );
     }
 
     #[test]

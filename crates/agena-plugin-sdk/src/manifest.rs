@@ -28,6 +28,11 @@ pub struct PluginManifest {
     /// declarations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugin_capabilities: Vec<HostCapability>,
+    /// UI contributions owned by this plugin. TUI-facing content and Studio
+    /// Web-facing views/controls are intentionally split so each host can
+    /// consume only the surface it can render.
+    #[serde(default, skip_serializing_if = "PluginUiContributions::is_empty")]
+    pub ui: PluginUiContributions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options_schema: Option<serde_json::Value>,
 }
@@ -318,6 +323,206 @@ pub enum HostCapability {
     PermissionCheck,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PluginUiContributions {
+    #[serde(default, skip_serializing_if = "PluginTuiUiContributions::is_empty")]
+    pub tui: PluginTuiUiContributions,
+    #[serde(default, skip_serializing_if = "PluginStudioUiContributions::is_empty")]
+    pub studio: PluginStudioUiContributions,
+}
+
+impl PluginUiContributions {
+    pub fn is_empty(&self) -> bool {
+        self.tui.is_empty() && self.studio.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PluginTuiUiContributions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statusline_segments: Vec<PluginTuiStatuslineSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub themes: Vec<PluginUiThemePalette>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_blocks: Vec<PluginTuiContentBlock>,
+}
+
+impl PluginTuiUiContributions {
+    pub fn is_empty(&self) -> bool {
+        self.statusline_segments.is_empty()
+            && self.themes.is_empty()
+            && self.content_blocks.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PluginStudioUiContributions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<PluginStudioCommand>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<PluginStudioControl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<PluginStudioView>,
+}
+
+impl PluginStudioUiContributions {
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty() && self.controls.is_empty() && self.views.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginTuiStatuslineSegment {
+    pub id: String,
+    pub content: String,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginUiThemePalette {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub colors: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginTuiContentBlock {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body: String,
+    #[serde(default = "default_tui_content_location")]
+    pub location: String,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginStudioCommand {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default = "default_studio_category")]
+    pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slash: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<String>,
+    #[serde(default = "default_studio_command_location")]
+    pub location: String,
+    #[serde(default)]
+    pub action: PluginUiAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginStudioControl {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default = "default_studio_control_location")]
+    pub location: String,
+    #[serde(default = "default_studio_control_kind")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<PluginStudioControlOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub action: PluginUiAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginStudioControlOption {
+    pub label: String,
+    pub value: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginStudioView {
+    pub id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default = "default_studio_view_location")]
+    pub location: String,
+    #[serde(default = "default_studio_view_kind")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<PluginStudioControl>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PluginUiAction {
+    None,
+    InvokeTool {
+        tool: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
+        #[serde(default)]
+        submit_output_as_prompt: bool,
+    },
+    OpenRoute {
+        route: String,
+    },
+    OpenUrl {
+        url: String,
+    },
+    SubmitPrompt {
+        prompt: String,
+    },
+}
+
+impl Default for PluginUiAction {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+fn default_tui_content_location() -> String {
+    "composer_footer".to_string()
+}
+
+fn default_studio_category() -> String {
+    "Plugin".to_string()
+}
+
+fn default_studio_command_location() -> String {
+    "command_palette".to_string()
+}
+
+fn default_studio_control_location() -> String {
+    "plugin_panel".to_string()
+}
+
+fn default_studio_control_kind() -> String {
+    "button".to_string()
+}
+
+fn default_studio_view_location() -> String {
+    "plugins".to_string()
+}
+
+fn default_studio_view_kind() -> String {
+    "markdown".to_string()
+}
+
 /// Single declarative path extraction rule. `jsonpath` is a subset:
 /// dot-paths (`$.path`, `$.files[*].path`). The host extracts each match
 /// from the entry input JSON, classifies it under [`PathKind`], and runs it
@@ -540,6 +745,7 @@ impl PluginManifest {
                 hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
                 entries: Vec::new(),
                 plugin_capabilities: Vec::new(),
+                ui: PluginUiContributions::default(),
                 options_schema: None,
             },
         }
@@ -598,6 +804,41 @@ impl PluginManifestBuilder {
 
     pub fn options_schema(mut self, schema: serde_json::Value) -> Self {
         self.inner.options_schema = Some(schema);
+        self
+    }
+
+    pub fn ui(mut self, ui: PluginUiContributions) -> Self {
+        self.inner.ui = ui;
+        self
+    }
+
+    pub fn tui_statusline_segment(mut self, segment: PluginTuiStatuslineSegment) -> Self {
+        self.inner.ui.tui.statusline_segments.push(segment);
+        self
+    }
+
+    pub fn tui_theme(mut self, theme: PluginUiThemePalette) -> Self {
+        self.inner.ui.tui.themes.push(theme);
+        self
+    }
+
+    pub fn tui_content_block(mut self, block: PluginTuiContentBlock) -> Self {
+        self.inner.ui.tui.content_blocks.push(block);
+        self
+    }
+
+    pub fn studio_command(mut self, command: PluginStudioCommand) -> Self {
+        self.inner.ui.studio.commands.push(command);
+        self
+    }
+
+    pub fn studio_control(mut self, control: PluginStudioControl) -> Self {
+        self.inner.ui.studio.controls.push(control);
+        self
+    }
+
+    pub fn studio_view(mut self, view: PluginStudioView) -> Self {
+        self.inner.ui.studio.views.push(view);
         self
     }
 

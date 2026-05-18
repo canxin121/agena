@@ -1,13 +1,20 @@
 import { computed, type ComputedRef, type Ref } from 'vue'
 import type { Router } from 'vue-router'
 
-import type { RuntimeStatus, SessionResource, WorkspaceResource } from '../lib/agenaApi'
+import {
+  invokePluginUiTool,
+  runPluginUiAction,
+  type RuntimeStatus,
+  type SessionResource,
+  type WorkspaceResource,
+} from '../lib/agenaApi'
 import { createChatCommandCatalog, type ChatCommandCatalogActions } from '../lib/chatCommandCatalog'
 import {
   commandSearchText,
   createCommandPalette,
   createCommandPaletteItems,
   type CommandItem,
+  type CommandPaletteCatalogInput,
 } from '../lib/commandPalette'
 import { useRegisteredCommandPaletteItems } from '../lib/commandPaletteRegistry'
 import type { ChatUsageSummary } from './chatUsageModel'
@@ -52,6 +59,8 @@ function sourcePriority(item: CommandItem): number {
       return 3
     case 'runtime-skill':
       return 4
+    case 'plugin-studio':
+      return 5
   }
 }
 
@@ -93,14 +102,51 @@ export function useChatCommandState(input: ChatCommandStateInput) {
     ),
   )
 
-  const paletteCatalogInput = {
+  const paletteCatalogInput: CommandPaletteCatalogInput = {
     router: input.routeRouter,
     runtimeSkills: computed(() => input.runtime.value?.operator.skills.skills ?? []),
     runtimeCommands: computed(() => input.runtime.value?.operator.skills.commands ?? []),
+    pluginCommands: computed(() => input.runtime.value?.operator.ui?.studio.commands ?? []),
     localCommands,
-    onSelectRuntimeEntry: async ({ kind, item }: { kind: 'skill' | 'command'; item: { name: string } }) => {
-      const descriptor = kind === 'command' ? 'command' : 'skill'
-      input.localCommandNotice.value = `Runtime ${descriptor} /${item.name} is available in the runtime catalog, but direct execution is not wired in Agena Web yet.`
+    onSelectRuntimeEntry: async ({ context, item }) => {
+      const response = await invokePluginUiTool({
+        tool: item.name,
+        payload: { args: context?.args.join(' ').trim() || null },
+        sessionId: input.selectedSessionId.value,
+      })
+      const prompt = response.output_text.trim()
+      if (!prompt) {
+        input.localCommandNotice.value = `Runtime entry /${item.name} returned an empty prompt.`
+        return
+      }
+      return { submitText: prompt }
+    },
+    onRunPluginAction: async ({ command, context }) => {
+      const action = command.action
+      if (action.kind === 'submit_prompt') {
+        return { submitText: action.prompt }
+      }
+      if (action.kind === 'invoke_tool') {
+        const response = await runPluginUiAction({
+          pluginId: command.plugin_id,
+          actionId: command.id,
+          payload: { args: context?.args.join(' ').trim() || null },
+          sessionId: input.selectedSessionId.value,
+        })
+        const output = response.result?.output_text?.trim() || ''
+        if (action.submit_output_as_prompt && output) {
+          return { submitText: output }
+        }
+        return { notice: output || `Ran plugin command ${command.title}.` }
+      }
+      if (action.kind === 'open_route') {
+        await input.routeRouter.push(action.route)
+        return
+      }
+      if (action.kind === 'open_url') {
+        if (typeof window !== 'undefined') window.open(action.url, '_blank', 'noopener,noreferrer')
+        return
+      }
     },
   }
 

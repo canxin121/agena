@@ -595,6 +595,17 @@ impl App {
             }
             parts.push(segment.content.clone());
         }
+        for block in self.backend.plugin_tui_content_blocks() {
+            if block.block.location != "composer_footer" || block.block.body.trim().is_empty() {
+                continue;
+            }
+            let label = block.block.title.trim();
+            if label.is_empty() {
+                parts.push(block.block.body.trim().to_string());
+            } else {
+                parts.push(format!("{label}: {}", block.block.body.trim()));
+            }
+        }
 
         parts.join("  |  ")
     }
@@ -614,6 +625,13 @@ impl App {
                 .plugin_statusline_segments()
                 .iter()
                 .any(|segment| !segment.content.trim().is_empty())
+            || self
+                .backend
+                .plugin_tui_content_blocks()
+                .iter()
+                .any(|block| {
+                    block.block.location == "composer_footer" && !block.block.body.trim().is_empty()
+                })
     }
 
     fn slash_command_suggestion_rows(&self) -> u16 {

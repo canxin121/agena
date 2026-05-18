@@ -18,7 +18,12 @@ pub use config::{
     HttpAuth, PluginEntry, PluginSignature, PluginsConfig, RestartPolicy, TimeoutsConfig,
 };
 pub use error::{HostError, TransportError};
-pub use host::{LoadedPlugin, PluginHost, PluginHostBuilder, PluginInspect, ToolInvokeStream};
+pub use host::{
+    LoadedPlugin, PluginHost, PluginHostBuilder, PluginInspect, PluginStudioCommandCatalogItem,
+    PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
+    PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiCatalog,
+    PluginUiToolInvokeResponse, ToolInvokeStream,
+};
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
 pub use logs::{PluginLogEntry, PluginLogStore};
@@ -34,12 +39,15 @@ pub use sdk::{
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforePatch, CommandBeforeResponse, ConfigInput, ConfigPatch,
     EventEnvelope, EventFilter, HookSubscription, NotificationInput, PermissionAskDecision,
-    PermissionAskInput, PermissionDecision, PluginError, PluginManifest, PluginToolDecl,
-    PostTurnInput, PreTurnInput, ProviderDescriptor, ProviderKind, ProviderListInput,
-    ProviderListPatch, SessionCompactedInput, SessionCompactingInput, SessionCompactingPatch,
-    SessionEndInput, SessionEndReason, SessionStartInput, SessionStartPatch, SessionStartSource,
-    ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    PermissionAskInput, PermissionDecision, PluginError, PluginManifest, PluginStudioCommand,
+    PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
+    PluginToolDecl, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions,
+    PluginUiAction, PluginUiContributions, PluginUiThemePalette, PostTurnInput, PreTurnInput,
+    ProviderDescriptor, ProviderKind, ProviderListInput, ProviderListPatch, SessionCompactedInput,
+    SessionCompactingInput, SessionCompactingPatch, SessionEndInput, SessionEndReason,
+    SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput, ShellEnvPatch,
+    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
     ToolPermissionNetworksInput, ToolPermissionPathsInput, UserPromptSubmitInput,
     UserPromptSubmitPatch,
 };

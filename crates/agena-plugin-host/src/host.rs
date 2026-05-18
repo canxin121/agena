@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::config::{PluginEntry, PluginsConfig, TimeoutsConfig};
 use crate::dispatcher::{self, call_with_timeout};
@@ -54,13 +54,14 @@ use crate::sdk::{
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
     HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
-    PermissionDecision, PluginError, PluginErrorCode, PluginManifest, PostTurnInput, PreTurnInput,
-    ProviderListInput, ProviderListPatch, SessionCompactedInput, SessionCompactingInput,
-    SessionCompactingPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
-    UserPromptSubmitInput, UserPromptSubmitPatch,
+    PermissionDecision, PluginError, PluginErrorCode, PluginManifest, PluginStudioCommand,
+    PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostTurnInput,
+    PreTurnInput, ProviderListInput, ProviderListPatch, SessionCompactedInput,
+    SessionCompactingInput, SessionCompactingPatch, SessionEndInput, SessionStartInput,
+    SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
+    ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput,
+    ToolInvokeInput, ToolInvokeOutput, ToolPermissionNetworksInput, ToolPermissionPathsInput,
+    ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -217,6 +218,72 @@ pub struct PluginInspect {
     pub manifest: Option<PluginManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<PluginAuthoritySummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginUiCatalog {
+    pub tui: PluginTuiUiCatalog,
+    pub studio: PluginStudioUiCatalog,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginTuiUiCatalog {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statusline_segments: Vec<HostStatuslineSegment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub themes: Vec<HostThemePalette>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_blocks: Vec<PluginTuiContentBlockCatalogItem>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginStudioUiCatalog {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<PluginStudioCommandCatalogItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<PluginStudioControlCatalogItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<PluginStudioViewCatalogItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginTuiContentBlockCatalogItem {
+    pub plugin_id: String,
+    #[serde(flatten)]
+    pub block: PluginTuiContentBlock,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginStudioCommandCatalogItem {
+    pub plugin_id: String,
+    #[serde(flatten)]
+    pub command: PluginStudioCommand,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginStudioControlCatalogItem {
+    pub plugin_id: String,
+    #[serde(flatten)]
+    pub control: PluginStudioControl,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginStudioViewCatalogItem {
+    pub plugin_id: String,
+    #[serde(flatten)]
+    pub view: PluginStudioView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginUiToolInvokeResponse {
+    pub plugin_id: String,
+    pub tool: String,
+    pub title: String,
+    pub output_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
 }
 
 /// Live handle to an in-flight tool stream. Consume `chunks` for incremental
@@ -1493,11 +1560,190 @@ impl PluginHost {
     }
 
     pub fn statusline_segments(&self) -> Vec<HostStatuslineSegment> {
-        self._host_handle.statusline_list_response().segments
+        self.ui_catalog().tui.statusline_segments
     }
 
     pub fn theme_palettes(&self) -> Vec<HostThemePalette> {
-        self._host_handle.theme_list_response().themes
+        self.ui_catalog().tui.themes
+    }
+
+    pub fn tui_content_blocks(&self) -> Vec<PluginTuiContentBlockCatalogItem> {
+        self.ui_catalog().tui.content_blocks
+    }
+
+    pub fn studio_commands(&self) -> Vec<PluginStudioCommandCatalogItem> {
+        self.ui_catalog().studio.commands
+    }
+
+    pub fn studio_controls(&self) -> Vec<PluginStudioControlCatalogItem> {
+        self.ui_catalog().studio.controls
+    }
+
+    pub fn studio_views(&self) -> Vec<PluginStudioViewCatalogItem> {
+        self.ui_catalog().studio.views
+    }
+
+    pub fn ui_catalog(&self) -> PluginUiCatalog {
+        let mut statusline_by_key = BTreeMap::<(String, String), HostStatuslineSegment>::new();
+        let mut themes_by_id = BTreeMap::<String, HostThemePalette>::new();
+        let mut content_blocks = Vec::new();
+        let mut studio_commands = Vec::new();
+        let mut studio_controls = Vec::new();
+        let mut studio_views = Vec::new();
+
+        for plugin in &self.plugins {
+            for segment in &plugin.manifest.ui.tui.statusline_segments {
+                let resolved = HostStatuslineSegment {
+                    plugin_id: plugin.id.clone(),
+                    segment_id: segment.id.clone(),
+                    content: segment.content.clone(),
+                    priority: segment.priority,
+                    color: segment.color.clone(),
+                };
+                statusline_by_key.insert(
+                    (resolved.plugin_id.clone(), resolved.segment_id.clone()),
+                    resolved,
+                );
+            }
+
+            for theme in &plugin.manifest.ui.tui.themes {
+                themes_by_id.insert(
+                    theme.id.clone(),
+                    HostThemePalette {
+                        id: theme.id.clone(),
+                        plugin_id: plugin.id.clone(),
+                        display_name: theme.display_name.clone(),
+                        colors: theme.colors.clone(),
+                    },
+                );
+            }
+
+            content_blocks.extend(plugin.manifest.ui.tui.content_blocks.iter().cloned().map(
+                |block| PluginTuiContentBlockCatalogItem {
+                    plugin_id: plugin.id.clone(),
+                    block,
+                },
+            ));
+
+            studio_commands.extend(plugin.manifest.ui.studio.commands.iter().cloned().map(
+                |command| PluginStudioCommandCatalogItem {
+                    plugin_id: plugin.id.clone(),
+                    command,
+                },
+            ));
+
+            studio_controls.extend(plugin.manifest.ui.studio.controls.iter().cloned().map(
+                |control| PluginStudioControlCatalogItem {
+                    plugin_id: plugin.id.clone(),
+                    control,
+                },
+            ));
+
+            studio_views.extend(plugin.manifest.ui.studio.views.iter().cloned().map(|view| {
+                PluginStudioViewCatalogItem {
+                    plugin_id: plugin.id.clone(),
+                    view,
+                }
+            }));
+        }
+
+        for segment in self._host_handle.statusline_list_response().segments {
+            statusline_by_key.insert(
+                (segment.plugin_id.clone(), segment.segment_id.clone()),
+                segment,
+            );
+        }
+        for theme in self._host_handle.theme_list_response().themes {
+            themes_by_id.insert(theme.id.clone(), theme);
+        }
+
+        let mut statusline_segments = statusline_by_key.into_values().collect::<Vec<_>>();
+        statusline_segments.sort_by(|a, b| {
+            b.priority
+                .cmp(&a.priority)
+                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+                .then_with(|| a.segment_id.cmp(&b.segment_id))
+        });
+        let themes = themes_by_id.into_values().collect::<Vec<_>>();
+        content_blocks.sort_by(|a, b| {
+            b.block
+                .priority
+                .cmp(&a.block.priority)
+                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+                .then_with(|| a.block.id.cmp(&b.block.id))
+        });
+        studio_commands.sort_by(|a, b| {
+            a.command
+                .location
+                .cmp(&b.command.location)
+                .then_with(|| a.command.category.cmp(&b.command.category))
+                .then_with(|| a.command.title.cmp(&b.command.title))
+                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+        });
+        studio_controls.sort_by(|a, b| {
+            a.control
+                .location
+                .cmp(&b.control.location)
+                .then_with(|| a.control.title.cmp(&b.control.title))
+                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+        });
+        studio_views.sort_by(|a, b| {
+            a.view
+                .location
+                .cmp(&b.view.location)
+                .then_with(|| a.view.title.cmp(&b.view.title))
+                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
+        });
+
+        PluginUiCatalog {
+            tui: PluginTuiUiCatalog {
+                statusline_segments,
+                themes,
+                content_blocks,
+            },
+            studio: PluginStudioUiCatalog {
+                commands: studio_commands,
+                controls: studio_controls,
+                views: studio_views,
+            },
+        }
+    }
+
+    pub fn resolve_studio_action(
+        &self,
+        plugin_id: &str,
+        action_id: &str,
+    ) -> Option<PluginUiAction> {
+        let plugin = self.plugins_by_id.get(plugin_id)?;
+        for command in &plugin.manifest.ui.studio.commands {
+            if command.id == action_id {
+                return Some(command.action.clone());
+            }
+        }
+        for control in &plugin.manifest.ui.studio.controls {
+            if control.id == action_id {
+                return Some(control.action.clone());
+            }
+        }
+        for view in &plugin.manifest.ui.studio.views {
+            for control in &view.controls {
+                if control.id == action_id {
+                    return Some(control.action.clone());
+                }
+            }
+        }
+        None
+    }
+
+    pub fn resolve_entry_for_plugin_tool(
+        &self,
+        plugin_id: &str,
+        tool_name: &str,
+    ) -> Option<RegistryPluginEntry> {
+        self.entry_entries().into_iter().find(|entry| {
+            entry.plugin_name == plugin_id
+                && (entry.original_name == tool_name || entry.exposed_name == tool_name)
+        })
     }
 }
 

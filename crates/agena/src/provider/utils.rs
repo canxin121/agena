@@ -460,6 +460,10 @@ pub struct ChatStreamDelta {
     #[serde(default)]
     pub content: Option<serde_json::Value>,
     #[serde(default)]
+    pub reasoning_content: Option<serde_json::Value>,
+    #[serde(default)]
+    pub reasoning_details: Option<serde_json::Value>,
+    #[serde(default)]
     pub tool_calls: Option<Vec<serde_json::Value>>,
 }
 

@@ -64,6 +64,7 @@
 - `/editor`
 - `/image`
 - `/copy`
+- `/copy-message`
 - `/copy-visible`
 - `/providers`
 - `/provider`
@@ -92,9 +93,9 @@
 - session rename
 - session timeline overlay
 - session export to markdown and open in editor
-- session list parent/child affordance
-- session pane all / roots / subtree branch views
-- tree-aware session search that preserves ancestors
+- session switcher parent/child affordance
+- session switcher all / roots / subtree branch scopes
+- tree-aware session filtering that preserves ancestors
 - transcript header parent/child summary
 - richer transcript/session chrome with context summaries
 - parent/child session hotkeys (`[` / `]`)
@@ -172,7 +173,7 @@
 
 2. branch affordance 强化
    - 在 transcript header 和 status line 中加入 lineage 摘要。
-   - 在 session pane 当前选中项上增加更明显的 branch 标识。
+   - 在 session switcher 和 lineage picker 中增加更明显的 branch 标识。
    - 让 `[`、`]`、`s`、`/resume`、`/children`、`/parent` 形成闭环，而不是分散快捷键。
 
 3. rewind / backtrack API 设计与前端接线
@@ -277,8 +278,8 @@
     - 不先做动作抽象，后面改键位会非常痛苦。
 
 24. layout options
-    - 至少支持 session pane 宽度、header 高度、composer 最大高度配置。
-    - 后续再考虑左右反转、隐藏 pane、单列模式。
+    - 保持 conversation-first 主视图，配置 modal 宽度、header 高度、composer 最大高度。
+    - 后续再考虑更细的单列密度、弹窗尺寸和 footer/status line 位置。
 
 25. statusline customization
     - 把当前上下文摘要、focus hint、flash 三者拆成可配置槽位。
@@ -329,7 +330,7 @@
 
 原因：
 
-- 会话树现在已经具备 session pane、parent/child 导航、resume picker、lineage picker、timeline、pager、draft persistence，以及 header/status/session pane 级别的 branch affordance。
+- 会话树现在已经具备 conversation-first 主视图、parent/child 导航、resume picker、lineage picker、timeline、pager、draft persistence，以及 header/status/switcher 级别的 branch affordance。
 - 继续加零散命令的收益会明显下降。
 - branch 与 rewind 做完之后，`agena-tui` 才算真正进入“长期工作台”阶段。
 

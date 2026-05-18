@@ -305,6 +305,7 @@ pub struct RuntimeOperatorResource {
     pub lsp: RuntimeLspResource,
     pub agents: RuntimeAgentsResource,
     pub skills: RuntimeSkillsResource,
+    pub ui: agena::plugin::PluginUiCatalog,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -404,6 +405,30 @@ pub struct PluginStatusListResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginInspectResponse {
     pub plugin: agena::plugin::PluginInspect,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginUiCatalogResponse {
+    pub catalog: agena::plugin::PluginUiCatalog,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginUiInvokeToolRequest {
+    pub tool: String,
+    #[serde(default)]
+    pub plugin_id: Option<String>,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub session_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PluginUiRunActionRequest {
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub session_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

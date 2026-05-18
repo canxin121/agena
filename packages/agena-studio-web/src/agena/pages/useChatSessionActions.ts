@@ -47,8 +47,9 @@ export type ChatSessionActionsInput = {
     matched: boolean
     command?: {
       title: string
-      source?: 'navigation' | 'runtime-skill' | 'runtime-command' | 'chat-action' | 'workspace-action'
+      source?: 'navigation' | 'runtime-skill' | 'runtime-command' | 'plugin-studio' | 'chat-action' | 'workspace-action'
     }
+    result?: { submitText?: string; notice?: string }
   }>
   selectedAdapterId: Ref<string>
   selectedModelId: Ref<string>
@@ -376,28 +377,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
   }
 
-  async function sendPrompt() {
-    const text = input.composer.value.trim()
-    if (!text) return
-
-    const noticeBeforeSlash = input.localCommandNotice.value
-    const slashResult = await input.runSlashCommand(text)
-    if (slashResult.matched) {
-      input.composer.value = ''
-      if (slashResult.command?.source === 'runtime-command' || slashResult.command?.source === 'runtime-skill') {
-        input.localCommandNotice.value =
-          input.localCommandNotice.value ||
-          `Direct execution for ${slashResult.command.title} is not available in Agena Web yet.`
-      } else {
-        const commandNoticeChanged =
-          input.localCommandNotice.value && input.localCommandNotice.value !== noticeBeforeSlash
-        if (!commandNoticeChanged) {
-          input.localCommandNotice.value = `Executed ${slashResult.command?.title || text}`
-        }
-      }
-      return
-    }
-
+  async function submitPromptText(text: string) {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
 
@@ -425,9 +405,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
             ? input.selectedVerbosity.value
             : undefined,
         parallelToolCalls:
-          input.selectedProviderId.value &&
-          input.selectedModelId.value &&
-          input.selectedParallelToolCalls.value
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedParallelToolCalls.value
             ? input.selectedParallelToolCalls.value === 'true'
             : undefined,
       })
@@ -440,6 +418,33 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     } finally {
       input.sending.value = false
     }
+  }
+
+  async function sendPrompt() {
+    const text = input.composer.value.trim()
+    if (!text) return
+
+    const noticeBeforeSlash = input.localCommandNotice.value
+    const slashResult = await input.runSlashCommand(text)
+    if (slashResult.matched) {
+      input.composer.value = ''
+      if (slashResult.result?.submitText) {
+        await submitPromptText(slashResult.result.submitText)
+        return
+      }
+      if (slashResult.result?.notice) {
+        input.localCommandNotice.value = slashResult.result.notice
+        return
+      }
+      const commandNoticeChanged =
+        input.localCommandNotice.value && input.localCommandNotice.value !== noticeBeforeSlash
+      if (!commandNoticeChanged) {
+        input.localCommandNotice.value = `Executed ${slashResult.command?.title || text}`
+      }
+      return
+    }
+
+    await submitPromptText(text)
   }
 
   async function continueCurrentSession() {
@@ -469,9 +474,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
             ? input.selectedVerbosity.value
             : undefined,
         parallelToolCalls:
-          input.selectedProviderId.value &&
-          input.selectedModelId.value &&
-          input.selectedParallelToolCalls.value
+          input.selectedProviderId.value && input.selectedModelId.value && input.selectedParallelToolCalls.value
             ? input.selectedParallelToolCalls.value === 'true'
             : undefined,
       })

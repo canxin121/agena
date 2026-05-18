@@ -6,7 +6,12 @@ import LoginPage from './agena/pages/LoginPage.vue'
 import { dispatchAuthCallback } from './agena/lib/authCallbackRegistry'
 import { createCommandPalette } from './agena/lib/commandPalette'
 import { registeredLocalCommands, setGlobalCommandPaletteOpenHandler } from './agena/lib/commandPaletteRegistry'
-import { fetchRuntimeStatus } from './agena/lib/agenaApi'
+import {
+  fetchRuntimeStatus,
+  runPluginUiAction,
+  type PluginStudioCommand,
+  type RuntimeSkill,
+} from './agena/lib/agenaApi'
 import { sectionBasePaths, sectionNavItems } from './agena/pages/runtimePageStateModel'
 import { syncDesktopBackendTarget } from './lib/backend'
 import { isDesktopRuntime } from './lib/desktopConfig'
@@ -19,22 +24,50 @@ const route = useRoute()
 const router = useRouter()
 
 const booting = ref(true)
-const runtimeSkills = ref([])
-const runtimeCommands = ref([])
+const runtimeSkills = ref<RuntimeSkill[]>([])
+const runtimeCommands = ref<RuntimeSkill[]>([])
+const pluginCommands = ref<PluginStudioCommand[]>([])
 const commandPalette = createCommandPalette({
   router,
   runtimeSkills: computed(() => runtimeSkills.value),
   runtimeCommands: computed(() => runtimeCommands.value),
+  pluginCommands: computed(() => pluginCommands.value),
   localCommands: registeredLocalCommands,
   onSelectRuntimeEntry: async ({ item }) => {
     await router.push({ path: '/chat', query: { slash: `/${item.name}` } })
     commandPalette.closePalette()
   },
+  onRunPluginAction: async ({ command, context }) => {
+    const action = command.action
+    if (action.kind === 'open_route') {
+      await router.push(action.route)
+      return
+    }
+    if (action.kind === 'open_url') {
+      if (typeof window !== 'undefined') window.open(action.url, '_blank', 'noopener,noreferrer')
+      return
+    }
+    if (action.kind === 'submit_prompt') {
+      await router.push({ path: '/chat', query: { prompt: action.prompt } })
+      return
+    }
+    if (action.kind === 'invoke_tool') {
+      const response = await runPluginUiAction({
+        pluginId: command.plugin_id,
+        actionId: command.id,
+        payload: { args: context?.args.join(' ').trim() || null },
+      })
+      if (action.submit_output_as_prompt && response.result?.output_text) {
+        await router.push({ path: '/chat', query: { prompt: response.result.output_text } })
+      }
+    }
+  },
 })
 
 function handleGlobalKeydown(event: KeyboardEvent) {
   const key = String(event.key || '').toLowerCase()
-  const isPaletteShortcut = key === 'p' && ((event.metaKey && !event.ctrlKey) || (!event.metaKey && event.ctrlKey)) && event.shiftKey
+  const isPaletteShortcut =
+    key === 'p' && ((event.metaKey && !event.ctrlKey) || (!event.metaKey && event.ctrlKey)) && event.shiftKey
   const isEscape = key === 'escape'
   const isEnter = key === 'enter'
   const isArrowDown = key === 'arrowdown'
@@ -97,10 +130,12 @@ async function bootstrap() {
         .then((status) => {
           runtimeSkills.value = status.operator.skills.skills
           runtimeCommands.value = status.operator.skills.commands
+          pluginCommands.value = status.operator.ui?.studio.commands ?? []
         })
         .catch(() => {
           runtimeSkills.value = []
           runtimeCommands.value = []
+          pluginCommands.value = []
         }),
     ])
   } finally {
@@ -160,9 +195,7 @@ const activeModeLabel = computed(() => {
           <div class="brand-mark">A</div>
           <div>
             <div class="brand-title">Agena Studio</div>
-            <div class="brand-subtitle">
-              Gen {{ health.data?.generation }} · mode {{ activeModeLabel }}
-            </div>
+            <div class="brand-subtitle">Gen {{ health.data?.generation }} · mode {{ activeModeLabel }}</div>
           </div>
         </div>
 
@@ -215,7 +248,10 @@ const activeModeLabel = computed(() => {
             :key="item.id"
             class="list-item palette-item"
             :class="{ active: index === commandPalette.highlightedIndex.value }"
-            @click="void item.run(); commandPalette.closePalette()"
+            @click="
+              void item.run()
+              commandPalette.closePalette()
+            "
           >
             <div>
               <strong>{{ item.title }}</strong>

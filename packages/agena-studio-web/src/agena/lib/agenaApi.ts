@@ -2,11 +2,7 @@ import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from '../../
 import { apiJson, apiText, apiUrl } from '../../lib/api'
 import { buildActiveUiAuthHeaders } from '../../lib/uiAuthToken'
 import { normalizeSseBuffer, parseSseEventBlock } from './sse'
-import type {
-  ProviderModelPricing,
-  ProviderModelThinkingMode,
-  ProviderModelSpeedMode,
-} from './providerApi'
+import type { ProviderModelPricing, ProviderModelThinkingMode, ProviderModelSpeedMode } from './providerApi'
 
 export * from './providerApi'
 
@@ -141,6 +137,7 @@ export type RuntimeStatus = {
       skills: RuntimeSkill[]
       commands: RuntimeSkill[]
     }
+    ui?: PluginUiCatalog
   }
 }
 
@@ -158,6 +155,110 @@ export type PluginStatus = {
 export type PluginInspect = {
   status: PluginStatus
   manifest?: Record<string, unknown> | null
+}
+
+export type PluginUiAction =
+  | { kind: 'none' }
+  | { kind: 'invoke_tool'; tool: string; input?: Record<string, unknown> | null; submit_output_as_prompt?: boolean }
+  | { kind: 'open_route'; route: string }
+  | { kind: 'open_url'; url: string }
+  | { kind: 'submit_prompt'; prompt: string }
+
+export type PluginTuiStatuslineSegment = {
+  plugin_id: string
+  segment_id: string
+  content: string
+  priority: number
+  color?: string | null
+}
+
+export type PluginUiThemePalette = {
+  plugin_id: string
+  id: string
+  display_name: string
+  colors: Record<string, string>
+}
+
+export type PluginTuiContentBlock = {
+  plugin_id: string
+  id: string
+  title: string
+  body?: string
+  location: string
+  priority: number
+  color?: string | null
+}
+
+export type PluginStudioCommand = {
+  plugin_id: string
+  id: string
+  title: string
+  description?: string
+  category: string
+  slash?: string | null
+  aliases?: string[]
+  usage?: string | null
+  location: string
+  action: PluginUiAction
+}
+
+export type PluginStudioControlOption = {
+  label: string
+  value: string
+  description?: string
+}
+
+export type PluginStudioControl = {
+  plugin_id: string
+  id: string
+  title: string
+  description?: string
+  location: string
+  kind: string
+  options?: PluginStudioControlOption[]
+  value?: unknown
+  action: PluginUiAction
+}
+
+export type PluginStudioView = {
+  plugin_id: string
+  id: string
+  title: string
+  description?: string
+  location: string
+  kind: string
+  content?: string | null
+  url?: string | null
+  controls?: PluginStudioControl[]
+}
+
+export type PluginUiCatalog = {
+  tui: {
+    statusline_segments?: PluginTuiStatuslineSegment[]
+    themes?: PluginUiThemePalette[]
+    content_blocks?: PluginTuiContentBlock[]
+  }
+  studio: {
+    commands?: PluginStudioCommand[]
+    controls?: PluginStudioControl[]
+    views?: PluginStudioView[]
+  }
+}
+
+export type PluginUiToolInvokeResponse = {
+  plugin_id: string
+  tool: string
+  title: string
+  output_text: string
+  payload?: unknown
+  metadata?: Record<string, string>
+}
+
+export type PluginUiActionRunResponse = {
+  plugin_id: string
+  action_id: string
+  action: PluginUiAction
+  result?: PluginUiToolInvokeResponse | null
 }
 
 export type PluginLogEntry = {
@@ -837,6 +938,48 @@ export async function deleteModelCatalogEntry(modelId: string): Promise<ModelCat
 export async function listPlugins(): Promise<PluginStatus[]> {
   const response = await apiJson<{ entries: PluginStatus[] }>('/api/v1/plugins')
   return response.entries ?? []
+}
+
+export async function fetchPluginUiCatalog(): Promise<PluginUiCatalog> {
+  const response = await apiJson<{ catalog: PluginUiCatalog }>('/api/v1/plugins/ui')
+  return response.catalog
+}
+
+export async function invokePluginUiTool(input: {
+  tool: string
+  pluginId?: string
+  payload?: Record<string, unknown>
+  sessionId?: number | null
+}): Promise<PluginUiToolInvokeResponse> {
+  return await apiJson<PluginUiToolInvokeResponse>('/api/v1/plugins/ui/invoke-tool', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      tool: input.tool.trim(),
+      ...(input.pluginId?.trim() ? { plugin_id: input.pluginId.trim() } : {}),
+      ...(input.payload ? { input: input.payload } : {}),
+      ...(input.sessionId === null || input.sessionId === undefined ? {} : { session_id: input.sessionId }),
+    }),
+  })
+}
+
+export async function runPluginUiAction(input: {
+  pluginId: string
+  actionId: string
+  payload?: Record<string, unknown>
+  sessionId?: number | null
+}): Promise<PluginUiActionRunResponse> {
+  return await apiJson<PluginUiActionRunResponse>(
+    `/api/v1/plugins/${encodeURIComponent(input.pluginId)}/ui/actions/${encodeURIComponent(input.actionId)}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...(input.payload ? { input: input.payload } : {}),
+        ...(input.sessionId === null || input.sessionId === undefined ? {} : { session_id: input.sessionId }),
+      }),
+    },
+  )
 }
 
 export async function getPlugin(pluginId: string): Promise<PluginInspect> {

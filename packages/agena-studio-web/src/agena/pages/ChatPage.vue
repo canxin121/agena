@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import {
@@ -63,6 +64,26 @@ const {
   workspacePath,
   workspaces,
 } = useChatPageState()
+
+watch(
+  () => [route.query.prompt, route.query.slash] as const,
+  ([prompt, slash]) => {
+    const promptText = typeof prompt === 'string' ? prompt.trim() : ''
+    const slashText = typeof slash === 'string' ? slash.trim() : ''
+    if (promptText) {
+      composer.value = promptText
+    } else if (slashText) {
+      composer.value = slashText.startsWith('/') ? `${slashText} ` : `/${slashText} `
+    } else {
+      return
+    }
+    const nextQuery = { ...route.query }
+    delete nextQuery.prompt
+    delete nextQuery.slash
+    void router.replace({ query: nextQuery })
+  },
+  { immediate: true },
+)
 
 const {
   formatEventTime,

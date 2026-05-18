@@ -579,6 +579,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             lsp,
             agents,
             skills,
+            ui: snapshot.plugin_manager().ui_catalog(),
         },
     }
 }

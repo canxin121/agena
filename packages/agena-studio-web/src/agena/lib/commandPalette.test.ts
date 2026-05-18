@@ -204,6 +204,46 @@ describe('commandPalette', () => {
     expect(selected).toEqual(['skill:review'])
   })
 
+  test('routes plugin studio slash through plugin action dispatcher', async () => {
+    const { router } = createRouterStub()
+    const selected: string[] = []
+    const palette = createCommandPalette({
+      router: router as never,
+      runtimeSkills: computed(() => []),
+      runtimeCommands: computed(() => []),
+      pluginCommands: computed(() => [
+        {
+          plugin_id: 'project-helper',
+          id: 'summarize-workspace',
+          title: 'Summarize workspace',
+          description: 'Run the project helper summary tool.',
+          category: 'Project',
+          slash: '/project-summary',
+          aliases: ['workspace summary'],
+          usage: '/project-summary [scope]',
+          location: 'command_palette',
+          action: {
+            kind: 'invoke_tool',
+            tool: 'summarize',
+            submit_output_as_prompt: true,
+          },
+        },
+      ]),
+      localCommands: computed(() => []),
+      onRunPluginAction: async ({ command, context }) => {
+        selected.push(`${command.plugin_id}:${command.id}:${context?.args.join('/') || ''}`)
+        return { submitText: 'summary prompt' }
+      },
+    })
+
+    const result = await palette.runSlashCommand('/project-summary src agena')
+
+    expect(result.matched).toBe(true)
+    expect(result.command?.id).toBe('plugin-studio.project-helper.summarize-workspace')
+    expect(result.result?.submitText).toBe('summary prompt')
+    expect(selected).toEqual(['project-helper:summarize-workspace:src/agena'])
+  })
+
   test('does not intercept runtime slash in local dispatcher', async () => {
     const { router } = createRouterStub()
     const palette = createCommandPalette({

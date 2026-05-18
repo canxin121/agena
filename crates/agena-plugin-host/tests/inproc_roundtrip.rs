@@ -995,6 +995,79 @@ async fn ui_theme_calls_require_capability() {
     assert!(err.message.contains("Theme"));
 }
 
+#[derive(Clone)]
+struct UiManifestPlugin;
+
+#[async_trait]
+impl Plugin for UiManifestPlugin {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::builder("ui-manifest", "0.1.0")
+            .tui_statusline_segment(PluginTuiStatuslineSegment {
+                id: "branch".to_string(),
+                content: "main".to_string(),
+                priority: 10,
+                color: Some("cyan".to_string()),
+            })
+            .tui_content_block(PluginTuiContentBlock {
+                id: "hint".to_string(),
+                title: "Hint".to_string(),
+                body: "ready".to_string(),
+                location: "composer_footer".to_string(),
+                priority: 5,
+                color: None,
+            })
+            .studio_command(PluginStudioCommand {
+                id: "review".to_string(),
+                title: "Review".to_string(),
+                description: "Run review prompt".to_string(),
+                category: "Code".to_string(),
+                slash: Some("/review".to_string()),
+                aliases: vec!["inspect".to_string()],
+                usage: Some("/review [path]".to_string()),
+                location: "command_palette".to_string(),
+                action: PluginUiAction::InvokeTool {
+                    tool: "review".to_string(),
+                    input: Some(json!({ "args": "" })),
+                    submit_output_as_prompt: true,
+                },
+            })
+            .build()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn manifest_ui_contributions_surface_in_unified_catalog() {
+    let mut list = BTreeMap::new();
+    list.insert(
+        "ui-manifest".to_string(),
+        PluginEntry::Static {
+            options: serde_json::Value::Null,
+            timeouts: Default::default(),
+        },
+    );
+    let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
+        .with_config(PluginsConfig {
+            list,
+            ..Default::default()
+        })
+        .register_static("ui-manifest", UiManifestPlugin)
+        .build()
+        .await
+        .expect("host builds");
+
+    let catalog = host.ui_catalog();
+    assert_eq!(catalog.tui.statusline_segments[0].content, "main");
+    assert_eq!(catalog.tui.content_blocks[0].block.body, "ready");
+    assert_eq!(catalog.studio.commands[0].command.title, "Review");
+    assert!(matches!(
+        host.resolve_studio_action("ui-manifest", "review"),
+        Some(PluginUiAction::InvokeTool {
+            submit_output_as_prompt: true,
+            ..
+        })
+    ));
+}
+
 /// A plugin shipping two entries: only entry `loud` declares `ReadConfig`;
 /// entry `quiet` declares nothing. With per-entry scoping the same host
 /// call must succeed under `loud` and fail under `quiet`, regardless of

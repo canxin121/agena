@@ -6,7 +6,8 @@ Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、M
 
 - 要新增一个模型可调用能力，写 plugin tool。
 - 要接入 MCP server，配置 MCP server，然后由 `agena.mcp` static plugin 暴露 tools。
-- 要扩展 prompt、provider、权限、shell env、事件、UI 状态栏等运行时行为，订阅 plugin hook。
+- 要扩展 prompt、provider、权限、shell env、事件等运行时行为，订阅 plugin hook。
+- 要扩展 TUI 或 Studio 前端界面，在 manifest 的 `ui.tui` / `ui.studio` 中声明 UI contributions。
 - 要给 plugin 持久化状态或 secret，使用 plugin host callback。
 - 要观察运行状态、日志、marketplace 安装状态，走 plugin CLI/API。
 
@@ -45,6 +46,7 @@ RuntimeConfigRegistry        PluginHostBuilder
 - 将 manifest 中声明的 tools 注册到 tool registry。
 - 在 tool 调用、chat、权限、provider、session、event 等阶段分发 hooks。
 - 为 plugin 提供 host callbacks。
+- 聚合 plugin manifest 和动态 host callback 提供的 UI contributions。
 - 维护 plugin status、logs、quota 和 inspect 信息。
 - 在配置 reload 时复用配置完全一致的 plugin transport。
 
@@ -389,6 +391,7 @@ Manifest 包含：
 - `hooks`
 - `entries`
 - `plugin_capabilities`
+- `ui`
 - `options_schema`
 
 Rust SDK 中的最小 plugin：
@@ -452,6 +455,117 @@ async fn main() -> std::io::Result<()> {
 
 - `examples/echo_plugin`: cdylib plugin。
 - `examples/echo_plugin_stdio`: stdio plugin。
+
+## Plugin UI
+
+Plugin UI 是 manifest 的一部分，由 plugin host 统一聚合后提供给 TUI、Studio Web 和 API。它不再是 Studio 前端单独维护的一套 plugin UI registry；前端只消费 runtime 当前 plugin host 给出的 catalog。
+
+Manifest 的 UI surface 明确拆成两个宿主面：
+
+| 字段 | 面向宿主 | 内容 |
+| --- | --- | --- |
+| `ui.tui.statusline_segments` | TUI | 静态状态栏片段。也可以继续通过 `host/ui.statusline.*` 动态贡献和删除。 |
+| `ui.tui.themes` | TUI | TUI theme palette。也可以通过 theme host callback 动态注册。 |
+| `ui.tui.content_blocks` | TUI | TUI 文本块，当前默认位置是 `composer_footer`。 |
+| `ui.studio.commands` | Studio Web/Desktop | Command Palette 和 slash command 可发现的 plugin commands。 |
+| `ui.studio.controls` | Studio Web/Desktop | Plugin detail panel 等位置上的按钮、选择器、开关、文本和数字 controls。 |
+| `ui.studio.views` | Studio Web/Desktop | Plugin detail 或其他 Studio 位置可渲染的 markdown/link/control 组合视图。 |
+
+TUI 和 Studio 的 UI contribution 类型不同，是有意的边界：TUI 只处理可在终端稳定渲染的状态栏、主题和文本块；Studio 可以渲染 command palette、controls、views，并把用户操作映射为统一的 `PluginUiAction`。
+
+Studio control 的 `kind` 当前支持：
+
+| kind | 渲染和提交 |
+| --- | --- |
+| `button` | 普通按钮，点击后执行 action。 |
+| `select` | 使用 `options` 渲染下拉框，执行时把当前值作为 `{ "value": "<option>" }` 传给 action。 |
+| `checkbox` / `toggle` / `switch` | 渲染布尔开关，执行时把当前值作为 `{ "value": true|false }` 传给 action。 |
+| `text` 或其他未知 kind | 渲染文本输入，执行时把当前文本作为 `{ "value": "..." }` 传给 action。 |
+| `number` | 渲染数字输入，执行时把当前数字作为 `{ "value": 123 }` 传给 action；空值传 `null`。 |
+
+`PluginUiAction` 支持：
+
+| Action | 行为 |
+| --- | --- |
+| `none` | 只展示，不执行行为。 |
+| `invoke_tool` | 调用当前 plugin 的某个 tool；`input` 是默认 JSON object，前端或 API 请求里的 input 会覆盖同名字段；`submit_output_as_prompt` 为 true 时，Studio 会把 tool 输出放回聊天输入/下一轮 prompt。 |
+| `open_route` | Studio 前端打开内部 route。 |
+| `open_url` | Studio 前端打开外部 URL。 |
+| `submit_prompt` | Studio 把固定 prompt 放入聊天流程。 |
+
+Rust SDK 示例：
+
+```rust
+use agena_plugin_sdk::prelude::*;
+use serde_json::json;
+
+fn manifest() -> PluginManifest {
+    PluginManifest::builder("project-helper", env!("CARGO_PKG_VERSION"))
+        .tool(
+            PluginToolDecl::new(
+                "summarize",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "scope": { "type": "string" }
+                    }
+                }),
+            )
+            .description("Summarize the requested project scope.")
+            .tag(ToolTag::ReadOnly),
+        )
+        .tui_content_block(PluginTuiContentBlock {
+            id: "workspace-hint".into(),
+            title: "Project".into(),
+            body: "Custom project helper is active.".into(),
+            location: "composer_footer".into(),
+            priority: 10,
+            color: None,
+        })
+        .studio_command(PluginStudioCommand {
+            id: "summarize-workspace".into(),
+            title: "Summarize workspace".into(),
+            description: "Run the project helper summary tool.".into(),
+            category: "Project".into(),
+            slash: Some("/project-summary".into()),
+            aliases: vec!["workspace summary".into()],
+            usage: Some("/project-summary".into()),
+            location: "command_palette".into(),
+            action: PluginUiAction::InvokeTool {
+                tool: "summarize".into(),
+                input: Some(json!({ "scope": "workspace" })),
+                submit_output_as_prompt: true,
+            },
+        })
+        .build()
+}
+```
+
+Plugin host 公开的统一 catalog 形状是：
+
+```json
+{
+  "tui": {
+    "statusline_segments": [],
+    "themes": [],
+    "content_blocks": []
+  },
+  "studio": {
+    "commands": [],
+    "controls": [],
+    "views": []
+  }
+}
+```
+
+Catalog item 会带上 `plugin_id`，便于 Studio 在执行 command/control/view control 时把 action 解析回 owning plugin。对于 statusline 和 theme，静态 manifest contribution 会和动态 host callback contribution 合并；同一 plugin 的动态 statusline segment 会覆盖同 id 的静态 segment，动态 theme 会覆盖同 id 的静态 theme。
+
+Studio 使用两条执行路径：
+
+- runtime skill/command 或 plugin tool 的直接调用走 `POST /api/v1/plugins/ui/invoke-tool`。
+- manifest 中的 Studio command/control/view control action 走 `POST /api/v1/plugins/{plugin_id}/ui/actions/{action_id}`。
+
+这两个 REST 入口都会经过 plugin host 的 tool registry 和 permission 检查。当前 direct UI invocation 没有交互式 permission confirmation 流；如果调用需要 ask/deny，API 会返回 409，Studio 需要把结果作为无法直接执行的操作处理。
 
 ## Hooks
 
@@ -746,8 +860,11 @@ Studio/backend API：
 | Method | Path | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/v1/plugins` | plugin runtime status list |
+| `GET` | `/api/v1/plugins/ui` | 当前 runtime 的统一 plugin UI catalog |
+| `POST` | `/api/v1/plugins/ui/invoke-tool` | 从 Studio/TUI 支持面直接调用 plugin tool |
 | `GET` | `/api/v1/plugins/{plugin_id}` | inspect plugin status、manifest、authority |
 | `GET` | `/api/v1/plugins/{plugin_id}/logs` | retained logs |
+| `POST` | `/api/v1/plugins/{plugin_id}/ui/actions/{action_id}` | 执行 manifest Studio UI action |
 | `POST` | `/api/v1/plugins/marketplace/search` | 搜索 registry |
 | `POST` | `/api/v1/plugins/marketplace/sync` | 同步 registry |
 | `GET` | `/api/v1/plugins/marketplace/installed` | 已安装 marketplace plugins |

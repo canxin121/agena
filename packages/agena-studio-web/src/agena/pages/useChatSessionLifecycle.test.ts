@@ -100,6 +100,7 @@ function createInput(query: Record<string, unknown> = {}): ChatSessionLifecycleI
     selectedThinkingMode: ref(''),
     selectedSpeedMode: ref(''),
     selectedVerbosity: ref(''),
+    selectedParallelToolCalls: ref(''),
     selectedSessionId: ref<number | null>(null),
     selectedWorkspaceId: ref<number | null>(null),
     sessionSearch: ref(''),

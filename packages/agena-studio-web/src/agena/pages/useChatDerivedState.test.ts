@@ -67,6 +67,7 @@ function sessionState(overrides?: Partial<SessionExecutionResource>): SessionExe
       model_thinking_mode: 'thinking-high',
       model_speed_mode: 'fast',
       model_verbosity: 'low',
+      model_parallel_tool_calls: true,
       effective_workspace_root: '/repo',
       allowed_tools: ['Read', 'Edit'],
     },
@@ -148,6 +149,7 @@ describe('useChatDerivedState', () => {
       'thinking=thinking-high',
       'speed=fast',
       'verbosity=low',
+      'parallel_tools=on',
       'workspace=/repo',
       'allowed_tools=2',
     ])

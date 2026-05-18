@@ -47,6 +47,7 @@ pub enum CommandId {
     ThinkingMode,
     SpeedMode,
     Verbosity,
+    ParallelToolCalls,
     Temperature,
     MaxOutput,
     System,
@@ -413,6 +414,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["verbose"],
         arguments: "<low|medium|high|clear>",
         summary_key: "command-verbosity-summary",
+    },
+    CommandSpec {
+        id: CommandId::ParallelToolCalls,
+        name: "parallel-tool-calls",
+        aliases: &["parallel-tools"],
+        arguments: "<on|off|clear>",
+        summary_key: "command-parallel-tool-calls-summary",
     },
     CommandSpec {
         id: CommandId::Temperature,

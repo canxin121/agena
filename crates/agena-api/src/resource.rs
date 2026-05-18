@@ -419,6 +419,8 @@ pub struct SessionExecutionContextResource {
     pub model_speed_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_verbosity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "AgentRunConfig::is_empty")]
     pub agent_run: AgentRunConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -453,6 +455,8 @@ pub struct RunOptions {
     pub speed_mode: Option<String>,
     #[serde(default)]
     pub verbosity: Option<String>,
+    #[serde(default)]
+    pub parallel_tool_calls: Option<bool>,
     #[serde(default)]
     pub agent_profile: Option<String>,
     #[serde(default)]

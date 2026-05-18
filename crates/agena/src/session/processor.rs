@@ -32,6 +32,7 @@ pub(crate) struct SessionRunRequest {
     pub model: ModelRef,
     pub model_thinking_mode: Option<String>,
     pub model_speed_mode: Option<String>,
+    pub model_parallel_tool_calls: Option<bool>,
     pub completion: CompletionRequest,
     pub next_message_id: i64,
     pub part_ids: ProcessorPartIdAllocator,
@@ -345,6 +346,7 @@ impl SessionProcessor {
             model_thinking_mode: run.model_thinking_mode.clone(),
             model_speed_mode: run.model_speed_mode.clone(),
             model_verbosity: run.completion.verbosity.clone(),
+            model_parallel_tool_calls: run.model_parallel_tool_calls,
             provider_metadata: None,
             tags: Vec::new(),
         };
@@ -1480,6 +1482,7 @@ mod tests {
                 model: ModelRef::new("ordered-stream", "ordered-model"),
                 model_thinking_mode: None,
                 model_speed_mode: None,
+                model_parallel_tool_calls: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1599,6 +1602,7 @@ mod tests {
                 model: ModelRef::new("ordered-stream", "ordered-model"),
                 model_thinking_mode: None,
                 model_speed_mode: None,
+                model_parallel_tool_calls: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1702,6 +1706,7 @@ mod tests {
                 model: ModelRef::new("ordered-stream", "ordered-model"),
                 model_thinking_mode: None,
                 model_speed_mode: None,
+                model_parallel_tool_calls: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,
@@ -1811,6 +1816,7 @@ mod tests {
                 model: ModelRef::new("ordered-stream", "ordered-model"),
                 model_thinking_mode: None,
                 model_speed_mode: None,
+                model_parallel_tool_calls: None,
                 completion: CompletionRequest {
                     model: ModelId::new("ordered-model"),
                     system: None,

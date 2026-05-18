@@ -1127,8 +1127,9 @@ impl ApiService {
         }
         let thinking_mode = non_empty(request.thinking_mode.as_deref()).map(ToOwned::to_owned);
         let speed_mode = non_empty(request.speed_mode.as_deref()).map(ToOwned::to_owned);
-        let requested_verbosity = non_empty(request.verbosity.as_deref())
-            .map(|value| value.trim().to_ascii_lowercase());
+        let requested_verbosity =
+            non_empty(request.verbosity.as_deref()).map(|value| value.trim().to_ascii_lowercase());
+        let requested_parallel_tool_calls = request.parallel_tool_calls;
 
         let resolved_adapter_id = model.adapter_id.clone().or_else(|| {
             provider_registry
@@ -1136,27 +1137,28 @@ impl ApiService {
                 .and_then(|provider| provider.default_adapter().cloned())
         });
 
-        let (thinking, thinking_request_override) = if let Some(thinking_mode_name) = thinking_mode.as_deref() {
-            let thinking_modes = provider_registry
-                .model_thinking_modes(&model)
-                .map_err(api_error_from_app)?;
-            let thinking_mode = thinking_modes.get(thinking_mode_name).ok_or_else(|| {
-                ApiError::bad_request(format!(
-                    "model `{}` has no thinking mode `{thinking_mode_name}`",
-                    model
-                ))
-            })?;
-            (
-                thinking_mode.thinking.clone(),
-                resolve_mode_request_override(
-                    &thinking_mode.request_override,
-                    &thinking_mode.adapter_overrides,
-                    resolved_adapter_id.as_ref(),
-                ),
-            )
-        } else {
-            (None, ModelSpeedModeRequestOverride::default())
-        };
+        let (thinking, thinking_request_override) =
+            if let Some(thinking_mode_name) = thinking_mode.as_deref() {
+                let thinking_modes = provider_registry
+                    .model_thinking_modes(&model)
+                    .map_err(api_error_from_app)?;
+                let thinking_mode = thinking_modes.get(thinking_mode_name).ok_or_else(|| {
+                    ApiError::bad_request(format!(
+                        "model `{}` has no thinking mode `{thinking_mode_name}`",
+                        model
+                    ))
+                })?;
+                (
+                    thinking_mode.thinking.clone(),
+                    resolve_mode_request_override(
+                        &thinking_mode.request_override,
+                        &thinking_mode.adapter_overrides,
+                        resolved_adapter_id.as_ref(),
+                    ),
+                )
+            } else {
+                (None, ModelSpeedModeRequestOverride::default())
+            };
 
         let speed_request_override = if let Some(speed_mode_name) = speed_mode.as_deref() {
             let speed_modes = provider_registry
@@ -1177,8 +1179,11 @@ impl ApiService {
             ModelSpeedModeRequestOverride::default()
         };
 
-        let request_override = thinking_request_override.merged_with(&speed_request_override);
-        let metadata = provider_registry.model_metadata(&model).map_err(api_error_from_app)?;
+        let mut request_override = thinking_request_override.merged_with(&speed_request_override);
+        request_override.set_parallel_tool_calls(requested_parallel_tool_calls);
+        let metadata = provider_registry
+            .model_metadata(&model)
+            .map_err(api_error_from_app)?;
         let verbosity = requested_verbosity.or_else(|| {
             metadata
                 .default_verbosity
@@ -1235,6 +1240,7 @@ impl ApiService {
                 model_thinking_mode: session.runtime().execution.model_thinking_mode.clone(),
                 model_speed_mode: session.runtime().execution.model_speed_mode.clone(),
                 model_verbosity: session.runtime().execution.model_verbosity.clone(),
+                model_parallel_tool_calls: session.runtime().execution.model_parallel_tool_calls,
                 agent_run: session.runtime().execution.agent_run.clone(),
                 effective_workspace_root: session
                     .runtime()

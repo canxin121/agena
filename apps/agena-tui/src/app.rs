@@ -744,6 +744,7 @@ struct RunOptionsState {
     thinking_mode: Option<String>,
     speed_mode: Option<String>,
     verbosity: Option<String>,
+    parallel_tool_calls: Option<bool>,
     system: Option<String>,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
@@ -5221,6 +5222,7 @@ impl App {
         self.run_options.thinking_mode = None;
         self.run_options.speed_mode = None;
         self.run_options.verbosity = None;
+        self.run_options.parallel_tool_calls = None;
         self.focus = Focus::Composer;
         self.flash_success(self.i18n.text_args(
             "flash-provider-selected",
@@ -5236,6 +5238,7 @@ impl App {
         self.run_options.thinking_mode = None;
         self.run_options.speed_mode = None;
         self.run_options.verbosity = None;
+        self.run_options.parallel_tool_calls = None;
         self.focus = Focus::Composer;
         self.flash_success(self.i18n.text_args(
             "flash-model-selected",
@@ -5471,6 +5474,7 @@ impl App {
             CommandId::ThinkingMode => self.handle_thinking_mode_command(args),
             CommandId::SpeedMode => self.handle_speed_mode_command(args),
             CommandId::Verbosity => self.handle_verbosity_command(spec, args),
+            CommandId::ParallelToolCalls => self.handle_parallel_tool_calls_command(spec, args),
             CommandId::Temperature => self.handle_temperature_command(spec, args),
             CommandId::MaxOutput => self.handle_max_output_command(spec, args),
             CommandId::System => self.handle_system_command(spec, args),
@@ -6048,6 +6052,7 @@ impl App {
             self.run_options.thinking_mode = None;
             self.run_options.speed_mode = None;
             self.run_options.verbosity = None;
+            self.run_options.parallel_tool_calls = None;
             self.flash_success(ui_text::t(&self.i18n, "flash-provider-cleared"));
             return;
         }
@@ -6090,6 +6095,7 @@ impl App {
             self.run_options.thinking_mode = None;
             self.run_options.speed_mode = None;
             self.run_options.verbosity = None;
+            self.run_options.parallel_tool_calls = None;
             self.flash_success(ui_text::t(&self.i18n, "flash-model-cleared"));
             return;
         }
@@ -6179,6 +6185,39 @@ impl App {
         self.flash_success(self.i18n.text_args(
             "flash-verbosity-set",
             &crate::fl_args!("value" => trimmed.to_ascii_lowercase()),
+        ));
+    }
+
+    fn handle_parallel_tool_calls_command(&mut self, spec: &'static CommandSpec, args: &str) {
+        let trimmed = args.trim();
+        if trimmed.is_empty() {
+            self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => spec.invocation()),
+            ));
+            return;
+        }
+        if trimmed.eq_ignore_ascii_case("clear") {
+            self.run_options.parallel_tool_calls = None;
+            self.flash_success(ui_text::t(&self.i18n, "flash-parallel-tool-calls-cleared"));
+            return;
+        }
+        let value = match trimmed.to_ascii_lowercase().as_str() {
+            "on" | "true" | "enabled" => Some(true),
+            "off" | "false" | "disabled" => Some(false),
+            _ => None,
+        };
+        let Some(value) = value else {
+            self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => spec.invocation()),
+            ));
+            return;
+        };
+        self.run_options.parallel_tool_calls = Some(value);
+        self.flash_success(self.i18n.text_args(
+            "flash-parallel-tool-calls-set",
+            &crate::fl_args!("value" => if value { "on" } else { "off" }),
         ));
     }
 
@@ -6360,6 +6399,12 @@ impl App {
             && !verbosity.trim().is_empty()
         {
             parts.push(format!("verbosity={verbosity}"));
+        }
+        if let Some(parallel_tool_calls) = execution.execution.model_parallel_tool_calls {
+            parts.push(format!(
+                "parallel_tools={}",
+                if parallel_tool_calls { "on" } else { "off" }
+            ));
         }
         if let Some(workspace_root) = execution.execution.effective_workspace_root.as_deref()
             && !workspace_root.trim().is_empty()
@@ -10418,6 +10463,7 @@ impl RunOptionsState {
             thinking_mode: self.thinking_mode.clone(),
             speed_mode: self.speed_mode.clone(),
             verbosity: self.verbosity.clone(),
+            parallel_tool_calls: self.parallel_tool_calls,
             agent_profile: None,
             system: self.system.clone(),
             temperature: self.temperature,
@@ -10439,6 +10485,12 @@ impl RunOptionsState {
         }
         if let Some(verbosity) = self.verbosity.as_ref() {
             parts.push(format!("verbosity {}", verbosity));
+        }
+        if let Some(parallel_tool_calls) = self.parallel_tool_calls {
+            parts.push(format!(
+                "parallel-tools {}",
+                if parallel_tool_calls { "on" } else { "off" }
+            ));
         }
         if let Some(temperature) = self.temperature {
             parts.push(format!("temp {:.2}", temperature));

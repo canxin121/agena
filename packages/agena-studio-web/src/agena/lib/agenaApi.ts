@@ -739,6 +739,7 @@ export type SessionExecutionContextResource = {
   model_thinking_mode?: string | null
   model_speed_mode?: string | null
   model_verbosity?: string | null
+  model_parallel_tool_calls?: boolean | null
   agent_run?: {
     temperature?: number | null
     max_output_tokens?: number | null
@@ -1827,6 +1828,7 @@ export async function continueSession(input: {
   thinkingMode?: string
   speedMode?: string
   verbosity?: string
+  parallelToolCalls?: boolean
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {}
@@ -1849,6 +1851,9 @@ export async function continueSession(input: {
   }
   if (input.providerId && input.modelId && input.verbosity?.trim()) {
     body.verbosity = input.verbosity.trim().toLowerCase()
+  }
+  if (input.providerId && input.modelId && input.parallelToolCalls !== undefined) {
+    body.parallel_tool_calls = input.parallelToolCalls
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/continue`, {
@@ -1881,6 +1886,7 @@ export async function submitTurn(input: {
   thinkingMode?: string
   speedMode?: string
   verbosity?: string
+  parallelToolCalls?: boolean
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {
@@ -1910,6 +1916,9 @@ export async function submitTurn(input: {
   }
   if (input.providerId && input.modelId && input.verbosity?.trim()) {
     body.verbosity = input.verbosity.trim().toLowerCase()
+  }
+  if (input.providerId && input.modelId && input.parallelToolCalls !== undefined) {
+    body.parallel_tool_calls = input.parallelToolCalls
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/turns`, {

@@ -566,6 +566,7 @@ impl SessionManager {
                     model_thinking_mode: None,
                     model_speed_mode: None,
                     model_verbosity: None,
+                    model_parallel_tool_calls: None,
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -592,6 +593,7 @@ impl SessionManager {
                     model_thinking_mode: None,
                     model_speed_mode: None,
                     model_verbosity: None,
+                    model_parallel_tool_calls: None,
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -1197,6 +1199,7 @@ impl SessionManager {
                 model_thinking_mode: request.options.thinking_mode.clone(),
                 model_speed_mode: request.options.speed_mode.clone(),
                 model_verbosity: request.options.verbosity.clone(),
+                model_parallel_tool_calls: request.options.request_override.parallel_tool_calls(),
                 provider_metadata: None,
                 tags: Vec::new(),
             },
@@ -2075,6 +2078,9 @@ impl SessionManager {
                                         model_thinking_mode: current_options.thinking_mode.clone(),
                                         model_speed_mode: current_options.speed_mode.clone(),
                                         model_verbosity: current_options.verbosity.clone(),
+                                        model_parallel_tool_calls: current_options
+                                            .request_override
+                                            .parallel_tool_calls(),
                                         provider_metadata: None,
                                         tags: Vec::new(),
                                     },
@@ -2326,6 +2332,7 @@ impl SessionManager {
                 options.thinking_mode.clone(),
                 options.speed_mode.clone(),
                 options.verbosity.clone(),
+                options.request_override.parallel_tool_calls(),
                 prepared.prompt_cache_key.clone(),
                 prepared.prompt_window_generation,
             );
@@ -2339,6 +2346,7 @@ impl SessionManager {
                 model: options.model.clone(),
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
+                model_parallel_tool_calls: options.request_override.parallel_tool_calls(),
                 completion: options.completion_request(
                     prepared.system.clone(),
                     prepared.messages.clone(),
@@ -2784,6 +2792,7 @@ impl SessionManager {
                 model_thinking_mode: None,
                 model_speed_mode: None,
                 model_verbosity: options.verbosity.clone(),
+                model_parallel_tool_calls: options.request_override.parallel_tool_calls(),
                 provider_metadata: None,
                 tags: vec![MESSAGE_TAG_PROMPT_SUMMARY.to_string()],
             },
@@ -4010,6 +4019,17 @@ impl SessionManager {
                 .model_speed_mode_override()
                 .map(ToOwned::to_owned);
         }
+        if options.request_override.parallel_tool_calls().is_none() {
+            options
+                .request_override
+                .set_parallel_tool_calls(session.runtime.model_parallel_tool_calls_override());
+        }
+        if options.verbosity.is_none() {
+            options.verbosity = session
+                .runtime
+                .model_verbosity_override()
+                .map(ToOwned::to_owned);
+        }
         if let Some(system) = session.runtime.execution.system_prompt_override.as_ref() {
             options.system = Some(system.clone());
         }
@@ -4108,7 +4128,9 @@ impl SessionManager {
         session.runtime.execution.agent_permission = state.config.permission.clone();
         session.runtime.execution.agent_run = crate::agent::AgentRunConfig::default();
         session.runtime.set_model_override(None, None, None);
-        session.runtime.set_model_mode_overrides(None, None, None);
+        session
+            .runtime
+            .set_model_mode_overrides(None, None, None, None);
         Ok(session)
     }
 
@@ -4189,6 +4211,7 @@ impl SessionManager {
         let next_thinking_mode = options.thinking_mode.clone();
         let next_speed_mode = options.speed_mode.clone();
         let next_verbosity = options.verbosity.clone();
+        let next_parallel_tool_calls = options.request_override.parallel_tool_calls();
         let next_run = crate::agent::AgentRunConfig {
             temperature: profile.frontmatter.temperature,
             max_output_tokens: profile.frontmatter.max_output_tokens,
@@ -4211,6 +4234,7 @@ impl SessionManager {
             || session.runtime.execution.model_thinking_mode != next_thinking_mode
             || session.runtime.execution.model_speed_mode != next_speed_mode
             || session.runtime.execution.model_verbosity != next_verbosity
+            || session.runtime.execution.model_parallel_tool_calls != next_parallel_tool_calls
             || session.runtime.execution.agent_run != next_run;
         session.runtime.execution.agent_profile = Some(profile.name.clone());
         session.runtime.execution.agent_mode = Some(profile.frontmatter.mode);
@@ -4225,13 +4249,12 @@ impl SessionManager {
             next_model_adapter_id.clone(),
             Some(next_model_id.clone()),
         );
-        session
-            .runtime
-            .set_model_mode_overrides(
-                next_thinking_mode.clone(),
-                next_speed_mode.clone(),
-                next_verbosity.clone(),
-            );
+        session.runtime.set_model_mode_overrides(
+            next_thinking_mode.clone(),
+            next_speed_mode.clone(),
+            next_verbosity.clone(),
+            next_parallel_tool_calls,
+        );
         options.model = next_model;
         options.thinking_mode = next_thinking_mode;
         options.speed_mode = next_speed_mode;
@@ -4543,6 +4566,7 @@ impl SessionManager {
                     model_thinking_mode: options.thinking_mode.clone(),
                     model_speed_mode: options.speed_mode.clone(),
                     model_verbosity: options.verbosity.clone(),
+                    model_parallel_tool_calls: options.request_override.parallel_tool_calls(),
                     provider_metadata: None,
                     tags: Vec::new(),
                 },
@@ -9328,6 +9352,7 @@ mod tests {
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
                 model_verbosity: options.verbosity.clone(),
+                model_parallel_tool_calls: options.request_override.parallel_tool_calls(),
                 provider_metadata: None,
                 tags: Vec::new(),
             },

@@ -116,6 +116,9 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
     if (execution.model_thinking_mode) facts.push(`thinking=${execution.model_thinking_mode}`)
     if (execution.model_speed_mode) facts.push(`speed=${execution.model_speed_mode}`)
     if (execution.model_verbosity) facts.push(`verbosity=${execution.model_verbosity}`)
+    if (execution.model_parallel_tool_calls != null) {
+      facts.push(`parallel_tools=${execution.model_parallel_tool_calls ? 'on' : 'off'}`)
+    }
     if (execution.effective_workspace_root) facts.push(`workspace=${execution.effective_workspace_root}`)
     if (execution.allowed_tools.length) facts.push(`allowed_tools=${execution.allowed_tools.length}`)
     return facts

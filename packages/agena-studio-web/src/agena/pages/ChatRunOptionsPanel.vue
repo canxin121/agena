@@ -8,6 +8,7 @@ const props = defineProps<{
   selectedThinkingMode: string
   selectedSpeedMode: string
   selectedVerbosity: string
+  selectedParallelToolCalls: string
   providers: ProviderSummary[]
   providerDefaultAdapter: (providerId: string) => string
   providerDefaultModel: (providerId: string) => string
@@ -17,6 +18,7 @@ const props = defineProps<{
   modelThinkingModeOptions: () => Array<{ id: string; label: string; description: string }>
   modelSpeedModeOptions: () => Array<{ id: string; label: string; description: string }>
   modelVerbosityOptions: () => Array<{ id: string; label: string; description: string }>
+  modelParallelToolCallsOptions: () => Array<{ id: string; label: string; description: string }>
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +28,7 @@ const emit = defineEmits<{
   'update:selectedThinkingMode': [value: string]
   'update:selectedSpeedMode': [value: string]
   'update:selectedVerbosity': [value: string]
+  'update:selectedParallelToolCalls': [value: string]
 }>()
 </script>
 
@@ -45,7 +48,8 @@ const emit = defineEmits<{
             emit('update:selectedModelId', props.providerDefaultModel(($event.target as HTMLSelectElement).value)),
             emit('update:selectedThinkingMode', ''),
             emit('update:selectedSpeedMode', ''),
-            emit('update:selectedVerbosity', ''))
+            emit('update:selectedVerbosity', ''),
+            emit('update:selectedParallelToolCalls', ''))
           "
         >
           <option value="">Auto</option>
@@ -64,7 +68,8 @@ const emit = defineEmits<{
             (emit('update:selectedAdapterId', ($event.target as HTMLSelectElement).value),
             emit('update:selectedThinkingMode', ''),
             emit('update:selectedSpeedMode', ''),
-            emit('update:selectedVerbosity', ''))
+            emit('update:selectedVerbosity', ''),
+            emit('update:selectedParallelToolCalls', ''))
           "
         >
           <option value="">Auto</option>
@@ -87,7 +92,8 @@ const emit = defineEmits<{
             (emit('update:selectedModelId', ($event.target as HTMLSelectElement).value),
             emit('update:selectedThinkingMode', ''),
             emit('update:selectedSpeedMode', ''),
-            emit('update:selectedVerbosity', ''))
+            emit('update:selectedVerbosity', ''),
+            emit('update:selectedParallelToolCalls', ''))
           "
         >
           <option value="">Auto</option>
@@ -146,6 +152,21 @@ const emit = defineEmits<{
           <option value="">Default</option>
           <option v-for="verbosity in props.modelVerbosityOptions()" :key="verbosity.id" :value="verbosity.id">
             {{ verbosity.label }}
+          </option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="label" for="parallel-tool-calls-id">Parallel Tools</label>
+        <select
+          id="parallel-tool-calls-id"
+          :value="props.selectedParallelToolCalls"
+          class="select"
+          :disabled="props.modelParallelToolCallsOptions().length === 0"
+          @change="emit('update:selectedParallelToolCalls', ($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">Default</option>
+          <option v-for="option in props.modelParallelToolCallsOptions()" :key="option.id" :value="option.id">
+            {{ option.label }}
           </option>
         </select>
       </div>

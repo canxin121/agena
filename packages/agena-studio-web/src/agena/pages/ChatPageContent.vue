@@ -98,6 +98,7 @@ const props = defineProps<{
         :selected-thinking-mode="props.state.selectedThinkingMode.value"
         :selected-speed-mode="props.state.selectedSpeedMode.value"
         :selected-verbosity="props.state.selectedVerbosity.value"
+        :selected-parallel-tool-calls="props.state.selectedParallelToolCalls.value"
         :providers="props.state.providers.value"
         :provider-default-adapter="props.state.providerDefaultAdapter"
         :provider-default-model="props.state.providerDefaultModel"
@@ -107,12 +108,14 @@ const props = defineProps<{
         :model-thinking-mode-options="props.state.modelThinkingModeOptions"
         :model-speed-mode-options="props.state.modelSpeedModeOptions"
         :model-verbosity-options="props.state.modelVerbosityOptions"
+        :model-parallel-tool-calls-options="props.state.modelParallelToolCallsOptions"
         @update:selected-provider-id="props.state.selectedProviderId.value = $event"
         @update:selected-adapter-id="props.state.selectedAdapterId.value = $event"
         @update:selected-model-id="props.state.selectedModelId.value = $event"
         @update:selected-thinking-mode="props.state.selectedThinkingMode.value = $event"
         @update:selected-speed-mode="props.state.selectedSpeedMode.value = $event"
         @update:selected-verbosity="props.state.selectedVerbosity.value = $event"
+        @update:selected-parallel-tool-calls="props.state.selectedParallelToolCalls.value = $event"
       />
 
       <ChatSessionTransferPanel

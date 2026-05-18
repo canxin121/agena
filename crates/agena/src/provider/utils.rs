@@ -416,6 +416,34 @@ pub fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::V
     response_id.map(|id| serde_json::json!({ "response_id": id }))
 }
 
+pub fn provider_metadata_with_assistant_reasoning_field(
+    provider_metadata: Option<serde_json::Value>,
+    assistant_reasoning_field: Option<&str>,
+) -> Option<serde_json::Value> {
+    let assistant_reasoning_field = assistant_reasoning_field
+        .map(str::trim)
+        .filter(|value| matches!(*value, "reasoning_content" | "reasoning_details"));
+
+    match (provider_metadata, assistant_reasoning_field) {
+        (None, None) => None,
+        (Some(metadata), None) => Some(metadata),
+        (None, Some(field)) => Some(serde_json::json!({
+            "assistant_reasoning_field": field
+        })),
+        (Some(serde_json::Value::Object(mut metadata)), Some(field)) => {
+            metadata.insert(
+                "assistant_reasoning_field".to_owned(),
+                serde_json::Value::String(field.to_owned()),
+            );
+            Some(serde_json::Value::Object(metadata))
+        }
+        (Some(metadata), Some(field)) => Some(serde_json::json!({
+            "provider_metadata": metadata,
+            "assistant_reasoning_field": field,
+        })),
+    }
+}
+
 // ─── Text normalization ───────────────────────────────────────────────────────
 
 pub fn normalize_optional_text(value: Option<String>) -> Option<String> {

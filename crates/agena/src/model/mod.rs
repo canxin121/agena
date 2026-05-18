@@ -622,6 +622,10 @@ impl ModelMetadata {
             .any(|candidate| candidate == normalized)
     }
 
+    pub fn supports_parallel_tool_calls_for_model(&self) -> bool {
+        self.supports_parallel_tool_calls.unwrap_or(false)
+    }
+
     pub fn with_fallbacks_from(mut self, fallback: &Self) -> Self {
         if self.lifecycle.is_none() {
             self.lifecycle = fallback.lifecycle;
@@ -1327,6 +1331,15 @@ mod tests {
             !metadata
                 .supports_verbosity_level_for_model(&ModelId::new("gpt-5.2-chat-latest"), "low")
         );
+    }
+
+    #[test]
+    fn model_metadata_parallel_tool_calls_default_to_disabled_without_support() {
+        let metadata = ModelMetadata::default();
+        assert!(!metadata.supports_parallel_tool_calls_for_model());
+
+        let supported = ModelMetadata::default().with_supports_parallel_tool_calls(true);
+        assert!(supported.supports_parallel_tool_calls_for_model());
     }
 
     #[test]

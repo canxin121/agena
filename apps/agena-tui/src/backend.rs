@@ -2177,6 +2177,17 @@ impl Backend {
             options.verbosity = Some(verbosity.to_ascii_lowercase());
         }
         if let Some(parallel_tool_calls) = parallel_tool_calls {
+            let snapshot = self.runtime.current_snapshot();
+            let provider_registry = snapshot.provider_registry();
+            let metadata = provider_registry
+                .model_metadata(&options.model)
+                .context("failed to resolve selected model parallel tool call metadata")?;
+            if !metadata.supports_parallel_tool_calls_for_model() {
+                return Err(anyhow!(
+                    "model {} does not support parallel tool calls",
+                    options.model
+                ));
+            }
             options
                 .request_override
                 .set_parallel_tool_calls(Some(parallel_tool_calls));

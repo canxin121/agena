@@ -4,6 +4,22 @@ import type { Router } from 'vue-router'
 import type { ProviderModel, ProviderSummary, WorkspaceResource } from '../lib/agenaApi'
 import { buildRuntimeSectionPath, type RuntimeRouteSection } from './runtimePageStateModel'
 
+function supportedVerbosityLevelsForModel(
+  modelId: string | null | undefined,
+  metadata:
+    | { supports_verbosity?: boolean | null; default_verbosity?: string | null }
+    | null
+    | undefined,
+): string[] {
+  const defaultVerbosity = metadata?.default_verbosity?.trim().toLowerCase() || ''
+  if (!metadata?.supports_verbosity && !defaultVerbosity) return []
+  const loweredId = (modelId || '').trim().toLowerCase()
+  const levels =
+    loweredId.includes('gpt-5') && loweredId.includes('-chat') ? ['medium'] : ['low', 'medium', 'high']
+  if (defaultVerbosity && !levels.includes(defaultVerbosity)) levels.push(defaultVerbosity)
+  return levels
+}
+
 export type ChatPageUiStateInput = {
   localCommandNotice: Ref<string>
   providerModels: Record<string, ProviderModel[]>
@@ -102,10 +118,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   function modelVerbosityOptions(): Array<{ id: string; label: string; description: string }> {
     const model = selectedProviderModel()
     const metadata = model?.metadata
-    if (!metadata?.supports_verbosity && !metadata?.default_verbosity) return []
-    const optionIds = new Set(['low', 'medium', 'high'])
-    if (metadata.default_verbosity?.trim()) optionIds.add(metadata.default_verbosity.trim().toLowerCase())
-    return [...optionIds].map((id) => ({
+    return supportedVerbosityLevelsForModel(model?.id, metadata).map((id) => ({
       id,
       label: id,
       description: id,

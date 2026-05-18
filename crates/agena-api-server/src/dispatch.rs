@@ -2254,6 +2254,63 @@ default_verbosity = "low"
     }
 
     #[tokio::test]
+    async fn run_options_to_core_rejects_unsupported_chat_model_verbosity() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-5.2-chat-latest"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[providers.openai.adapters.openai.models."gpt-5.2-chat-latest"]
+supports_verbosity = true
+default_verbosity = "medium"
+"#,
+            "chat-model-verbosity",
+        )
+        .await;
+        let session_id = create_session(&state, &workspace_root, "chat verbosity").await;
+
+        let allowed_options = RunOptions {
+            model: Some(ModelRef::new("openai", "openai/gpt-5.2-chat-latest")),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: Some("medium".to_string()),
+            parallel_tool_calls: None,
+            agent_profile: None,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            max_turn_loops: None,
+        };
+        let allowed_core = run_options_to_core(&state, session_id, &allowed_options)
+            .await
+            .expect("chat model medium verbosity should resolve");
+        assert_eq!(allowed_core.verbosity.as_deref(), Some("medium"));
+
+        let rejected = run_options_to_core(
+            &state,
+            session_id,
+            &RunOptions {
+                verbosity: Some("high".to_string()),
+                ..allowed_options
+            },
+        )
+        .await
+        .expect_err("chat model high verbosity should be rejected");
+        assert!(
+            rejected.to_string().contains("supported values: medium"),
+            "unexpected error: {rejected}"
+        );
+    }
+
+    #[tokio::test]
     async fn run_options_to_core_threads_parallel_tool_calls_into_request_override() {
         let (state, workspace_root) = test_state_with_config(
             r#"

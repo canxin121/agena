@@ -14,7 +14,7 @@ use crate::error::{PluginError, Result};
 use crate::hooks::{
     EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
 };
-use crate::manifest::{PathKind, PluginToolDecl, ToolTag};
+use crate::manifest::{PathKind, PluginToolDecl, ToolDescriptionMode, ToolTag};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -596,6 +596,14 @@ pub struct ToolDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_mode: Option<ToolDescriptionMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,
     #[serde(default)]

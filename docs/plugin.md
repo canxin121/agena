@@ -56,6 +56,9 @@ RuntimeConfigRegistry        PluginHostBuilder
 
 - `name`: plugin 内部 tool 名称。
 - `description`: 展示给模型和 UI 的说明。
+- `summary`: 简短说明。开启 help 模式时，模型只看到这个简短说明和 `tools help` 引导。
+- `help`: 详细帮助文本。不会直接进入 provider tool definition；需要时通过 `tools` 的 `help` 子命令获取。
+- `description_mode`: tool 自己建议的模型可见说明模式，`detailed` 或 `help`。运行时配置可以覆盖它。
 - `input_schema`: JSON Schema，用来描述调用入参。
 - `input_paths`: 从调用入参中提取本地路径并做读写权限审计。
 - `input_networks`: 从调用入参中提取网络目标并做网络权限审计。
@@ -74,6 +77,45 @@ Tool 的模型可见名称由 tool registry 决定：
 - 如果和已有 tool 名称冲突，暴露为 `plugin_id/tool_name`。
 
 这个规则让 plugin 可以安全地提供通用名称，同时避免覆盖其他 plugin 的能力。
+
+## Tool 说明模式和 Help
+
+Tool 的模型可见说明有两种模式：
+
+- `detailed`: 默认行为。Provider tool definition 使用 tool 的 `description`。
+- `help`: Provider tool definition 只使用短说明，并提示模型调用 `tools` 的 `help` 子命令获取完整帮助。
+
+详细帮助不随 provider 请求一起发送，避免把大量 tool、MCP server 或 skill 的长说明塞进每次模型调用。需要完整用法时，模型可以调用：
+
+```json
+{"command": "help", "args": {"tool": "fs", "include_schema": true}}
+```
+
+其中 `tool` 是模型可见 tool 名称；如果有重名冲突，使用 registry 暴露出来的 `plugin_id/tool_name` 名称。`include_schema` 默认为 `true`，会把注册后的 input schema 一并返回。
+
+配置优先级从高到低：
+
+1. `[plugins.tool_presentation.tools]` 中的具体 tool 覆盖。
+2. `[plugins.tool_presentation.plugins]` 中的 plugin 覆盖。
+3. manifest 里的 `description_mode`。
+4. `[plugins.tool_presentation].default_mode`。
+
+示例：
+
+```toml
+[plugins.tool_presentation]
+default_mode = "help"
+
+[plugins.tool_presentation.plugins]
+"agena.skills" = "help"
+"agena.mcp" = "help"
+
+[plugins.tool_presentation.tools]
+fs = "detailed"
+"agena.workflow/tools" = "detailed"
+```
+
+`tools` 的 `search` 子命令用于发现和加载 deferred tools；`help` 子命令用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `summary` 和 `help`，也可以通过 `tool.definition` hook 改写 `description`、`summary`、`help`、`description_mode` 和 `input_schema`。
 
 ## Provided Static Plugins
 
@@ -109,7 +151,7 @@ Runtime build 注册：
 | `schedule` | `list` |
 | `schedule_edit` | `create`, `delete`, `wakeup` |
 | `workflow` | `init`, `review`, `security_review` |
-| `tools` | `search` |
+| `tools` | `search`, `help` |
 | `agent` | `switch`, `restore` |
 | `goal` | `get` |
 | `goal_edit` | `create`, `clear`, `update` |
@@ -234,6 +276,7 @@ timeouts = { tool_invoke = "45s" }
 | `default_quota` | 没有单独 quota 的 plugin 使用的默认 host callback quota。 |
 | `quotas` | 按 plugin id 设置 host callback quota。 |
 | `trusted_keys` | cdylib signature 校验使用的 ed25519 public key。 |
+| `tool_presentation` | 控制 tool 说明进入模型请求时使用 `detailed` 还是 `help` 模式。 |
 
 Timeout 字段：
 

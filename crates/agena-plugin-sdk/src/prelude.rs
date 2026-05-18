@@ -38,7 +38,8 @@ pub use crate::host_api::{
 pub use crate::manifest::{
     HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
     PathAccessSpec, PathKind, PluginManifest, PluginManifestBuilder, PluginToolDecl,
-    ToolLoadPriority, ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    ToolDescriptionMode, ToolLoadPriority, ToolStreamingMode, ToolTag, TransportKind,
+    normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 

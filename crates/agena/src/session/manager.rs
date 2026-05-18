@@ -5945,6 +5945,7 @@ mod tests {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         };
         crate::plugin::PluginHostBuilder::new(workspace_root, "test")
             .with_config(config)
@@ -5976,6 +5977,7 @@ mod tests {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         };
         let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
             .with_config(config)
@@ -6011,6 +6013,7 @@ mod tests {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         };
         crate::plugin::PluginHostBuilder::new(workspace_root, "test")
             .with_config(config)
@@ -6045,6 +6048,7 @@ mod tests {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         };
         let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
             .with_config(config)
@@ -6217,10 +6221,18 @@ mod tests {
                 .map(|tool| {
                     let deferred = tool.is_deferred();
                     let description = tool.description_text().to_string();
+                    let summary = tool.summary_text().map(ToString::to_string);
+                    let help = tool.help_text().map(ToString::to_string);
+                    let input_schema = Some(tool.sanitized_input_schema());
+                    let description_mode = tool.decl.description_mode;
                     let tags = tool.effective_tags();
                     crate::plugin::sdk::host_api::ToolDescriptor {
                         name: tool.exposed_name,
                         description: Some(description),
+                        summary,
+                        help,
+                        input_schema,
+                        description_mode,
                         tags,
                         deferred,
                         plugin_id: (!tool.plugin_name.trim().is_empty())

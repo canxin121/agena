@@ -239,10 +239,10 @@ fn manifest_from_snapshot(
 ) -> PluginManifest {
     let mut entries = Vec::new();
     if !servers.is_empty() {
-        entries.push(mcp_decl(servers.len(), !network_access.is_empty()));
+        entries.push(mcp_decl(&servers, !network_access.is_empty()));
     }
     if !tools.is_empty() {
-        entries.push(mcp_call_decl(tools.len(), !network_access.is_empty()));
+        entries.push(mcp_call_decl(&tools, !network_access.is_empty()));
     }
     PluginManifest::builder("agena-mcp", env!("CARGO_PKG_VERSION"))
         .description("Agena MCP bridge exposed as hierarchical plugin commands.")
@@ -262,7 +262,8 @@ async fn network_access_by_server(
         .collect()
 }
 
-fn mcp_decl(server_count: usize, has_network_servers: bool) -> PluginToolDecl {
+fn mcp_decl(servers: &[String], has_network_servers: bool) -> PluginToolDecl {
+    let server_count = servers.len();
     let entry = PluginToolDecl::new(
         "mcp",
         crate::entry::definition::json_schema_for::<McpToolInput>(),
@@ -270,13 +271,16 @@ fn mcp_decl(server_count: usize, has_network_servers: bool) -> PluginToolDecl {
     .description(format!(
         "MCP read command for {server_count} configured server(s). Set command to resources_list, resources_read, prompts_list, or prompts_get; pass server-specific args."
     ))
+    .summary(format!("Read MCP resources and prompts from {server_count} server(s)."))
+    .help(mcp_read_help(servers))
     .tags([ToolTag::ReadOnly, ToolTag::Mcp])
     .concurrency_safe(true)
     .deferred_load();
     maybe_network_tag(entry, has_network_servers)
 }
 
-fn mcp_call_decl(tool_count: usize, has_network_servers: bool) -> PluginToolDecl {
+fn mcp_call_decl(tools: &[(String, ToolDescriptor)], has_network_servers: bool) -> PluginToolDecl {
+    let tool_count = tools.len();
     let entry = PluginToolDecl::new(
         "mcp_call",
         crate::entry::definition::json_schema_for::<McpCallInput>(),
@@ -284,10 +288,44 @@ fn mcp_call_decl(tool_count: usize, has_network_servers: bool) -> PluginToolDecl
     .description(format!(
         "MCP tool command for {tool_count} discovered tool(s). Set command to tool and pass server, tool, and optional arguments in args."
     ))
+    .summary(format!("Call {tool_count} discovered MCP tool(s)."))
+    .help(mcp_call_help(tools))
     .tags([ToolTag::Mutating, ToolTag::Mcp])
     .concurrency_safe(false)
     .deferred_load();
     maybe_network_tag(entry, has_network_servers)
+}
+
+fn mcp_read_help(servers: &[String]) -> String {
+    let mut lines = vec![
+        "Use `resources_list` to list resources, `resources_read` to read a resource URI, `prompts_list` to list prompts, and `prompts_get` to fetch a prompt from a configured MCP server.".to_string(),
+        "Configured servers:".to_string(),
+    ];
+    for server in servers {
+        lines.push(format!("- {server}"));
+    }
+    lines.join("\n")
+}
+
+fn mcp_call_help(tools: &[(String, ToolDescriptor)]) -> String {
+    let mut lines = vec![
+        "Use command `tool` with `server`, `tool`, and optional `arguments` to call a discovered MCP tool.".to_string(),
+        "Discovered MCP tools:".to_string(),
+    ];
+    for (server, tool) in tools {
+        let description = tool.description.as_deref().unwrap_or("").trim();
+        if description.is_empty() {
+            lines.push(format!("- {server}/{}", tool.name));
+        } else {
+            lines.push(format!("- {server}/{}: {description}", tool.name));
+        }
+        if let Some(schema) = tool.input_schema.as_ref()
+            && let Ok(schema) = serde_json::to_string_pretty(schema)
+        {
+            lines.push(format!("  inputSchema: {schema}"));
+        }
+    }
+    lines.join("\n")
 }
 
 fn maybe_network_tag(entry: PluginToolDecl, has_network_servers: bool) -> PluginToolDecl {

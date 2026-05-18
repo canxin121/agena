@@ -1,10 +1,11 @@
 use std::{
+    collections::BTreeMap,
     path::Path,
     sync::{Arc, Mutex},
 };
 
 use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseConnection, DbErr};
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder};
 use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 
 use crate::{
@@ -15,6 +16,7 @@ use crate::{
             session_goal::{GoalAccountingMode, GoalUpdate},
             workspace,
         },
+        entities,
         tx::{with_transaction_and_app_effects, with_transaction_and_effects},
     },
     event::{
@@ -23,7 +25,8 @@ use crate::{
     },
     message::Message,
     permission::{PermissionMode, PermissionScope, PersistedPermissionRule},
-    session::cost::SessionCostSummary,
+    role::Role,
+    session::cost::{SessionCostSummary, UsageStatRecord, UsageStats, UsageStatsQuery},
 };
 
 use super::{
@@ -861,6 +864,93 @@ impl SessionStore {
         Ok(super::cost::summarize(&session.messages))
     }
 
+    pub(crate) async fn usage_stats(&self, query: UsageStatsQuery) -> Result<UsageStats, AppError> {
+        let generated_at = Utc::now();
+        let Some(workspace_id) = self.lookup_workspace_id().await? else {
+            return Ok(super::cost::summarize_usage_records(
+                &[],
+                &query,
+                generated_at,
+            ));
+        };
+
+        let sessions = entities::session::Entity::find()
+            .filter(entities::session::Column::WorkspaceId.eq(workspace_id))
+            .all(&self.db)
+            .await?;
+        if sessions.is_empty() {
+            return Ok(super::cost::summarize_usage_records(
+                &[],
+                &query,
+                generated_at,
+            ));
+        }
+
+        let session_meta = sessions
+            .iter()
+            .map(|session| {
+                (
+                    session.id,
+                    (
+                        session.title.clone(),
+                        session.is_subagent,
+                        session.workspace_id,
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let session_ids = sessions
+            .iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+
+        let mut statement = entities::activity_message::Entity::find()
+            .filter(entities::activity_message::Column::SessionId.is_in(session_ids))
+            .filter(entities::activity_message::Column::Role.eq(Role::Assistant))
+            .filter(entities::activity_message::Column::Usage.is_not_null())
+            .order_by_asc(entities::activity_message::Column::CreatedAtMs)
+            .order_by_asc(entities::activity_message::Column::MessageId);
+
+        if let Some(from) = query.from.as_ref() {
+            statement = statement.filter(
+                entities::activity_message::Column::CreatedAtMs.gte(from.timestamp_millis()),
+            );
+        }
+        if let Some(to) = query.to.as_ref() {
+            statement = statement
+                .filter(entities::activity_message::Column::CreatedAtMs.lte(to.timestamp_millis()));
+        }
+
+        let message_models = statement.all(&self.db).await?;
+        let mut records = Vec::with_capacity(message_models.len());
+        for message in message_models {
+            let Some(usage) = message.usage else {
+                continue;
+            };
+            let Some((title, is_subagent, _workspace_id)) = session_meta.get(&message.session_id)
+            else {
+                continue;
+            };
+            let provider_id = nonempty_or_unknown(message.metadata.model_provider_id.as_str());
+            let model_id = nonempty_or_unknown(message.metadata.model_id.as_str());
+            records.push(UsageStatRecord {
+                session_id: message.session_id,
+                session_title: title.clone(),
+                is_subagent: *is_subagent,
+                created_at: timestamp_millis_to_utc(message.created_at_ms)?,
+                provider_id,
+                model_id,
+                usage,
+            });
+        }
+
+        Ok(super::cost::summarize_usage_records(
+            &records,
+            &query,
+            generated_at,
+        ))
+    }
+
     /// Serialise a session as JSONL: the first line is a [`SessionExportMeta`]
     /// header; each subsequent line is one persistent `EventKind` payload in
     /// the original `seq_global` order. The output is portable across
@@ -1474,6 +1564,15 @@ fn with_cache<T>(
             tracing::warn!("session cache lock poisoned; falling back to database state");
             None
         }
+    }
+}
+
+fn nonempty_or_unknown(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 

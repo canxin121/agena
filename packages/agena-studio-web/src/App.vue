@@ -206,6 +206,9 @@ const activeModeLabel = computed(() => {
           <RouterLink to="/workspace" class="nav-link" :class="{ active: route.path.startsWith('/workspace') }">
             Workspace
           </RouterLink>
+          <RouterLink to="/usage" class="nav-link" :class="{ active: route.path.startsWith('/usage') }">
+            Usage
+          </RouterLink>
           <RouterLink
             v-for="item in sectionNavItems"
             :key="item.section"

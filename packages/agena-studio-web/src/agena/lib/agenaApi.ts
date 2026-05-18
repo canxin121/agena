@@ -276,6 +276,7 @@ export type ModelCatalogEntry = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  assistant_reasoning_field?: string | null
   output_modalities?: string[] | null
   pricing?: ProviderModelPricing | null
   thinking_modes?: Record<string, ProviderModelThinkingMode>
@@ -332,6 +333,7 @@ export type ModelCatalogEntryWriteRequest = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  assistant_reasoning_field?: string | null
   output_modalities?: string[] | null
   pricing?: ProviderModelPricing | null
   display_name?: string | null
@@ -395,6 +397,7 @@ export type ProviderModelMetadata = {
   supports_parallel_tool_calls?: boolean | null
   supports_verbosity?: boolean | null
   default_verbosity?: string | null
+  assistant_reasoning_field?: string | null
   output_modalities?: string[] | null
   pricing?: ProviderModelPricing | null
   limits?: {

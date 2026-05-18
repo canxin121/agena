@@ -198,6 +198,8 @@ pub struct ModelCatalogEntryResource {
     pub supports_verbosity: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -263,6 +265,7 @@ impl ModelCatalogEntryResource {
             supports_parallel_tool_calls: value.supports_parallel_tool_calls,
             supports_verbosity: value.supports_verbosity,
             default_verbosity: value.default_verbosity,
+            assistant_reasoning_field: value.assistant_reasoning_field,
             output_modalities: value.output_modalities,
             pricing: value.pricing,
             thinking_modes: value.thinking_modes,

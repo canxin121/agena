@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
-    ModelCapabilities, ModelProvider, PromptCacheShape, StreamResumePolicy,
+    ModelCapabilities, ModelProvider, PromptCacheShape, StreamResumePolicy, chat_wire,
 };
 
 #[derive(Debug, Clone)]
@@ -125,6 +125,17 @@ impl MultiAdapterProvider {
             &adapter.model_capabilities(target_model),
             &adapter.model_metadata(target_model),
         )
+    }
+
+    fn backfill_assistant_reasoning_field(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &mut CompletionRequest,
+    ) {
+        let field = self
+            .model_metadata_for_adapter(adapter_id, &request.model)
+            .assistant_reasoning_field;
+        chat_wire::backfill_assistant_reasoning_field_on_request(request, field.as_deref());
     }
 }
 
@@ -360,6 +371,7 @@ impl ModelProvider for MultiAdapterProvider {
         mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
         let visible_model = request.model.clone();
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         let (adapter_id, target_model, _) = self.resolve_route(adapter_id, &visible_model)?;
         let adapter = self.adapter(adapter_id.as_str())?;
         request.model = target_model;
@@ -388,6 +400,7 @@ impl ModelProvider for MultiAdapterProvider {
         AppError,
     > {
         let visible_model = request.model.clone();
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         let (adapter_id, target_model, _) = self.resolve_route(adapter_id, &visible_model)?;
         let adapter = self.adapter(adapter_id.as_str())?;
         request.model = target_model;

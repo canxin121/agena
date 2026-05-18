@@ -13,13 +13,13 @@ use tracing::Instrument;
 
 use crate::error::{AppError, ProviderErrorKind};
 use crate::model::{
-    AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelRef, ModelSpeedMode,
-    ModelThinkingMode, ProviderId,
+    AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelPricing, ModelPricingTier,
+    ModelRef, ModelSpeedMode, ModelThinkingMode, ProviderId,
 };
 use crate::plugin::ProviderDescriptor;
 
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelProvider,
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig, StreamResumePolicy, wire_message,
 };
@@ -67,6 +67,108 @@ fn assign_catalog_model_id(model: &mut Model) {
         return;
     }
     model.catalog_model_id = Some(ModelId::new(catalog_model_id));
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PricingRates {
+    input: Option<f64>,
+    output: Option<f64>,
+    cache_read: Option<f64>,
+    cache_write: Option<f64>,
+}
+
+impl PricingRates {
+    fn from_pricing(pricing: &ModelPricing) -> Self {
+        Self {
+            input: parse_pricing_rate(pricing.input_usd_per_million_tokens.as_deref()),
+            output: parse_pricing_rate(pricing.output_usd_per_million_tokens.as_deref()),
+            cache_read: parse_pricing_rate(pricing.cache_read_usd_per_million_tokens.as_deref()),
+            cache_write: parse_pricing_rate(pricing.cache_write_usd_per_million_tokens.as_deref()),
+        }
+    }
+
+    fn apply_tier(&mut self, tier: &ModelPricingTier) {
+        if let Some(value) = parse_pricing_rate(tier.input_usd_per_million_tokens.as_deref()) {
+            self.input = Some(value);
+        }
+        if let Some(value) = parse_pricing_rate(tier.output_usd_per_million_tokens.as_deref()) {
+            self.output = Some(value);
+        }
+        if let Some(value) = parse_pricing_rate(tier.cache_read_usd_per_million_tokens.as_deref()) {
+            self.cache_read = Some(value);
+        }
+        if let Some(value) = parse_pricing_rate(tier.cache_write_usd_per_million_tokens.as_deref())
+        {
+            self.cache_write = Some(value);
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.input.is_none()
+            && self.output.is_none()
+            && self.cache_read.is_none()
+            && self.cache_write.is_none()
+    }
+}
+
+fn parse_pricing_rate(value: Option<&str>) -> Option<f64> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn estimate_total_cost_from_metadata(
+    metadata: &ModelMetadata,
+    usage: &CompletionUsage,
+) -> Option<f64> {
+    let pricing = metadata.pricing.as_ref()?;
+    let context_tokens = usage
+        .input_tokens
+        .saturating_add(usage.cache_read_tokens)
+        .saturating_add(usage.cache_write_tokens);
+    let matching_context_tier = pricing
+        .tiers
+        .iter()
+        .filter(|tier| tier.tier_type.as_deref() == Some("context"))
+        .filter_map(|tier| tier.size_tokens.map(|size| (u64::from(size), tier)))
+        .filter(|(size, _)| context_tokens > *size)
+        .max_by_key(|(size, _)| *size)
+        .map(|(_, tier)| tier);
+
+    let mut rates = PricingRates::from_pricing(pricing);
+    if let Some(tier) = matching_context_tier {
+        rates.apply_tier(tier);
+    }
+    if rates.is_empty() {
+        return None;
+    }
+
+    let visible_output_tokens = usage.output_tokens.saturating_sub(usage.reasoning_tokens);
+    let estimated = (usage.input_tokens as f64 * rates.input.unwrap_or(0.0) / 1_000_000.0)
+        + (visible_output_tokens as f64 * rates.output.unwrap_or(0.0) / 1_000_000.0)
+        + (usage.reasoning_tokens as f64 * rates.output.unwrap_or(0.0) / 1_000_000.0)
+        + (usage.cache_read_tokens as f64 * rates.cache_read.unwrap_or(0.0) / 1_000_000.0)
+        + (usage.cache_write_tokens as f64 * rates.cache_write.unwrap_or(0.0) / 1_000_000.0);
+    estimated.is_finite().then_some(estimated)
+}
+
+fn hydrate_usage_cost_from_provider_metadata(
+    provider: &dyn ModelProvider,
+    model: &ModelRef,
+    usage: &mut Option<CompletionUsage>,
+) {
+    let Some(usage) = usage.as_mut() else {
+        return;
+    };
+    if usage.total_cost > 0.0 {
+        return;
+    }
+    let metadata = provider.model_metadata_for_adapter(model.adapter_id.as_ref(), &model.model_id);
+    if let Some(estimated) = estimate_total_cost_from_metadata(&metadata, usage) {
+        usage.total_cost = estimated;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -868,6 +970,14 @@ impl ProviderRegistry {
             }
         })
         .await
+        .map(|mut response| {
+            hydrate_usage_cost_from_provider_metadata(
+                provider.as_ref(),
+                model,
+                &mut response.usage,
+            );
+            response
+        })
     }
 
     pub async fn complete_stream(
@@ -886,6 +996,8 @@ impl ProviderRegistry {
         let provider_id = model.provider_id.to_string();
         let model_id = model.model_id.to_string();
         let adapter_id = model.adapter_id.clone();
+        let model_ref = model.clone();
+        let provider_for_usage = provider.clone();
         let retry_policy = self.retry_policy;
         let replay_policy = self.stream_replay_policy;
         let provider_resume_policy = provider.stream_resume_policy();
@@ -988,7 +1100,14 @@ impl ProviderRegistry {
 
                 while let Some(item) = inner_stream.next().await {
                     match item {
-                        Ok(event) => {
+                        Ok(mut event) => {
+                            if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
+                                hydrate_usage_cost_from_provider_metadata(
+                                    provider_for_usage.as_ref(),
+                                    &model_ref,
+                                    usage,
+                                );
+                            }
                             if replay_mode && replay_cursor < emitted_history.len() {
                                 if event == emitted_history[replay_cursor] {
                                     replay_cursor += 1;
@@ -1253,10 +1372,13 @@ fn provider_error_kind_label(kind: ProviderErrorKind) -> &'static str {
 mod tests {
     use super::*;
     use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, PartContent};
-    use crate::model::{ModelId, ModelRef, ProviderId};
+    use crate::model::{
+        ModelId, ModelMetadata, ModelPricing, ModelPricingTier, ModelRef, ProviderId,
+    };
     use crate::provider::{
         CapabilityFamily, CapabilitySupport, CompletionFinishReason, CompletionRequest,
-        CompletionResponse, ModelCapabilities, ProviderModel,
+        CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelCapabilities,
+        ProviderModel,
     };
     use futures_util::{StreamExt, stream};
     use std::sync::{
@@ -1297,6 +1419,12 @@ mod tests {
         provider_id: &'static str,
         family: CapabilityFamily,
         models: Vec<Model>,
+    }
+
+    struct PricedUsageProvider {
+        provider_id: &'static str,
+        metadata: ModelMetadata,
+        usage: CompletionUsage,
     }
 
     fn retryable_api_error(provider_id: &str, message: &str) -> AppError {
@@ -1350,6 +1478,23 @@ mod tests {
         }
     }
 
+    fn sample_pricing() -> ModelPricing {
+        ModelPricing {
+            input_usd_per_million_tokens: Some("1.0".to_owned()),
+            output_usd_per_million_tokens: Some("2.0".to_owned()),
+            cache_read_usd_per_million_tokens: Some("0.1".to_owned()),
+            cache_write_usd_per_million_tokens: Some("0.2".to_owned()),
+            tiers: vec![ModelPricingTier {
+                tier_type: Some("context".to_owned()),
+                size_tokens: Some(200_000),
+                input_usd_per_million_tokens: Some("3.0".to_owned()),
+                output_usd_per_million_tokens: Some("6.0".to_owned()),
+                cache_read_usd_per_million_tokens: Some("0.3".to_owned()),
+                cache_write_usd_per_million_tokens: Some("0.6".to_owned()),
+            }],
+        }
+    }
+
     #[async_trait]
     impl ModelProvider for ModeSynthProvider {
         fn id(&self) -> &str {
@@ -1375,6 +1520,50 @@ mod tests {
             Err(AppError::Internal(
                 "unused in mode synth provider".to_owned(),
             ))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ModelProvider for PricedUsageProvider {
+        fn id(&self) -> &str {
+            self.provider_id
+        }
+
+        fn default_model(&self) -> &ModelId {
+            static DEFAULT_MODEL: LazyLock<ModelId> =
+                LazyLock::new(|| ModelId::new("priced-model"));
+            &DEFAULT_MODEL
+        }
+
+        fn model_capabilities(&self, _model: &ModelId) -> ModelCapabilities {
+            ModelCapabilities::default().with_streaming(CapabilitySupport::Supported)
+        }
+
+        fn model_metadata(&self, _model: &ModelId) -> ModelMetadata {
+            self.metadata.clone()
+        }
+
+        async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+            Ok(vec![
+                ProviderModel::new(self.provider_id, self.default_model().as_str())
+                    .with_metadata(self.metadata.clone()),
+            ])
+        }
+
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
+            Ok(CompletionResponse {
+                provider_id: pid(self.provider_id),
+                model: request.model,
+                text: "ok".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: Some(self.usage.clone()),
+                provider_metadata: None,
+            })
         }
     }
 
@@ -1884,6 +2073,91 @@ mod tests {
             CapabilitySupport::Supported
         );
         assert_eq!(model.capabilities.streaming, CapabilitySupport::Supported);
+    }
+
+    #[test]
+    fn estimated_total_cost_prefers_matching_context_tier_and_charges_reasoning_as_output() {
+        let metadata = ModelMetadata::default().with_pricing(sample_pricing());
+        let usage = CompletionUsage {
+            input_tokens: 250_000,
+            output_tokens: 700,
+            reasoning_tokens: 200,
+            cache_write_tokens: 10_000,
+            cache_read_tokens: 5_000,
+            total_cost: 0.0,
+        };
+
+        let estimated =
+            estimate_total_cost_from_metadata(&metadata, &usage).expect("pricing should estimate");
+
+        assert!((estimated - 0.7617).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn registry_complete_estimates_usage_cost_from_model_metadata() {
+        let provider = PricedUsageProvider {
+            provider_id: "priced-complete",
+            metadata: ModelMetadata::default().with_pricing(sample_pricing()),
+            usage: CompletionUsage {
+                input_tokens: 1_000,
+                output_tokens: 300,
+                reasoning_tokens: 100,
+                cache_write_tokens: 50,
+                cache_read_tokens: 100,
+                total_cost: 0.0,
+            },
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+
+        let response = registry
+            .complete(
+                &model_ref("priced-complete", "priced-model"),
+                completion_request("priced-model"),
+            )
+            .await
+            .expect("completion should succeed");
+
+        let usage = response.usage.expect("usage should be present");
+        assert!((usage.total_cost - 0.00162).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn registry_complete_stream_estimates_usage_cost_from_model_metadata() {
+        let provider = PricedUsageProvider {
+            provider_id: "priced-stream",
+            metadata: ModelMetadata::default().with_pricing(sample_pricing()),
+            usage: CompletionUsage {
+                input_tokens: 1_000,
+                output_tokens: 300,
+                reasoning_tokens: 100,
+                cache_write_tokens: 50,
+                cache_read_tokens: 100,
+                total_cost: 0.0,
+            },
+        };
+        let mut registry = ProviderRegistry::new();
+        registry.register(provider);
+
+        let mut stream = registry
+            .complete_stream(
+                &model_ref("priced-stream", "priced-model"),
+                completion_request("priced-model"),
+            )
+            .await
+            .expect("stream should succeed");
+
+        let mut completed_usage = None;
+        while let Some(item) = stream.next().await {
+            if let CompletionStreamEvent::Completed { usage, .. } =
+                item.expect("stream item should succeed")
+            {
+                completed_usage = usage;
+            }
+        }
+
+        let usage = completed_usage.expect("completed usage should be present");
+        assert!((usage.total_cost - 0.00162).abs() < 1e-9);
     }
 
     #[tokio::test]

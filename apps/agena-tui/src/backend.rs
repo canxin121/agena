@@ -2591,6 +2591,12 @@ fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> J
             JsonValue::String(default_verbosity.to_owned()),
         );
     }
+    if let Some(assistant_reasoning_interleaved) = entry.assistant_reasoning_interleaved {
+        value.insert(
+            "assistant_reasoning_interleaved".to_owned(),
+            JsonValue::Bool(assistant_reasoning_interleaved),
+        );
+    }
     if let Some(assistant_reasoning_field) = non_empty(entry.assistant_reasoning_field.as_deref()) {
         value.insert(
             "assistant_reasoning_field".to_owned(),
@@ -2702,6 +2708,12 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
         value.insert(
             "default_verbosity".to_owned(),
             JsonValue::String(default_verbosity.to_owned()),
+        );
+    }
+    if let Some(assistant_reasoning_interleaved) = model.metadata.assistant_reasoning_interleaved {
+        value.insert(
+            "assistant_reasoning_interleaved".to_owned(),
+            JsonValue::Bool(assistant_reasoning_interleaved),
         );
     }
     if let Some(assistant_reasoning_field) =

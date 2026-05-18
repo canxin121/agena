@@ -69,6 +69,8 @@ pub struct CatalogModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_interleaved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
@@ -101,6 +103,7 @@ impl CatalogModelDefinition {
             && self.supports_parallel_tool_calls.is_none()
             && self.supports_verbosity.is_none()
             && self.default_verbosity.is_none()
+            && self.assistant_reasoning_interleaved.is_none()
             && self.assistant_reasoning_field.is_none()
             && self.output_modalities.is_empty()
             && self.pricing.is_none()
@@ -127,6 +130,7 @@ impl CatalogModelDefinition {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity,
+            assistant_reasoning_interleaved: self.assistant_reasoning_interleaved,
             assistant_reasoning_field: self.assistant_reasoning_field,
             output_modalities: self.output_modalities,
             pricing: self.pricing,
@@ -188,6 +192,8 @@ pub struct ModelCatalogEntryRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_verbosity: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_interleaved: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub output_modalities: Vec<String>,
@@ -217,6 +223,7 @@ impl ModelCatalogEntryRecord {
             supports_parallel_tool_calls: self.supports_parallel_tool_calls,
             supports_verbosity: self.supports_verbosity,
             default_verbosity: self.default_verbosity.clone(),
+            assistant_reasoning_interleaved: self.assistant_reasoning_interleaved,
             assistant_reasoning_field: self.assistant_reasoning_field.clone(),
             output_modalities: self.output_modalities.clone(),
             pricing: self.pricing.clone(),
@@ -323,6 +330,7 @@ impl ModelCatalogSnapshot {
             supports_parallel_tool_calls: definition.supports_parallel_tool_calls,
             supports_verbosity: definition.supports_verbosity,
             default_verbosity: definition.default_verbosity.clone(),
+            assistant_reasoning_interleaved: definition.assistant_reasoning_interleaved,
             assistant_reasoning_field: definition.assistant_reasoning_field.clone(),
             output_modalities: definition.output_modalities.clone(),
             pricing: definition.pricing.clone(),
@@ -803,6 +811,7 @@ fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
         supports_parallel_tool_calls: model.metadata.supports_parallel_tool_calls,
         supports_verbosity: model.metadata.supports_verbosity,
         default_verbosity: model.metadata.default_verbosity.clone(),
+        assistant_reasoning_interleaved: model.metadata.assistant_reasoning_interleaved,
         assistant_reasoning_field: model.metadata.assistant_reasoning_field.clone(),
         output_modalities: model.metadata.output_modalities.clone(),
         pricing: model.metadata.pricing.clone(),
@@ -950,6 +959,9 @@ fn merge_catalog_definition(current: &mut CatalogModelDefinition, next: &Catalog
     }
     if current.default_verbosity.is_none() {
         current.default_verbosity = next.default_verbosity.clone();
+    }
+    if current.assistant_reasoning_interleaved.is_none() {
+        current.assistant_reasoning_interleaved = next.assistant_reasoning_interleaved;
     }
     if current.assistant_reasoning_field.is_none() {
         current.assistant_reasoning_field = next.assistant_reasoning_field.clone();
@@ -1118,6 +1130,9 @@ fn merge_public_source_catalog_definition(
     }
     if current.default_verbosity.is_none() {
         current.default_verbosity = next.default_verbosity.clone();
+    }
+    if current.assistant_reasoning_interleaved.is_none() {
+        current.assistant_reasoning_interleaved = next.assistant_reasoning_interleaved;
     }
     if current.assistant_reasoning_field.is_none() {
         current.assistant_reasoning_field = next.assistant_reasoning_field.clone();
@@ -1915,6 +1930,13 @@ mod tests {
                                         }
                                     }
                                 }
+                            },
+                            "claude-sonnet-4-6": {
+                                "id": "claude-sonnet-4-6",
+                                "name": "Claude Sonnet 4.6",
+                                "description": "Interleaved boolean source",
+                                "reasoning": true,
+                                "interleaved": true
                             }
                         }
                     }
@@ -2064,6 +2086,7 @@ mod tests {
         assert_eq!(gpt5.supports_parallel_tool_calls, Some(true));
         assert_eq!(gpt5.supports_verbosity, Some(true));
         assert_eq!(gpt5.default_verbosity.as_deref(), Some("low"));
+        assert_eq!(gpt5.assistant_reasoning_interleaved, Some(true));
         assert_eq!(
             gpt5.assistant_reasoning_field.as_deref(),
             Some("reasoning_content")
@@ -2095,6 +2118,14 @@ mod tests {
                 .feature_support(ModelCapabilityFeature::StructuredOutput),
             Some(CapabilitySupport::Supported)
         );
+
+        let claude_sonnet = snapshot
+            .official
+            .models
+            .get("claude-sonnet-4-6")
+            .expect("claude-sonnet-4-6 should exist");
+        assert_eq!(claude_sonnet.assistant_reasoning_interleaved, Some(true));
+        assert_eq!(claude_sonnet.assistant_reasoning_field, None);
         assert_eq!(
             gpt5.capabilities
                 .feature_support(ModelCapabilityFeature::Temperature),

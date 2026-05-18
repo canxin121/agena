@@ -518,14 +518,28 @@ onMounted(() => {
           />
         </div>
 
-        <div class="field" style="margin-top: 12px">
-          <label class="label" for="catalog-assistant-reasoning-field">Assistant Reasoning Field</label>
-          <input
-            id="catalog-assistant-reasoning-field"
-            v-model="draft.assistant_reasoning_field"
-            class="input mono"
-            placeholder="reasoning_content"
-          />
+        <div class="grid two" style="margin-top: 12px">
+          <label
+            class="muted"
+            for="catalog-assistant-reasoning-interleaved"
+            style="display: flex; gap: 8px; align-items: center"
+          >
+            <input
+              id="catalog-assistant-reasoning-interleaved"
+              v-model="draft.assistant_reasoning_interleaved"
+              type="checkbox"
+            />
+            Assistant reasoning interleaved
+          </label>
+          <div class="field">
+            <label class="label" for="catalog-assistant-reasoning-field">Assistant Reasoning Field</label>
+            <input
+              id="catalog-assistant-reasoning-field"
+              v-model="draft.assistant_reasoning_field"
+              class="input mono"
+              placeholder="reasoning_content"
+            />
+          </div>
         </div>
 
         <div class="grid two" style="margin-top: 12px">

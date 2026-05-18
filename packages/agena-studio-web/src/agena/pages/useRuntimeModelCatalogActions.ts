@@ -40,6 +40,7 @@ export type ModelCatalogEditableDraft = {
   display_name: string
   origin: string
   description: string
+  assistant_reasoning_interleaved: boolean
   assistant_reasoning_field: string
   output_modalities_json: string
   pricing_json: string
@@ -193,6 +194,7 @@ export function createEmptyModelCatalogDraft(adapterId = '', modelId = ''): Mode
     display_name: '',
     origin: '',
     description: '',
+    assistant_reasoning_interleaved: false,
     assistant_reasoning_field: '',
     output_modalities_json: '',
     pricing_json: '',
@@ -285,6 +287,7 @@ export function createModelCatalogDraftFromEntry(entry: ModelCatalogEntry): Mode
     display_name: String(entry.display_name || ''),
     origin: String(entry.origin || ''),
     description: String(entry.description || ''),
+    assistant_reasoning_interleaved: Boolean(entry.assistant_reasoning_interleaved),
     assistant_reasoning_field: String(entry.assistant_reasoning_field || ''),
     output_modalities_json: stringifyJsonValue(entry.output_modalities || null),
     pricing_json: stringifyJsonValue(entry.pricing || null),
@@ -313,6 +316,7 @@ export function createModelCatalogDraftFromProviderModel(model: ProviderModel): 
     display_name: String(model.display_name || ''),
     origin: '',
     description: String(model.metadata?.description || ''),
+    assistant_reasoning_interleaved: Boolean(model.metadata?.assistant_reasoning_interleaved),
     assistant_reasoning_field: String(model.metadata?.assistant_reasoning_field || ''),
     output_modalities_json: stringifyJsonValue(model.metadata?.output_modalities || null),
     pricing_json: stringifyJsonValue(model.metadata?.pricing || null),
@@ -455,6 +459,7 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
     display_name: normalizeOptionalText(draft.display_name),
     origin: normalizeOptionalText(draft.origin),
     description: normalizeOptionalText(draft.description),
+    assistant_reasoning_interleaved: draft.assistant_reasoning_interleaved ? true : null,
     assistant_reasoning_field: normalizeOptionalText(draft.assistant_reasoning_field),
     output_modalities: normalizeOptionalStringArray(draft.output_modalities_json, 'Output modalities'),
     pricing: normalizeOptionalJsonObject(draft.pricing_json, 'Pricing') as ProviderModelPricing | null,

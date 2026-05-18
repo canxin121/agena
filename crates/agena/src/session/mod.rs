@@ -1,5 +1,4 @@
 mod cache;
-mod compaction_worker;
 mod context_governor;
 mod context_policy;
 pub(crate) mod control;
@@ -33,10 +32,7 @@ pub use model::{
     SessionRuntimeStatus, SessionStatus, SessionSummary, validate_session_goal_objective,
 };
 #[allow(unused_imports)]
-pub(crate) use model::{
-    MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_PROMPT_COMPACTED,
-    MESSAGE_TAG_TOOL_RESULT_PRUNED,
-};
+pub(crate) use model::{MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_TOOL_RESULT_PRUNED};
 pub use processor::SessionProcessor;
 
 pub use history::ProjectedMessageHeader;

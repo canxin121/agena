@@ -243,7 +243,7 @@ Timeout 字段：
 | `tool_hook` | tool before/after/failure hooks。 |
 | `tool_invoke` | plugin tool invoke timeout。 |
 | `permission_ask` | permission hook。 |
-| `chat` | chat message/params/headers/system transform。 |
+| `chat` | chat params/headers。Mutating chat prompt hooks are kept for compatibility but are not applied to provider prompts. |
 | `fast` | shell env、command hooks、config hooks 等快速路径。 |
 
 Duration 支持 `ms`、`s`、`m`、`h`：
@@ -425,16 +425,18 @@ Hook 名称遵循 plugin SDK 协议命名；`tool.*` hook 作用于 plugin tool 
 | provider/auth | `provider.list`, `auth` |
 | permission | `permission.ask` |
 | command/shell | `command.execute.before`, `command.execute.after`, `shell.env` |
-| session | `session.start`, `session.end`, `session.compacting`, `session.compacted` |
+| session | `session.start`, `session.end` (`session.compacting` / `session.compacted` are legacy) |
 | turn | `pre_turn`, `post_turn`, `user.prompt.submit`, `agent.stop` |
 | event/notification | `event`, `notification` |
 | config | `config` |
+
+Provider-visible prompt content is append-only within a session so upstream prompt caches can match stable prefixes. For that reason `chat.message`, `chat.messages.transform`, and `chat.system.transform` are not applied on the provider request path: they can rewrite, drop, or reorder system/messages. `chat.params` and `chat.headers` still apply because they do not mutate the transcript prefix.
 
 典型用途：
 
 - 在 `provider.list` 中注入 plugin-provided provider。
 - 在 `chat.headers` 中给 provider request 增加 header。
-- 在 `chat.system.transform` 中改写 system prompt。
+- 在 `chat.params` 中调整 temperature、max output tokens 等 request 参数。
 - 在 `permission.ask` 中为组织策略提供建议或决策。
 - 在 `shell.env` 中注入 shell 环境变量。
 - 在 `tool.execute.before/after` 中改写 tool 调用入参或输出。

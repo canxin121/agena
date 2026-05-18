@@ -671,7 +671,7 @@ impl AmazonBedrockProvider {
         tools: &mut [BedrockAnthropicEntryDefinition],
         messages: &mut [BedrockAnthropicMessage],
     ) {
-        for block in system.iter_mut().take(2) {
+        if let Some(block) = system.last_mut() {
             block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }
 
@@ -679,13 +679,24 @@ impl AmazonBedrockProvider {
             tool.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }
 
-        if let Some(block) = messages
-            .iter_mut()
-            .rev()
-            .find_map(|message| message.content.last_mut())
-        {
+        if let Some(block) = Self::latest_anthropic_user_cache_block(messages) {
             block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }
+    }
+
+    fn latest_anthropic_user_cache_block(
+        messages: &mut [BedrockAnthropicMessage],
+    ) -> Option<&mut BedrockAnthropicTextBlock> {
+        messages.iter_mut().rev().find_map(|message| {
+            if message.role != "user" || message.content.is_empty() {
+                return None;
+            }
+            let index = message
+                .content
+                .iter()
+                .rposition(|block| block.kind != "tool_result")?;
+            message.content.get_mut(index)
+        })
     }
 
     fn build_anthropic_request(
@@ -2612,6 +2623,37 @@ mod tests {
             .tag(crate::plugin::sdk::ToolTag::ReadOnly)
             .concurrency_safe(true),
         )
+    }
+
+    #[test]
+    fn anthropic_cache_hints_keep_latest_real_user_boundary_during_tool_loop() {
+        let mut system = vec![BedrockAnthropicTextBlock::text("system")];
+        let mut tools = Vec::new();
+        let mut messages = vec![
+            BedrockAnthropicMessage {
+                role: "user".to_owned(),
+                content: vec![BedrockAnthropicTextBlock::text("write tests")],
+            },
+            BedrockAnthropicMessage {
+                role: "assistant".to_owned(),
+                content: vec![BedrockAnthropicTextBlock::tool_use("call_1", "bash", "{}")],
+            },
+            BedrockAnthropicMessage {
+                role: "user".to_owned(),
+                content: vec![BedrockAnthropicTextBlock::tool_result("call_1", "ok")],
+            },
+        ];
+
+        AmazonBedrockProvider::apply_anthropic_prompt_cache_hints(
+            system.as_mut_slice(),
+            tools.as_mut_slice(),
+            messages.as_mut_slice(),
+        );
+
+        assert!(system[0].cache_control.is_some());
+        assert!(messages[0].content[0].cache_control.is_some());
+        assert!(messages[1].content[0].cache_control.is_none());
+        assert!(messages[2].content[0].cache_control.is_none());
     }
 
     fn completed_operation_message() -> Message {

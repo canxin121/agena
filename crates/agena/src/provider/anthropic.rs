@@ -443,11 +443,10 @@ impl AnthropicProvider {
         tools: &mut [AnthropicEntryDefinition],
         messages: &mut [AnthropicMessage],
     ) {
-        // Keep Anthropic cache markers within the documented four-breakpoint
-        // envelope: up to two system blocks, the final tool schema, and the
-        // last message block. A single message-level marker avoids unstable
-        // intermediate breakpoints.
-        for block in system.iter_mut().take(2) {
+        // Keep cache markers stable across tool-use loops: tool definitions
+        // and system text sit above the conversation, while the latest real
+        // user message stays fixed as assistant/tool-result messages append.
+        if let Some(block) = system.last_mut() {
             block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }
 
@@ -455,13 +454,24 @@ impl AnthropicProvider {
             tool.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }
 
-        if let Some(block) = messages
-            .iter_mut()
-            .rev()
-            .find_map(|message| message.content.last_mut())
-        {
+        if let Some(block) = Self::latest_user_cache_block(messages) {
             block.cache_control = Some(prompt_cache::PromptCacheControl::ephemeral());
         }
+    }
+
+    fn latest_user_cache_block(
+        messages: &mut [AnthropicMessage],
+    ) -> Option<&mut AnthropicTextBlock> {
+        messages.iter_mut().rev().find_map(|message| {
+            if message.role != "user" || message.content.is_empty() {
+                return None;
+            }
+            let index = message
+                .content
+                .iter()
+                .rposition(|block| block.kind != "tool_result")?;
+            message.content.get_mut(index)
+        })
     }
 
     async fn send_json<R>(
@@ -1648,9 +1658,9 @@ mod tests {
             messages.as_mut_slice(),
         );
 
-        assert!(system[0].cache_control.is_some());
-        assert!(system[1].cache_control.is_some());
-        assert!(system[2].cache_control.is_none());
+        assert!(system[0].cache_control.is_none());
+        assert!(system[1].cache_control.is_none());
+        assert!(system[2].cache_control.is_some());
 
         assert!(tools[0].cache_control.is_none());
         assert!(tools[1].cache_control.is_some());
@@ -1658,6 +1668,36 @@ mod tests {
         assert!(messages[0].content[0].cache_control.is_none());
         assert!(messages[1].content[0].cache_control.is_none());
         assert!(messages[2].content[0].cache_control.is_some());
+    }
+
+    #[test]
+    fn apply_prompt_cache_hints_keeps_latest_real_user_boundary_during_tool_loop() {
+        let mut system = vec![AnthropicTextBlock::text("system")];
+        let mut tools = Vec::new();
+        let mut messages = vec![
+            AnthropicMessage {
+                role: "user".to_owned(),
+                content: vec![AnthropicTextBlock::text("write tests")],
+            },
+            AnthropicMessage {
+                role: "assistant".to_owned(),
+                content: vec![AnthropicTextBlock::tool_use("call_1", "bash", "{}")],
+            },
+            AnthropicMessage {
+                role: "user".to_owned(),
+                content: vec![AnthropicTextBlock::tool_result("call_1", "ok")],
+            },
+        ];
+
+        AnthropicProvider::apply_prompt_cache_hints(
+            system.as_mut_slice(),
+            tools.as_mut_slice(),
+            messages.as_mut_slice(),
+        );
+
+        assert!(messages[0].content[0].cache_control.is_some());
+        assert!(messages[1].content[0].cache_control.is_none());
+        assert!(messages[2].content[0].cache_control.is_none());
     }
 
     #[test]

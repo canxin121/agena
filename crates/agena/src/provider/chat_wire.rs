@@ -71,6 +71,10 @@ pub(crate) struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_details: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ChatToolCallRequest>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -84,6 +88,8 @@ impl ChatMessage {
             role: "system".to_owned(),
             kind: None,
             content: Some(Value::String(content)),
+            reasoning_content: None,
+            reasoning_details: None,
             tool_calls: None,
             tool_call_id: None,
             copilot_cache_control: None,
@@ -95,6 +101,8 @@ impl ChatMessage {
             role: "user".to_owned(),
             kind: None,
             content: Some(content),
+            reasoning_content: None,
+            reasoning_details: None,
             tool_calls: None,
             tool_call_id: None,
             copilot_cache_control: None,
@@ -106,6 +114,8 @@ impl ChatMessage {
             role: "assistant".to_owned(),
             kind: None,
             content,
+            reasoning_content: None,
+            reasoning_details: None,
             tool_calls,
             tool_call_id: None,
             copilot_cache_control: None,
@@ -117,6 +127,8 @@ impl ChatMessage {
             role: "tool".to_owned(),
             kind: None,
             content: Some(content),
+            reasoning_content: None,
+            reasoning_details: None,
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
             copilot_cache_control: None,
@@ -250,6 +262,7 @@ fn supports_reasoning_effort(model: &str) -> bool {
         || normalized.starts_with("o4")
         || normalized.starts_with("gpt-5")
         || normalized.contains("codex")
+        || normalized.contains("deepseek-v4")
 }
 
 // ─── Response / decode types ──────────────────────────────────────────────────
@@ -282,6 +295,10 @@ pub(crate) struct ChatCompletionChoice {
 pub(crate) struct ChatDeltaOrMessage {
     #[serde(default)]
     pub content: Option<Value>,
+    #[serde(default)]
+    pub reasoning_content: Option<Value>,
+    #[serde(default)]
+    pub reasoning_details: Option<Value>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ChatToolCallWire>>,
 }
@@ -361,6 +378,25 @@ pub(crate) fn extract_text_from_content(value: &Value) -> String {
     }
 }
 
+pub(crate) fn extract_reasoning_text_from_fields(
+    reasoning_content: Option<&Value>,
+    reasoning_details: Option<&Value>,
+) -> Option<String> {
+    reasoning_content
+        .or(reasoning_details)
+        .map(extract_text_from_content)
+        .and_then(|text| (!text.trim().is_empty()).then_some(text))
+}
+
+pub(crate) fn extract_reasoning_text_from_delta_or_message(
+    value: &ChatDeltaOrMessage,
+) -> Option<String> {
+    extract_reasoning_text_from_fields(
+        value.reasoning_content.as_ref(),
+        value.reasoning_details.as_ref(),
+    )
+}
+
 pub(crate) fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     let prompt_tokens = usage.prompt_tokens.unwrap_or_default();
     let cache_read_tokens = usage
@@ -417,6 +453,18 @@ pub(crate) fn parse_completion_response(
     default_model: &str,
     payload: ChatCompletionResponse,
 ) -> Result<CompletionResponse, AppError> {
+    let reasoning_text = payload
+        .choices
+        .first()
+        .and_then(|c| c.message.as_ref())
+        .and_then(extract_reasoning_text_from_delta_or_message)
+        .or_else(|| {
+            payload
+                .choices
+                .first()
+                .and_then(|c| c.delta.as_ref())
+                .and_then(extract_reasoning_text_from_delta_or_message)
+        });
     let text = payload
         .choices
         .first()
@@ -450,7 +498,11 @@ pub(crate) fn parse_completion_response(
             .and_then(|m| m.tool_calls.as_ref()),
     )?;
 
-    if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
+    if text.is_empty()
+        && reasoning_text.is_none()
+        && tool_calls.is_empty()
+        && finish_reason.is_none()
+    {
         return Err(AppError::Provider(format!(
             "{provider_id} returned empty completion payload without finish reason"
         )));
@@ -463,7 +515,7 @@ pub(crate) fn parse_completion_response(
         provider_id: ProviderId::new(provider_id),
         model: ModelId::new(payload.model.unwrap_or_else(|| default_model.to_owned())),
         text,
-        reasoning_text: None,
+        reasoning_text,
         finish_reason,
         tool_calls,
         usage,

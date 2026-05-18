@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
 use futures_core::Stream;
@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::{
     error::AppError,
     message::Message,
-    model::{ModelId, ProviderId},
+    model::{CapabilitySupport, ModelCapabilities, ModelId, ModelThinkingMode, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionUsage, ManagedCredential, ModelProvider, ProviderModel, StreamResumePolicy,
@@ -120,6 +120,134 @@ impl OpenAiCompatibleProvider {
 
     fn completions_endpoint(&self) -> String {
         format!("{}/chat/completions", self.base_url)
+    }
+
+    fn is_dashscope_compatible(&self) -> bool {
+        url::Url::parse(self.base_url.as_str())
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+            .is_some_and(|host| host.contains("dashscope") && host.contains("aliyuncs.com"))
+    }
+
+    fn dashscope_reasoning_profile(model: &str) -> Option<DashscopeReasoningProfile> {
+        let normalized = model.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return None;
+        }
+        if normalized.contains("kimi-k2-thinking")
+            || normalized.contains(":thinking")
+            || normalized.contains("-thinking")
+        {
+            return Some(DashscopeReasoningProfile::AlwaysOn);
+        }
+        if normalized.contains("qwen-plus")
+            || normalized.contains("qwen3")
+            || normalized.contains("qwq")
+            || normalized.contains("deepseek-r1")
+            || normalized.contains("kimi-k2")
+            || normalized.contains("k2p")
+            || normalized.contains("k2-5")
+            || normalized.contains("qvq")
+        {
+            return Some(DashscopeReasoningProfile::Toggleable);
+        }
+        None
+    }
+
+    fn is_dashscope_reasoning_model(&self, model: &ModelId) -> bool {
+        self.is_dashscope_compatible()
+            && Self::dashscope_reasoning_profile(model.as_str()).is_some()
+    }
+
+    fn apply_dashscope_reasoning_overrides(
+        &self,
+        model: &ModelId,
+        thinking: Option<&crate::provider::ThinkingRequest>,
+        request_override: &mut crate::model::ModelSpeedModeRequestOverride,
+    ) {
+        if !self.is_dashscope_compatible() {
+            return;
+        }
+
+        let Some(profile) = Self::dashscope_reasoning_profile(model.as_str()) else {
+            return;
+        };
+
+        match thinking {
+            Some(crate::provider::ThinkingRequest::Disabled) => {
+                if matches!(profile, DashscopeReasoningProfile::Toggleable) {
+                    request_override
+                        .body_patch
+                        .insert("enable_thinking".to_owned(), serde_json::Value::Bool(false));
+                }
+                request_override.body_patch.remove("thinking_budget");
+            }
+            Some(crate::provider::ThinkingRequest::Budget { budget_tokens }) => {
+                request_override
+                    .body_patch
+                    .entry("enable_thinking".to_owned())
+                    .or_insert_with(|| serde_json::Value::Bool(true));
+                request_override
+                    .body_patch
+                    .entry("thinking_budget".to_owned())
+                    .or_insert_with(|| serde_json::Value::from(*budget_tokens));
+            }
+            _ => {
+                if !request_override.body_patch.contains_key("enable_thinking")
+                    && !matches!(profile, DashscopeReasoningProfile::AlwaysOn)
+                {
+                    request_override
+                        .body_patch
+                        .insert("enable_thinking".to_owned(), serde_json::Value::Bool(true));
+                }
+            }
+        }
+    }
+
+    fn dashscope_thinking_modes(model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+        let mut modes = BTreeMap::new();
+        match Self::dashscope_reasoning_profile(model.as_str()) {
+            Some(DashscopeReasoningProfile::Toggleable) => {
+                let mut disabled_override = crate::model::ModelSpeedModeRequestOverride::default();
+                disabled_override
+                    .body_patch
+                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(false));
+                modes.insert(
+                    "no-thinking".to_owned(),
+                    ModelThinkingMode::new()
+                        .with_display_name("No Thinking")
+                        .with_thinking(crate::provider::ThinkingRequest::Disabled)
+                        .with_request_override(disabled_override),
+                );
+
+                let mut enabled_override = crate::model::ModelSpeedModeRequestOverride::default();
+                enabled_override
+                    .body_patch
+                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(true));
+                modes.insert(
+                    "thinking-enabled".to_owned(),
+                    ModelThinkingMode::new()
+                        .with_display_name("Thinking")
+                        .with_description("Enable DashScope reasoning output")
+                        .with_request_override(enabled_override),
+                );
+            }
+            Some(DashscopeReasoningProfile::AlwaysOn) => {
+                let mut enabled_override = crate::model::ModelSpeedModeRequestOverride::default();
+                enabled_override
+                    .body_patch
+                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(true));
+                modes.insert(
+                    "thinking-enabled".to_owned(),
+                    ModelThinkingMode::new()
+                        .with_display_name("Thinking")
+                        .with_description("Use the model's built-in reasoning output")
+                        .with_request_override(enabled_override),
+                );
+            }
+            None => {}
+        }
+        modes
     }
 
     fn supports_top_level_prompt_cache(&self) -> bool {
@@ -623,6 +751,12 @@ impl OpenAiCompatibleProvider {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DashscopeReasoningProfile {
+    Toggleable,
+    AlwaysOn,
+}
+
 fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
     let normalized = messages
         .iter()
@@ -666,6 +800,39 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
     fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
         Some(crate::provider::CapabilityFamily::OpenAiCompatible)
+    }
+
+    fn model_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&crate::model::AdapterId>,
+        model: &ModelId,
+    ) -> ModelCapabilities {
+        let mut capabilities = crate::provider::default_capability_registry()
+            .capabilities_for_family(
+                crate::provider::CapabilityFamily::OpenAiCompatible,
+                model.as_str(),
+            );
+        let _ = adapter_id;
+        if self.is_dashscope_reasoning_model(model) {
+            capabilities.reasoning = CapabilitySupport::Supported;
+        }
+        capabilities
+    }
+
+    fn model_thinking_modes_for_adapter(
+        &self,
+        adapter_id: Option<&crate::model::AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelThinkingMode> {
+        let modes = crate::provider::default_model_mode_registry().thinking_modes_for_family(
+            crate::provider::CapabilityFamily::OpenAiCompatible,
+            adapter_id,
+            model.as_str(),
+        );
+        if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
+            return Self::dashscope_thinking_modes(model);
+        }
+        modes
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -714,6 +881,12 @@ impl ModelProvider for OpenAiCompatibleProvider {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
         let prompt_cache_key = request.prompt_cache_key.clone();
+        let mut request_override = request.request_override.clone();
+        self.apply_dashscope_reasoning_overrides(
+            &model,
+            request.thinking.as_ref(),
+            &mut request_override,
+        );
 
         let body = ChatCompletionRequest {
             model: model.to_string(),
@@ -740,14 +913,14 @@ impl ModelProvider for OpenAiCompatibleProvider {
             verbosity: request.verbosity.clone(),
         };
         let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             self.apply_request_headers(
                 self.client.post(self.completions_endpoint()),
                 api_key,
                 prompt_cache_key.as_deref(),
-                Some(&request.request_override.headers),
+                Some(&request_override.headers),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&body_json)
@@ -755,59 +928,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
         .await?;
         let payload: ChatCompletionResponse =
             utils::parse_json_response(self.id.as_str(), response).await?;
-        let response_id = payload.id.clone();
-        let text = payload
-            .choices
-            .first()
-            .and_then(|c| c.message.as_ref())
-            .and_then(|m| m.content.as_ref())
-            .map(chat_wire::extract_text_from_content)
-            .or_else(|| {
-                payload
-                    .choices
-                    .first()
-                    .and_then(|c| c.delta.as_ref())
-                    .and_then(|d| d.content.as_ref())
-                    .map(chat_wire::extract_text_from_content)
-            })
-            .or_else(|| payload.choices.first().and_then(|c| c.text.clone()))
-            .unwrap_or_default();
-        let finish_reason = CompletionFinishReason::from_provider(
-            payload
-                .choices
-                .first()
-                .and_then(|c| c.finish_reason.as_deref()),
-        );
-        let tool_calls = chat_wire::parse_chat_tool_calls(
-            self.id.as_str(),
-            payload
-                .choices
-                .first()
-                .and_then(|c| c.message.as_ref())
-                .and_then(|m| m.tool_calls.as_ref()),
-        )?;
-
-        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
-            return Err(AppError::Provider(format!(
-                "{} returned empty completion payload without finish reason",
-                self.id
-            )));
-        }
-
-        Ok(CompletionResponse {
-            provider_id: ProviderId::new(self.id.clone()),
-            model: ModelId::new(
-                payload
-                    .model
-                    .unwrap_or_else(|| self.default_model.to_string()),
-            ),
-            text,
-            reasoning_text: None,
-            finish_reason,
-            tool_calls,
-            usage: payload.usage.map(chat_wire::chat_usage_to_completion),
-            provider_metadata: utils::response_id_metadata(response_id),
-        })
+        chat_wire::parse_completion_response(self.id.as_str(), self.default_model.as_str(), payload)
     }
 
     async fn complete_stream(
@@ -826,6 +947,12 @@ impl ModelProvider for OpenAiCompatibleProvider {
 
         let model = request.model.clone();
         let prompt_cache_key = request.prompt_cache_key.clone();
+        let mut request_override = request.request_override.clone();
+        self.apply_dashscope_reasoning_overrides(
+            &model,
+            request.thinking.as_ref(),
+            &mut request_override,
+        );
 
         let body = ChatCompletionRequest {
             model: model.to_string(),
@@ -854,14 +981,14 @@ impl ModelProvider for OpenAiCompatibleProvider {
             verbosity: request.verbosity.clone(),
         };
         let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
             self.apply_request_headers(
                 self.client.post(self.completions_endpoint()),
                 api_key,
                 prompt_cache_key.as_deref(),
-                Some(&request.request_override.headers),
+                Some(&request_override.headers),
             )
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&body_json)
@@ -904,6 +1031,25 @@ impl ModelProvider for OpenAiCompatibleProvider {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
                         delta,
+                    };
+                }
+
+                let reasoning_delta = choice
+                    .and_then(|item| item.delta.as_ref())
+                    .and_then(|delta| {
+                        chat_wire::extract_reasoning_text_from_fields(
+                            delta.reasoning_content.as_ref(),
+                            delta.reasoning_details.as_ref(),
+                        )
+                    })
+                    .unwrap_or_default();
+
+                if !reasoning_delta.is_empty() {
+                    stream_has_content = true;
+                    yield CompletionStreamEvent::ThinkingDelta {
+                        provider_id: provider_id.clone(),
+                        model: model_name.clone(),
+                        delta: reasoning_delta,
                     };
                 }
 
@@ -1738,6 +1884,70 @@ mod tests {
     }
 
     #[test]
+    fn dashscope_reasoning_models_enable_reasoning_and_expose_toggle_modes() {
+        let provider = OpenAiCompatibleProvider::new(
+            "custom-dashscope",
+            reqwest::Client::new(),
+            "sk-test",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen-plus",
+        );
+        let model = ModelId::new("qwen-plus");
+
+        let capabilities = provider.model_capabilities_for_adapter(None, &model);
+        assert_eq!(capabilities.reasoning, CapabilitySupport::Supported);
+
+        let modes = provider.model_thinking_modes_for_adapter(None, &model);
+        assert!(modes.contains_key("no-thinking"));
+        assert!(modes.contains_key("thinking-enabled"));
+    }
+
+    #[test]
+    fn dashscope_reasoning_override_enables_and_budgets_reasoning() {
+        let provider = OpenAiCompatibleProvider::new(
+            "custom-dashscope",
+            reqwest::Client::new(),
+            "sk-test",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen-plus",
+        );
+        let model = ModelId::new("qwen-plus");
+
+        let mut default_override = crate::model::ModelSpeedModeRequestOverride::default();
+        provider.apply_dashscope_reasoning_overrides(&model, None, &mut default_override);
+        assert_eq!(
+            default_override.body_patch.get("enable_thinking"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        let mut disabled_override = crate::model::ModelSpeedModeRequestOverride::default();
+        provider.apply_dashscope_reasoning_overrides(
+            &model,
+            Some(&crate::provider::ThinkingRequest::Disabled),
+            &mut disabled_override,
+        );
+        assert_eq!(
+            disabled_override.body_patch.get("enable_thinking"),
+            Some(&serde_json::Value::Bool(false))
+        );
+
+        let mut budget_override = crate::model::ModelSpeedModeRequestOverride::default();
+        provider.apply_dashscope_reasoning_overrides(
+            &model,
+            Some(&crate::provider::ThinkingRequest::Budget { budget_tokens: 50 }),
+            &mut budget_override,
+        );
+        assert_eq!(
+            budget_override.body_patch.get("enable_thinking"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            budget_override.body_patch.get("thinking_budget"),
+            Some(&serde_json::Value::from(50))
+        );
+    }
+
+    #[test]
     fn parse_models_rejects_invalid_shape() {
         let provider = OpenAiCompatibleProvider::new(
             "mock-provider",
@@ -1811,6 +2021,134 @@ mod tests {
             .expect("cached list_models should succeed");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id.as_str(), "google/gemini-2.5-pro");
+    }
+
+    #[tokio::test]
+    async fn complete_parses_reasoning_text_from_reasoning_content_field() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "qwen-plus",
+                    "choices": [{
+                        "message": {
+                            "content": "Final answer",
+                            "reasoning_content": "Hidden path"
+                        },
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 4,
+                        "completion_tokens": 3,
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 2
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "mock-provider",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "qwen-plus",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("qwen-plus"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "Final answer");
+        assert_eq!(response.reasoning_text.as_deref(), Some("Hidden path"));
+        assert_eq!(
+            response.usage.as_ref().map(|usage| usage.reasoning_tokens),
+            Some(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_deepseek_v4_serializes_reasoning_effort() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"reasoning_effort\\\":\\\"high\\\"".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "deepseek-v4-pro",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "mock-provider",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "deepseek-v4-pro",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("deepseek-v4-pro"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: Some(crate::provider::ThinkingRequest::Effort {
+                    effort: crate::provider::ReasoningEffort::High,
+                }),
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
     }
 
     #[tokio::test]
@@ -1916,6 +2254,78 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("chatcmpl_stream")
         );
+    }
+
+    #[tokio::test]
+    async fn complete_stream_emits_thinking_delta_for_reasoning_content_field() {
+        let mut server = mockito::Server::new_async().await;
+        let body = concat!(
+            "data: {\"id\":\"chatcmpl_reasoning\",\"choices\":[{\"delta\":{\"reasoning_content\":\"Plan \"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Answer\"}}]}\n\n",
+            "data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2,\"completion_tokens_details\":{\"reasoning_tokens\":1}}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "mock-provider",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "qwen-plus",
+        );
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("qwen-plus"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut reasoning = String::new();
+        let mut text = String::new();
+        let mut saw_completed = false;
+
+        while let Some(item) = stream.next().await {
+            match item.expect("stream event should parse") {
+                CompletionStreamEvent::ThinkingDelta { delta, .. } => {
+                    reasoning.push_str(delta.as_str())
+                }
+                CompletionStreamEvent::TextDelta { delta, .. } => text.push_str(delta.as_str()),
+                CompletionStreamEvent::Completed { usage, .. } => {
+                    assert_eq!(usage.as_ref().map(|value| value.reasoning_tokens), Some(1));
+                    saw_completed = true;
+                }
+                CompletionStreamEvent::ToolCallDelta { .. } => {}
+            }
+        }
+
+        assert_eq!(reasoning, "Plan ");
+        assert_eq!(text, "Answer");
+        assert!(saw_completed);
     }
 
     #[test]

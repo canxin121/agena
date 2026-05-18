@@ -463,7 +463,7 @@ impl OpenAiProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
-            verbosity: None,
+            verbosity: request.verbosity.clone(),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -517,7 +517,7 @@ impl OpenAiProvider {
                 request.thinking.as_ref(),
                 model.as_str(),
             ),
-            verbosity: None,
+            verbosity: request.verbosity.clone(),
         };
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
@@ -2529,6 +2529,7 @@ mod tests {
         let _chat = server
             .mock("POST", "/chat/completions")
             .expect(1)
+            .match_body(mockito::Matcher::Regex("\\\"verbosity\\\":\\\"low\\\"".to_owned()))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
@@ -2563,7 +2564,7 @@ mod tests {
                 top_k: None,
                 seed: None,
                 thinking: None,
-                verbosity: None,
+                verbosity: Some("low".to_owned()),
                 request_override: Default::default(),
                 response_format: None,
             })
@@ -2575,6 +2576,67 @@ mod tests {
             response.finish_reason,
             Some(CompletionFinishReason::Stop)
         ));
+    }
+
+    #[tokio::test]
+    async fn complete_stream_chat_serializes_verbosity() {
+        let mut server = mockito::Server::new_async().await;
+        let body = concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"}}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let _chat = server
+            .mock("POST", "/chat/completions")
+            .expect(1)
+            .match_body(mockito::Matcher::Regex("\\\"verbosity\\\":\\\"high\\\"".to_owned()))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = OpenAiProvider::new(
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "gpt-4o-mini",
+        );
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("gpt-4o-mini"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: Some("high".to_owned()),
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut saw_completed = false;
+        while let Some(item) = stream.next().await {
+            if matches!(
+                item.expect("stream item should parse"),
+                CompletionStreamEvent::Completed { .. }
+            ) {
+                saw_completed = true;
+            }
+        }
+
+        assert!(saw_completed);
     }
 
     #[tokio::test]

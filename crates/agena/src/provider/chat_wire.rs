@@ -528,6 +528,13 @@ pub(crate) fn parse_completion_response(
 /// Convert a `CompletionRequest` into the flat `Vec<ChatMessage>` wire format
 /// used by Chat Completions endpoints.
 pub(crate) fn request_to_chat_messages(request: &CompletionRequest) -> Vec<ChatMessage> {
+    request_to_chat_messages_with_assistant_reasoning_field(request, None)
+}
+
+pub(crate) fn request_to_chat_messages_with_assistant_reasoning_field(
+    request: &CompletionRequest,
+    assistant_reasoning_field: Option<&str>,
+) -> Vec<ChatMessage> {
     let mut messages = Vec::new();
 
     if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
@@ -546,7 +553,11 @@ pub(crate) fn request_to_chat_messages(request: &CompletionRequest) -> Vec<ChatM
                 parts.as_slice(),
             ))),
             Role::Assistant => {
-                messages.extend(assistant_messages_from_parts(message, &parts));
+                messages.extend(assistant_messages_from_parts(
+                    message,
+                    &parts,
+                    assistant_reasoning_field,
+                ));
             }
         }
     }
@@ -572,16 +583,22 @@ fn message_content_value(message: &Message, parts: &[wire_message::WirePart]) ->
 fn assistant_messages_from_parts(
     message: &Message,
     parts: &[wire_message::WirePart],
+    assistant_reasoning_field: Option<&str>,
 ) -> Vec<ChatMessage> {
+    let assistant_reasoning_text = assistant_reasoning_text(message);
     let has_tool_result = parts
         .iter()
         .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }));
     if !has_tool_result {
         let (content, tool_calls) = assistant_content_and_tool_calls(message, parts);
-        return vec![ChatMessage::assistant(
-            content,
-            (!tool_calls.is_empty()).then_some(tool_calls),
-        )];
+        let mut chat_message =
+            ChatMessage::assistant(content, (!tool_calls.is_empty()).then_some(tool_calls));
+        apply_assistant_reasoning_field(
+            &mut chat_message,
+            assistant_reasoning_field,
+            assistant_reasoning_text.as_str(),
+        );
+        return vec![chat_message];
     }
 
     let mut messages = Vec::new();
@@ -596,10 +613,16 @@ fn assistant_messages_from_parts(
                 if !buffered.is_empty() {
                     let (content, tool_calls) =
                         assistant_content_and_tool_calls(message, &buffered);
-                    messages.push(ChatMessage::assistant(
+                    let mut chat_message = ChatMessage::assistant(
                         content,
                         (!tool_calls.is_empty()).then_some(tool_calls),
-                    ));
+                    );
+                    apply_assistant_reasoning_field(
+                        &mut chat_message,
+                        assistant_reasoning_field,
+                        assistant_reasoning_text.as_str(),
+                    );
+                    messages.push(chat_message);
                     buffered.clear();
                 }
                 messages.push(ChatMessage::tool_result(
@@ -618,13 +641,50 @@ fn assistant_messages_from_parts(
 
     if !buffered.is_empty() {
         let (content, tool_calls) = assistant_content_and_tool_calls(message, &buffered);
-        messages.push(ChatMessage::assistant(
-            content,
-            (!tool_calls.is_empty()).then_some(tool_calls),
-        ));
+        let mut chat_message =
+            ChatMessage::assistant(content, (!tool_calls.is_empty()).then_some(tool_calls));
+        apply_assistant_reasoning_field(
+            &mut chat_message,
+            assistant_reasoning_field,
+            assistant_reasoning_text.as_str(),
+        );
+        messages.push(chat_message);
     }
 
     messages
+}
+
+fn assistant_reasoning_text(message: &Message) -> String {
+    let mut chunks = Vec::new();
+    for part in &message.parts {
+        let Some(content) = part.content.as_ref() else {
+            continue;
+        };
+        if let crate::message::PartContent::Reasoning(reasoning) = content {
+            if !reasoning.summary.is_empty() {
+                chunks.push(reasoning.summary.join(""));
+            } else if !reasoning.raw_content.is_empty() {
+                chunks.push(reasoning.raw_content.join(""));
+            }
+        }
+    }
+    chunks.join("")
+}
+
+fn apply_assistant_reasoning_field(
+    message: &mut ChatMessage,
+    field: Option<&str>,
+    reasoning_text: &str,
+) {
+    match field {
+        Some("reasoning_content") => {
+            message.reasoning_content = Some(Value::String(reasoning_text.to_owned()));
+        }
+        Some("reasoning_details") => {
+            message.reasoning_details = Some(Value::String(reasoning_text.to_owned()));
+        }
+        _ => {}
+    }
 }
 
 fn assistant_content_and_tool_calls(

@@ -13,7 +13,7 @@ use crate::model::{
 
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider, PromptCacheShape,
-    StreamResumePolicy, ThinkingRequest,
+    StreamResumePolicy, ThinkingRequest, chat_wire,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -801,6 +801,17 @@ impl ConfiguredModelsProvider {
                 .flatten(),
         )
     }
+
+    fn backfill_assistant_reasoning_field(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &mut CompletionRequest,
+    ) {
+        let field = self
+            .model_metadata_for_adapter(adapter_id, &request.model)
+            .assistant_reasoning_field;
+        chat_wire::backfill_assistant_reasoning_field_on_request(request, field.as_deref());
+    }
 }
 
 #[async_trait]
@@ -938,36 +949,43 @@ impl ModelProvider for ConfiguredModelsProvider {
         Ok(models)
     }
 
-    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+    async fn complete(
+        &self,
+        mut request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        self.backfill_assistant_reasoning_field(None, &mut request);
         self.target.complete(request).await
     }
 
     async fn complete_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
+        mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         self.target.complete_for_adapter(adapter_id, request).await
     }
 
     async fn complete_stream(
         &self,
-        request: CompletionRequest,
+        mut request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        self.backfill_assistant_reasoning_field(None, &mut request);
         self.target.complete_stream(request).await
     }
 
     async fn complete_stream_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
+        mut request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         self.target
             .complete_stream_for_adapter(adapter_id, request)
             .await

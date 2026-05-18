@@ -14,7 +14,7 @@ use crate::{
 
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ModelProvider,
-    PromptCacheShape, StreamResumePolicy,
+    PromptCacheShape, StreamResumePolicy, chat_wire,
 };
 
 #[derive(Clone)]
@@ -84,6 +84,17 @@ impl CatalogedModelsProvider {
         } else {
             model
         }
+    }
+
+    fn backfill_assistant_reasoning_field(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &mut CompletionRequest,
+    ) {
+        let field = self
+            .model_metadata_for_adapter(adapter_id, &request.model)
+            .assistant_reasoning_field;
+        chat_wire::backfill_assistant_reasoning_field_on_request(request, field.as_deref());
     }
 }
 
@@ -263,36 +274,43 @@ impl ModelProvider for CatalogedModelsProvider {
         Ok(models)
     }
 
-    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+    async fn complete(
+        &self,
+        mut request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        self.backfill_assistant_reasoning_field(None, &mut request);
         self.target.complete(request).await
     }
 
     async fn complete_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
+        mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         self.target.complete_for_adapter(adapter_id, request).await
     }
 
     async fn complete_stream(
         &self,
-        request: CompletionRequest,
+        mut request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        self.backfill_assistant_reasoning_field(None, &mut request);
         self.target.complete_stream(request).await
     }
 
     async fn complete_stream_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        request: CompletionRequest,
+        mut request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
         self.target
             .complete_stream_for_adapter(adapter_id, request)
             .await
@@ -309,17 +327,21 @@ fn catalog_model_id_for_raw(raw_model_id: &str) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{
+        message::{Message, PartContent, ReasoningPart},
         model::ModelLifecycle,
         provider::{
             CapabilitySupport, CompletionFinishReason, CompletionResponse,
             ConfiguredModelThinkingMode, ThinkingRequest,
         },
+        role::Role,
     };
+    use std::sync::Mutex;
 
     #[derive(Clone)]
     struct StaticProvider {
         default_model: ModelId,
         listed: Vec<Model>,
+        captured_requests: Arc<Mutex<Vec<CompletionRequest>>>,
     }
 
     #[async_trait]
@@ -348,6 +370,10 @@ mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<CompletionResponse, AppError> {
+            self.captured_requests
+                .lock()
+                .expect("captured requests lock should not be poisoned")
+                .push(request.clone());
             Ok(CompletionResponse {
                 provider_id: crate::model::ProviderId::new("openai"),
                 model: request.model,
@@ -366,6 +392,7 @@ mod tests {
         let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
             default_model: ModelId::new("gpt-4.1"),
             listed: vec![Model::new("openai", "gpt-4.1").with_display_name("GPT 4.1")],
+            captured_requests: Arc::new(Mutex::new(Vec::new())),
         });
         let provider = CatalogedModelsProvider::new(
             target,
@@ -408,5 +435,82 @@ mod tests {
         assert_eq!(gpt5.display_name.as_deref(), Some("GPT 5"));
         assert_eq!(gpt5.metadata.lifecycle, Some(ModelLifecycle::Preview));
         assert!(gpt5.thinking_modes.contains_key("deep"));
+    }
+
+    #[tokio::test]
+    async fn catalog_wrapper_backfills_assistant_reasoning_field_from_catalog_metadata() {
+        let captured_requests = Arc::new(Mutex::new(Vec::new()));
+        let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
+            default_model: ModelId::new("deepseek-v4-pro"),
+            listed: vec![Model::new("openai", "deepseek-v4-pro")],
+            captured_requests: Arc::clone(&captured_requests),
+        });
+        let provider = CatalogedModelsProvider::new(
+            target,
+            ModelCatalogProviderRecord {
+                models: BTreeMap::from([(
+                    "deepseek-v4-pro".to_owned(),
+                    crate::model_catalog::CatalogModelDefinition {
+                        assistant_reasoning_field: Some("reasoning_content".to_owned()),
+                        ..crate::model_catalog::CatalogModelDefinition::default()
+                    },
+                )]),
+                appendable_model_ids: Default::default(),
+            },
+        );
+
+        provider
+            .complete(CompletionRequest {
+                model: ModelId::new("deepseek-v4-pro"),
+                system: None,
+                messages: vec![
+                    Message::prompt_parts(
+                        Role::Assistant,
+                        vec![
+                            PartContent::Reasoning(ReasoningPart {
+                                summary: vec!["Prior chain".to_owned()],
+                                raw_content: Vec::new(),
+                                encrypted_content: None,
+                            }),
+                            PartContent::text("Prior answer"),
+                        ],
+                    ),
+                    Message::prompt_text(Role::User, "continue"),
+                ],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("catalog wrapper completion should succeed");
+
+        let captured = captured_requests
+            .lock()
+            .expect("captured requests lock should not be poisoned");
+        let assistant = captured[0]
+            .messages
+            .iter()
+            .find(|message| matches!(message.role, Role::Assistant))
+            .expect("assistant message should be present");
+        assert_eq!(
+            assistant
+                .metadata
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("assistant_reasoning_field"))
+                .and_then(|value| value.as_str()),
+            Some("reasoning_content")
+        );
     }
 }

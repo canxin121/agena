@@ -58,6 +58,7 @@ async fn cdylib_echo_plugin_loads_and_invokes() {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         })
         .build()
         .await

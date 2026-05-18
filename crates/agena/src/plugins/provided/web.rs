@@ -35,6 +35,8 @@ fn entries() -> Vec<PluginToolDecl> {
         .description(
             "Web command dispatcher. Set command to fetch or search; pass that command's payload in args. Fetch upgrades HTTP to HTTPS and caches for 15 minutes.",
         )
+        .summary("Search the web or fetch web pages.")
+        .help("Use command `search` for web search and `fetch` to retrieve a URL. Fetch upgrades HTTP URLs to HTTPS where possible and caches successful fetches for 15 minutes.")
         .tags([ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet])
         .concurrency_safe(true)
         .deferred_load(),

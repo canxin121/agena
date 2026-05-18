@@ -267,6 +267,8 @@ fn entries() -> Vec<PluginToolDecl> {
         .description(
             "Settings read command. Set command to get, list, or validate; pass that command's payload in args.",
         )
+        .summary("Read, list, or validate runtime settings.")
+        .help("Use command `get` to inspect one setting path, `list` to enumerate settings, and `validate` to validate config text without applying it.")
         .tags([ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()])
         .host_capability(crate::plugin::sdk::HostCapability::ReadConfig)
         .concurrency_safe(true)
@@ -278,6 +280,8 @@ fn entries() -> Vec<PluginToolDecl> {
         .description(
             "Settings edit command. Set command to set, delete, or patch; pass that command's payload in args. Edits validate config.toml and reload by default.",
         )
+        .summary("Edit config.toml settings.")
+        .help("Use command `set`, `delete`, or `patch` to mutate config.toml. Edits validate the file and reload the runtime by default. This tool is deferred because it writes configuration.")
         .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()])
         .host_capabilities([
             crate::plugin::sdk::HostCapability::ReadConfig,

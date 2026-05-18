@@ -181,6 +181,8 @@ pub(crate) fn lsp_decl() -> PluginToolDecl {
     .description(
         "LSP command dispatcher. Set command to servers, definition, references, hover, or diagnostics; pass that command's payload in args.",
     )
+    .summary("Query configured language servers.")
+    .help("Use command `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics. Pass the selected command payload under `args`.")
     .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
     .concurrency_safe(true)
     .always_load()

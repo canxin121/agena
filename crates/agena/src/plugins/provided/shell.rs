@@ -37,6 +37,8 @@ fn entries() -> Vec<PluginToolDecl> {
         .description(
             "Shell command dispatcher. Set command to bash, powershell, or monitor; pass that command's payload in args. Shell execution args must declare filesystem_effects for paths the command may read or write.",
         )
+        .summary("Run shell, PowerShell, or monitor commands.")
+        .help("Use command `bash` or `powershell` for one-shot commands and `monitor` to start/read/stop long-running processes. Shell execution payloads must declare `filesystem_effects` for any paths the command may read or write.")
         .tags([ToolTag::Mutating, ToolTag::Shell])
         .concurrency_safe(false)
         .deferred_load()

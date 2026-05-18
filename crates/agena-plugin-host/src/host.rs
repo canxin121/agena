@@ -1323,6 +1323,15 @@ impl PluginHost {
                 if let Some(d) = patch.description {
                     inp.description = d;
                 }
+                if patch.summary.is_some() {
+                    inp.summary = patch.summary;
+                }
+                if patch.help.is_some() {
+                    inp.help = patch.help;
+                }
+                if patch.description_mode.is_some() {
+                    inp.description_mode = patch.description_mode;
+                }
                 if let Some(s) = patch.input_schema {
                     inp.input_schema = s;
                 }

@@ -58,6 +58,7 @@ async fn stdio_echo_plugin_loads_invokes_and_streams() {
             trusted_keys: Default::default(),
             default_quota: Default::default(),
             quotas: Default::default(),
+            tool_presentation: Default::default(),
         })
         .build()
         .await

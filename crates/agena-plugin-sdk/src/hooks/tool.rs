@@ -90,6 +90,12 @@ pub struct ToolDefinitionInput {
     pub tool_name: String,
     pub plugin_name: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_mode: Option<crate::manifest::ToolDescriptionMode>,
     pub input_schema: serde_json::Value,
 }
 
@@ -97,6 +103,12 @@ pub struct ToolDefinitionInput {
 pub struct ToolDefinitionPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description_mode: Option<crate::manifest::ToolDescriptionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
 }

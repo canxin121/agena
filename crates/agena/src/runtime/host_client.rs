@@ -287,10 +287,18 @@ fn parse_subagent_type(value: &str) -> Result<TaskSubagentType, PluginError> {
 fn render_tool_descriptor(tool: crate::plugin::registry::PluginEntry) -> ToolDescriptor {
     let deferred = tool.is_deferred();
     let description = tool.description_text().trim().to_string();
+    let summary = tool.summary_text().map(ToString::to_string);
+    let help = tool.help_text().map(ToString::to_string);
+    let input_schema = Some(tool.sanitized_input_schema());
+    let description_mode = tool.decl.description_mode;
     let tags = tool.effective_tags();
     ToolDescriptor {
         name: tool.exposed_name,
         description: (!description.is_empty()).then_some(description),
+        summary,
+        help,
+        input_schema,
+        description_mode,
         tags,
         deferred,
         plugin_id: (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name),
@@ -757,7 +765,7 @@ impl HostClient for RuntimeHostClient {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, PluginError> {
         let executor = self.tool_executor()?;
         Ok(executor
-            .searchable_tools()
+            .detailed_tools()
             .into_iter()
             .map(render_tool_descriptor)
             .collect())

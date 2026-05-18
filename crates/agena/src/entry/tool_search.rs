@@ -18,7 +18,10 @@ pub(crate) struct SearchableTool {
 impl SearchableTool {
     pub(crate) fn from_entry(entry: RegistryPluginEntry) -> Self {
         let deferred = entry.is_deferred();
-        let description = entry.description_text().to_string();
+        let description = entry
+            .summary_text()
+            .unwrap_or_else(|| entry.description_text())
+            .to_string();
         let tags = entry.effective_tags();
         Self {
             name: entry.exposed_name,
@@ -73,6 +76,12 @@ pub(crate) fn execute_with_tools(
                 },
                 definition.description
             ));
+        }
+        if !results.is_empty() {
+            lines.push(
+                "Call `tools` with command `help` and an exact tool name for detailed usage."
+                    .to_string(),
+            );
         }
     }
 

@@ -5,6 +5,8 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::sdk::ToolDescriptionMode;
+
 pub use crate::quota::QuotaConfig;
 
 /// Top-level `[plugins]` config block, parsed from agena's config layer.
@@ -28,6 +30,10 @@ pub struct PluginsConfig {
     /// `signature` field reference one of these keys.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub trusted_keys: BTreeMap<String, String>,
+    /// Controls how tool descriptions are exposed to the model. The detailed
+    /// help remains available through host/tool help APIs.
+    #[serde(default, skip_serializing_if = "ToolPresentationConfig::is_default")]
+    pub tool_presentation: ToolPresentationConfig,
 }
 
 impl Default for PluginsConfig {
@@ -39,7 +45,59 @@ impl Default for PluginsConfig {
             default_quota: QuotaConfig::default(),
             quotas: BTreeMap::new(),
             trusted_keys: BTreeMap::new(),
+            tool_presentation: ToolPresentationConfig::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ToolPresentationConfig {
+    pub default_mode: ToolDescriptionMode,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, ToolDescriptionMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, ToolDescriptionMode>,
+}
+
+impl Default for ToolPresentationConfig {
+    fn default() -> Self {
+        Self {
+            default_mode: ToolDescriptionMode::Detailed,
+            plugins: BTreeMap::new(),
+            tools: BTreeMap::new(),
+        }
+    }
+}
+
+impl ToolPresentationConfig {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    pub fn mode_for(
+        &self,
+        plugin_name: &str,
+        original_name: &str,
+        exposed_name: &str,
+        tool_default: Option<ToolDescriptionMode>,
+    ) -> ToolDescriptionMode {
+        for key in [
+            exposed_name.to_string(),
+            format!("{plugin_name}/{original_name}"),
+            format!("{plugin_name}/{exposed_name}"),
+            format!("{plugin_name}.{original_name}"),
+            original_name.to_string(),
+        ] {
+            if let Some(mode) = self.tools.get(key.as_str()).copied() {
+                return mode;
+            }
+        }
+        self.plugins
+            .get(plugin_name)
+            .copied()
+            .or(tool_default)
+            .unwrap_or(self.default_mode)
     }
 }
 
@@ -322,4 +380,50 @@ pub enum HttpAuth {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         password_env: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_presentation_mode_precedence_is_tool_plugin_manifest_default_global() {
+        let config = ToolPresentationConfig {
+            default_mode: ToolDescriptionMode::Help,
+            plugins: BTreeMap::from([("plugin.alpha".to_string(), ToolDescriptionMode::Detailed)]),
+            tools: BTreeMap::from([("plugin.alpha/echo".to_string(), ToolDescriptionMode::Help)]),
+        };
+
+        assert_eq!(
+            config.mode_for(
+                "plugin.alpha",
+                "echo",
+                "plugin.alpha/echo",
+                Some(ToolDescriptionMode::Detailed)
+            ),
+            ToolDescriptionMode::Help
+        );
+        assert_eq!(
+            config.mode_for(
+                "plugin.alpha",
+                "other",
+                "other",
+                Some(ToolDescriptionMode::Help)
+            ),
+            ToolDescriptionMode::Detailed
+        );
+        assert_eq!(
+            config.mode_for(
+                "plugin.beta",
+                "other",
+                "other",
+                Some(ToolDescriptionMode::Detailed)
+            ),
+            ToolDescriptionMode::Detailed
+        );
+        assert_eq!(
+            config.mode_for("plugin.beta", "plain", "plain", None),
+            ToolDescriptionMode::Help
+        );
+    }
 }

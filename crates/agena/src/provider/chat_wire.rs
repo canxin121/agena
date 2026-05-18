@@ -388,6 +388,28 @@ pub(crate) fn extract_reasoning_text_from_fields(
         .and_then(|text| (!text.trim().is_empty()).then_some(text))
 }
 
+pub(crate) fn assistant_reasoning_field_from_fields(
+    reasoning_content: Option<&Value>,
+    reasoning_details: Option<&Value>,
+) -> Option<&'static str> {
+    if reasoning_content.is_some() {
+        Some("reasoning_content")
+    } else if reasoning_details.is_some() {
+        Some("reasoning_details")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn assistant_reasoning_field_from_delta_or_message(
+    value: &ChatDeltaOrMessage,
+) -> Option<&'static str> {
+    assistant_reasoning_field_from_fields(
+        value.reasoning_content.as_ref(),
+        value.reasoning_details.as_ref(),
+    )
+}
+
 pub(crate) fn extract_reasoning_text_from_delta_or_message(
     value: &ChatDeltaOrMessage,
 ) -> Option<String> {
@@ -585,6 +607,8 @@ fn assistant_messages_from_parts(
     parts: &[wire_message::WirePart],
     assistant_reasoning_field: Option<&str>,
 ) -> Vec<ChatMessage> {
+    let assistant_reasoning_field =
+        assistant_reasoning_field_from_message_metadata(message).or(assistant_reasoning_field);
     let assistant_reasoning_text = assistant_reasoning_text(message);
     let has_tool_result = parts
         .iter()
@@ -671,6 +695,17 @@ fn assistant_reasoning_text(message: &Message) -> String {
     chunks.join("")
 }
 
+fn assistant_reasoning_field_from_message_metadata(message: &Message) -> Option<&str> {
+    message
+        .metadata
+        .provider_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.as_object())
+        .and_then(|metadata| metadata.get("assistant_reasoning_field"))
+        .and_then(|value| value.as_str())
+        .filter(|value| matches!(*value, "reasoning_content" | "reasoning_details"))
+}
+
 fn apply_assistant_reasoning_field(
     message: &mut ChatMessage,
     field: Option<&str>,
@@ -684,6 +719,81 @@ fn apply_assistant_reasoning_field(
             message.reasoning_details = Some(Value::String(reasoning_text.to_owned()));
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        message::{MessageMetadata, PartContent, ReasoningPart},
+        role::Role,
+    };
+    use serde_json::json;
+
+    fn assistant_message_with_reasoning_and_metadata(
+        field: &str,
+        reasoning: &str,
+        answer: &str,
+    ) -> Message {
+        let mut message = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::Reasoning(ReasoningPart {
+                    summary: vec![reasoning.to_owned()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                }),
+                PartContent::text(answer),
+            ],
+        );
+        message.metadata = MessageMetadata {
+            provider_metadata: Some(json!({
+                "assistant_reasoning_field": field,
+            })),
+            ..MessageMetadata::default()
+        };
+        message
+    }
+
+    #[test]
+    fn request_to_chat_messages_uses_assistant_reasoning_field_from_message_metadata() {
+        let messages = request_to_chat_messages(&CompletionRequest {
+            model: ModelId::new("custom-model"),
+            system: None,
+            messages: vec![
+                assistant_message_with_reasoning_and_metadata(
+                    "reasoning_details",
+                    "Plan carefully",
+                    "Intermediate answer",
+                ),
+                Message::prompt_text(Role::User, "continue"),
+            ],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            request_override: Default::default(),
+            response_format: None,
+        });
+
+        let assistant = messages
+            .iter()
+            .find(|message| message.role == "assistant")
+            .expect("assistant message should be present");
+        assert_eq!(
+            assistant.reasoning_details.as_ref(),
+            Some(&Value::String("Plan carefully".to_owned()))
+        );
+        assert!(assistant.reasoning_content.is_none());
     }
 }
 

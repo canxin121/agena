@@ -939,7 +939,29 @@ impl ModelProvider for OpenAiCompatibleProvider {
         .await?;
         let payload: ChatCompletionResponse =
             utils::parse_json_response(self.id.as_str(), response).await?;
-        chat_wire::parse_completion_response(self.id.as_str(), self.default_model.as_str(), payload)
+        let response_reasoning_field = payload
+            .choices
+            .first()
+            .and_then(|choice| choice.message.as_ref())
+            .and_then(chat_wire::assistant_reasoning_field_from_delta_or_message)
+            .or_else(|| {
+                payload
+                    .choices
+                    .first()
+                    .and_then(|choice| choice.delta.as_ref())
+                    .and_then(chat_wire::assistant_reasoning_field_from_delta_or_message)
+            })
+            .or(assistant_reasoning_field);
+        let mut parsed = chat_wire::parse_completion_response(
+            self.id.as_str(),
+            self.default_model.as_str(),
+            payload,
+        )?;
+        parsed.provider_metadata = utils::provider_metadata_with_assistant_reasoning_field(
+            parsed.provider_metadata.take(),
+            response_reasoning_field,
+        );
+        Ok(parsed)
     }
 
     async fn complete_stream(
@@ -1023,6 +1045,7 @@ impl ModelProvider for OpenAiCompatibleProvider {
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
             let mut response_id: Option<String> = None;
+            let mut assistant_reasoning_field_seen: Option<&'static str> = None;
 
             while let Some(event) = events.next().await {
                 let event = event?;
@@ -1052,6 +1075,13 @@ impl ModelProvider for OpenAiCompatibleProvider {
                 let reasoning_delta = choice
                     .and_then(|item| item.delta.as_ref())
                     .and_then(|delta| {
+                        if assistant_reasoning_field_seen.is_none() {
+                            assistant_reasoning_field_seen =
+                                chat_wire::assistant_reasoning_field_from_fields(
+                                    delta.reasoning_content.as_ref(),
+                                    delta.reasoning_details.as_ref(),
+                                );
+                        }
                         chat_wire::extract_reasoning_text_from_fields(
                             delta.reasoning_content.as_ref(),
                             delta.reasoning_details.as_ref(),
@@ -1160,7 +1190,10 @@ impl ModelProvider for OpenAiCompatibleProvider {
                         stream_finish_reason.as_deref(),
                     ),
                     usage: stream_usage,
-                    provider_metadata: utils::response_id_metadata(response_id),
+                    provider_metadata: utils::provider_metadata_with_assistant_reasoning_field(
+                        utils::response_id_metadata(response_id),
+                        assistant_reasoning_field_seen.or(assistant_reasoning_field),
+                    ),
                 };
             }
         };
@@ -2119,6 +2152,88 @@ mod tests {
             response.usage.as_ref().map(|usage| usage.reasoning_tokens),
             Some(2)
         );
+        assert_eq!(
+            response
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("assistant_reasoning_field"))
+                .and_then(|value| value.as_str()),
+            Some("reasoning_content")
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_parses_reasoning_details_and_persists_field_metadata() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "id": "chatcmpl_reasoning_details",
+                    "choices": [{
+                        "message": {
+                            "content": "Answer",
+                            "reasoning_details": "Hidden path"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "mock-provider",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "custom-model",
+        );
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("custom-model"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "Answer");
+        assert_eq!(response.reasoning_text.as_deref(), Some("Hidden path"));
+        assert_eq!(
+            response
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("chatcmpl_reasoning_details")
+        );
+        assert_eq!(
+            response
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("assistant_reasoning_field"))
+                .and_then(|value| value.as_str()),
+            Some("reasoning_details")
+        );
     }
 
     #[tokio::test]
@@ -2170,6 +2285,72 @@ mod tests {
                 thinking: Some(crate::provider::ThinkingRequest::Effort {
                     effort: crate::provider::ReasoningEffort::High,
                 }),
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+    }
+
+    #[tokio::test]
+    async fn complete_round_trips_assistant_reasoning_field_from_message_metadata() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"reasoning_details\\\":\\\"Plan carefully\\\"".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "custom-model",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "mock-provider",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "custom-model",
+        );
+
+        let mut assistant =
+            assistant_message_with_reasoning("Plan carefully", "Intermediate answer");
+        assistant.metadata.provider_metadata = Some(serde_json::json!({
+            "assistant_reasoning_field": "reasoning_details"
+        }));
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("custom-model"),
+                system: None,
+                messages: vec![
+                    assistant,
+                    Message::prompt_text(crate::role::Role::User, "continue"),
+                ],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
                 verbosity: None,
                 request_override: Default::default(),
                 response_format: None,
@@ -2418,6 +2599,85 @@ mod tests {
         assert_eq!(reasoning, "Plan ");
         assert_eq!(text, "Answer");
         assert!(saw_completed);
+    }
+
+    #[tokio::test]
+    async fn complete_stream_persists_reasoning_details_field_metadata() {
+        let mut server = mockito::Server::new_async().await;
+        let body = concat!(
+            "data: {\"id\":\"chatcmpl_reasoning_details\",\"choices\":[{\"delta\":{\"reasoning_details\":\"Plan \"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Answer\"}}]}\n\n",
+            "data: {\"choices\":[{\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let provider = OpenAiCompatibleProvider::new(
+            "mock-provider",
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "custom-model",
+        );
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("custom-model"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut completed_metadata = None;
+        while let Some(item) = stream.next().await {
+            match item.expect("stream event should parse") {
+                CompletionStreamEvent::Completed {
+                    provider_metadata, ..
+                } => {
+                    completed_metadata = provider_metadata;
+                }
+                CompletionStreamEvent::ThinkingDelta { .. }
+                | CompletionStreamEvent::TextDelta { .. }
+                | CompletionStreamEvent::ToolCallDelta { .. } => {}
+            }
+        }
+
+        assert_eq!(
+            completed_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("chatcmpl_reasoning_details")
+        );
+        assert_eq!(
+            completed_metadata
+                .as_ref()
+                .and_then(|value| value.get("assistant_reasoning_field"))
+                .and_then(|value| value.as_str()),
+            Some("reasoning_details")
+        );
     }
 
     #[test]

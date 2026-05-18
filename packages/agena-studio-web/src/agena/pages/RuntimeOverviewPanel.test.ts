@@ -60,7 +60,7 @@ describe('RuntimeOverviewPanel', () => {
     expect(html.includes('Anthropic')).toBe(true)
   })
 
-  test('renders live provider models as one-click draft sources', async () => {
+  test('does not render provider live models automatically', async () => {
     const html = await renderVueSsr('/src/agena/pages/RuntimeOverviewPanel.vue', {
       catalogEntries: [
         {
@@ -113,12 +113,12 @@ describe('RuntimeOverviewPanel', () => {
     })
 
     expect(html.includes('Provider Defaults')).toBe(true)
-    expect(html.includes('Live models:')).toBe(true)
-    expect(html.includes('Bring to Draft: GPT-5')).toBe(true)
-    expect(html.includes('Bring to Draft: GPT-5 Mini')).toBe(true)
+    expect(html.includes('Live models:')).toBe(false)
+    expect(html.includes('Bring to Draft: GPT-5')).toBe(false)
+    expect(html.includes('Bring to Draft: GPT-5 Mini')).toBe(false)
     expect(html.includes('Blank Draft')).toBe(true)
-    expect(html.includes('Use the live model buttons above for the fastest draft path')).toBe(true)
-    expect(html.match(/Bring to Draft:/g)?.length).toBe(2)
+    expect(html.includes('Search the paged catalog list above or start from a blank draft')).toBe(true)
+    expect(html.match(/Bring to Draft:/g)?.length ?? 0).toBe(0)
   })
 
   test('renders official and custom entries for the same provider/model with distinct actions', async () => {

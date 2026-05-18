@@ -80,7 +80,9 @@ impl SessionCostSummary {
         if self.is_empty() {
             return "no usage recorded yet".to_string();
         }
-        let cache_tokens = self.cache_write_tokens.saturating_add(self.cache_read_tokens);
+        let cache_tokens = self
+            .cache_write_tokens
+            .saturating_add(self.cache_read_tokens);
         format!(
             "{} in{} + {} out{} = {} tokens · ${:.4} over {} turn{}",
             format_count(self.input_tokens),

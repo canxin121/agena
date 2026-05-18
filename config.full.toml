@@ -42,9 +42,9 @@ ttl_secs = 900
 max_bytes = 67108864
 
 [runtime.model_catalog]
-# Maximum age for the workspace-local generated catalog cache under
-# `.agena/catalog/model-catalog-cache.json`.
-cache_max_age_secs = 86400
+# Maximum age for the generated official model catalog persisted in the
+# runtime database. Provider adapter model lists are fetched live separately.
+cache_max_age_secs = 604800
 
 [agents.plan]
 description = "Read-only planning agent"
@@ -340,6 +340,150 @@ stream_mode = "sse"
 # [providers.openrouter.adapters.openai]
 # enabled = true
 # api_mode = "chat"
+#
+# [providers."opencode-go"]
+# default_adapter = "openai"
+# default_model = "kimi-k2.6"
+#
+# [providers."opencode-go".auth]
+# mode = "api"
+# base_url = "https://opencode.ai/zen/go/v1"
+# endpoint_layout = "protocol_root"
+# api_key_env = "OPENCODE_API_KEY"
+#
+# [providers."opencode-go".adapters.openai]
+# enabled = true
+# api_mode = "chat"
+# models_url = "https://opencode.ai/zen/go/v1/models"
+#
+# [providers."opencode-go".adapters.openai.models."minimax-m2.7"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.openai.models."minimax-m2.5"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic]
+# enabled = true
+# messages_url = "https://opencode.ai/zen/go/v1/messages"
+# models_url = "https://opencode.ai/zen/go/v1/models"
+#
+# [providers."opencode-go".adapters.anthropic.models."minimax-m2.7"]
+# enabled = true
+#
+# [providers."opencode-go".adapters.anthropic.models."minimax-m2.5"]
+# enabled = true
+#
+# [providers."opencode-go".adapters.anthropic.models."kimi-k2.6"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."kimi-k2.5"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."glm-5.1"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."glm-5"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."deepseek-v4-pro"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."deepseek-v4-flash"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."qwen3.6-plus"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."qwen3.5-plus"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."mimo-v2-pro"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."mimo-v2-omni"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."mimo-v2.5-pro"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."mimo-v2.5"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic.models."hy3-preview"]
+# enabled = false
+#
+# [providers."opencode-free"]
+# default_adapter = "openai"
+# default_model = "deepseek-v4-flash-free"
+#
+# [providers."opencode-free".auth]
+# mode = "api"
+# base_url = "https://opencode.ai/zen/v1"
+# endpoint_layout = "direct"
+# api_key = "public"
+#
+# [providers."opencode-free".adapters.openai]
+# enabled = true
+# api_mode = "chat"
+# model_discovery = "configured_only"
+#
+# [providers."opencode-free".adapters.openai.models."deepseek-v4-flash-free"]
+# enabled = true
+#
+# [providers."opencode-free".adapters.openai.models."kimi-k2.5-free"]
+# enabled = true
+#
+# [providers."opencode-free".adapters.openai.models."glm-5-free"]
+# enabled = true
+#
+# [providers."opencode-free".adapters.openai.models."big-pickle"]
+# enabled = true
+#
+# [providers."opencode-free".adapters.anthropic]
+# enabled = true
+# model_discovery = "configured_only"
+#
+# [providers."opencode-free".adapters.anthropic.models."minimax-m2.5-free"]
+# enabled = true
+#
+# [providers."opencode-free".adapters.anthropic.models."qwen3.6-plus-free"]
+# enabled = true
+#
+# [providers."opencode-zen"]
+# default_adapter = "openai"
+# default_model = "gpt-5.5"
+#
+# [providers."opencode-zen".auth]
+# mode = "api"
+# base_url = "https://opencode.ai/zen/v1"
+# endpoint_layout = "direct"
+# api_key_env = "OPENCODE_API_KEY"
+#
+# [providers."opencode-zen".adapters.openai]
+# enabled = true
+# api_mode = "auto"
+# model_discovery = "configured_only"
+#
+# [providers."opencode-zen".adapters.openai.models."gpt-5.5"]
+# enabled = true
+#
+# [providers."opencode-zen".adapters.openai.models."kimi-k2.6"]
+# enabled = true
+#
+# [providers."opencode-zen".adapters.anthropic]
+# enabled = true
+# model_discovery = "configured_only"
+#
+# [providers."opencode-zen".adapters.anthropic.models."claude-sonnet-4-6"]
+# enabled = true
+#
+# [providers."opencode-zen".adapters.gemini]
+# enabled = true
+# auth_header = "x-goog-api-key"
+# model_discovery = "configured_only"
+#
+# [providers."opencode-zen".adapters.gemini.models."gemini-3.1-pro"]
+# enabled = true
 #
 # [providers."github-copilot"]
 # default_adapter = "openai"

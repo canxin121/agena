@@ -23,18 +23,18 @@ use crate::{
 use super::raw::parse_adapter_model_ref;
 use super::{
     ConfigEnvironment, ConfigError, ProcessEnvironment, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, SharedGatewayEndpointLayout,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig,
+    ProviderModelDiscoveryConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, SharedGatewayEndpointLayout,
 };
 
 const ATOMGIT_LLM_BASE_URL: &str = "https://api-ai.gitcode.com/v1";
-const PROBE_DEFAULT_MODEL_ID: &str = "__probe__";
+const LIST_MODELS_DEFAULT_MODEL_ID: &str = "__list_models__";
 
 #[derive(Debug, Clone)]
-pub struct ProviderAdapterProbeResult {
+pub struct ProviderAdapterModelsResult {
     pub adapter_id: String,
     pub enabled: bool,
-    pub supported: bool,
     pub resolved_base_url: Option<String>,
     pub models: Vec<crate::provider::ProviderModel>,
     pub error: Option<String>,
@@ -268,13 +268,29 @@ fn build_provider(
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, ConfigError>>()?;
 
-    let provider: Arc<dyn ModelProvider> = Arc::new(MultiAdapterProvider::new(
-        provider_id,
-        resolved.default_adapter.clone(),
-        resolved.default_model.clone(),
-        adapters,
-        routes,
-    ));
+    let configured_only_adapters = resolved
+        .adapters
+        .iter()
+        .filter(|(_, adapter)| {
+            adapter.enabled
+                && matches!(
+                    adapter.model_discovery,
+                    ProviderModelDiscoveryConfig::ConfiguredOnly
+                )
+        })
+        .map(|(adapter_id, _)| adapter_id.clone())
+        .collect();
+
+    let provider: Arc<dyn ModelProvider> = Arc::new(
+        MultiAdapterProvider::new(
+            provider_id,
+            resolved.default_adapter.clone(),
+            resolved.default_model.clone(),
+            adapters,
+            routes,
+        )
+        .with_configured_only_adapters(configured_only_adapters),
+    );
 
     if let Some(provider_record) = catalog.map(|snapshot| snapshot.merged_models()) {
         Ok(CatalogedModelsProvider::new(provider, provider_record))
@@ -632,24 +648,23 @@ fn build_adapter_provider(
     Ok(provider)
 }
 
-pub async fn probe_provider_adapters(
+pub async fn list_provider_adapter_models(
     provider_id: &str,
     auth: &ProviderAuthConfig,
     adapters: &BTreeMap<String, ResolvedProviderAdapterConfig>,
     client: reqwest::Client,
     env: &dyn ConfigEnvironment,
-) -> Vec<ProviderAdapterProbeResult> {
+) -> Vec<ProviderAdapterModelsResult> {
     let mut results = Vec::new();
     for (adapter_id, adapter) in adapters {
         let resolved_base_url =
-            resolved_adapter_probe_base_url(provider_id, auth, &adapter.definition)
+            resolved_adapter_models_base_url(provider_id, auth, &adapter.definition)
                 .ok()
                 .flatten();
         if !adapter.enabled {
-            results.push(ProviderAdapterProbeResult {
+            results.push(ProviderAdapterModelsResult {
                 adapter_id: adapter_id.clone(),
                 enabled: false,
-                supported: false,
                 resolved_base_url,
                 models: Vec::new(),
                 error: Some("adapter is disabled".to_owned()),
@@ -661,17 +676,16 @@ pub async fn probe_provider_adapters(
             provider_id,
             adapter_id.as_str(),
             adapter,
-            PROBE_DEFAULT_MODEL_ID,
+            LIST_MODELS_DEFAULT_MODEL_ID,
             auth,
             client.clone(),
             env,
         ) {
             Ok(provider) => provider,
             Err(err) => {
-                results.push(ProviderAdapterProbeResult {
+                results.push(ProviderAdapterModelsResult {
                     adapter_id: adapter_id.clone(),
                     enabled: true,
-                    supported: false,
                     resolved_base_url,
                     models: Vec::new(),
                     error: Some(err.to_string()),
@@ -705,20 +719,18 @@ pub async fn probe_provider_adapters(
                         model.speed_modes = provider.model_speed_modes_for_adapter(None, &model.id);
                     }
                 }
-                results.push(ProviderAdapterProbeResult {
+                results.push(ProviderAdapterModelsResult {
                     adapter_id: adapter_id.clone(),
                     enabled: true,
-                    supported: true,
                     resolved_base_url,
                     models,
                     error: None,
                 });
             }
             Err(err) => {
-                results.push(ProviderAdapterProbeResult {
+                results.push(ProviderAdapterModelsResult {
                     adapter_id: adapter_id.clone(),
                     enabled: true,
-                    supported: false,
                     resolved_base_url,
                     models: Vec::new(),
                     error: Some(err.to_string()),
@@ -753,7 +765,7 @@ fn resolve_adapter_default_models(
     Ok(defaults)
 }
 
-fn resolved_adapter_probe_base_url(
+fn resolved_adapter_models_base_url(
     provider_id: &str,
     auth: &ProviderAuthConfig,
     definition: &ProviderAdapterDefinition,

@@ -3,7 +3,6 @@ import { ref } from 'vue'
 
 import type {
   MessageResource,
-  ProviderModel,
   ProviderSummary,
   RewindCheckpointResource,
   RuntimeStatus,
@@ -153,10 +152,6 @@ function createDeps() {
         },
       ]
     },
-    listProviderModels: async (providerId) => {
-      calls.push(`listProviderModels:${providerId}`)
-      return [{ provider_id: providerId, id: 'claude-opus-4-7' }] satisfies ProviderModel[]
-    },
     listProviders: async () => {
       calls.push('listProviders')
       return [
@@ -219,7 +214,6 @@ describe('useChatSessionLifecycle', () => {
       'fetchRuntimeStatus',
       'listProviders',
       'listWorkspaces',
-      'listProviderModels:anthropic',
       'listSessions:1:',
       'getSessionState:3',
       'listMessages:3',
@@ -230,7 +224,7 @@ describe('useChatSessionLifecycle', () => {
     ])
     expect(input.runtime.value?.provider_ids).toEqual(['anthropic'])
     expect(input.providers.value.map((item) => item.provider_id)).toEqual(['anthropic'])
-    expect(input.providerModels.anthropic?.map((item) => item.id)).toEqual(['claude-opus-4-7'])
+    expect(input.providerModels).toEqual({})
     expect(input.selectedProviderId.value).toBe('anthropic')
     expect(input.selectedAdapterId.value).toBe('anthropic')
     expect(input.selectedModelId.value).toBe('claude-opus-4-7')

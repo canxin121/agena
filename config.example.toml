@@ -110,13 +110,80 @@ enabled = true
 # [providers.shared.adapters.gemini]
 # enabled = true
 
+# OpenCode Go shared gateway. Most Go models use OpenAI-compatible chat
+# completions; MiniMax M2.7 / M2.5 use Anthropic Messages. Full routing notes
+# are in docs/opencode-go.md.
+#
+# [providers."opencode-go"]
+# default_adapter = "openai"
+# default_model = "kimi-k2.6"
+#
+# [providers."opencode-go".auth]
+# mode = "api"
+# base_url = "https://opencode.ai/zen/go/v1"
+# endpoint_layout = "protocol_root"
+# api_key_env = "OPENCODE_API_KEY"
+#
+# [providers."opencode-go".adapters.openai]
+# enabled = true
+# api_mode = "chat"
+# models_url = "https://opencode.ai/zen/go/v1/models"
+#
+# [providers."opencode-go".adapters.openai.models."minimax-m2.7"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.openai.models."minimax-m2.5"]
+# enabled = false
+#
+# [providers."opencode-go".adapters.anthropic]
+# enabled = true
+# messages_url = "https://opencode.ai/zen/go/v1/messages"
+# models_url = "https://opencode.ai/zen/go/v1/models"
+#
+# [providers."opencode-go".adapters.anthropic.models."minimax-m2.7"]
+# enabled = true
+#
+# [providers."opencode-go".adapters.anthropic.models."minimax-m2.5"]
+# enabled = true
+
+# OpenCode Zen free/public models. `model_discovery = "configured_only"` keeps
+# the public provider from listing paid Zen models returned by /models.
+#
+# [providers."opencode-free"]
+# default_adapter = "openai"
+# default_model = "deepseek-v4-flash-free"
+#
+# [providers."opencode-free".auth]
+# mode = "api"
+# base_url = "https://opencode.ai/zen/v1"
+# endpoint_layout = "direct"
+# api_key = "public"
+#
+# [providers."opencode-free".adapters.openai]
+# enabled = true
+# api_mode = "chat"
+# model_discovery = "configured_only"
+#
+# [providers."opencode-free".adapters.openai.models."deepseek-v4-flash-free"]
+# enabled = true
+#
+# [providers."opencode-free".adapters.openai.models."big-pickle"]
+# enabled = true
+#
+# [providers."opencode-free".adapters.anthropic]
+# enabled = true
+# model_discovery = "configured_only"
+#
+# [providers."opencode-free".adapters.anthropic.models."minimax-m2.5-free"]
+# enabled = true
+
 [runtime]
 # Agena also maintains a model-first catalog for model picker metadata and
-# local workspace overrides. The official catalog is generated at runtime from
-# live provider model lists and cached under `.agena/catalog/model-catalog-cache.json`.
+# local workspace overrides. The official catalog is generated at runtime,
+# persisted in the runtime database, and refreshed after a long TTL or manually.
 #
 # [runtime.model_catalog]
-# cache_max_age_secs = 86400
+# cache_max_age_secs = 604800
 
 [agents.plan]
 description = "Read-only planning agent"

@@ -25,7 +25,8 @@ use agena_api::{
     commands::UpsertPermissionRuleParams,
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, MessageRole, PermissionRuleResource, ProviderSummaryResource, RunOptions,
+        MessageResource, MessageRole, PermissionRuleResource, ProviderAdapterModelsResource,
+        ProviderAdapterModelsResponse, ProviderSummaryResource, RunOptions,
         SessionExecutionResource, SessionResource, SessionRunState,
     },
 };
@@ -62,10 +63,7 @@ use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::ui_text;
-use agena_api_server::local_api::{
-    ModelCatalogEntryResource, ModelCatalogListResponse, ProviderAdapterDiscoveryResource,
-    ProviderAdapterDiscoveryResponse,
-};
+use agena_api_server::local_api::{ModelCatalogEntryResource, ModelCatalogListResponse};
 
 mod transcript_view;
 mod view;
@@ -302,9 +300,9 @@ enum AppMessage {
         offset: usize,
         result: UiResult<ModelCatalogListResponse>,
     },
-    ProviderStudioDiscoveryLoaded {
+    ProviderStudioAdapterModelsLoaded {
         request_key: String,
-        result: UiResult<ProviderAdapterDiscoveryResponse>,
+        result: UiResult<ProviderAdapterModelsResponse>,
     },
     ProviderStudioSaved {
         provider_id: String,
@@ -529,7 +527,8 @@ struct ProviderStudioOverlay {
     focus: ProviderStudioFocus,
     selected_field: usize,
     draft: ProviderConfigDraft,
-    discoveries: Vec<ProviderAdapterDiscoveryResource>,
+    adapter_models: Vec<ProviderAdapterModelsResource>,
+    adapter_candidate_ids: Vec<String>,
     selected_adapter: usize,
     selected_model: usize,
     selected_adapter_ids: BTreeSet<String>,
@@ -541,9 +540,9 @@ struct ProviderStudioOverlay {
     catalog_limit: usize,
     catalog_loading: bool,
     selected_catalog: usize,
-    discovering: bool,
+    listing_adapter_models: bool,
     saving: bool,
-    pending_discovery_key: Option<String>,
+    pending_adapter_models_key: Option<String>,
     editor: Option<ProviderStudioEditor>,
 }
 
@@ -1884,7 +1883,7 @@ impl App {
                 false
             }
             KeyCode::Char('r') => {
-                self.request_provider_studio_discovery(dialog);
+                self.request_provider_studio_adapter_models(dialog);
                 false
             }
             KeyCode::Char('R') => {
@@ -1898,7 +1897,7 @@ impl App {
                 false
             }
             KeyCode::Char('a') | KeyCode::Char('A') => {
-                if dialog.discoveries.get(dialog.selected_adapter).is_none() {
+                if provider_studio_selected_adapter_models(dialog).is_none() {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-provider-studio-adapter-required",
@@ -2509,10 +2508,10 @@ impl App {
                 offset,
                 result,
             } => self.handle_provider_studio_catalog_loaded(query, offset, result),
-            AppMessage::ProviderStudioDiscoveryLoaded {
+            AppMessage::ProviderStudioAdapterModelsLoaded {
                 request_key,
                 result,
-            } => self.handle_provider_studio_discovery_loaded(request_key, result),
+            } => self.handle_provider_studio_adapter_models_loaded(request_key, result),
             AppMessage::ProviderStudioSaved {
                 provider_id,
                 result,
@@ -3198,31 +3197,31 @@ impl App {
         self.overlay = Some(Overlay::ProviderStudio(dialog));
     }
 
-    fn handle_provider_studio_discovery_loaded(
+    fn handle_provider_studio_adapter_models_loaded(
         &mut self,
         request_key: String,
-        result: UiResult<ProviderAdapterDiscoveryResponse>,
+        result: UiResult<ProviderAdapterModelsResponse>,
     ) {
         let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
             return;
         };
-        if dialog.pending_discovery_key.as_deref() != Some(request_key.as_str()) {
+        if dialog.pending_adapter_models_key.as_deref() != Some(request_key.as_str()) {
             self.overlay = Some(Overlay::ProviderStudio(dialog));
             return;
         }
 
-        dialog.discovering = false;
-        dialog.pending_discovery_key = None;
+        dialog.listing_adapter_models = false;
+        dialog.pending_adapter_models_key = None;
         match result {
             Ok(response) => {
-                dialog.discoveries = response.adapters;
+                dialog.adapter_models = response.adapters;
                 dialog.selected_adapter = min(
                     dialog.selected_adapter,
-                    dialog.discoveries.len().saturating_sub(1),
+                    dialog.adapter_candidate_ids.len().saturating_sub(1),
                 );
                 dialog.selected_model = 0;
                 let lookup_ids = dialog
-                    .discoveries
+                    .adapter_models
                     .iter()
                     .flat_map(|adapter| adapter.models.iter().map(|model| model.id.to_string()))
                     .collect::<Vec<_>>();
@@ -3232,12 +3231,6 @@ impl App {
                         .into_iter()
                         .map(|entry| entry.model_id),
                 );
-                dialog.selected_adapter_ids = dialog
-                    .discoveries
-                    .iter()
-                    .filter(|adapter| adapter.supported)
-                    .map(|adapter| adapter.adapter_id.clone())
-                    .collect();
             }
             Err(error) => self.flash_error(error),
         }
@@ -3265,7 +3258,7 @@ impl App {
                     .unwrap_or(0);
                 self.load_provider_studio_draft(&mut dialog, Some(provider_id.as_str()), None);
                 if dialog.draft.auth_kind.is_api() || dialog.draft.source_provider_id.is_some() {
-                    self.request_provider_studio_discovery(&mut dialog);
+                    self.request_provider_studio_adapter_models(&mut dialog);
                 }
             }
             Err(error) => self.flash_error(error),
@@ -4525,7 +4518,8 @@ impl App {
                     default_adapter: "openai".to_owned(),
                     default_model: String::new(),
                 }),
-            discoveries: Vec::new(),
+            adapter_models: Vec::new(),
+            adapter_candidate_ids: Vec::new(),
             selected_adapter: 0,
             selected_model: 0,
             selected_adapter_ids: BTreeSet::new(),
@@ -4537,9 +4531,9 @@ impl App {
             catalog_limit: 50,
             catalog_loading: true,
             selected_catalog: 0,
-            discovering: false,
+            listing_adapter_models: false,
             saving: false,
-            pending_discovery_key: None,
+            pending_adapter_models_key: None,
             editor: None,
         };
         let selected_id = overlay
@@ -4566,12 +4560,8 @@ impl App {
                 }
                 dialog.draft = draft;
                 dialog.selected_field = 0;
-                dialog.discoveries.clear();
-                dialog.selected_adapter = 0;
-                dialog.selected_model = 0;
-                dialog.pending_discovery_key = None;
-                dialog.discovering = false;
-                dialog.selected_adapter_ids = provider_id
+                dialog.adapter_models.clear();
+                let configured_adapter_ids = provider_id
                     .and_then(|id| {
                         self.backend
                             .list_configured_providers()
@@ -4582,11 +4572,17 @@ impl App {
                         provider
                             .adapters
                             .into_iter()
-                            .filter(|adapter| adapter.enabled)
                             .map(|adapter| adapter.adapter_id)
                             .collect()
                     })
                     .unwrap_or_default();
+                dialog.adapter_candidate_ids =
+                    provider_studio_candidate_adapter_ids(&dialog.draft, configured_adapter_ids);
+                dialog.selected_adapter = 0;
+                dialog.selected_model = 0;
+                dialog.pending_adapter_models_key = None;
+                dialog.listing_adapter_models = false;
+                dialog.selected_adapter_ids.clear();
             }
             Err(error) => self.flash_error(error.to_string()),
         }
@@ -4619,31 +4615,50 @@ impl App {
         });
     }
 
-    fn request_provider_studio_discovery(&mut self, dialog: &mut ProviderStudioOverlay) {
-        let request_key = provider_studio_request_key(&dialog.draft);
-        dialog.pending_discovery_key = Some(request_key.clone());
-        dialog.discovering = true;
+    fn request_provider_studio_adapter_models(&mut self, dialog: &mut ProviderStudioOverlay) {
+        if dialog.selected_adapter_ids.is_empty() {
+            self.flash_error(
+                "listing adapter models requires at least one explicit adapter selection",
+            );
+            return;
+        }
+
+        let request_key = provider_studio_request_key(
+            &dialog.draft,
+            &dialog
+                .selected_adapter_ids
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        dialog.pending_adapter_models_key = Some(request_key.clone());
+        dialog.listing_adapter_models = true;
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let draft = dialog.draft.clone();
+        let adapter_ids = dialog
+            .selected_adapter_ids
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
         tokio::spawn(async move {
             let result = if draft.auth_kind.is_api() {
                 backend
-                    .discover_draft_provider_adapters(&draft)
+                    .list_draft_provider_adapter_models(&draft, &adapter_ids)
                     .await
                     .map_err(|error| error.to_string())
             } else if let Some(provider_id) = draft.source_provider_id.as_deref() {
                 backend
-                    .discover_saved_provider_adapters(provider_id)
+                    .list_saved_provider_adapter_models(provider_id, &adapter_ids)
                     .await
                     .map_err(|error| error.to_string())
             } else {
                 Err(format!(
-                    "provider discovery requires api auth or an existing saved provider; current auth is {}",
+                    "listing adapter models requires api auth or an existing saved provider; current auth is {}",
                     draft.auth_kind.label()
                 ))
             };
-            let _ = tx.send(AppMessage::ProviderStudioDiscoveryLoaded {
+            let _ = tx.send(AppMessage::ProviderStudioAdapterModelsLoaded {
                 request_key,
                 result,
             });
@@ -4657,7 +4672,7 @@ impl App {
             let result = backend
                 .save_provider_draft(
                     dialog.draft.clone(),
-                    dialog.discoveries.as_slice(),
+                    dialog.adapter_models.as_slice(),
                     &dialog
                         .selected_adapter_ids
                         .iter()
@@ -4674,7 +4689,7 @@ impl App {
     }
 
     fn request_provider_studio_save_selected_adapter(&mut self, dialog: ProviderStudioOverlay) {
-        let Some(discovery) = dialog.discoveries.get(dialog.selected_adapter).cloned() else {
+        let Some(adapter_models) = provider_studio_selected_adapter_models(&dialog).cloned() else {
             self.flash_warning(ui_text::t(
                 &self.i18n,
                 "flash-provider-studio-adapter-required",
@@ -4685,7 +4700,7 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
-                .save_provider_adapter_matches(dialog.draft.clone(), discovery)
+                .save_provider_adapter_matches(dialog.draft.clone(), adapter_models)
                 .await
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::ProviderStudioSaved {
@@ -4753,16 +4768,17 @@ impl App {
                     min(target, ProviderStudioField::ALL.len().saturating_sub(1));
             }
             ProviderStudioFocus::Adapters => {
-                dialog.selected_adapter = min(target, dialog.discoveries.len().saturating_sub(1));
+                dialog.selected_adapter =
+                    min(target, dialog.adapter_candidate_ids.len().saturating_sub(1));
                 dialog.selected_model = min(
                     dialog.selected_model,
-                    provider_studio_selected_discovery(dialog)
+                    provider_studio_selected_adapter_models(dialog)
                         .map(|adapter| adapter.models.len().saturating_sub(1))
                         .unwrap_or_default(),
                 );
             }
             ProviderStudioFocus::Models => {
-                let max_index = provider_studio_selected_discovery(dialog)
+                let max_index = provider_studio_selected_adapter_models(dialog)
                     .map(|adapter| adapter.models.len().saturating_sub(1))
                     .unwrap_or_default();
                 dialog.selected_model = min(target, max_index);
@@ -4799,21 +4815,19 @@ impl App {
                 });
             }
             ProviderStudioFocus::Adapters => {
-                if let Some(adapter_id) = provider_studio_selected_discovery(dialog)
-                    .map(|discovery| discovery.adapter_id.clone())
+                if let Some(adapter_id) = provider_studio_selected_adapter_models(dialog)
+                    .map(|adapter_models| adapter_models.adapter_id.clone())
                 {
-                    dialog.draft.default_adapter = adapter_id.clone();
-                    dialog.selected_adapter_ids.insert(adapter_id);
+                    dialog.draft.default_adapter = adapter_id;
                 }
             }
             ProviderStudioFocus::Models => {
-                if let Some(discovery) = provider_studio_selected_discovery(dialog)
-                    && let Some(model) = discovery.models.get(dialog.selected_model).cloned()
+                if let Some(adapter_models) = provider_studio_selected_adapter_models(dialog)
+                    && let Some(model) = adapter_models.models.get(dialog.selected_model).cloned()
                 {
-                    let adapter_id = discovery.adapter_id.clone();
+                    let adapter_id = adapter_models.adapter_id.clone();
                     dialog.draft.default_adapter = adapter_id.clone();
                     dialog.draft.default_model = model.id.to_string();
-                    dialog.selected_adapter_ids.insert(adapter_id);
                 }
             }
             ProviderStudioFocus::Catalog => {
@@ -4823,11 +4837,10 @@ impl App {
                     .map(|entry| entry.model_id.clone())
                 {
                     if dialog.draft.default_adapter.trim().is_empty() {
-                        if let Some(adapter_id) = provider_studio_selected_discovery(dialog)
-                            .map(|discovery| discovery.adapter_id.clone())
+                        if let Some(adapter_id) = provider_studio_selected_adapter_models(dialog)
+                            .map(|adapter_models| adapter_models.adapter_id.clone())
                         {
-                            dialog.draft.default_adapter = adapter_id.clone();
-                            dialog.selected_adapter_ids.insert(adapter_id);
+                            dialog.draft.default_adapter = adapter_id;
                         } else {
                             dialog.draft.default_adapter = "openai".to_owned();
                         }
@@ -4867,9 +4880,7 @@ impl App {
     }
 
     fn toggle_provider_studio_selected_adapter(&mut self, dialog: &mut ProviderStudioOverlay) {
-        let Some(adapter_id) = provider_studio_selected_discovery(dialog)
-            .map(|discovery| discovery.adapter_id.clone())
-        else {
+        let Some(adapter_id) = provider_studio_selected_adapter_id(dialog) else {
             return;
         };
         if !dialog.selected_adapter_ids.remove(adapter_id.as_str()) {
@@ -7246,19 +7257,54 @@ fn provider_studio_provider_rows(
     rows
 }
 
-fn provider_studio_request_key(draft: &ProviderConfigDraft) -> String {
+fn provider_studio_request_key(draft: &ProviderConfigDraft, adapter_ids: &[String]) -> String {
     format!(
-        "{}|{}|{}",
+        "{}|{}|{}|{}",
         draft.source_provider_id.as_deref().unwrap_or("<new>"),
         draft.provider_id.trim(),
-        draft.base_url.trim()
+        draft.base_url.trim(),
+        adapter_ids
+            .iter()
+            .map(|adapter_id| adapter_id.trim())
+            .filter(|adapter_id| !adapter_id.is_empty())
+            .collect::<Vec<_>>()
+            .join(",")
     )
 }
 
-fn provider_studio_selected_discovery(
+fn provider_studio_candidate_adapter_ids(
+    draft: &ProviderConfigDraft,
+    configured_adapter_ids: BTreeSet<String>,
+) -> Vec<String> {
+    let mut adapter_ids = configured_adapter_ids;
+    let has_shared_gateway_adapter = adapter_ids.iter().any(|adapter_id| {
+        agena::config::HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS.contains(&adapter_id.as_str())
+    });
+    if draft.auth_kind.is_api() && (adapter_ids.is_empty() || has_shared_gateway_adapter) {
+        adapter_ids.extend(
+            agena::config::HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS
+                .iter()
+                .map(|adapter_id| (*adapter_id).to_owned()),
+        );
+    }
+    adapter_ids.into_iter().collect()
+}
+
+fn provider_studio_selected_adapter_id(dialog: &ProviderStudioOverlay) -> Option<String> {
+    dialog
+        .adapter_candidate_ids
+        .get(dialog.selected_adapter)
+        .cloned()
+}
+
+fn provider_studio_selected_adapter_models(
     dialog: &ProviderStudioOverlay,
-) -> Option<&ProviderAdapterDiscoveryResource> {
-    dialog.discoveries.get(dialog.selected_adapter)
+) -> Option<&ProviderAdapterModelsResource> {
+    let adapter_id = dialog.adapter_candidate_ids.get(dialog.selected_adapter)?;
+    dialog
+        .adapter_models
+        .iter()
+        .find(|adapter_models| adapter_models.adapter_id == *adapter_id)
 }
 
 fn provider_studio_selected_model_target(
@@ -7267,7 +7313,7 @@ fn provider_studio_selected_model_target(
     if dialog.focus == ProviderStudioFocus::Catalog {
         let entry = dialog.catalog_items.get(dialog.selected_catalog)?;
         let adapter_id = if dialog.draft.default_adapter.trim().is_empty() {
-            provider_studio_selected_discovery(dialog)
+            provider_studio_selected_adapter_models(dialog)
                 .map(|adapter| adapter.adapter_id.clone())
                 .unwrap_or_else(|| "openai".to_owned())
         } else {
@@ -7276,10 +7322,10 @@ fn provider_studio_selected_model_target(
         return Some((adapter_id, entry.model_id.clone(), None));
     }
 
-    let discovery = provider_studio_selected_discovery(dialog)?;
-    let model = discovery.models.get(dialog.selected_model)?.clone();
+    let adapter_models = provider_studio_selected_adapter_models(dialog)?;
+    let model = adapter_models.models.get(dialog.selected_model)?.clone();
     Some((
-        discovery.adapter_id.clone(),
+        adapter_models.adapter_id.clone(),
         model.id.to_string(),
         Some(model),
     ))

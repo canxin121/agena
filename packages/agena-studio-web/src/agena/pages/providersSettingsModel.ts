@@ -1,8 +1,9 @@
-import type { ModelCatalogEntry, ProviderAdapterDiscovery, ProviderModel } from '../lib/agenaApi'
+import type { ModelCatalogEntry, ProviderAdapterModels, ProviderModel } from '../lib/agenaApi'
 import {
   buildConfiguredProviderModelFromDraft,
   catalogLookupIdForProviderModel,
   createModelCatalogDraftFromEntry,
+  createModelCatalogDraftFromProviderSelection,
 } from './useRuntimeModelCatalogActions'
 
 export type ProviderAdapterPatch = {
@@ -56,20 +57,33 @@ export function matchedCatalogModelDefinitions(
   return definitions
 }
 
-export function discoveryMatchedModels(entries: ModelCatalogEntry[], discovery: ProviderAdapterDiscovery): ProviderModel[] {
-  return discovery.models.filter((model) => Boolean(preferredCatalogEntryForProviderModel(entries, model)))
+export function configuredProviderModelDefinitions(
+  entries: ModelCatalogEntry[],
+  models: ProviderModel[],
+): Record<string, Record<string, unknown>> {
+  const definitions: Record<string, Record<string, unknown>> = {}
+  for (const model of models) {
+    definitions[model.id] = buildConfiguredProviderModelFromDraft(
+      createModelCatalogDraftFromProviderSelection(entries, model),
+    )
+  }
+  return definitions
 }
 
-export function discoveryUnmatchedModels(
+export function adapterModelsMatchedModels(entries: ModelCatalogEntry[], adapterModels: ProviderAdapterModels): ProviderModel[] {
+  return adapterModels.models.filter((model) => Boolean(preferredCatalogEntryForProviderModel(entries, model)))
+}
+
+export function adapterModelsUnmatchedModels(
   entries: ModelCatalogEntry[],
-  discovery: ProviderAdapterDiscovery,
+  adapterModels: ProviderAdapterModels,
 ): ProviderModel[] {
-  return discovery.models.filter((model) => !preferredCatalogEntryForProviderModel(entries, model))
+  return adapterModels.models.filter((model) => !preferredCatalogEntryForProviderModel(entries, model))
 }
 
 export function buildAdaptersPatchFromDraftSelection(input: {
   catalogEntries: ModelCatalogEntry[]
-  discoveries: ProviderAdapterDiscovery[]
+  adapterModelLists: ProviderAdapterModels[]
   selectedAdapterIds: string[]
   defaultAdapterId: string
   defaultModelId: string
@@ -77,12 +91,12 @@ export function buildAdaptersPatchFromDraftSelection(input: {
 }): Record<string, ProviderAdapterPatch> {
   const adaptersPatch: Record<string, ProviderAdapterPatch> = {}
 
-  for (const discovery of input.discoveries) {
-    if (!discovery.supported || !input.selectedAdapterIds.includes(discovery.adapter_id)) continue
-    const matchedModels = matchedCatalogModelDefinitions(input.catalogEntries, discovery.models)
-    adaptersPatch[discovery.adapter_id] = {
+  for (const adapterModels of input.adapterModelLists) {
+    if (adapterModels.error || !input.selectedAdapterIds.includes(adapterModels.adapter_id)) continue
+    const configuredModels = configuredProviderModelDefinitions(input.catalogEntries, adapterModels.models)
+    adaptersPatch[adapterModels.adapter_id] = {
       enabled: true,
-      ...(Object.keys(matchedModels).length ? { models: matchedModels } : {}),
+      models: configuredModels,
     }
   }
 
@@ -90,13 +104,15 @@ export function buildAdaptersPatchFromDraftSelection(input: {
     input.defaultModelId,
     input.defaultCatalogModelId || '',
   ])
+  const existingDefaultModel =
+    adaptersPatch[input.defaultAdapterId]?.models?.[input.defaultModelId] || {}
   adaptersPatch[input.defaultAdapterId] = {
     enabled: true,
     models: {
       ...(adaptersPatch[input.defaultAdapterId]?.models || {}),
       [input.defaultModelId]: defaultModelEntry
         ? buildConfiguredProviderModelFromDraft(createModelCatalogDraftFromEntry(defaultModelEntry))
-        : {},
+        : existingDefaultModel,
     },
   }
 

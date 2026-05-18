@@ -226,9 +226,11 @@ impl RuntimeSnapshot {
                 .build_provider_registry_with_plugins_and_catalog(plugins.as_ref(), None)
                 .await?,
         );
-        let model_catalog = Arc::new(ModelCatalogService::new(ModelCatalogStore::new(
-            model_catalog_config,
-        ))?);
+        let model_catalog_store = match database.as_ref() {
+            Some(db) => ModelCatalogStore::new_database(model_catalog_config, Arc::clone(db)),
+            None => ModelCatalogStore::new(model_catalog_config),
+        };
+        let model_catalog = Arc::new(ModelCatalogService::new(model_catalog_store).await?);
         let mut catalog_snapshot = model_catalog.snapshot();
         if let Ok(snapshot) = model_catalog
             .refresh_if_stale_on_startup(catalog_source_providers.as_ref(), Some(&resolution))

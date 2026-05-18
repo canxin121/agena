@@ -15,9 +15,7 @@ use crate::{
     provider::{
         AnthropicProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ManagedCredential, ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel,
-        auth::AuthData,
-        remote_model_catalog_cache::{RemoteModelCatalogCache, RemoteModelCatalogSource},
-        should_retry_credential, utils,
+        auth::AuthData, should_retry_credential, utils,
     },
 };
 
@@ -194,18 +192,6 @@ impl GitlabProvider {
 
     fn use_responses_api(model: &str) -> bool {
         model.to_ascii_lowercase().contains("codex")
-    }
-
-    fn list_models_source(&self) -> RemoteModelCatalogSource {
-        RemoteModelCatalogSource::new(
-            PROVIDER_ID,
-            format!(
-                "{}|{}",
-                self.openai_proxy_base_url(),
-                self.anthropic_proxy_base_url()
-            ),
-            self.api_key.prompt_cache_scope(),
-        )
     }
 
     fn listed_model_id(model_id: &str) -> String {
@@ -613,10 +599,7 @@ impl ModelProvider for GitlabProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let source = self.list_models_source();
-        RemoteModelCatalogCache::default()
-            .get_or_fetch(&source, || async { self.fetch_proxy_models().await })
-            .await
+        self.fetch_proxy_models().await
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
@@ -815,138 +798,68 @@ fn now_ms() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, OnceLock};
-
     use futures_util::StreamExt;
 
     use super::*;
 
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let previous = std::env::var(key).ok();
-            // SAFETY: tests serialize env mutation through `env_lock()`.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            if let Some(previous) = self.previous.as_ref() {
-                // SAFETY: tests serialize env mutation through `env_lock()`.
-                unsafe {
-                    std::env::set_var(self.key, previous);
-                }
-            } else {
-                // SAFETY: tests serialize env mutation through `env_lock()`.
-                unsafe {
-                    std::env::remove_var(self.key);
-                }
-            }
-        }
-    }
-
     #[tokio::test]
-    async fn gitlab_list_models_uses_proxy_model_endpoints_and_disk_cache() {
-        let _env_lock = env_lock().lock().expect("env lock should succeed");
-        let dir = tempfile::tempdir().expect("tempdir should create");
-        let _cache_dir =
-            EnvVarGuard::set("AGENA_PROVIDER_MODELS_CACHE_DIR", dir.path().as_os_str());
-
+    async fn gitlab_list_models_uses_proxy_model_endpoints_each_time() {
         let mut server = mockito::Server::new_async().await;
 
-        {
-            let _direct_access = server
-                .mock("POST", "/api/v4/ai/third_party_agents/direct_access")
-                .match_header("authorization", "Bearer gl-token")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    serde_json::json!({
-                        "token": "direct-token",
-                        "headers": {
-                            "x-request-id": "req-1",
-                            "x-api-key": "remove-me"
-                        }
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-            let _openai_models = server
-                .mock("GET", "/ai/v1/proxy/openai/v1/models")
-                .match_header("authorization", "Bearer direct-token")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    serde_json::json!({
-                        "data": [
-                            { "id": "duo-chat-gpt-5-codex", "name": "GitLab Duo Chat GPT-5 Codex" },
-                            { "id": "openai.gpt-5.4", "name": "GPT-5.4 via GitLab" }
-                        ]
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-            let _anthropic_models = server
-                .mock("GET", "/ai/v1/proxy/anthropic/v1/models")
-                .match_header("authorization", "Bearer direct-token")
-                .with_status(200)
-                .with_header("content-type", "application/json")
-                .with_body(
-                    serde_json::json!({
-                        "data": [
-                            {
-                                "id": "duo-chat-sonnet-4-5",
-                                "display_name": "GitLab Duo Chat Sonnet 4.5"
-                            }
-                        ]
-                    })
-                    .to_string(),
-                )
-                .expect(1)
-                .create_async()
-                .await;
-
-            let provider = GitlabProvider::from_token_with_urls(
-                reqwest::Client::new(),
-                "gl-token",
-                Some(server.url()),
-                Some(server.url()),
+        let _direct_access = server
+            .mock("POST", "/api/v4/ai/third_party_agents/direct_access")
+            .match_header("authorization", "Bearer gl-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "token": "direct-token",
+                    "headers": {
+                        "x-request-id": "req-1",
+                        "x-api-key": "remove-me"
+                    }
+                })
+                .to_string(),
             )
-            .expect("gitlab provider should be created from token");
-
-            let models = provider
-                .list_models()
-                .await
-                .expect("initial list_models should succeed");
-            assert!(
-                models
-                    .iter()
-                    .any(|model| model.id.as_str() == "claude-sonnet-4-5")
-            );
-            assert!(models.iter().any(|model| model.id.as_str() == "gpt-5.4"));
-            assert!(
-                models
-                    .iter()
-                    .any(|model| model.id.as_str() == "gpt-5-codex")
-            );
-        }
+            .expect(2)
+            .create_async()
+            .await;
+        let _openai_models = server
+            .mock("GET", "/ai/v1/proxy/openai/v1/models")
+            .match_header("authorization", "Bearer direct-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "data": [
+                        { "id": "duo-chat-gpt-5-codex", "name": "GitLab Duo Chat GPT-5 Codex" },
+                        { "id": "openai.gpt-5.4", "name": "GPT-5.4 via GitLab" }
+                    ]
+                })
+                .to_string(),
+            )
+            .expect(2)
+            .create_async()
+            .await;
+        let _anthropic_models = server
+            .mock("GET", "/ai/v1/proxy/anthropic/v1/models")
+            .match_header("authorization", "Bearer direct-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "data": [
+                        {
+                            "id": "duo-chat-sonnet-4-5",
+                            "display_name": "GitLab Duo Chat Sonnet 4.5"
+                        }
+                    ]
+                })
+                .to_string(),
+            )
+            .expect(2)
+            .create_async()
+            .await;
 
         let provider = GitlabProvider::from_token_with_urls(
             reqwest::Client::new(),
@@ -959,7 +872,31 @@ mod tests {
         let models = provider
             .list_models()
             .await
-            .expect("cached list_models should succeed");
+            .expect("initial list_models should succeed");
+        assert!(
+            models
+                .iter()
+                .any(|model| model.id.as_str() == "claude-sonnet-4-5")
+        );
+        assert!(models.iter().any(|model| model.id.as_str() == "gpt-5.4"));
+        assert!(
+            models
+                .iter()
+                .any(|model| model.id.as_str() == "gpt-5-codex")
+        );
+
+        let provider = GitlabProvider::from_token_with_urls(
+            reqwest::Client::new(),
+            "gl-token",
+            Some(server.url()),
+            Some(server.url()),
+        )
+        .expect("gitlab provider should be created from token");
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("second live list_models should succeed");
         assert!(
             models
                 .iter()

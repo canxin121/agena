@@ -7,6 +7,10 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+    QueryOrder,
+};
 use serde::{Deserialize, Serialize};
 
 mod curate;
@@ -15,6 +19,7 @@ mod sources;
 use crate::{
     AppError,
     config::{ConfigResolution, ProviderAdapterDefinition, ProviderCapabilityFamilyConfig},
+    db::entities::{model_catalog_entry, model_catalog_state},
     model::{
         CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality, ModelLifecycle,
         ModelPricing,
@@ -27,7 +32,11 @@ use crate::{
     },
 };
 
-pub const DEFAULT_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24;
+pub const DEFAULT_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24 * 7;
+
+const CATALOG_KIND_OFFICIAL: &str = "official";
+const CATALOG_KIND_CUSTOM: &str = "custom";
+const CATALOG_STATE_ID: i32 = 1;
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -418,17 +427,44 @@ struct CachedOfficialCatalog {
 }
 
 #[derive(Clone)]
+enum ModelCatalogStoreBackend {
+    File(ModelCatalogConfig),
+    Database {
+        config: ModelCatalogConfig,
+        db: Arc<DatabaseConnection>,
+    },
+}
+
+#[derive(Clone)]
 pub struct ModelCatalogStore {
-    config: ModelCatalogConfig,
+    backend: ModelCatalogStoreBackend,
 }
 
 impl ModelCatalogStore {
     pub fn new(config: ModelCatalogConfig) -> Self {
-        Self { config }
+        Self {
+            backend: ModelCatalogStoreBackend::File(config),
+        }
+    }
+
+    pub fn new_database(config: ModelCatalogConfig, db: Arc<DatabaseConnection>) -> Self {
+        Self {
+            backend: ModelCatalogStoreBackend::Database { config, db },
+        }
     }
 
     pub fn config(&self) -> &ModelCatalogConfig {
-        &self.config
+        match &self.backend {
+            ModelCatalogStoreBackend::File(config) => config,
+            ModelCatalogStoreBackend::Database { config, .. } => config,
+        }
+    }
+
+    fn database(&self) -> Option<&Arc<DatabaseConnection>> {
+        match &self.backend {
+            ModelCatalogStoreBackend::File(_) => None,
+            ModelCatalogStoreBackend::Database { db, .. } => Some(db),
+        }
     }
 
     fn read_json<T: for<'de> Deserialize<'de>>(&self, path: &Path) -> Result<Option<T>, AppError> {
@@ -450,22 +486,178 @@ impl ModelCatalogStore {
         Ok(())
     }
 
-    pub fn read_custom(&self) -> Result<ModelCatalogDocument, AppError> {
+    async fn migrate_legacy_files_if_needed(&self) -> Result<(), AppError> {
+        let Some(db) = self.database() else {
+            return Ok(());
+        };
+
+        let has_any_entries = model_catalog_entry::Entity::find()
+            .one(db.as_ref())
+            .await?
+            .is_some();
+        let has_state = model_catalog_state::Entity::find_by_id(CATALOG_STATE_ID)
+            .one(db.as_ref())
+            .await?
+            .is_some();
+        if has_any_entries || has_state {
+            return Ok(());
+        }
+
+        if let Some(custom) = self.read_json::<ModelCatalogDocument>(&self.config().custom_path)? {
+            self.write_document_to_db(CATALOG_KIND_CUSTOM, &custom)
+                .await?;
+        }
+        if let Some(cached) = self.read_json::<CachedOfficialCatalog>(&self.config().cache_path)? {
+            self.write_cached_official_to_db(&cached).await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn read_custom(&self) -> Result<ModelCatalogDocument, AppError> {
+        if self.database().is_some() {
+            return self.read_document_from_db(CATALOG_KIND_CUSTOM).await;
+        }
         Ok(self
-            .read_json(&self.config.custom_path)?
+            .read_json(&self.config().custom_path)?
             .unwrap_or_default())
     }
 
-    pub fn write_custom(&self, document: &ModelCatalogDocument) -> Result<(), AppError> {
-        self.write_json(&self.config.custom_path, document)
+    pub async fn write_custom(&self, document: &ModelCatalogDocument) -> Result<(), AppError> {
+        if self.database().is_some() {
+            return self
+                .write_document_to_db(CATALOG_KIND_CUSTOM, document)
+                .await;
+        }
+        self.write_json(&self.config().custom_path, document)
     }
 
-    fn read_cached_official(&self) -> Result<Option<CachedOfficialCatalog>, AppError> {
-        self.read_json(&self.config.cache_path)
+    async fn read_cached_official(&self) -> Result<Option<CachedOfficialCatalog>, AppError> {
+        if self.database().is_some() {
+            return self.read_cached_official_from_db().await;
+        }
+        self.read_json(&self.config().cache_path)
     }
 
-    fn write_cached_official(&self, cached: &CachedOfficialCatalog) -> Result<(), AppError> {
-        self.write_json(&self.config.cache_path, cached)
+    async fn write_cached_official(&self, cached: &CachedOfficialCatalog) -> Result<(), AppError> {
+        if self.database().is_some() {
+            return self.write_cached_official_to_db(cached).await;
+        }
+        self.write_json(&self.config().cache_path, cached)
+    }
+
+    async fn read_document_from_db(&self, kind: &str) -> Result<ModelCatalogDocument, AppError> {
+        let db = self
+            .database()
+            .expect("database-backed catalog store should have a database");
+        let rows = model_catalog_entry::Entity::find()
+            .filter(model_catalog_entry::Column::Kind.eq(kind))
+            .order_by_asc(model_catalog_entry::Column::ModelId)
+            .all(db.as_ref())
+            .await?;
+        let mut models = BTreeMap::new();
+        for row in rows {
+            let definition = serde_json::from_value::<CatalogModelDefinition>(row.definition_json)
+                .map_err(|err| {
+                    AppError::Config(format!(
+                        "parse model catalog definition `{}`/{kind}: {err}",
+                        row.model_id
+                    ))
+                })?;
+            models.insert(row.model_id, definition);
+        }
+        Ok(ModelCatalogDocument { models })
+    }
+
+    async fn write_document_to_db(
+        &self,
+        kind: &str,
+        document: &ModelCatalogDocument,
+    ) -> Result<(), AppError> {
+        let db = self
+            .database()
+            .expect("database-backed catalog store should have a database");
+        model_catalog_entry::Entity::delete_many()
+            .filter(model_catalog_entry::Column::Kind.eq(kind))
+            .exec(db.as_ref())
+            .await?;
+
+        let updated_at_ms = now_unix_ms();
+        let rows = document
+            .models
+            .iter()
+            .map(|(model_id, definition)| {
+                Ok(model_catalog_entry::ActiveModel {
+                    kind: Set(kind.to_owned()),
+                    model_id: Set(model_id.clone()),
+                    definition_json: Set(serde_json::to_value(definition)?),
+                    search_text: Set(model_catalog_definition_search_text(model_id, definition)),
+                    updated_at_ms: Set(updated_at_ms),
+                    ..Default::default()
+                })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+        if !rows.is_empty() {
+            model_catalog_entry::Entity::insert_many(rows)
+                .exec(db.as_ref())
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn read_cached_official_from_db(
+        &self,
+    ) -> Result<Option<CachedOfficialCatalog>, AppError> {
+        let db = self
+            .database()
+            .expect("database-backed catalog store should have a database");
+        let Some(state) = model_catalog_state::Entity::find_by_id(CATALOG_STATE_ID)
+            .one(db.as_ref())
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(fetched_at_unix_ms) = state.fetched_at_unix_ms else {
+            return Ok(None);
+        };
+        let Some(source) = state
+            .source
+            .as_deref()
+            .map(parse_catalog_source)
+            .transpose()?
+        else {
+            return Ok(None);
+        };
+        let document = self.read_document_from_db(CATALOG_KIND_OFFICIAL).await?;
+        Ok(Some(CachedOfficialCatalog {
+            fetched_at_unix_ms,
+            source,
+            document,
+        }))
+    }
+
+    async fn write_cached_official_to_db(
+        &self,
+        cached: &CachedOfficialCatalog,
+    ) -> Result<(), AppError> {
+        let db = self
+            .database()
+            .expect("database-backed catalog store should have a database");
+        self.write_document_to_db(CATALOG_KIND_OFFICIAL, &cached.document)
+            .await?;
+        model_catalog_state::Entity::delete_by_id(CATALOG_STATE_ID)
+            .exec(db.as_ref())
+            .await?;
+        model_catalog_state::ActiveModel {
+            id: Set(CATALOG_STATE_ID),
+            fetched_at_unix_ms: Set(Some(cached.fetched_at_unix_ms)),
+            source: Set(Some(format_catalog_source(cached.source))),
+            last_error: Set(None),
+            updated_at_ms: Set(now_unix_ms()),
+        }
+        .insert(db.as_ref())
+        .await?;
+        Ok(())
     }
 }
 
@@ -478,21 +670,22 @@ pub struct ModelCatalogService {
 }
 
 impl ModelCatalogService {
-    pub fn new(store: ModelCatalogStore) -> Result<Self, AppError> {
-        Self::with_remote_sources(store, default_remote_sources())
+    pub async fn new(store: ModelCatalogStore) -> Result<Self, AppError> {
+        Self::with_remote_sources(store, default_remote_sources()).await
     }
 
-    fn with_remote_sources(
+    async fn with_remote_sources(
         store: ModelCatalogStore,
         remote_sources: Vec<sources::ModelCatalogRemoteSource>,
     ) -> Result<Self, AppError> {
-        let custom = store.read_custom()?;
+        store.migrate_legacy_files_if_needed().await?;
+        let custom = store.read_custom().await?;
         let mut snapshot = ModelCatalogSnapshot {
             custom,
             ..ModelCatalogSnapshot::default()
         };
 
-        if let Some(cached) = store.read_cached_official()? {
+        if let Some(cached) = store.read_cached_official().await? {
             snapshot.last_successful_source = Some(cached.source);
             snapshot.last_refresh_at =
                 DateTime::<Utc>::from_timestamp_millis(cached.fetched_at_unix_ms);
@@ -547,7 +740,7 @@ impl ModelCatalogService {
         let (document, warnings) = match self.build_catalog_document(providers, resolution).await {
             Ok(result) => result,
             Err(refresh_error) => {
-                if let Some(cached) = self.store.read_cached_official()? {
+                if let Some(cached) = self.store.read_cached_official().await? {
                     let cache_is_fresh = self.cache_is_fresh(&cached);
                     let mut snapshot = self.snapshot();
                     snapshot.official = cached.document;
@@ -565,11 +758,13 @@ impl ModelCatalogService {
             }
         };
         let fetched_at_unix_ms = now_unix_ms();
-        self.store.write_cached_official(&CachedOfficialCatalog {
-            fetched_at_unix_ms,
-            source: ModelCatalogEntrySourceKind::Generated,
-            document: document.clone(),
-        })?;
+        self.store
+            .write_cached_official(&CachedOfficialCatalog {
+                fetched_at_unix_ms,
+                source: ModelCatalogEntrySourceKind::Generated,
+                document: document.clone(),
+            })
+            .await?;
 
         let mut snapshot = self.snapshot();
         snapshot.official = document;
@@ -580,7 +775,7 @@ impl ModelCatalogService {
         Ok(snapshot)
     }
 
-    pub fn upsert_custom_entry(
+    pub async fn upsert_custom_entry(
         &self,
         model_id: impl Into<String>,
         definition: CatalogModelDefinition,
@@ -588,15 +783,18 @@ impl ModelCatalogService {
         let model_id = model_id.into();
         let mut snapshot = self.snapshot();
         snapshot.custom.models.insert(model_id, definition);
-        self.store.write_custom(&snapshot.custom)?;
+        self.store.write_custom(&snapshot.custom).await?;
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
     }
 
-    pub fn remove_custom_entry(&self, model_id: &str) -> Result<ModelCatalogSnapshot, AppError> {
+    pub async fn remove_custom_entry(
+        &self,
+        model_id: &str,
+    ) -> Result<ModelCatalogSnapshot, AppError> {
         let mut snapshot = self.snapshot();
         snapshot.custom.models.remove(model_id);
-        self.store.write_custom(&snapshot.custom)?;
+        self.store.write_custom(&snapshot.custom).await?;
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
     }
@@ -643,7 +841,7 @@ impl ModelCatalogService {
                 }
             }
             Err(error) => {
-                warnings.push(format!("live discovery: {error}"));
+                warnings.push(format!("live provider model list: {error}"));
                 if succeeded == 0 {
                     return Err(error);
                 }
@@ -714,7 +912,7 @@ impl ModelCatalogService {
                 errors.join("; ")
             };
             return Err(AppError::Config(format!(
-                "live provider model discovery failed: {detail}"
+                "live provider model list failed: {detail}"
             )));
         }
 
@@ -724,7 +922,7 @@ impl ModelCatalogService {
             })?;
         let warning = (!errors.is_empty()).then(|| {
             format!(
-                "live discovery generated catalog from {succeeded} provider(s); skipped {} provider(s): {}",
+                "live provider model lists generated catalog from {succeeded} provider(s); skipped {} provider(s): {}",
                 errors.len(),
                 errors.join("; ")
             )
@@ -736,7 +934,7 @@ impl ModelCatalogService {
         let fetched = UNIX_EPOCH + Duration::from_millis(cached.fetched_at_unix_ms.max(0) as u64);
         SystemTime::now()
             .duration_since(fetched)
-            .map(|age| age.as_secs() <= self.store.config.cache_max_age_secs)
+            .map(|age| age.as_secs() <= self.store.config().cache_max_age_secs)
             .unwrap_or(false)
     }
 
@@ -750,7 +948,7 @@ impl ModelCatalogService {
         };
 
         match SystemTime::now().duration_since(last_refresh_at.into()) {
-            Ok(age) => age.as_secs() > self.store.config.cache_max_age_secs,
+            Ok(age) => age.as_secs() > self.store.config().cache_max_age_secs,
             Err(_) => false,
         }
     }
@@ -766,6 +964,43 @@ fn now_unix_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
         .unwrap_or_default()
+}
+
+fn format_catalog_source(source: ModelCatalogEntrySourceKind) -> String {
+    match source {
+        ModelCatalogEntrySourceKind::Generated => "generated",
+        ModelCatalogEntrySourceKind::Cache => "cache",
+    }
+    .to_owned()
+}
+
+fn parse_catalog_source(value: &str) -> Result<ModelCatalogEntrySourceKind, AppError> {
+    match value {
+        "generated" => Ok(ModelCatalogEntrySourceKind::Generated),
+        "cache" => Ok(ModelCatalogEntrySourceKind::Cache),
+        other => Err(AppError::Config(format!(
+            "invalid model catalog cache source `{other}`"
+        ))),
+    }
+}
+
+fn model_catalog_definition_search_text(
+    model_id: &str,
+    definition: &CatalogModelDefinition,
+) -> String {
+    let definition_text = serde_json::to_string(definition).unwrap_or_default();
+    [
+        model_id,
+        definition.display_name.as_deref().unwrap_or_default(),
+        definition.origin.as_deref().unwrap_or_default(),
+        definition.description.as_deref().unwrap_or_default(),
+        definition_text.as_str(),
+    ]
+    .into_iter()
+    .filter(|value| !value.trim().is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
+    .to_lowercase()
 }
 
 fn default_remote_sources() -> Vec<sources::ModelCatalogRemoteSource> {
@@ -1843,9 +2078,11 @@ mod tests {
                 source: ModelCatalogEntrySourceKind::Cache,
                 document: cached_document.clone(),
             })
+            .await
             .expect("cache should be written");
 
         let service = ModelCatalogService::with_remote_sources(store, Vec::new())
+            .await
             .expect("service should load");
         let providers = ProviderRegistry::new();
 
@@ -1875,9 +2112,11 @@ mod tests {
                 source: ModelCatalogEntrySourceKind::Cache,
                 document: model_catalog_document("gpt-4o"),
             })
+            .await
             .expect("stale cache should be written");
 
         let service = ModelCatalogService::with_remote_sources(store, Vec::new())
+            .await
             .expect("service should load");
         let mut providers = ProviderRegistry::new();
         providers.register(StaticListProvider::new(
@@ -2093,6 +2332,7 @@ mod tests {
                 ),
             ],
         )
+        .await
         .expect("service should load");
         let mut providers = ProviderRegistry::new();
         providers.register(StaticListProvider::new(
@@ -2289,7 +2529,8 @@ mod tests {
         assert_eq!(definition.default_top_p.as_deref(), Some("0.95"));
         assert_eq!(definition.default_top_k, Some(64));
 
-        let record = ModelCatalogSnapshot::entry_record("google/gemini-2.5-pro", &definition, false);
+        let record =
+            ModelCatalogSnapshot::entry_record("google/gemini-2.5-pro", &definition, false);
         assert_eq!(record.default_temperature.as_deref(), Some("1.0"));
         assert_eq!(record.default_top_p.as_deref(), Some("0.95"));
         assert_eq!(record.default_top_k, Some(64));

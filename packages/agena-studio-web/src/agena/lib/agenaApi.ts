@@ -2,6 +2,13 @@ import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from '../../
 import { apiJson, apiText, apiUrl } from '../../lib/api'
 import { buildActiveUiAuthHeaders } from '../../lib/uiAuthToken'
 import { normalizeSseBuffer, parseSseEventBlock } from './sse'
+import type {
+  ProviderModelPricing,
+  ProviderModelThinkingMode,
+  ProviderModelSpeedMode,
+} from './providerApi'
+
+export * from './providerApi'
 
 export type StudioHealth = {
   status: string
@@ -223,38 +230,8 @@ export type RuntimeReloadResponse = {
   loaded_at: string
 }
 
-export type ProviderSummary = {
-  provider_id: string
-  default_adapter?: string | null
-  default_model: string
-  adapters?: ProviderAdapterSummary[]
-}
-
-export type ProviderAdapterSummary = {
-  adapter_id: string
-  enabled: boolean
-  configured_model_count: number
-}
-
 export type ModelCatalogSourceKind = 'generated' | 'cache' | 'custom'
 export type ModelCatalogEntryKind = 'official' | 'custom'
-
-export type ProviderModelPricingTier = {
-  tier_type?: string | null
-  size_tokens?: number | null
-  input_usd_per_million_tokens?: string | null
-  output_usd_per_million_tokens?: string | null
-  cache_read_usd_per_million_tokens?: string | null
-  cache_write_usd_per_million_tokens?: string | null
-}
-
-export type ProviderModelPricing = {
-  input_usd_per_million_tokens?: string | null
-  output_usd_per_million_tokens?: string | null
-  cache_read_usd_per_million_tokens?: string | null
-  cache_write_usd_per_million_tokens?: string | null
-  tiers?: ProviderModelPricingTier[] | null
-}
 
 export type ModelCatalogEntry = {
   model_id: string
@@ -376,100 +353,6 @@ export type ConfigSettingsEditResponse = {
   reload?: RuntimeReloadResponse | null
   previous: unknown
   current: unknown
-}
-
-export type CapabilitySupportValue = 'supported' | 'unsupported' | 'unknown'
-
-export type ProviderModelCapabilities = {
-  text_input?: CapabilitySupportValue | null
-  image_input?: CapabilitySupportValue | null
-  document_input?: CapabilitySupportValue | null
-  audio_input?: CapabilitySupportValue | null
-  video_input?: CapabilitySupportValue | null
-  file_input?: CapabilitySupportValue | null
-  tool_calling?: CapabilitySupportValue | null
-  streaming?: CapabilitySupportValue | null
-  reasoning?: CapabilitySupportValue | null
-  structured_output?: CapabilitySupportValue | null
-  temperature_supported?: CapabilitySupportValue | null
-}
-
-export type ProviderModelMetadata = {
-  lifecycle?: string | null
-  description?: string | null
-  knowledge_cutoff?: string | null
-  release_date?: string | null
-  last_updated?: string | null
-  open_weights?: boolean | null
-  default_thinking_mode?: string | null
-  supports_parallel_tool_calls?: boolean | null
-  supports_verbosity?: boolean | null
-  default_verbosity?: string | null
-  default_temperature?: string | null
-  default_top_p?: string | null
-  default_top_k?: number | null
-  assistant_reasoning_interleaved?: boolean | null
-  assistant_reasoning_field?: string | null
-  output_modalities?: string[] | null
-  pricing?: ProviderModelPricing | null
-  limits?: {
-    context_window_tokens?: number | null
-    max_input_tokens?: number | null
-    max_output_tokens?: number | null
-  } | null
-}
-
-export type ProviderModel = {
-  provider_id: string
-  adapter_id?: string | null
-  id: string
-  catalog_model_id?: string | null
-  display_name?: string | null
-  capabilities?: ProviderModelCapabilities | null
-  metadata?: ProviderModelMetadata | null
-  thinking_modes?: Record<string, ProviderModelThinkingMode>
-  speed_modes?: Record<string, ProviderModelSpeedMode>
-}
-
-export type ProviderModelsResponse = {
-  provider_id: string
-  models: ProviderModel[]
-}
-
-export type ProviderAdapterDiscovery = {
-  adapter_id: string
-  enabled: boolean
-  supported: boolean
-  resolved_base_url?: string | null
-  models: ProviderModel[]
-  error?: string | null
-}
-
-export type ProviderAdapterDiscoveryResponse = {
-  provider_id: string
-  adapters: ProviderAdapterDiscovery[]
-}
-
-export type ProviderModelSpeedModeRequestOverride = {
-  headers?: Record<string, string> | null
-  body_patch?: Record<string, unknown> | null
-}
-
-export type ProviderModelThinkingMode = {
-  display_name?: string | null
-  description?: string | null
-  thinking?: Record<string, unknown> | null
-  request_override?: ProviderModelSpeedModeRequestOverride | null
-  adapter_overrides?: Record<string, ProviderModelSpeedModeRequestOverride> | null
-  disabled?: boolean
-}
-
-export type ProviderModelSpeedMode = {
-  display_name?: string | null
-  description?: string | null
-  request_override?: ProviderModelSpeedModeRequestOverride | null
-  adapter_overrides?: Record<string, ProviderModelSpeedModeRequestOverride> | null
-  disabled?: boolean
 }
 
 export type AuthProvider = {
@@ -1092,57 +975,6 @@ export async function upgradeMarketplacePlugins(input: {
     },
   )
   return response.entries ?? []
-}
-
-export async function listProviders(): Promise<ProviderSummary[]> {
-  return await apiJson<ProviderSummary[]>('/api/v1/providers')
-}
-
-export async function listProviderModels(providerId: string): Promise<ProviderModel[]> {
-  const response = await apiJson<ProviderModelsResponse>(`/api/v1/providers/${encodeURIComponent(providerId)}/models`)
-  return response.models ?? []
-}
-
-export async function discoverDraftProviderAdapters(input: {
-  providerId?: string
-  baseUrl: string
-  endpointLayout?: 'auto' | 'direct' | 'protocol_root' | 'provider_routed'
-  apiKey?: string
-  apiKeyEnv?: string
-  adapterIds?: string[]
-}): Promise<ProviderAdapterDiscovery[]> {
-  const response = await apiJson<ProviderAdapterDiscoveryResponse>('/api/v1/providers/discover', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      ...(input.providerId?.trim() ? { provider_id: input.providerId.trim() } : {}),
-      base_url: input.baseUrl.trim(),
-      ...(input.endpointLayout?.trim() ? { endpoint_layout: input.endpointLayout.trim() } : {}),
-      ...(input.apiKey?.trim() ? { api_key: input.apiKey.trim() } : {}),
-      ...(input.apiKeyEnv?.trim() ? { api_key_env: input.apiKeyEnv.trim() } : {}),
-      ...(input.adapterIds?.length ? { adapter_ids: input.adapterIds } : {}),
-    }),
-  })
-  return response.adapters ?? []
-}
-
-export async function discoverSavedProviderAdapters(
-  providerId: string,
-  input: {
-    adapterIds?: string[]
-  } = {},
-): Promise<ProviderAdapterDiscovery[]> {
-  const response = await apiJson<ProviderAdapterDiscoveryResponse>(
-    `/api/v1/providers/${encodeURIComponent(providerId)}/discover`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        ...(input.adapterIds?.length ? { adapter_ids: input.adapterIds } : {}),
-      }),
-    },
-  )
-  return response.adapters ?? []
 }
 
 export async function listAuthProviders(): Promise<AuthProvider[]> {

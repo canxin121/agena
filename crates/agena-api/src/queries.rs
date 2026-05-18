@@ -1,13 +1,14 @@
-//! Read-only queries. Closely mirrors REST GET endpoints but expressed as
-//! `Query` enum so they can be invoked over both REST and WS.
+//! Read-only queries. Mostly mirrors REST GET endpoints, but also includes
+//! parameterized read-only list operations that use POST on the HTTP surface.
+//! Expressed as a `Query` enum so they can be invoked over both REST and WS.
 
 use serde::{Deserialize, Serialize};
 
 use crate::pagination::{PageInfo, PaginatedResponse};
 use crate::resource::{
-    HealthResponse, MessageResource, PartLoadMode, PermissionRuleResource, ProviderModelsResponse,
-    ProviderSummaryResource, RuntimeStatusResponse, SessionGoalResource, SessionResource,
-    WorkspaceResource,
+    HealthResponse, MessageResource, PartLoadMode, PermissionRuleResource,
+    ProviderAdapterModelsResponse, ProviderModelsResponse, ProviderSummaryResource,
+    RuntimeStatusResponse, SessionGoalResource, SessionResource, WorkspaceResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +18,8 @@ pub enum Query {
     Runtime,
     ListProviders,
     ListProviderModels(ListProviderModelsParams),
+    ListProviderAdapterModels(ListProviderAdapterModelsParams),
+    ListSavedProviderAdapterModels(ListSavedProviderAdapterModelsParams),
     ListWorkspaces(ListWorkspacesParams),
     GetWorkspace(GetWorkspaceParams),
     ListSessions(ListSessionsParams),
@@ -37,6 +40,7 @@ pub enum QueryResult {
     Runtime(RuntimeStatusResponse),
     Providers(Vec<ProviderSummaryResource>),
     ProviderModels(ProviderModelsResponse),
+    ProviderAdapterModels(ProviderAdapterModelsResponse),
     Workspaces(PaginatedResponse<WorkspaceResource>),
     Workspace(WorkspaceResource),
     Sessions(PaginatedResponse<SessionResource>),
@@ -61,6 +65,28 @@ pub struct PaginatedEvents {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListProviderModelsParams {
     pub provider_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListProviderAdapterModelsParams {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    pub base_url: String,
+    #[serde(default)]
+    pub endpoint_layout: agena::config::SharedGatewayEndpointLayout,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub adapter_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListSavedProviderAdapterModelsParams {
+    pub provider_id: String,
+    #[serde(default)]
+    pub adapter_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

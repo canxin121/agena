@@ -806,6 +806,215 @@ enabled = true
 }
 
 #[test]
+fn opencode_go_provider_config_loads_protocol_routes() {
+    let path = write_temp_config(
+        r#"
+[providers."opencode-go"]
+default_adapter = "openai"
+default_model = "kimi-k2.6"
+
+[providers."opencode-go".auth]
+mode = "api"
+base_url = "https://opencode.ai/zen/go/v1"
+endpoint_layout = "protocol_root"
+api_key_env = "OPENCODE_API_KEY"
+
+[providers."opencode-go".adapters.openai]
+enabled = true
+api_mode = "chat"
+models_url = "https://opencode.ai/zen/go/v1/models"
+
+[providers."opencode-go".adapters.openai.models."minimax-m2.7"]
+enabled = false
+
+[providers."opencode-go".adapters.anthropic]
+enabled = true
+messages_url = "https://opencode.ai/zen/go/v1/messages"
+models_url = "https://opencode.ai/zen/go/v1/models"
+
+[providers."opencode-go".adapters.anthropic.models."minimax-m2.7"]
+enabled = true
+
+[providers."opencode-go".adapters.anthropic.models."kimi-k2.6"]
+enabled = false
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("opencode-go")
+        .expect("opencode-go provider should exist");
+
+    assert_eq!(provider.default_adapter, "openai");
+    assert_eq!(provider.default_model, "kimi-k2.6");
+    match &provider.auth {
+        ProviderAuthConfig::Api(api) => {
+            assert_eq!(api.base_url, "https://opencode.ai/zen/go/v1");
+            assert_eq!(
+                api.endpoint_layout,
+                SharedGatewayEndpointLayout::ProtocolRoot
+            );
+            assert_eq!(api.api_key_env.as_deref(), Some("OPENCODE_API_KEY"));
+        }
+        other => panic!("expected opencode-go api auth, got {other:?}"),
+    }
+
+    match &provider.adapters["openai"].definition {
+        ProviderAdapterDefinition::OpenAi(config) => {
+            assert_eq!(config.options.api_mode, OpenAiApiModeConfig::Chat);
+            assert_eq!(
+                config.options.models_url.as_deref(),
+                Some("https://opencode.ai/zen/go/v1/models")
+            );
+            assert_eq!(config.options.auth_header, "authorization");
+            assert_eq!(config.options.auth_scheme.as_deref(), Some("Bearer"));
+        }
+        other => panic!("expected openai adapter, got {other:?}"),
+    }
+
+    match &provider.adapters["anthropic"].definition {
+        ProviderAdapterDefinition::Anthropic(config) => {
+            assert_eq!(
+                config.options.messages_url.as_deref(),
+                Some("https://opencode.ai/zen/go/v1/messages")
+            );
+            assert_eq!(
+                config.options.models_url.as_deref(),
+                Some("https://opencode.ai/zen/go/v1/models")
+            );
+            assert_eq!(config.options.auth_header, "x-api-key");
+            assert_eq!(config.options.auth_scheme, None);
+        }
+        other => panic!("expected anthropic adapter, got {other:?}"),
+    }
+
+    assert_eq!(
+        provider
+            .models
+            .get("openai/minimax-m2.7")
+            .map(|model| model.enabled),
+        Some(false)
+    );
+    assert_eq!(
+        provider
+            .models
+            .get("anthropic/minimax-m2.7")
+            .map(|model| model.enabled),
+        Some(true)
+    );
+    assert_eq!(
+        provider
+            .models
+            .get("anthropic/kimi-k2.6")
+            .map(|model| model.enabled),
+        Some(false)
+    );
+}
+
+#[test]
+fn opencode_free_provider_config_uses_public_key_and_configured_only_models() {
+    let path = write_temp_config(
+        r#"
+[providers."opencode-free"]
+default_adapter = "openai"
+default_model = "deepseek-v4-flash-free"
+
+[providers."opencode-free".auth]
+mode = "api"
+base_url = "https://opencode.ai/zen/v1"
+endpoint_layout = "direct"
+api_key = "public"
+
+[providers."opencode-free".adapters.openai]
+enabled = true
+api_mode = "chat"
+model_discovery = "configured_only"
+
+[providers."opencode-free".adapters.openai.models."deepseek-v4-flash-free"]
+enabled = true
+
+[providers."opencode-free".adapters.anthropic]
+enabled = true
+model_discovery = "configured_only"
+
+[providers."opencode-free".adapters.anthropic.models."minimax-m2.5-free"]
+enabled = true
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("opencode-free")
+        .expect("opencode-free provider should exist");
+
+    match &provider.auth {
+        ProviderAuthConfig::Api(api) => {
+            assert_eq!(api.base_url, "https://opencode.ai/zen/v1");
+            assert_eq!(api.endpoint_layout, SharedGatewayEndpointLayout::Direct);
+            assert_eq!(api.api_key.as_deref(), Some("public"));
+        }
+        other => panic!("expected opencode-free api auth, got {other:?}"),
+    }
+
+    let openai = provider
+        .adapters
+        .get("openai")
+        .expect("openai adapter should exist");
+    assert_eq!(
+        openai.model_discovery,
+        ProviderModelDiscoveryConfig::ConfiguredOnly
+    );
+    match &openai.definition {
+        ProviderAdapterDefinition::OpenAi(config) => {
+            assert_eq!(config.options.api_mode, OpenAiApiModeConfig::Chat);
+        }
+        other => panic!("expected openai adapter, got {other:?}"),
+    }
+
+    let anthropic = provider
+        .adapters
+        .get("anthropic")
+        .expect("anthropic adapter should exist");
+    assert_eq!(
+        anthropic.model_discovery,
+        ProviderModelDiscoveryConfig::ConfiguredOnly
+    );
+
+    assert_eq!(
+        provider
+            .models
+            .get("openai/deepseek-v4-flash-free")
+            .map(|model| model.enabled),
+        Some(true)
+    );
+    assert_eq!(
+        provider
+            .models
+            .get("anthropic/minimax-m2.5-free")
+            .map(|model| model.enabled),
+        Some(true)
+    );
+}
+
+#[test]
 fn multi_adapter_provider_allows_passthrough_models_without_explicit_routes() {
     let path = write_temp_config(
         r#"

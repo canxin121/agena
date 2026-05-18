@@ -1585,8 +1585,8 @@ impl App {
             dialog.draft.auth_kind.label(),
             dialog.selected_adapter_ids.len(),
             dialog.catalog_total,
-            if dialog.discovering {
-                "discovering "
+            if dialog.listing_adapter_models {
+                "listing "
             } else {
                 ""
             },
@@ -1707,7 +1707,7 @@ impl App {
             right_rows[0],
         );
 
-        let discovery_split = if should_stack_detail_layout(right_rows[1].width, 24, 28) {
+        let adapter_models_split = if should_stack_detail_layout(right_rows[1].width, 24, 28) {
             Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
@@ -1718,53 +1718,55 @@ impl App {
                 .constraints(adaptive_detail_split(right_rows[1].width, 24, 28))
                 .split(right_rows[1])
         };
-        let adapters_area = discovery_split[0];
-        let models_area = discovery_split[1];
+        let adapters_area = adapter_models_split[0];
+        let models_area = adapter_models_split[1];
 
-        let adapter_items = if dialog.discoveries.is_empty() {
+        let adapter_items = if dialog.adapter_candidate_ids.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-provider-studio-discovery-empty"),
+                ui_text::t(&self.i18n, "overlay-provider-studio-adapter-models-empty"),
                 Style::default().fg(Color::DarkGray),
             )))]
         } else {
             dialog
-                .discoveries
+                .adapter_candidate_ids
                 .iter()
-                .map(|adapter| {
-                    let enabled = if dialog
-                        .selected_adapter_ids
-                        .contains(adapter.adapter_id.as_str())
-                    {
+                .map(|adapter_id| {
+                    let adapter_models = dialog
+                        .adapter_models
+                        .iter()
+                        .find(|adapter_models| adapter_models.adapter_id == *adapter_id);
+                    let enabled = if dialog.selected_adapter_ids.contains(adapter_id.as_str()) {
                         "[x]"
                     } else {
                         "[ ]"
                     };
-                    let detail = if adapter.supported {
-                        format!(
-                            "{} models · {}",
-                            adapter.models.len(),
-                            adapter
-                                .resolved_base_url
-                                .as_deref()
-                                .map(|value| truncate_display_text(value, 28))
-                                .unwrap_or_else(|| "supported".to_owned())
-                        )
+                    let detail = if let Some(adapter) = adapter_models {
+                        if adapter.error.is_none() {
+                            format!(
+                                "{} models · {}",
+                                adapter.models.len(),
+                                adapter
+                                    .resolved_base_url
+                                    .as_deref()
+                                    .map(|value| truncate_display_text(value, 28))
+                                    .unwrap_or_else(|| "loaded".to_owned())
+                            )
+                        } else {
+                            truncate_display_text(adapter.error.as_deref().unwrap_or("error"), 32)
+                        }
                     } else {
-                        truncate_display_text(adapter.error.as_deref().unwrap_or("unsupported"), 32)
+                        "not listed".to_owned()
+                    };
+                    let detail_style = match adapter_models {
+                        Some(adapter) if adapter.error.is_none() => {
+                            Style::default().fg(Color::DarkGray)
+                        }
+                        Some(_) => Style::default().fg(Color::Red),
+                        None => Style::default().fg(Color::DarkGray),
                     };
                     ListItem::new(vec![
-                        Line::from(sanitize_display_text(format!(
-                            "{enabled} {}",
-                            adapter.adapter_id
-                        ))),
-                        Line::from(Span::styled(
-                            sanitize_display_text(detail),
-                            if adapter.supported {
-                                Style::default().fg(Color::DarkGray)
-                            } else {
-                                Style::default().fg(Color::Red)
-                            },
-                        )),
+                        Line::from(sanitize_display_text(format!("{enabled} {}", adapter_id))),
+                        Line::from(Span::styled(sanitize_display_text(detail), detail_style)),
                     ])
                 })
                 .collect::<Vec<_>>()
@@ -1785,18 +1787,19 @@ impl App {
             })
             .highlight_symbol(">> ");
         let mut adapter_state = ListState::default();
-        adapter_state.select((!dialog.discoveries.is_empty()).then_some(dialog.selected_adapter));
+        adapter_state
+            .select((!dialog.adapter_candidate_ids.is_empty()).then_some(dialog.selected_adapter));
         frame.render_stateful_widget(adapter_list, adapters_area, &mut adapter_state);
 
-        let model_items = provider_studio_selected_discovery(dialog)
-            .map(|discovery| {
-                if discovery.models.is_empty() {
+        let model_items = provider_studio_selected_adapter_models(dialog)
+            .map(|adapter_models| {
+                if adapter_models.models.is_empty() {
                     vec![ListItem::new(Line::from(Span::styled(
                         ui_text::t(&self.i18n, "overlay-provider-studio-models-empty"),
                         Style::default().fg(Color::DarkGray),
                     )))]
                 } else {
-                    discovery
+                    adapter_models
                         .models
                         .iter()
                         .map(|model| {
@@ -1848,8 +1851,8 @@ impl App {
             })
             .highlight_symbol(">> ");
         let mut model_state = ListState::default();
-        let has_models = provider_studio_selected_discovery(dialog)
-            .map(|discovery| !discovery.models.is_empty())
+        let has_models = provider_studio_selected_adapter_models(dialog)
+            .map(|adapter_models| !adapter_models.models.is_empty())
             .unwrap_or(false);
         model_state.select(has_models.then_some(dialog.selected_model));
         frame.render_stateful_widget(model_list, models_area, &mut model_state);

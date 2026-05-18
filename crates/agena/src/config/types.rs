@@ -357,6 +357,14 @@ pub enum SharedGatewayEndpointLayout {
     ProviderRouted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderModelDiscoveryConfig {
+    #[default]
+    Live,
+    ConfiguredOnly,
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Default)]
 pub struct ProviderApiAuthConfig {
     pub base_url: String,
@@ -459,6 +467,8 @@ impl fmt::Debug for ProviderSapAiCoreAuthConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderAdapterConfig {
     pub enabled: bool,
+    #[serde(skip_serializing_if = "is_default")]
+    pub model_discovery: ProviderModelDiscoveryConfig,
     #[serde(flatten)]
     pub definition: ProviderAdapterDefinition,
 }

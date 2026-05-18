@@ -91,10 +91,12 @@ impl CatalogedModelsProvider {
         adapter_id: Option<&AdapterId>,
         request: &mut CompletionRequest,
     ) {
-        let field = self
-            .model_metadata_for_adapter(adapter_id, &request.model)
-            .assistant_reasoning_field;
-        chat_wire::backfill_assistant_reasoning_field_on_request(request, field.as_deref());
+        let metadata = self.model_metadata_for_adapter(adapter_id, &request.model);
+        chat_wire::backfill_assistant_reasoning_field_on_request(
+            request,
+            metadata.assistant_reasoning_field.as_deref(),
+            metadata.assistant_reasoning_interleaved.unwrap_or(false),
+        );
     }
 }
 
@@ -474,6 +476,77 @@ mod tests {
                             }),
                             PartContent::text("Prior answer"),
                         ],
+                    ),
+                    Message::prompt_text(Role::User, "continue"),
+                ],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("catalog wrapper completion should succeed");
+
+        let captured = captured_requests
+            .lock()
+            .expect("captured requests lock should not be poisoned");
+        let assistant = captured[0]
+            .messages
+            .iter()
+            .find(|message| matches!(message.role, Role::Assistant))
+            .expect("assistant message should be present");
+        assert_eq!(
+            assistant
+                .metadata
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("assistant_reasoning_field"))
+                .and_then(|value| value.as_str()),
+            Some("reasoning_content")
+        );
+    }
+
+    #[tokio::test]
+    async fn catalog_wrapper_preserves_empty_interleaved_reasoning_field_from_catalog_metadata() {
+        let captured_requests = Arc::new(Mutex::new(Vec::new()));
+        let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
+            default_model: ModelId::new("deepseek-v4-pro"),
+            listed: vec![Model::new("openai", "deepseek-v4-pro")],
+            captured_requests: Arc::clone(&captured_requests),
+        });
+        let provider = CatalogedModelsProvider::new(
+            target,
+            ModelCatalogProviderRecord {
+                models: BTreeMap::from([(
+                    "deepseek-v4-pro".to_owned(),
+                    crate::model_catalog::CatalogModelDefinition {
+                        assistant_reasoning_interleaved: Some(true),
+                        assistant_reasoning_field: Some("reasoning_content".to_owned()),
+                        ..crate::model_catalog::CatalogModelDefinition::default()
+                    },
+                )]),
+                appendable_model_ids: Default::default(),
+            },
+        );
+
+        provider
+            .complete(CompletionRequest {
+                model: ModelId::new("deepseek-v4-pro"),
+                system: None,
+                messages: vec![
+                    Message::prompt_text(
+                        Role::Assistant,
+                        "Prior answer without explicit reasoning",
                     ),
                     Message::prompt_text(Role::User, "continue"),
                 ],

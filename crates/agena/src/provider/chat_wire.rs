@@ -590,6 +590,7 @@ pub(crate) fn request_to_chat_messages_with_assistant_reasoning_field(
 pub(crate) fn backfill_assistant_reasoning_field_on_request(
     request: &mut CompletionRequest,
     assistant_reasoning_field: Option<&str>,
+    assistant_reasoning_interleaved: bool,
 ) {
     let Some(field) = assistant_reasoning_field else {
         return;
@@ -602,7 +603,7 @@ pub(crate) fn backfill_assistant_reasoning_field_on_request(
         if assistant_reasoning_field_from_message_metadata(message).is_some() {
             continue;
         }
-        if assistant_reasoning_text(message).trim().is_empty() {
+        if !assistant_reasoning_interleaved && assistant_reasoning_text(message).trim().is_empty() {
             continue;
         }
         message.metadata.provider_metadata =
@@ -857,7 +858,58 @@ mod tests {
             response_format: None,
         };
 
-        backfill_assistant_reasoning_field_on_request(&mut request, Some("reasoning_content"));
+        backfill_assistant_reasoning_field_on_request(
+            &mut request,
+            Some("reasoning_content"),
+            false,
+        );
+
+        let assistant = request
+            .messages
+            .iter()
+            .find(|message| matches!(message.role, Role::Assistant))
+            .expect("assistant message should be present");
+        assert_eq!(
+            assistant
+                .metadata
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("assistant_reasoning_field"))
+                .and_then(|value| value.as_str()),
+            Some("reasoning_content")
+        );
+    }
+
+    #[test]
+    fn backfill_assistant_reasoning_field_on_request_preserves_empty_interleaved_reasoning() {
+        let mut request = CompletionRequest {
+            model: ModelId::new("custom-model"),
+            system: None,
+            messages: vec![
+                Message::prompt_text(Role::Assistant, "Prior answer without explicit reasoning"),
+                Message::prompt_text(Role::User, "continue"),
+            ],
+            tools: Vec::new(),
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            request_override: Default::default(),
+            response_format: None,
+        };
+
+        backfill_assistant_reasoning_field_on_request(
+            &mut request,
+            Some("reasoning_content"),
+            true,
+        );
 
         let assistant = request
             .messages

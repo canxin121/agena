@@ -2367,6 +2367,56 @@ supports_parallel_tool_calls = true
     }
 
     #[tokio::test]
+    async fn run_options_to_core_rejects_parallel_tool_calls_for_unsupported_model() {
+        let (state, workspace_root) = test_state_with_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[providers.openai.adapters.openai.models."gpt-4.1-mini"]
+supports_parallel_tool_calls = false
+"#,
+            "parallel-tool-calls-unsupported",
+        )
+        .await;
+        let session_id =
+            create_session(&state, &workspace_root, "parallel tool calls unsupported").await;
+
+        let rejected = run_options_to_core(
+            &state,
+            session_id,
+            &RunOptions {
+                model: Some(ModelRef::new("openai", "openai/gpt-4.1-mini")),
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                parallel_tool_calls: Some(true),
+                agent_profile: None,
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+                max_turn_loops: None,
+            },
+        )
+        .await
+        .expect_err("unsupported model should reject parallel tool calls");
+        assert!(
+            rejected
+                .to_string()
+                .contains("does not support parallel tool calls"),
+            "unexpected error: {rejected}"
+        );
+    }
+
+    #[tokio::test]
     async fn run_options_to_core_rejects_unknown_model_thinking_mode() {
         let (state, workspace_root) = test_state_with_config(
             r#"

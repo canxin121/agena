@@ -1184,6 +1184,14 @@ impl ApiService {
         let metadata = provider_registry
             .model_metadata(&model)
             .map_err(api_error_from_app)?;
+        if requested_parallel_tool_calls.is_some()
+            && !metadata.supports_parallel_tool_calls_for_model()
+        {
+            return Err(ApiError::bad_request(format!(
+                "model `{}` does not support parallel tool calls",
+                model
+            )));
+        }
         let supported_verbosity_levels =
             metadata.supported_verbosity_levels_for_model(&model.model_id);
         if let Some(verbosity) = requested_verbosity.as_deref()

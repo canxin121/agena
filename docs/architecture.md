@@ -111,7 +111,7 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 
 - `config`: TOML schema、env overlay、CLI override、provider auth/adapters normalization、provider registry build。
 - `runtime`: runtime builder、snapshot、reload、background tasks。
-- `session`: session manager、processor、history、store、cache、compaction。
+- `session`: session manager、processor、history、store、cache、append-only prompt assembly。
 - `event`: event bus、publisher、store、filter、envelope。
 - `db`: SeaORM entities、migration、CRUD。
 - `provider`: model providers、credential、auth、runtime retry、streaming。
@@ -190,9 +190,8 @@ The resolved config builds:
 - `SessionStore`: 数据库存储和 history/event projection。
 - `EventPublisher`: 发布 domain events。
 - `EventBus`: live broadcast。
-- `SessionProcessor`: provider 调用、tool call loop、prompt window。
+- `SessionProcessor`: provider 调用、tool call loop、append-only prompt window。
 - `ToolExecutor`: provided/plugin tool 执行。
-- `CompactionWorker`: 上下文压缩。
 - `TurnRegistry`: active turn control/cancel。
 - session cache。
 
@@ -204,8 +203,8 @@ continue_session
 reply_permission
 reply_user_input
 fork_session
-rewind_session
-unrewind_session
+rewind_session (creates a fork)
+unrewind_session (legacy no-op)
 cancel_active_turn
 export_session_jsonl
 import_session_jsonl
@@ -220,7 +219,7 @@ user parts
 SessionManager reserves/appends message
   |
   v
-SessionProcessor builds prompt window
+SessionProcessor builds append-only provider prompt
   |
   v
 ProviderRegistry resolves model/provider
@@ -342,7 +341,7 @@ Plugin host can invoke hooks for:
 - permission ask.
 - command before/after and shell env.
 - config notification.
-- session start/end/compacting/compacted.
+- session start/end. Prompt compaction hooks are legacy; runtime provider prompts are kept append-only for cache stability.
 - user prompt submit.
 - agent stop.
 - pre_turn/post_turn.

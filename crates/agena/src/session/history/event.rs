@@ -144,7 +144,7 @@ pub enum SystemNoticeKind {
     CompactionSummary,
     ContextInjection,
     ToolPolicyHint,
-    /// Audit marker emitted alongside a `rewind_to_message` operation.
+    /// Legacy audit marker emitted by older same-session rewind operations.
     /// The notice text is a JSON [`RewindCheckpoint`] payload describing the
     /// messages that were dropped from the prompt window so a UI can show
     /// "you rewound past these N messages — undo?" without re-folding.

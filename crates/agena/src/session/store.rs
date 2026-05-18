@@ -525,17 +525,32 @@ impl SessionStore {
                 .rfind(|e| e.kind.is_persistent())
                 .map(|e| e.meta.seq_global)
                 .unwrap_or(0),
-            Some(message_id) => events
-                .iter()
-                .filter(|e| event_targets_message(&e.kind, message_id))
-                .map(|e| e.meta.seq_global)
-                .max()
-                .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "message not found in session {}: {}",
-                        source.id, message_id
-                    ))
-                })?,
+            Some(message_id) => {
+                let target_event = events
+                    .iter()
+                    .filter(|e| event_targets_message(&e.kind, message_id))
+                    .max_by_key(|e| e.meta.seq_global)
+                    .ok_or_else(|| {
+                        AppError::Internal(format!(
+                            "message not found in session {}: {}",
+                            source.id, message_id
+                        ))
+                    })?;
+                let target_seq = target_event.meta.seq_global;
+                event_turn_id_for_message(&target_event.kind, message_id)
+                    .and_then(|turn_id| {
+                        events
+                            .iter()
+                            .filter(|e| e.meta.seq_global >= target_seq)
+                            .find_map(|event| match &event.kind {
+                                EventKind::TurnCompleted(payload) if payload.turn_id == turn_id => {
+                                    Some(event.meta.seq_global)
+                                }
+                                _ => None,
+                            })
+                    })
+                    .unwrap_or(target_seq)
+            }
         };
 
         let items = events
@@ -844,263 +859,6 @@ impl SessionStore {
     ) -> Result<SessionCostSummary, AppError> {
         let session = self.load_session(session_id, cache_policy).await?;
         Ok(super::cost::summarize(&session.messages))
-    }
-
-    pub(crate) async fn rewind_to_message(
-        &self,
-        session_id: i64,
-        message_id: i64,
-        expected_version: Option<i64>,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Session, AppError> {
-        // Validate that `message_id` belongs to this session by projecting
-        // the current event log and checking membership.
-        let pre_events = self.history.list_session_events(session_id).await?;
-        let pre_view = super::history::fold_session_view(pre_events.as_slice())
-            .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
-        if !pre_view.messages.iter().any(|m| m.id == message_id) {
-            return Err(AppError::Internal(format!(
-                "message not found for rewind: {message_id}"
-            )));
-        }
-
-        // Compact every message that lives at or after the rewind target.
-        // The transcript projector treats `Compacted` as "drop from prompt".
-        // Before publishing the revisions we emit a `RewindCheckpoint`
-        // audit notice carrying short previews of every dropped message so
-        // a UI can render "you rewound past these N messages — undo?"
-        // without re-folding the event log.
-        let dropped: Vec<super::history::RewindCheckpointEntry> = pre_view
-            .messages
-            .iter()
-            .filter(|m| m.id >= message_id)
-            .map(|m| super::history::RewindCheckpointEntry {
-                message_id: m.id,
-                role: format!("{:?}", m.role).to_lowercase(),
-                preview: rewind_preview(m),
-            })
-            .collect();
-        let revisions: Vec<EventKind> = pre_view
-            .messages
-            .iter()
-            .filter(|m| m.id >= message_id)
-            .map(|m| {
-                EventKind::MessageRevised(super::history::MessageRevised {
-                    target_message_id: m.id,
-                    kind: super::history::RevisionKind::Compacted,
-                })
-            })
-            .collect();
-
-        let now = Utc::now();
-        let mut items = Vec::with_capacity(revisions.len().saturating_add(1));
-        if !dropped.is_empty() {
-            let checkpoint_id = self.reserve_message_ids(0).await?.message_id;
-            let payload = super::history::RewindCheckpoint {
-                schema: 1,
-                at_ms: now.timestamp_millis(),
-                target_message_id: message_id,
-                dropped,
-            };
-            let text = serde_json::to_string(&payload)
-                .map_err(|err| AppError::Internal(format!("encode rewind checkpoint: {err}")))?;
-            items.push(EventKind::SystemNoticeAppended(
-                super::history::SystemNoticeAppended {
-                    message_id: super::history::MessageId(checkpoint_id),
-                    created_at: now,
-                    kind: super::history::SystemNoticeKind::RewindCheckpoint,
-                    text,
-                },
-            ));
-        }
-        items.extend(revisions);
-        if !items.is_empty() {
-            self.history
-                .append_items(session_id, items, now)
-                .await
-                .map_err(|err| AppError::Internal(format!("append rewind events: {err}")))?;
-        }
-
-        let new_runtime_base = session::get_session_by_id(&self.db, session_id)
-            .await?
-            .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?
-            .runtime_state
-            .unwrap_or_default();
-        let next_runtime = rewind_runtime_state(new_runtime_base);
-
-        let cache = Arc::clone(&self.cache);
-        let session = with_transaction_and_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
-            let next_runtime = next_runtime.clone();
-            Box::pin(async move {
-                let outcome = session::touch_session_with_version(
-                    txn,
-                    session_id,
-                    next_runtime,
-                    expected_version,
-                )
-                .await?;
-                let updated = match outcome {
-                    session::TouchOutcome::Updated(model) => model,
-                    session::TouchOutcome::NotFound => {
-                        return Err(DbErr::Custom(format!(
-                            "session disappeared while rewinding: {session_id}"
-                        )));
-                    }
-                    session::TouchOutcome::VersionConflict {
-                        current_version,
-                        expected_version,
-                    } => {
-                        return Err(DbErr::Custom(format!(
-                            "rewind version conflict for session {session_id}: \
-                             expected {expected_version}, current {current_version}"
-                        )));
-                    }
-                };
-                let session = session_from_model_db(updated)?;
-                let session_for_cache = session.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
-                    });
-                });
-                Ok(session)
-            })
-        })
-        .await?;
-        let goal = load_session_goal(&self.db, session_id).await?;
-
-        // Re-project after the publish so the cached session reflects the
-        // compaction. Drop the persisted snapshot first — it was folded
-        // before any of the new revisions landed and would otherwise hide
-        // them on the next snapshot-fast-path load.
-        self.history.invalidate_snapshot(session_id).await?;
-        let post_events = self.history.list_session_events(session_id).await?;
-        let post_view = super::history::fold_session_view(post_events.as_slice())
-            .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
-        let mut session = session;
-        session.goal = goal;
-        session.replace_messages(post_view.messages);
-        with_cache(self.cache.as_ref(), |guard| {
-            guard.insert(session.clone(), cache_policy);
-        });
-        Ok(session)
-    }
-
-    /// Reverse a prior `rewind_to_message(message_id)` by republishing every
-    /// outstanding `Compacted` revision targeting a message id `>= message_id`
-    /// as `Uncompacted`. Idempotent: running it twice is a no-op.
-    pub(crate) async fn unrewind_to_message(
-        &self,
-        session_id: i64,
-        message_id: i64,
-        expected_version: Option<i64>,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Session, AppError> {
-        use std::collections::HashMap;
-
-        let events = self.history.list_session_events(session_id).await?;
-        // Walk the event log to find which message ids are *currently* in a
-        // compacted state (compaction count > 0 after netting Uncompacted).
-        let mut compacted_state: HashMap<i64, i32> = HashMap::new();
-        for event in &events {
-            let EventKind::MessageRevised(super::history::MessageRevised {
-                target_message_id,
-                kind,
-            }) = &event.kind
-            else {
-                continue;
-            };
-            match kind {
-                super::history::RevisionKind::Compacted => {
-                    *compacted_state.entry(*target_message_id).or_insert(0) += 1;
-                }
-                super::history::RevisionKind::Uncompacted => {
-                    *compacted_state.entry(*target_message_id).or_insert(0) -= 1;
-                }
-                _ => {}
-            }
-        }
-
-        let revisions: Vec<EventKind> = compacted_state
-            .into_iter()
-            .filter(|(target_id, count)| *count > 0 && *target_id >= message_id)
-            .map(|(target_id, _)| {
-                EventKind::MessageRevised(super::history::MessageRevised {
-                    target_message_id: target_id,
-                    kind: super::history::RevisionKind::Uncompacted,
-                })
-            })
-            .collect();
-        if !revisions.is_empty() {
-            self.history
-                .append_items(session_id, revisions, Utc::now())
-                .await
-                .map_err(|err| AppError::Internal(format!("append unrewind events: {err}")))?;
-        }
-
-        let new_runtime_base = session::get_session_by_id(&self.db, session_id)
-            .await?
-            .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?
-            .runtime_state
-            .unwrap_or_default();
-        let next_runtime = rewind_runtime_state(new_runtime_base);
-
-        let cache = Arc::clone(&self.cache);
-        let session = with_transaction_and_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
-            let next_runtime = next_runtime.clone();
-            Box::pin(async move {
-                let outcome = session::touch_session_with_version(
-                    txn,
-                    session_id,
-                    next_runtime,
-                    expected_version,
-                )
-                .await?;
-                let updated = match outcome {
-                    session::TouchOutcome::Updated(model) => model,
-                    session::TouchOutcome::NotFound => {
-                        return Err(DbErr::Custom(format!(
-                            "session disappeared while unrewinding: {session_id}"
-                        )));
-                    }
-                    session::TouchOutcome::VersionConflict {
-                        current_version,
-                        expected_version,
-                    } => {
-                        return Err(DbErr::Custom(format!(
-                            "unrewind version conflict for session {session_id}: \
-                             expected {expected_version}, current {current_version}"
-                        )));
-                    }
-                };
-                let session = session_from_model_db(updated)?;
-                let session_for_cache = session.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
-                    });
-                });
-                Ok(session)
-            })
-        })
-        .await?;
-        let goal = load_session_goal(&self.db, session_id).await?;
-
-        // Drop the persisted snapshot so the next load re-folds against the
-        // newly-published Uncompacted revisions.
-        self.history.invalidate_snapshot(session_id).await?;
-        let post_events = self.history.list_session_events(session_id).await?;
-        let post_view = super::history::fold_session_view(post_events.as_slice())
-            .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
-        let mut session = session;
-        session.goal = goal;
-        session.replace_messages(post_view.messages);
-        with_cache(self.cache.as_ref(), |guard| {
-            guard.insert(session.clone(), cache_policy);
-        });
-        Ok(session)
     }
 
     /// Serialise a session as JSONL: the first line is a [`SessionExportMeta`]
@@ -1907,6 +1665,24 @@ fn event_targets_message(kind: &EventKind, message_id: i64) -> bool {
     }
 }
 
+fn event_turn_id_for_message(kind: &EventKind, message_id: i64) -> Option<super::ids::TurnId> {
+    match kind {
+        EventKind::UserMessageAppended(payload) if payload.message_id.raw() == message_id => {
+            Some(payload.turn_id)
+        }
+        EventKind::AssistantMessageCompleted(payload) if payload.message_id.raw() == message_id => {
+            Some(payload.turn_id)
+        }
+        EventKind::ToolCallIssued(payload) if payload.message_id.raw() == message_id => {
+            Some(payload.turn_id)
+        }
+        EventKind::ToolCallCompleted(payload) if payload.message_id.raw() == message_id => {
+            Some(payload.turn_id)
+        }
+        _ => None,
+    }
+}
+
 /// Visit every `message_id` carried by the persistent variants of `kind`.
 /// Stays in sync with [`rewrite_event_message_ids`] — anything visited there
 /// must be visited here too, otherwise import will under-reserve and
@@ -2187,44 +1963,6 @@ fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         | EventKind::MessageRevised(_)
         | EventKind::PluginEvent(_) => {}
     }
-}
-
-/// Roll the session runtime forward across a transcript-mutating operation
-/// (rewind or unrewind). Bumps `prompt_window.generation` so anything keyed
-/// off it is invalidated, drops cache-hit markers (`provider_anchors`,
-/// `prompt_tokens`) whose digest no longer matches the new transcript, and
-/// resets the in-flight `turn` state — but **preserves** the user-facing
-/// execution context (agent profile, allowed tools, model override, plan
-/// Truncated body preview for a single dropped message used in
-/// `RewindCheckpoint` payloads. Caps at 256 chars, single-line, suffix
-/// `...` when truncated. Falls back to the message's `as_text_lossy`.
-fn rewind_preview(message: &Message) -> String {
-    const MAX: usize = 256;
-    let raw = message.as_text_lossy();
-    let collapsed: String = raw
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect();
-    if collapsed.chars().count() <= MAX {
-        return collapsed;
-    }
-    let truncated: String = collapsed.chars().take(MAX - 3).collect();
-    format!("{truncated}...")
-}
-
-/// state). Without that preservation a rewind would silently kick the user
-/// out of plan mode and forget their selected agent profile.
-fn rewind_runtime_state(
-    runtime: crate::session::SessionRuntimeState,
-) -> crate::session::SessionRuntimeState {
-    let next_generation = runtime.prompt_window.generation.saturating_add(1);
-    let mut next = crate::session::SessionRuntimeState::default();
-    next.prompt_window.generation = next_generation;
-    next.execution = runtime.execution;
-    next.goal = runtime.goal;
-    next.plan = runtime.plan;
-    next.loaded_deferred_tools = runtime.loaded_deferred_tools;
-    next
 }
 
 fn ordered_unique_touched_messages(

@@ -711,17 +711,6 @@ impl SessionHistoryStore {
         Ok(built)
     }
 
-    /// Drop the cached projection snapshot for a session. Called after
-    /// timeline-mutating operations (rewind/unrewind/fork-copy) so the next
-    /// `load_projection` re-folds from the authoritative event log.
-    pub(crate) async fn invalidate_snapshot(&self, session_id: i64) -> Result<(), DbErr> {
-        session_snapshot::Entity::delete_many()
-            .filter(session_snapshot::Column::SessionId.eq(session_id))
-            .exec(&self.db)
-            .await
-            .map(|_| ())
-    }
-
     pub(crate) async fn apply_message_part_update(
         &self,
         update: &MessagePartUpdatedEvent,

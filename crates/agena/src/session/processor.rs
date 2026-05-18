@@ -140,6 +140,7 @@ impl SessionProcessor {
 
     /// Apply the experimental `chat.system.transform` hook chain to the
     /// system prompt before sending it to the provider.
+    #[allow(dead_code)]
     async fn apply_chat_system_transform_hook(
         &self,
         session_id: i64,
@@ -174,6 +175,7 @@ impl SessionProcessor {
     /// Apply the `chat.message` hook chain to every outgoing message before
     /// the provider request goes out. Messages whose `content` becomes
     /// `Value::Null` (the SDK's drop signal) are filtered out.
+    #[allow(dead_code)]
     async fn apply_chat_message_hook(&self, session_id: i64, request: &mut CompletionRequest) {
         let Some(plugins) = &self.plugins else { return };
         if plugins.is_empty() {
@@ -230,6 +232,7 @@ impl SessionProcessor {
     /// Apply the `chat.messages.transform` hook: dispatches the entire outgoing
     /// message list as `ChatMessage` SDK values; plugins can add, remove, or
     /// reorder messages wholesale.
+    #[allow(dead_code)]
     async fn apply_chat_messages_transform_hook(
         &self,
         session_id: i64,
@@ -311,12 +314,10 @@ impl SessionProcessor {
             model_id = %run.model.model_id,
         );
         let mut client_events = Vec::new();
-        self.apply_chat_system_transform_hook(run.session_id, &mut run.completion)
-            .await;
-        self.apply_chat_message_hook(run.session_id, &mut run.completion)
-            .await;
-        self.apply_chat_messages_transform_hook(run.session_id, &mut run.completion)
-            .await;
+        // Provider-visible prompt content is append-only for prompt-cache
+        // affinity. Mutating chat hooks can rewrite/drop/reorder system and
+        // message content, so they remain registered for compatibility but are
+        // not applied on the provider request path.
         self.apply_chat_params_hook(
             run.model.provider_id.as_str(),
             run.model.model_id.as_str(),
@@ -603,11 +604,6 @@ impl SessionProcessor {
         })
     }
 
-    pub(crate) fn should_retry_with_compaction(&self, err: &AppError, rounds: u8) -> bool {
-        self.context_governor
-            .should_retry_with_compaction(err, rounds)
-    }
-
     pub(crate) fn should_compact_prompt_with_budget(
         &self,
         messages: &[Message],
@@ -617,16 +613,8 @@ impl SessionProcessor {
             .should_compact_prompt_with_budget(messages, max_prompt_chars)
     }
 
-    pub(crate) fn keep_tail_messages(&self) -> usize {
-        self.context_governor.keep_tail_messages()
-    }
-
     pub(crate) fn max_prompt_chars(&self) -> usize {
         self.context_governor.max_prompt_chars()
-    }
-
-    pub(crate) fn can_retry_compaction(&self, rounds: u8) -> bool {
-        self.context_governor.can_retry_compaction(rounds)
     }
 
     pub(crate) fn supports_prompt_continuation(&self, model: &ModelRef) -> bool {

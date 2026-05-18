@@ -300,7 +300,7 @@ search=<optional>
 
 ## Optimistic concurrency
 
-Session update、delete、turn、continue、fork、permission reply、user input reply、rewind、unrewind 等写操作可使用：
+Session update、delete、turn、continue、fork、permission reply、user input reply、rewind 等写操作可使用：
 
 ```text
 If-Match: <session.version>
@@ -784,8 +784,8 @@ limit=<1..2000>
 | POST   | `/api/v1/sessions/{session_id}/cancel`             | cancel active turn               |
 | POST   | `/api/v1/sessions/{session_id}/permission-replies` | reply to permission request      |
 | POST   | `/api/v1/sessions/{session_id}/user-input-replies` | reply to host/user input request |
-| POST   | `/api/v1/sessions/{session_id}/rewind`             | rewind to message                |
-| POST   | `/api/v1/sessions/{session_id}/unrewind`           | undo rewind from message         |
+| POST   | `/api/v1/sessions/{session_id}/rewind`             | fork session at message          |
+| POST   | `/api/v1/sessions/{session_id}/unrewind`           | legacy no-op                     |
 | GET    | `/api/v1/sessions/{session_id}/export`             | export session JSONL             |
 | GET    | `/api/v1/sessions/{session_id}/rewind-checkpoints` | list rewind audit checkpoints    |
 
@@ -938,13 +938,15 @@ Fork:
 
 Fork starts from the selected message id.
 
-Rewind/unrewind:
+Rewind:
 
 ```json
 {
   "message_id": 42
 }
 ```
+
+Rewind no longer compacts or removes messages from the source session. It returns a new forked session rooted at the selected message, preserving the source session's provider-visible prompt as append-only. Unrewind is retained for compatibility and returns the current source session without mutating it.
 
 Import:
 

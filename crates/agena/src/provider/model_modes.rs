@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::LazyLock};
 
 use regex::Regex;
 
-use crate::model::{AdapterId, ModelSpeedModeRequestOverride, ModelThinkingMode};
+use crate::model::{AdapterId, ModelMetadata, ModelSpeedModeRequestOverride, ModelThinkingMode};
 
 use super::{CapabilityFamily, ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 
@@ -15,6 +15,7 @@ impl ModelModeRegistry {
         family: CapabilityFamily,
         adapter_id: Option<&AdapterId>,
         model: &str,
+        metadata: &ModelMetadata,
     ) -> BTreeMap<String, ModelThinkingMode> {
         let normalized = normalize_model(model);
         if normalized.is_empty() {
@@ -24,7 +25,7 @@ impl ModelModeRegistry {
         let protocol = protocol_for_model(family, adapter_id, normalized.as_str());
         match protocol {
             ThinkingProtocol::None => BTreeMap::new(),
-            ThinkingProtocol::OpenAi => openai_reasoning_modes(normalized.as_str()),
+            ThinkingProtocol::OpenAi => openai_reasoning_modes(normalized.as_str(), metadata),
             ThinkingProtocol::OpenAiCompatible => {
                 openai_compatible_reasoning_modes(normalized.as_str())
             }
@@ -111,7 +112,10 @@ fn looks_like_openai_compatible_reasoning_model(model: &str) -> bool {
         || model.contains("deep-research")
 }
 
-fn openai_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
+fn openai_reasoning_modes(
+    model: &str,
+    metadata: &ModelMetadata,
+) -> BTreeMap<String, ModelThinkingMode> {
     if model.contains("deep-research") {
         return openai_reasoning_mode_overrides(effort_modes(&[ReasoningEffort::Medium], false));
     }
@@ -129,25 +133,33 @@ fn openai_reasoning_modes(model: &str) -> BTreeMap<String, ModelThinkingMode> {
     }
 
     if GPT5_FAMILY_RE.is_match(model) {
+        let mut efforts = vec![
+            ReasoningEffort::Minimal,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ];
+        if openai_release_date_supports_xhigh(metadata) {
+            efforts.push(ReasoningEffort::Xhigh);
+        }
         return openai_reasoning_mode_overrides(effort_modes(
-            &[
-                ReasoningEffort::Minimal,
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-            ],
-            false,
+            efforts.as_slice(),
+            openai_release_date_supports_none(metadata),
         ));
     }
 
     if model.starts_with("o1") || model.starts_with("o3") || model.starts_with("o4") {
+        let mut efforts = vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ];
+        if openai_release_date_supports_xhigh(metadata) {
+            efforts.push(ReasoningEffort::Xhigh);
+        }
         return openai_reasoning_mode_overrides(effort_modes(
-            &[
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-            ],
-            false,
+            efforts.as_slice(),
+            openai_release_date_supports_none(metadata),
         ));
     }
 
@@ -490,6 +502,20 @@ fn normalize_model(model: &str) -> String {
     model.trim().to_ascii_lowercase()
 }
 
+fn openai_release_date_supports_none(metadata: &ModelMetadata) -> bool {
+    metadata
+        .release_date
+        .as_deref()
+        .is_some_and(|date| date >= OPENAI_NONE_EFFORT_RELEASE_DATE)
+}
+
+fn openai_release_date_supports_xhigh(metadata: &ModelMetadata) -> bool {
+    metadata
+        .release_date
+        .as_deref()
+        .is_some_and(|date| date >= OPENAI_XHIGH_EFFORT_RELEASE_DATE)
+}
+
 fn gpt5_version(model: &str) -> Option<u32> {
     GPT5_VERSION_RE
         .captures(model)
@@ -506,6 +532,8 @@ static GPT5_PRO_RE: LazyLock<Regex> =
 static GPT5_VERSIONED_PRO_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?:^|/)gpt-5[.-]\d+[.-]pro(?:[.-]|$)").expect("valid versioned gpt-5 pro regex")
 });
+const OPENAI_NONE_EFFORT_RELEASE_DATE: &str = "2025-11-13";
+const OPENAI_XHIGH_EFFORT_RELEASE_DATE: &str = "2025-12-04";
 
 #[cfg(test)]
 mod tests {
@@ -517,6 +545,7 @@ mod tests {
             CapabilityFamily::OpenAi,
             None,
             "gpt-5.2",
+            &ModelMetadata::default(),
         );
         assert!(modes.contains_key("no-thinking"));
         assert!(modes.contains_key("thinking-low"));
@@ -544,6 +573,7 @@ mod tests {
             CapabilityFamily::OpenAiCompatible,
             None,
             "claude-sonnet-4-6",
+            &ModelMetadata::default(),
         );
         assert!(modes.contains_key("no-thinking"));
         assert!(modes.contains_key("thinking-minimal"));
@@ -557,6 +587,7 @@ mod tests {
             CapabilityFamily::Anthropic,
             None,
             "claude-opus-4.7",
+            &ModelMetadata::default(),
         );
         assert!(modes.contains_key("thinking-low"));
         assert!(modes.contains_key("thinking-medium"));
@@ -571,6 +602,7 @@ mod tests {
             CapabilityFamily::Gemini,
             None,
             "gemini-3-flash-image",
+            &ModelMetadata::default(),
         );
         assert!(modes.contains_key("thinking-minimal"));
         assert!(modes.contains_key("thinking-high"));
@@ -583,6 +615,7 @@ mod tests {
             CapabilityFamily::Bedrock,
             None,
             "nova-pro-v1",
+            &ModelMetadata::default(),
         );
         assert!(modes.contains_key("thinking-low"));
         assert!(modes.contains_key("thinking-medium"));
@@ -595,6 +628,7 @@ mod tests {
             CapabilityFamily::Bedrock,
             None,
             "anthropic.claude-opus-4-7",
+            &ModelMetadata::default(),
         );
         assert!(modes.contains_key("thinking-low"));
         assert!(modes.contains_key("thinking-medium"));
@@ -618,6 +652,7 @@ mod tests {
             CapabilityFamily::Anthropic,
             None,
             "claude-opus-4.7",
+            &ModelMetadata::default(),
         );
         assert_eq!(
             modes
@@ -628,5 +663,52 @@ mod tests {
                 display: Some(ThinkingDisplay::Summarized),
             })
         );
+    }
+
+    #[test]
+    fn openai_release_date_gates_none_and_xhigh_efforts() {
+        let baseline = default_model_mode_registry().thinking_modes_for_family(
+            CapabilityFamily::OpenAi,
+            None,
+            "gpt-5",
+            &ModelMetadata::default(),
+        );
+        assert!(!baseline.contains_key("no-thinking"));
+        assert!(!baseline.contains_key("thinking-xhigh"));
+        assert!(baseline.contains_key("thinking-minimal"));
+
+        let none_only = default_model_mode_registry().thinking_modes_for_family(
+            CapabilityFamily::OpenAi,
+            None,
+            "gpt-5",
+            &ModelMetadata::default().with_release_date("2025-11-13"),
+        );
+        assert!(none_only.contains_key("no-thinking"));
+        assert!(!none_only.contains_key("thinking-xhigh"));
+
+        let full = default_model_mode_registry().thinking_modes_for_family(
+            CapabilityFamily::OpenAi,
+            None,
+            "gpt-5",
+            &ModelMetadata::default().with_release_date("2025-12-04"),
+        );
+        assert!(full.contains_key("no-thinking"));
+        assert!(full.contains_key("thinking-xhigh"));
+    }
+
+    #[test]
+    fn openai_o_series_release_date_gates_none_and_xhigh_without_minimal() {
+        let modes = default_model_mode_registry().thinking_modes_for_family(
+            CapabilityFamily::OpenAi,
+            None,
+            "o4-mini",
+            &ModelMetadata::default().with_release_date("2025-12-04"),
+        );
+        assert!(modes.contains_key("no-thinking"));
+        assert!(modes.contains_key("thinking-low"));
+        assert!(modes.contains_key("thinking-medium"));
+        assert!(modes.contains_key("thinking-high"));
+        assert!(modes.contains_key("thinking-xhigh"));
+        assert!(!modes.contains_key("thinking-minimal"));
     }
 }

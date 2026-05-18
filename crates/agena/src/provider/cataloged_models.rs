@@ -98,6 +98,22 @@ impl CatalogedModelsProvider {
             metadata.assistant_reasoning_interleaved.unwrap_or(false),
         );
     }
+
+    fn synthesize_thinking_modes_from_metadata(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelThinkingMode> {
+        let Some(family) = self.target.capability_family() else {
+            return BTreeMap::new();
+        };
+        crate::provider::default_model_mode_registry().thinking_modes_for_family(
+            family,
+            adapter_id,
+            model.as_str(),
+            &self.model_metadata_for_adapter(adapter_id, model),
+        )
+    }
 }
 
 #[async_trait]
@@ -160,27 +176,25 @@ impl ModelProvider for CatalogedModelsProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelThinkingMode> {
-        self.configured_definition(model)
-            .map(|configured| {
-                let mut modes = self
-                    .target
-                    .model_thinking_modes_for_adapter(adapter_id, model);
-                for (name, configured_mode) in &configured.thinking_modes {
-                    match configured_mode.apply_to_mode(modes.get(name)) {
-                        Some(mode) => {
-                            modes.insert(name.clone(), mode);
-                        }
-                        None => {
-                            modes.remove(name);
-                        }
+        let mut modes = self
+            .target
+            .model_thinking_modes_for_adapter(adapter_id, model);
+        for (name, mode) in self.synthesize_thinking_modes_from_metadata(adapter_id, model) {
+            modes.entry(name).or_insert(mode);
+        }
+        if let Some(configured) = self.configured_definition(model) {
+            for (name, configured_mode) in &configured.thinking_modes {
+                match configured_mode.apply_to_mode(modes.get(name)) {
+                    Some(mode) => {
+                        modes.insert(name.clone(), mode);
+                    }
+                    None => {
+                        modes.remove(name);
                     }
                 }
-                modes
-            })
-            .unwrap_or_else(|| {
-                self.target
-                    .model_thinking_modes_for_adapter(adapter_id, model)
-            })
+            }
+        }
+        modes
     }
 
     fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
@@ -344,6 +358,7 @@ mod tests {
         default_model: ModelId,
         listed: Vec<Model>,
         captured_requests: Arc<Mutex<Vec<CompletionRequest>>>,
+        capability_family: Option<crate::provider::CapabilityFamily>,
     }
 
     #[async_trait]
@@ -354,6 +369,10 @@ mod tests {
 
         fn default_model(&self) -> &ModelId {
             &self.default_model
+        }
+
+        fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
+            self.capability_family
         }
 
         fn model_capabilities(&self, _model: &ModelId) -> ModelCapabilities {
@@ -395,6 +414,7 @@ mod tests {
             default_model: ModelId::new("gpt-4.1"),
             listed: vec![Model::new("openai", "gpt-4.1").with_display_name("GPT 4.1")],
             captured_requests: Arc::new(Mutex::new(Vec::new())),
+            capability_family: None,
         });
         let provider = CatalogedModelsProvider::new(
             target,
@@ -446,6 +466,7 @@ mod tests {
             default_model: ModelId::new("deepseek-v4-pro"),
             listed: vec![Model::new("openai", "deepseek-v4-pro")],
             captured_requests: Arc::clone(&captured_requests),
+            capability_family: None,
         });
         let provider = CatalogedModelsProvider::new(
             target,
@@ -523,6 +544,7 @@ mod tests {
             default_model: ModelId::new("deepseek-v4-pro"),
             listed: vec![Model::new("openai", "deepseek-v4-pro")],
             captured_requests: Arc::clone(&captured_requests),
+            capability_family: None,
         });
         let provider = CatalogedModelsProvider::new(
             target,
@@ -585,5 +607,33 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("reasoning_content")
         );
+    }
+
+    #[tokio::test]
+    async fn catalog_wrapper_uses_catalog_metadata_to_enrich_release_gated_thinking_modes() {
+        let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
+            default_model: ModelId::new("gpt-5"),
+            listed: vec![Model::new("openai", "gpt-5")],
+            captured_requests: Arc::new(Mutex::new(Vec::new())),
+            capability_family: Some(crate::provider::CapabilityFamily::OpenAi),
+        });
+        let provider = CatalogedModelsProvider::new(
+            target,
+            ModelCatalogProviderRecord {
+                models: BTreeMap::from([(
+                    "gpt-5".to_owned(),
+                    crate::model_catalog::CatalogModelDefinition {
+                        release_date: Some("2025-12-04".to_owned()),
+                        ..crate::model_catalog::CatalogModelDefinition::default()
+                    },
+                )]),
+                appendable_model_ids: Default::default(),
+            },
+        );
+
+        let modes = provider.model_thinking_modes(&ModelId::new("gpt-5"));
+        assert!(modes.contains_key("no-thinking"));
+        assert!(modes.contains_key("thinking-xhigh"));
+        assert!(modes.contains_key("thinking-minimal"));
     }
 }

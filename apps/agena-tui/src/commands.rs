@@ -38,6 +38,7 @@ pub enum CommandId {
     Editor,
     Image,
     Copy,
+    CopyMessage,
     CopyVisible,
     Providers,
     Provider,
@@ -111,14 +112,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Sessions,
         name: "sessions",
         aliases: &[],
-        arguments: "[all|roots|subtree]",
+        arguments: "[query|all|roots|subtree]",
         summary_key: "command-sessions-summary",
     },
     CommandSpec {
         id: CommandId::Resume,
         name: "resume",
         aliases: &["switch", "recent"],
-        arguments: "",
+        arguments: "[query]",
         summary_key: "command-resume-summary",
     },
     CommandSpec {
@@ -351,6 +352,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["yank"],
         arguments: "",
         summary_key: "command-copy-summary",
+    },
+    CommandSpec {
+        id: CommandId::CopyMessage,
+        name: "copy-message",
+        aliases: &["copy-last", "copy-assistant"],
+        arguments: "",
+        summary_key: "command-copy-message-summary",
     },
     CommandSpec {
         id: CommandId::CopyVisible,

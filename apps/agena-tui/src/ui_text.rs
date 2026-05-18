@@ -217,9 +217,9 @@ pub fn help_lines(i18n: &I18n) -> Vec<String> {
     vec![
         t(i18n, "help-header"),
         String::new(),
+        t(i18n, "status-global"),
         t(i18n, "status-composer"),
         t(i18n, "status-transcript"),
-        t(i18n, "status-sessions"),
         t(i18n, "help-actions-line-6"),
     ]
 }

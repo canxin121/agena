@@ -1522,6 +1522,50 @@ impl Backend {
         Ok(rows)
     }
 
+    pub async fn usage_inspector_rows(&self, session_id: Option<i64>) -> Result<Vec<InspectorRow>> {
+        let manager = self.session_manager()?;
+        let now = chrono::Utc::now();
+        let periods = [
+            ("today", agena::session::UsagePeriod::Today),
+            ("last_7_days", agena::session::UsagePeriod::Last7Days),
+            ("last_30_days", agena::session::UsagePeriod::Last30Days),
+            ("all_time", agena::session::UsagePeriod::AllTime),
+        ];
+        let mut rows = Vec::new();
+        for (label, period) in periods {
+            let stats = manager
+                .usage_stats(agena::session::UsageStatsQuery::for_period(period, now))
+                .await?;
+            rows.push(InspectorRow {
+                label: label.to_string(),
+                detail: format_usage_totals(&stats.totals),
+            });
+        }
+
+        let stats = manager
+            .usage_stats(agena::session::UsageStatsQuery::for_period(
+                agena::session::UsagePeriod::Last30Days,
+                now,
+            ))
+            .await?;
+        for entry in stats.by_model.into_iter().take(8) {
+            rows.push(InspectorRow {
+                label: format!("model:{}/{}", entry.provider_id, entry.model_id),
+                detail: format_usage_totals(&entry.totals),
+            });
+        }
+
+        if let Some(session_id) = session_id {
+            rows.push(InspectorRow {
+                label: "selected_session".to_string(),
+                detail: format!("#{session_id}"),
+            });
+            rows.extend(self.session_cost_inspector_rows(session_id).await?);
+        }
+
+        Ok(rows)
+    }
+
     pub async fn list_permission_rules(&self) -> Result<Vec<PermissionRuleResource>> {
         match dispatch::dispatch_query(
             &self.app_state,
@@ -2752,7 +2796,6 @@ fn draft_discovery_adapters(
         let config = match trimmed {
             "openai" => ResolvedProviderAdapterConfig {
                 enabled: true,
-                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
                     extra_headers: std::collections::BTreeMap::new(),
                     options: OpenAiProviderOptions {
@@ -2770,7 +2813,6 @@ fn draft_discovery_adapters(
             },
             "anthropic" => ResolvedProviderAdapterConfig {
                 enabled: true,
-                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
                     extra_headers: std::collections::BTreeMap::new(),
                     options: AnthropicProviderOptions {
@@ -2785,7 +2827,6 @@ fn draft_discovery_adapters(
             },
             "gemini" => ResolvedProviderAdapterConfig {
                 enabled: true,
-                model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
                     extra_headers: std::collections::BTreeMap::new(),
                     options: SimpleHttpProviderOptions {
@@ -2985,6 +3026,21 @@ fn git_status_inspector_rows(status: GitStatusResource) -> Vec<InspectorRow> {
     ];
     rows.retain(|row| !row.detail.is_empty());
     rows
+}
+
+fn format_usage_totals(totals: &agena::session::UsageTotals) -> String {
+    format!(
+        "turns={} sessions={} in={} out={} reasoning={} cache_read={} cache_write={} cache_hit={:.1}% cost=${:.4}",
+        totals.turns,
+        totals.sessions,
+        totals.input_tokens,
+        totals.output_tokens,
+        totals.reasoning_tokens,
+        totals.cache_read_tokens,
+        totals.cache_write_tokens,
+        totals.cache_hit_rate * 100.0,
+        totals.total_cost_usd
+    )
 }
 
 fn detect_dimensions(bytes: &[u8]) -> (Option<u32>, Option<u32>) {

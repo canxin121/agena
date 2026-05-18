@@ -5701,22 +5701,17 @@ impl App {
     }
 
     fn handle_cost_command(&mut self) {
-        let Some(session_id) = self.current_or_selected_session_id() else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return;
-        };
+        let session_id = self.current_or_selected_session_id();
         match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                match handle.block_on(self.backend.session_cost_inspector_rows(session_id)) {
-                    Ok(rows) => self.open_inspector_picker(
-                        format!("Cost [#{}]", session_id),
-                        "Inspect session usage and cost".to_string(),
-                        "",
-                        rows,
-                    ),
-                    Err(error) => self.flash_error(error.to_string()),
-                }
-            }
+            Ok(handle) => match handle.block_on(self.backend.usage_inspector_rows(session_id)) {
+                Ok(rows) => self.open_inspector_picker(
+                    "Usage".to_string(),
+                    "Inspect usage, cost, cache rate, and selected session cost".to_string(),
+                    "",
+                    rows,
+                ),
+                Err(error) => self.flash_error(error.to_string()),
+            },
             Err(error) => self.flash_error(error.to_string()),
         }
     }

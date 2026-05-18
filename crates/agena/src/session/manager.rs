@@ -40,7 +40,7 @@ use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
 use super::compaction_worker::CompactionWorker;
 use super::control::{TurnControl, TurnControlError, TurnRegistry};
-use super::cost::SessionCostSummary;
+use super::cost::{SessionCostSummary, UsageStats, UsageStatsQuery};
 use super::history::{
     FinishReason, MessageId as HistoryMessageId, MessageRevised, RevisionKind, ToolCallCompleted,
     ToolCallId as HistoryToolCallId, TranscriptContent, TranscriptToolOutput, TurnAbortReason,
@@ -908,6 +908,10 @@ impl SessionManager {
         self.store
             .goal_cost_summary(session_id, state.cache_policy())
             .await
+    }
+
+    pub async fn usage_stats(&self, query: UsageStatsQuery) -> Result<UsageStats, AppError> {
+        self.store.usage_stats(query).await
     }
 
     pub async fn create_goal(

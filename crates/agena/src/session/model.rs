@@ -199,6 +199,8 @@ impl PromptTokenUsageSnapshot {
         self.input_tokens
             .saturating_add(self.output_tokens)
             .saturating_add(self.reasoning_tokens)
+            .saturating_add(self.cache_write_tokens)
+            .saturating_add(self.cache_read_tokens)
     }
 }
 

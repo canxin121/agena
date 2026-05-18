@@ -1159,14 +1159,19 @@ fn build_gemini_tools(tools: &[crate::plugin::registry::PluginEntry]) -> Option<
 fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage {
     let prompt_tokens = u.prompt_token_count.unwrap_or_default();
     let cache_read_tokens = u.cached_content_token_count.unwrap_or_default();
+    let reasoning_tokens = u.thoughts_token_count.unwrap_or_default();
     // Gemini's `promptTokenCount` is inclusive of cached tokens; the rest
     // of the codebase follows Anthropic's convention where `input_tokens`
     // is just the uncached portion. Subtract to match.
     let input_tokens = prompt_tokens.saturating_sub(cache_read_tokens);
+    let output_tokens = u
+        .candidates_token_count
+        .unwrap_or_default()
+        .saturating_sub(reasoning_tokens);
     MessageUsage {
         input_tokens,
-        output_tokens: u.candidates_token_count.unwrap_or_default(),
-        reasoning_tokens: u.thoughts_token_count.unwrap_or_default(),
+        output_tokens,
+        reasoning_tokens,
         cache_write_tokens: 0,
         cache_read_tokens,
         total_cost: 0.0,
@@ -1856,7 +1861,8 @@ mod tests {
                     let usage = usage.expect("usage should be present");
                     // promptTokenCount=4, cachedContentTokenCount=1 → uncached input = 3
                     assert_eq!(usage.input_tokens, 3);
-                    assert_eq!(usage.output_tokens, 2);
+                    // candidatesTokenCount=2, thoughtsTokenCount=1 → visible output = 1
+                    assert_eq!(usage.output_tokens, 1);
                     assert_eq!(usage.reasoning_tokens, 1);
                     assert_eq!(usage.cache_read_tokens, 1);
                     let metadata = provider_metadata.expect("provider metadata should be present");

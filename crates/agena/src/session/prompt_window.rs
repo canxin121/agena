@@ -1,3 +1,5 @@
+#![cfg_attr(not(test), allow(dead_code))]
+
 use std::{
     collections::{BTreeSet, HashSet},
     sync::LazyLock,
@@ -28,8 +30,8 @@ use super::history::{
 };
 use super::ids::ToolCallId;
 use super::model::{
-    MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_PROMPT_COMPACTED,
-    MESSAGE_TAG_PROMPT_SUMMARY, MESSAGE_TAG_TOOL_RESULT_PRUNED,
+    MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_PROMPT_SUMMARY,
+    MESSAGE_TAG_TOOL_RESULT_PRUNED,
 };
 
 const ATTACHMENT_PAYLOAD_STRIP_MIN_BYTES: usize = 256_000;
@@ -41,7 +43,7 @@ const MIN_PROMPT_BUDGET_TOKENS: u32 = 512;
 const MIN_CONTEXT_RESERVE_TOKENS: u32 = 1_024;
 const MAX_CONTEXT_RESERVE_TOKENS: u32 = 20_000;
 const PROMPT_PROTOCOL_OVERHEAD_CHARS: usize = 2_048;
-const PROMPT_REQUEST_SHAPE_VERSION: u32 = 3;
+const PROMPT_REQUEST_SHAPE_VERSION: u32 = 4;
 const SYNTHETIC_TOOL_COMPLETED_PLACEHOLDER: &str =
     "[Tool execution completed without persisted output]";
 const SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER: &str = "[Tool execution was interrupted]";
@@ -98,7 +100,6 @@ pub(crate) struct PromptRequestOptions<'a> {
     pub provider_id: &'a str,
     pub model_id: &'a str,
     pub system: Option<&'a str>,
-    pub goal_context: Option<&'a str>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub tools: &'a [RegistryPluginEntry],
@@ -131,7 +132,7 @@ pub(crate) enum PromptContinuationReason {
     AnchorAssistantMissing,
     TranscriptDigestMismatch,
     NoDeltaMessages,
-    ReusedPreviousResponseId,
+    AppendOnlyFullPrompt,
 }
 
 impl PromptContinuationReason {
@@ -145,7 +146,7 @@ impl PromptContinuationReason {
             Self::AnchorAssistantMissing => "anchor_assistant_missing",
             Self::TranscriptDigestMismatch => "transcript_digest_mismatch",
             Self::NoDeltaMessages => "no_delta_messages",
-            Self::ReusedPreviousResponseId => "reused_previous_response_id",
+            Self::AppendOnlyFullPrompt => "append_only_full_prompt",
         }
     }
 }
@@ -182,33 +183,11 @@ struct PendingToolCallOutput {
 }
 
 pub(crate) fn active_prompt_messages(session: &Session) -> Vec<Message> {
-    let active = session
-        .messages
-        .iter()
-        .filter(|message| !message.metadata.has_tag(MESSAGE_TAG_PROMPT_COMPACTED))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let Some(latest_summary_id) = active
-        .iter()
-        .rev()
-        .find(|message| message.metadata.has_tag(MESSAGE_TAG_PROMPT_SUMMARY))
-        .map(|message| message.id)
-    else {
-        return active;
-    };
-
-    let mut prompt_messages = Vec::with_capacity(active.len());
-    if let Some(summary) = active
-        .iter()
-        .find(|message| message.id == latest_summary_id)
-    {
-        prompt_messages.push(summary.clone());
-    }
-    prompt_messages.extend(active.into_iter().filter(|message| {
-        message.id != latest_summary_id && !message.metadata.has_tag(MESSAGE_TAG_PROMPT_SUMMARY)
-    }));
-    prompt_messages
+    // Prompt-cache affinity depends on every later request preserving the
+    // exact provider-visible prefix from earlier requests. Revisions such as
+    // compaction, pruning, or summary promotion stay in the audit log, but the
+    // prompt path itself is append-only and keeps message order unchanged.
+    session.messages.clone()
 }
 
 pub(crate) fn can_compact(
@@ -373,23 +352,8 @@ fn remove_pending_outputs_satisfied_by_message(
     pending.retain(|item| !completed_ids.contains(item.tool_call_id.as_str()));
 }
 
-fn goal_context_message(goal_context: &str) -> Option<Message> {
-    let goal_context = goal_context.trim();
-    if goal_context.is_empty() {
-        return None;
-    }
-    Some(Message::prompt_text(
-        Role::User,
-        format!("<goal_context>\n{goal_context}\n</goal_context>"),
-    ))
-}
-
-fn prompt_messages_for_request(messages: &[Message], goal_context: Option<&str>) -> Vec<Message> {
-    let mut prompt_messages = normalize_prompt_messages(messages);
-    if let Some(goal_message) = goal_context.and_then(goal_context_message) {
-        prompt_messages.push(goal_message);
-    }
-    prompt_messages
+fn prompt_messages_for_request(messages: &[Message]) -> Vec<Message> {
+    normalize_prompt_messages(messages)
 }
 
 fn message_has_visible_prompt_payload(message: &Message) -> bool {
@@ -435,7 +399,6 @@ pub(crate) fn prompt_request_fingerprints(
         request_options_fingerprint: fingerprint_request_options(
             options.provider_id,
             options.model_id,
-            options.goal_context,
             options.temperature,
             options.max_output_tokens,
             options.tools,
@@ -449,7 +412,6 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
     messages: &[Message],
     system_fingerprint: &str,
     request_options_fingerprint: &str,
-    goal_context: Option<&str>,
 ) -> Option<PromptTokenEstimate> {
     let runtime = &session.runtime.prompt_tokens;
     if !runtime.matches_request(
@@ -462,7 +424,7 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
 
     let last_successful_total_tokens = runtime.total_tokens()?;
     let assistant_message_id = runtime.last_successful_assistant_message_id?;
-    let prompt_messages = prompt_messages_for_request(messages, goal_context);
+    let prompt_messages = prompt_messages_for_request(messages);
     let anchor_index = prompt_messages
         .iter()
         .position(|message| message.id == assistant_message_id)?;
@@ -709,8 +671,7 @@ pub(crate) fn build_prepared_prompt(
     options: PromptRequestOptions<'_>,
 ) -> PreparedPrompt {
     let active_messages = active_prompt_messages(session);
-    let prompt_messages =
-        prompt_messages_for_request(active_messages.as_slice(), options.goal_context);
+    let prompt_messages = prompt_messages_for_request(active_messages.as_slice());
     let provider_request_shape = options.provider_request_shape.cloned();
     let PromptRequestFingerprint {
         system_fingerprint,
@@ -725,24 +686,11 @@ pub(crate) fn build_prepared_prompt(
         request_options_fingerprint.as_str(),
     );
 
-    if let PromptContinuationOutcome::Reuse {
-        previous_response_id,
-        delta_messages,
-    } = continuation
-    {
-        return PreparedPrompt {
-            system: None,
-            messages: delta_messages,
-            prompt_cache_key: prompt_cache_key_for_session(session),
-            previous_response_id: Some(previous_response_id),
-            prompt_window_generation: session.runtime.prompt_window.generation,
-            system_fingerprint,
-            request_options_fingerprint,
-            provider_request_shape,
-            continuation_reason: PromptContinuationReason::ReusedPreviousResponseId,
-            continuation_diagnostic: PromptContinuationDiagnostic::default(),
-        };
-    }
+    let continuation_reason = match &continuation {
+        PromptContinuationOutcome::Reuse { .. } => PromptContinuationReason::AppendOnlyFullPrompt,
+        PromptContinuationOutcome::Restart { reason, .. } => *reason,
+    };
+    let continuation_diagnostic = continuation.diagnostic();
 
     PreparedPrompt {
         system: options.system.map(ToOwned::to_owned),
@@ -753,8 +701,8 @@ pub(crate) fn build_prepared_prompt(
         system_fingerprint,
         request_options_fingerprint,
         provider_request_shape,
-        continuation_reason: continuation.reason(),
-        continuation_diagnostic: continuation.diagnostic(),
+        continuation_reason,
+        continuation_diagnostic,
     }
 }
 
@@ -771,13 +719,6 @@ enum PromptContinuationOutcome {
 }
 
 impl PromptContinuationOutcome {
-    fn reason(&self) -> PromptContinuationReason {
-        match self {
-            Self::Restart { reason, .. } => *reason,
-            Self::Reuse { .. } => PromptContinuationReason::ReusedPreviousResponseId,
-        }
-    }
-
     fn diagnostic(&self) -> PromptContinuationDiagnostic {
         match self {
             Self::Restart { diagnostic, .. } => diagnostic.clone(),
@@ -1395,7 +1336,6 @@ struct SummarySections {
 fn fingerprint_request_options(
     provider_id: &str,
     model_id: &str,
-    goal_context: Option<&str>,
     temperature: Option<f32>,
     max_output_tokens: Option<u32>,
     tools: &[RegistryPluginEntry],
@@ -1406,7 +1346,6 @@ fn fingerprint_request_options(
         prompt_request_shape_version: u32,
         provider_id: &'a str,
         model_id: &'a str,
-        goal_context_fingerprint: Option<String>,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
         tools: &'a [RegistryPluginEntry],
@@ -1415,13 +1354,11 @@ fn fingerprint_request_options(
 
     let provider_request_shape_fingerprint =
         provider_request_shape.map(PromptCacheShape::fingerprint);
-    let goal_context_fingerprint = goal_context.map(|value| fingerprint_optional_text(Some(value)));
 
     fingerprint_value(&RequestOptionsFingerprint {
         prompt_request_shape_version: PROMPT_REQUEST_SHAPE_VERSION,
         provider_id,
         model_id,
-        goal_context_fingerprint,
         temperature,
         max_output_tokens,
         tools,
@@ -1504,10 +1441,11 @@ mod tests {
     }
 
     #[test]
-    fn active_prompt_messages_skips_compacted_and_promotes_latest_summary() {
+    fn active_prompt_messages_preserves_append_only_order() {
         let mut compacted = Message::prompt_text(Role::User, "old");
         compacted.id = 1;
-        compacted.metadata.add_tag(MESSAGE_TAG_PROMPT_COMPACTED);
+        compacted.metadata.add_tag("prompt_compacted");
+        let compacted_id = compacted.id;
 
         let mut current = Message::prompt_text(Role::User, "new");
         current.id = 2;
@@ -1523,13 +1461,14 @@ mod tests {
         ]);
 
         let prompt_messages = active_prompt_messages(&session);
-        assert_eq!(prompt_messages.len(), 2);
-        assert_eq!(prompt_messages[0].id, summary.id);
+        assert_eq!(prompt_messages.len(), 3);
+        assert_eq!(prompt_messages[0].id, compacted_id);
         assert_eq!(prompt_messages[1].id, current.id);
+        assert_eq!(prompt_messages[2].id, summary.id);
     }
 
     #[test]
-    fn build_prepared_prompt_uses_previous_response_id_for_strict_extensions() {
+    fn build_prepared_prompt_keeps_full_prompt_for_strict_extensions() {
         let mut assistant = Message::prompt_text(Role::Assistant, "done");
         assistant.id = 11;
         let mut user = Message::prompt_text(Role::User, "follow up");
@@ -1553,7 +1492,6 @@ mod tests {
                     request_options_fingerprint: fingerprint_request_options(
                         "openai",
                         "gpt-5",
-                        None,
                         Some(0.2),
                         Some(256),
                         &[],
@@ -1577,7 +1515,6 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
-                goal_context: None,
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
@@ -1586,13 +1523,14 @@ mod tests {
             },
         );
 
-        assert_eq!(prepared.previous_response_id.as_deref(), Some("resp_123"));
-        assert_eq!(prepared.system, None);
-        assert_eq!(prepared.messages.len(), 1);
-        assert_eq!(prepared.messages[0].id, 12);
+        assert_eq!(prepared.previous_response_id, None);
+        assert_eq!(prepared.system.as_deref(), Some("system"));
+        assert_eq!(prepared.messages.len(), 2);
+        assert_eq!(prepared.messages[0].id, 11);
+        assert_eq!(prepared.messages[1].id, 12);
         assert_eq!(
             prepared.continuation_reason,
-            PromptContinuationReason::ReusedPreviousResponseId
+            PromptContinuationReason::AppendOnlyFullPrompt
         );
     }
 
@@ -1620,7 +1558,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
             transcript_digest,
         );
 
@@ -1629,9 +1567,8 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None)
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
                 .as_str(),
-            None,
         )
         .expect("runtime prompt token estimate should be available");
 
@@ -1666,7 +1603,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
             transcript_digest,
         );
 
@@ -1675,9 +1612,8 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("different system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None)
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
                 .as_str(),
-            None,
         );
 
         assert!(estimate.is_none());
@@ -1708,7 +1644,6 @@ mod tests {
                     request_options_fingerprint: fingerprint_request_options(
                         "openai",
                         "gpt-5",
-                        None,
                         Some(0.2),
                         Some(256),
                         &[],
@@ -1735,7 +1670,6 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
-                goal_context: None,
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
@@ -1776,7 +1710,7 @@ mod tests {
             2,
             Some(4_096),
             fingerprint_optional_text(Some("system")),
-            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None),
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None),
             prompt_transcript_digest(&[Message::prompt_text(Role::Assistant, "different")]),
         );
 
@@ -1785,9 +1719,8 @@ mod tests {
             &session,
             active_messages.as_slice(),
             fingerprint_optional_text(Some("system")).as_str(),
-            fingerprint_request_options("openai", "gpt-5", None, Some(0.2), Some(256), &[], None)
+            fingerprint_request_options("openai", "gpt-5", Some(0.2), Some(256), &[], None)
                 .as_str(),
-            None,
         );
 
         assert!(estimate.is_none());
@@ -2264,7 +2197,6 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: None,
-                goal_context: None,
                 temperature: None,
                 max_output_tokens: None,
                 tools: &[],
@@ -2278,7 +2210,6 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: None,
-                goal_context: None,
                 temperature: None,
                 max_output_tokens: None,
                 tools: &[tool],
@@ -2294,59 +2225,21 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_request_options_changes_when_goal_context_changes() {
-        let baseline = fingerprint_request_options(
-            "openai",
-            "gpt-5",
-            Some("continue working"),
-            None,
-            None,
-            &[],
-            None,
-        );
-        let changed = fingerprint_request_options(
-            "openai",
-            "gpt-5",
-            Some("wrap up and stop"),
-            None,
-            None,
-            &[],
-            None,
-        );
-
-        assert_ne!(baseline, changed);
-    }
-
-    #[test]
     fn fingerprint_request_options_changes_when_provider_shape_changes() {
         let baseline_shape =
             PromptCacheShape::new("openai").with_string("base_url", "https://api.openai.com/v1");
         let changed_shape =
             PromptCacheShape::new("openai").with_string("base_url", "https://proxy.example/v1");
-        let baseline = fingerprint_request_options(
-            "openai",
-            "gpt-5",
-            None,
-            None,
-            None,
-            &[],
-            Some(&baseline_shape),
-        );
-        let changed = fingerprint_request_options(
-            "openai",
-            "gpt-5",
-            None,
-            None,
-            None,
-            &[],
-            Some(&changed_shape),
-        );
+        let baseline =
+            fingerprint_request_options("openai", "gpt-5", None, None, &[], Some(&baseline_shape));
+        let changed =
+            fingerprint_request_options("openai", "gpt-5", None, None, &[], Some(&changed_shape));
 
         assert_ne!(baseline, changed);
     }
 
     #[test]
-    fn build_prepared_prompt_appends_hidden_goal_context_message() {
+    fn build_prepared_prompt_does_not_synthesize_hidden_goal_context_message() {
         let session = Session::new(1, 1, "goal", Utc::now())
             .with_messages(vec![Message::prompt_text(Role::User, "hello")]);
 
@@ -2356,7 +2249,6 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
-                goal_context: Some("continue working toward the objective"),
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
@@ -2365,13 +2257,8 @@ mod tests {
             },
         );
 
-        assert_eq!(prepared.messages.len(), 2);
-        let goal_message = prepared.messages.last().expect("goal message");
-        assert_eq!(goal_message.role, Role::User);
-        assert!(
-            goal_message.as_text_lossy().contains("<goal_context>"),
-            "expected hidden goal context wrapper in synthesized prompt message"
-        );
+        assert_eq!(prepared.messages.len(), 1);
+        assert_eq!(prepared.messages[0].as_text_lossy(), "hello");
     }
 
     #[test]
@@ -2406,7 +2293,6 @@ mod tests {
                     request_options_fingerprint: fingerprint_request_options(
                         "openai",
                         "gpt-5",
-                        None,
                         Some(0.2),
                         Some(256),
                         &[],
@@ -2430,7 +2316,6 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
-                goal_context: None,
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],
@@ -2465,7 +2350,6 @@ mod tests {
                 provider_id: "openai",
                 model_id: "gpt-5",
                 system: Some("system"),
-                goal_context: None,
                 temperature: Some(0.2),
                 max_output_tokens: Some(256),
                 tools: &[],

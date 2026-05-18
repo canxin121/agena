@@ -181,7 +181,7 @@ impl SessionViewBuilder {
             state: MessageStatus::Completed,
             parts,
             created_at: payload.created_at,
-            metadata: with_source(payload.metadata.clone(), MessageSource::User),
+            metadata: user_message_metadata(payload.metadata.clone()),
             usage: None,
             finish: None,
         };
@@ -577,6 +577,14 @@ fn complete_tool_part(
 fn with_source(mut metadata: MessageMetadata, source: MessageSource) -> MessageMetadata {
     metadata.source = source;
     metadata
+}
+
+fn user_message_metadata(metadata: MessageMetadata) -> MessageMetadata {
+    if metadata.source == MessageSource::System {
+        metadata
+    } else {
+        with_source(metadata, MessageSource::User)
+    }
 }
 
 #[allow(dead_code)]

@@ -518,8 +518,8 @@ pub enum MemorySubcommand {
 pub enum SessionsSubcommand {
     List(SessionListArgs),
     Goal(SessionGoalCommand),
-    /// Reverse a prior `rewind` on the same session by re-admitting every
-    /// still-compacted message at or after `--message`.
+    /// Legacy compatibility command. Rewind now creates a fork, so unrewind
+    /// returns the current source session without mutating it.
     Unrewind(SessionUnrewindArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),

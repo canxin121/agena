@@ -1498,19 +1498,22 @@ fn resolve_provider_auth<'a>(
         ProviderAuthMode::None => Ok(ProviderAuthConfig::None),
         ProviderAuthMode::Api => {
             let base_url = required_string(provider_id, "base_url", raw_auth.base_url)?;
+            let has_explicit_protocol_paths = raw_auth.protocol_paths.is_some();
             if raw_auth.credential.is_some() {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
                     message: "auth mode `api` does not accept `credential`".to_owned(),
                 });
             }
+            let protocol_paths =
+                resolve_protocol_paths(provider_id, raw_auth.protocol_paths, "protocol_paths")?;
             Ok(ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url,
-                protocol_paths: resolve_protocol_paths(
-                    provider_id,
-                    raw_auth.protocol_paths,
-                    "protocol_paths",
-                )?,
+                base_url: if has_explicit_protocol_paths {
+                    base_url
+                } else {
+                    strip_default_protocol_path_from_base_url(base_url)
+                },
+                protocol_paths,
                 api_key: normalize_optional(raw_auth.api_key),
                 api_key_env: normalize_optional(raw_auth.api_key_env),
             }))
@@ -1927,6 +1930,20 @@ fn required_string(
         provider_id: provider_id.to_owned(),
         field,
     })
+}
+
+fn strip_default_protocol_path_from_base_url(value: String) -> String {
+    let trimmed = value.trim_end_matches('/');
+    if let Ok(mut url) = url::Url::parse(trimmed) {
+        match url.path().trim_end_matches('/') {
+            "/v1" | "/v1beta" => {
+                url.set_path("");
+                return url.to_string().trim_end_matches('/').to_owned();
+            }
+            _ => {}
+        }
+    }
+    value
 }
 
 pub(crate) fn parse_adapter_model_ref(

@@ -1,0 +1,397 @@
+use super::*;
+
+impl SessionManager {
+    pub async fn create_session(&self, request: SessionCreateRequest) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .create_session(
+                request.title,
+                request.parent_session_id,
+                state.cache_policy(),
+            )
+            .await?;
+
+        let patch = match state
+            .tool_executor
+            .plugin_manager()
+            .dispatch_session_start(crate::plugin::SessionStartInput {
+                session_id: session.id,
+                source: crate::plugin::SessionStartSource::Startup,
+                workspace_root: state.tool_executor.workspace_root().display().to_string(),
+                model: None,
+            })
+            .await
+        {
+            Ok(patch) => patch,
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena_plugin_host::session_start",
+                    session_id = session.id,
+                    "session.start hook failed during session creation: {err}"
+                );
+                return Ok(session);
+            }
+        };
+
+        let mut injected_messages = Vec::new();
+        if let Some(additional_context) = patch.additional_context {
+            let ids = self.store.reserve_message_ids(1).await?;
+            let system_message = build_message(
+                ids,
+                Role::System,
+                MessageStatus::Completed,
+                vec![PartContent::text(additional_context)],
+                MessageMetadata {
+                    source: MessageSource::System,
+                    parent_message_id: session
+                        .last_conversation_message()
+                        .map(|message| message.id),
+                    generated_by_call_id: None,
+                    model_provider_id: String::new(),
+                    model_adapter_id: None,
+                    model_id: String::new(),
+                    model_thinking_mode: None,
+                    model_speed_mode: None,
+                    model_verbosity: None,
+                    model_parallel_tool_calls: None,
+                    provider_metadata: None,
+                    tags: Vec::new(),
+                },
+            );
+            session.messages.push(system_message.clone());
+            injected_messages.push(system_message);
+        }
+        if let Some(initial_user_message) = patch.initial_user_message {
+            let ids = self.store.reserve_message_ids(1).await?;
+            let user_message = build_message(
+                ids,
+                Role::User,
+                MessageStatus::Completed,
+                vec![PartContent::text(initial_user_message)],
+                MessageMetadata {
+                    source: MessageSource::System,
+                    parent_message_id: session
+                        .last_conversation_message()
+                        .map(|message| message.id),
+                    generated_by_call_id: None,
+                    model_provider_id: String::new(),
+                    model_adapter_id: None,
+                    model_id: String::new(),
+                    model_thinking_mode: None,
+                    model_speed_mode: None,
+                    model_verbosity: None,
+                    model_parallel_tool_calls: None,
+                    provider_metadata: None,
+                    tags: Vec::new(),
+                },
+            );
+            session.messages.push(user_message.clone());
+            injected_messages.push(user_message);
+        }
+
+        if injected_messages.is_empty() {
+            return Ok(session);
+        }
+
+        self.persist_session_changes(session, injected_messages, Vec::new(), None, state)
+            .await
+    }
+
+    pub async fn get_session(&self, session_id: i64) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        self.store
+            .load_session(session_id, state.cache_policy())
+            .await
+    }
+
+    pub async fn switch_session_agent(
+        &self,
+        session_id: i64,
+        agent: Option<String>,
+        push_previous: bool,
+    ) -> Result<SessionAgentSwitchOutcome, AppError> {
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let previous_agent = session.runtime.execution.agent_profile.clone();
+        if push_previous {
+            session
+                .runtime
+                .execution
+                .agent_stack
+                .push(previous_agent.clone());
+        }
+
+        let target_agent = agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let mut session = match target_agent {
+            Some(agent_name) => {
+                let mut options = self.run_options_from_session(&session, state.clone())?;
+                options.agent_profile = Some(agent_name);
+                self.apply_requested_agent_profile(session, &mut options, state.clone())
+                    .await?
+            }
+            None => {
+                self.clear_session_agent_profile(session, state.clone())
+                    .await?
+            }
+        };
+        let current_agent = session.runtime.execution.agent_profile.clone();
+        let stack_depth = session.runtime.execution.agent_stack.len();
+        session = self
+            .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await?;
+        Ok(SessionAgentSwitchOutcome {
+            session_id: session.id,
+            previous_agent,
+            current_agent,
+            stack_depth,
+        })
+    }
+
+    pub async fn restore_session_agent(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionAgentRestoreOutcome, AppError> {
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let previous_agent = session.runtime.execution.agent_profile.clone();
+        let Some(target_agent) = session.runtime.execution.agent_stack.pop() else {
+            return Ok(SessionAgentRestoreOutcome {
+                session_id,
+                restored: false,
+                previous_agent,
+                current_agent: session.runtime.execution.agent_profile,
+                stack_depth: 0,
+            });
+        };
+
+        let mut session = match target_agent {
+            Some(agent_name) => {
+                let mut options = self.run_options_from_session(&session, state.clone())?;
+                options.agent_profile = Some(agent_name);
+                self.apply_requested_agent_profile(session, &mut options, state.clone())
+                    .await?
+            }
+            None => {
+                self.clear_session_agent_profile(session, state.clone())
+                    .await?
+            }
+        };
+        let current_agent = session.runtime.execution.agent_profile.clone();
+        let stack_depth = session.runtime.execution.agent_stack.len();
+        session = self
+            .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await?;
+        Ok(SessionAgentRestoreOutcome {
+            session_id: session.id,
+            restored: true,
+            previous_agent,
+            current_agent,
+            stack_depth,
+        })
+    }
+
+    pub async fn is_turn_active(&self, session_id: i64) -> bool {
+        self.turn_registry.is_active(session_id).await
+    }
+
+    pub async fn resolve_scheduled_run_options(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionRunOptions, AppError> {
+        let session = self.get_session(session_id).await?;
+        if let Some(model) = infer_session_model(&session)? {
+            return self.apply_execution_context_to_run_options(
+                &session,
+                SessionRunOptions {
+                    model,
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                    agent_profile: None,
+                    max_turn_loops: None,
+                },
+            );
+        }
+
+        let provider_registry = self.execution_state().processor.provider_registry().clone();
+        let provider_ids = provider_registry.provider_ids();
+        if provider_ids.len() != 1 {
+            return Err(AppError::Internal(
+                "model is required when the session has no previous model and multiple providers are configured"
+                    .to_string(),
+            ));
+        }
+        let provider_id = provider_ids.into_iter().next().ok_or_else(|| {
+            AppError::Internal("no providers configured for scheduled run".to_string())
+        })?;
+        let provider = provider_registry.get(provider_id.as_str()).ok_or_else(|| {
+            AppError::Internal(format!(
+                "provider not found for scheduled run: {provider_id}"
+            ))
+        })?;
+        self.apply_execution_context_to_run_options(
+            &session,
+            SessionRunOptions {
+                model: ModelRef::new(provider_id, provider.default_model().to_string()),
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                thinking: None,
+                request_override: Default::default(),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+                agent_profile: None,
+                max_turn_loops: None,
+            },
+        )
+    }
+
+    pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
+        self.store.list_workspace_session_ids().await
+    }
+
+    pub async fn list_projected_messages(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<Message>, AppError> {
+        self.store
+            .list_projected_messages(session_id, include_full_parts)
+            .await
+    }
+
+    pub async fn list_projected_messages_page(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<(Vec<Message>, bool, Option<(i64, i64)>), AppError> {
+        self.store
+            .list_projected_messages_page(session_id, include_full_parts, cursor, limit)
+            .await
+    }
+
+    pub async fn list_projected_message_headers(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<crate::session::ProjectedMessageHeader>, AppError> {
+        self.store.list_projected_message_headers(session_id).await
+    }
+
+    pub async fn list_projected_message_headers_page(
+        &self,
+        session_id: i64,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<
+        (
+            Vec<crate::session::ProjectedMessageHeader>,
+            bool,
+            Option<(i64, i64)>,
+        ),
+        AppError,
+    > {
+        self.store
+            .list_projected_message_headers_page(session_id, cursor, limit)
+            .await
+    }
+
+    pub async fn find_projected_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Option<Message>, AppError> {
+        self.store
+            .find_projected_message(session_id, message_id, include_full_parts)
+            .await
+    }
+
+    pub async fn find_projected_message_header(
+        &self,
+        session_id: i64,
+        message_id: i64,
+    ) -> Result<Option<crate::session::ProjectedMessageHeader>, AppError> {
+        self.store
+            .find_projected_message_header(session_id, message_id)
+            .await
+    }
+
+    pub async fn list_projected_parts(
+        &self,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<MessagePart>, AppError> {
+        self.store
+            .list_projected_parts(message_id, include_full_parts)
+            .await
+    }
+
+    pub async fn find_projected_part(&self, part_id: i64) -> Result<Option<MessagePart>, AppError> {
+        self.store.find_projected_part(part_id).await
+    }
+
+    pub async fn broadcast_session_end(
+        &self,
+        session_id: i64,
+        reason: crate::plugin::SessionEndReason,
+    ) {
+        self.execution_state()
+            .tool_executor
+            .plugin_manager()
+            .broadcast_session_end(crate::plugin::SessionEndInput { session_id, reason })
+            .await;
+    }
+
+    pub async fn broadcast_active_session_end(&self, reason: crate::plugin::SessionEndReason) {
+        let session_ids = self.turn_registry.active_session_ids().await;
+        for session_id in session_ids {
+            self.broadcast_session_end(session_id, reason).await;
+        }
+    }
+
+    pub async fn find_session_id_for_message(
+        &self,
+        message_id: i64,
+    ) -> Result<Option<i64>, AppError> {
+        self.store
+            .find_projected_session_id_for_message(message_id)
+            .await
+    }
+
+    pub async fn find_session_id_for_part(&self, part_id: i64) -> Result<Option<i64>, AppError> {
+        self.store.find_projected_session_id_for_part(part_id).await
+    }
+
+    pub async fn list_session_summaries(
+        &self,
+        request: SessionListRequest,
+    ) -> Result<Vec<SessionSummary>, AppError> {
+        self.store.list_session_summaries(request).await
+    }
+
+    pub async fn list_session_events(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<crate::event::DomainEvent>, AppError> {
+        self.store.list_session_events(session_id).await
+    }
+}

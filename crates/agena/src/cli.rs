@@ -1133,6 +1133,7 @@ struct DiagnosticsEnvironmentOutput {
     agena_config_set: bool,
     agena_database_url_set: bool,
     agena_database_path_set: bool,
+    agena_adapter_log_set: bool,
     agena_telemetry_enabled_set: bool,
     agena_otel_endpoint_set: bool,
     otel_exporter_otlp_traces_endpoint_set: bool,
@@ -1587,7 +1588,7 @@ impl AgenaCli {
         if let Some(api_key) = args.api_key {
             if !matches!(
                 resolved.auth,
-                ProviderAuthConfig::Api(_) | ProviderAuthConfig::SapAiCore(_)
+                ProviderAuthConfig::Api(_) | ProviderAuthConfig::Gitlab(_)
             ) {
                 return Err(AppError::Config(format!(
                     "{provider_id} does not support api key login"
@@ -2703,6 +2704,7 @@ impl AgenaCli {
                     agena_config_set: std::env::var_os("AGENA_CONFIG").is_some(),
                     agena_database_url_set: std::env::var_os("AGENA_DATABASE_URL").is_some(),
                     agena_database_path_set: std::env::var_os("AGENA_DATABASE_PATH").is_some(),
+                    agena_adapter_log_set: std::env::var_os("AGENA_ADAPTER_LOG").is_some(),
                     agena_telemetry_enabled_set: std::env::var_os("AGENA_TELEMETRY_ENABLED")
                         .is_some(),
                     agena_otel_endpoint_set: std::env::var_os("AGENA_OTEL_ENDPOINT").is_some(),
@@ -3618,6 +3620,8 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
                         "github_copilot".to_owned()
                     }
                     crate::provider::auth::CredentialIssuer::Gitlab => "gitlab".to_owned(),
+                    crate::provider::auth::CredentialIssuer::GoogleAdc => "google_adc".to_owned(),
+                    crate::provider::auth::CredentialIssuer::SapAiCore => "sap_ai_core".to_owned(),
                     crate::provider::auth::CredentialIssuer::AtomGit => "atomgit".to_owned(),
                 }),
                 expires_at_ms: Some(expires_at_ms),

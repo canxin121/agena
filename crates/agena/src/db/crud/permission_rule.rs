@@ -118,12 +118,15 @@ where
     Ok(None)
 }
 
-pub fn mode_from_string(value: &str) -> Result<PermissionMode, ()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ParsePermissionValueError;
+
+pub fn mode_from_string(value: &str) -> Result<PermissionMode, ParsePermissionValueError> {
     match value {
         "allow" => Ok(PermissionMode::Allow),
         "ask" => Ok(PermissionMode::Ask),
         "deny" => Ok(PermissionMode::Deny),
-        _ => Err(()),
+        _ => Err(ParsePermissionValueError),
     }
 }
 
@@ -143,23 +146,12 @@ pub fn scope_to_string(scope: PermissionScope) -> String {
     }
 }
 
-pub fn scope_from_string(value: &str) -> Result<PermissionScope, ()> {
+pub fn scope_from_string(value: &str) -> Result<PermissionScope, ParsePermissionValueError> {
     match value {
         "session" => Ok(PermissionScope::Session),
         "workspace" => Ok(PermissionScope::Workspace),
         "global" => Ok(PermissionScope::Global),
-        _ => Err(()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scope_round_trips_global() {
-        assert_eq!(scope_to_string(PermissionScope::Global), "global");
-        assert_eq!(scope_from_string("global"), Ok(PermissionScope::Global));
+        _ => Err(ParsePermissionValueError),
     }
 }
 
@@ -185,4 +177,15 @@ where
     active.revoked_by = Set(revoked_by);
     active.updated_at_ms = Set(Utc::now().timestamp_millis());
     active.update(db).await.map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_round_trips_global() {
+        assert_eq!(scope_to_string(PermissionScope::Global), "global");
+        assert_eq!(scope_from_string("global"), Ok(PermissionScope::Global));
+    }
 }

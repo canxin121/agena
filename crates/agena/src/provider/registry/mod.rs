@@ -19,7 +19,7 @@ use crate::model::{
 use crate::plugin::ProviderDescriptor;
 
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelProvider,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelRuntime,
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig, StreamResumePolicy, wire_message,
 };
@@ -155,7 +155,7 @@ fn estimate_total_cost_from_metadata(
 }
 
 fn hydrate_usage_cost_from_provider_metadata(
-    provider: &dyn ModelProvider,
+    provider: &dyn ModelRuntime,
     model: &ModelRef,
     usage: &mut Option<CompletionUsage>,
 ) {
@@ -203,7 +203,7 @@ impl StreamReplayPolicy {
 }
 
 pub struct ProviderRegistry {
-    providers: HashMap<String, Arc<dyn ModelProvider>>,
+    providers: HashMap<String, Arc<dyn ModelRuntime>>,
     retry_policy: RequestRetryPolicy,
     stream_replay_policy: StreamReplayPolicy,
 }
@@ -218,11 +218,11 @@ struct PluginRegisteredProvider {
 #[derive(Clone)]
 pub struct NamedProvider {
     provider_id: String,
-    target: Arc<dyn ModelProvider>,
+    target: Arc<dyn ModelRuntime>,
 }
 
 impl NamedProvider {
-    pub fn new(provider_id: impl Into<String>, target: Arc<dyn ModelProvider>) -> Self {
+    pub fn new(provider_id: impl Into<String>, target: Arc<dyn ModelRuntime>) -> Self {
         Self {
             provider_id: provider_id.into(),
             target,
@@ -231,7 +231,7 @@ impl NamedProvider {
 }
 
 #[async_trait]
-impl ModelProvider for NamedProvider {
+impl ModelRuntime for NamedProvider {
     fn id(&self) -> &str {
         self.provider_id.as_str()
     }
@@ -501,7 +501,7 @@ impl ModelProvider for NamedProvider {
 }
 
 #[async_trait]
-impl ModelProvider for PluginRegisteredProvider {
+impl ModelRuntime for PluginRegisteredProvider {
     fn id(&self) -> &str {
         self.id.as_str()
     }
@@ -572,13 +572,13 @@ impl ProviderRegistry {
 
     pub fn register<P>(&mut self, provider: P)
     where
-        P: ModelProvider + 'static,
+        P: ModelRuntime + 'static,
     {
         self.providers
             .insert(provider.id().to_owned(), Arc::new(provider));
     }
 
-    pub fn register_arc(&mut self, provider: Arc<dyn ModelProvider>) {
+    pub fn register_arc(&mut self, provider: Arc<dyn ModelRuntime>) {
         self.providers.insert(provider.id().to_owned(), provider);
     }
 
@@ -615,7 +615,7 @@ impl ProviderRegistry {
         Ok(())
     }
 
-    pub fn get(&self, provider_id: &str) -> Option<Arc<dyn ModelProvider>> {
+    pub fn get(&self, provider_id: &str) -> Option<Arc<dyn ModelRuntime>> {
         self.providers.get(provider_id).cloned()
     }
 
@@ -700,7 +700,7 @@ impl ProviderRegistry {
 
 fn validate_request_capabilities(
     model: &ModelRef,
-    provider: &dyn ModelProvider,
+    provider: &dyn ModelRuntime,
     request: &CompletionRequest,
 ) -> Result<(), AppError> {
     let capabilities =

@@ -14,6 +14,9 @@ use crate::provider::{
     CompletionUsage, ManagedCredential, should_retry_credential,
 };
 
+pub(crate) const ADAPTER_LOG_TARGET: &str = "agena::adapter";
+const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
+
 // ─── Header / fingerprint helpers ────────────────────────────────────────────
 
 pub(crate) fn prompt_cache_header_entries(
@@ -77,11 +80,10 @@ pub fn auth_header_value(scheme: Option<&str>, token: &str) -> String {
 
 /// Apply provider-configured `extra_headers` and consult the plugin host's
 /// `chat.headers` hook chain.
-pub fn apply_request_headers(
+pub fn resolved_request_headers(
     provider_id: &str,
-    mut req: reqwest::RequestBuilder,
     extra_headers: &HashMap<String, String>,
-) -> reqwest::RequestBuilder {
+) -> BTreeMap<String, String> {
     let mut combined: BTreeMap<String, String> = extra_headers
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -106,7 +108,14 @@ pub fn apply_request_headers(
         }
     }
 
-    for (key, value) in &combined {
+    combined
+}
+
+pub fn apply_resolved_request_headers(
+    mut req: reqwest::RequestBuilder,
+    headers: &BTreeMap<String, String>,
+) -> reqwest::RequestBuilder {
+    for (key, value) in headers {
         req = req.header(key.as_str(), value.as_str());
     }
     req
@@ -174,15 +183,31 @@ fn merge_json_value(current: &mut serde_json::Value, patch: &serde_json::Value) 
 
 // ─── HTTP response helpers ────────────────────────────────────────────────────
 
-pub async fn parse_json_response<T: DeserializeOwned>(
+pub async fn parse_json_response_logged<T: DeserializeOwned>(
     provider_id: &str,
+    adapter_kind: &str,
+    operation: &str,
     response: reqwest::Response,
 ) -> Result<T, AppError> {
     if response.status().is_success() {
         ensure_response_content_type(provider_id, &response, "application/json")?;
-        return Ok(response.json::<T>().await?);
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.text().await?;
+        adapter_log_http_response_text(
+            provider_id,
+            adapter_kind,
+            operation,
+            status,
+            &headers,
+            body.as_str(),
+        );
+        return serde_json::from_str::<T>(body.as_str()).map_err(AppError::from);
     }
-    Err(http_status_error_from_response(provider_id, response).await)
+    Err(
+        http_status_error_from_response_logged(provider_id, adapter_kind, operation, response)
+            .await,
+    )
 }
 
 pub fn ensure_response_content_type(
@@ -221,18 +246,29 @@ pub fn parse_json_value<T: DeserializeOwned>(
     })
 }
 
-pub async fn http_status_error_from_response(
+pub async fn http_status_error_from_response_logged(
     provider_id: &str,
+    adapter_kind: &str,
+    operation: &str,
     response: reqwest::Response,
 ) -> AppError {
     let status = response.status();
     let headers = response.headers().clone();
-    let body = response
+    let raw_body = response
         .text()
         .await
         .unwrap_or_else(|_| "<empty>".to_owned());
 
-    let mut body = serde_json::from_str::<ProviderErrorEnvelope>(&body)
+    adapter_log_http_response_text(
+        provider_id,
+        adapter_kind,
+        operation,
+        status,
+        &headers,
+        raw_body.as_str(),
+    );
+
+    let mut body = serde_json::from_str::<ProviderErrorEnvelope>(&raw_body)
         .map(|parsed| {
             let mut message = parsed.error.message;
             if let Some(kind) = parsed.error.kind {
@@ -243,7 +279,7 @@ pub async fn http_status_error_from_response(
             }
             message
         })
-        .unwrap_or(body);
+        .unwrap_or(raw_body);
 
     let upstream_refs = [
         response_header_value(&headers, "x-request-id")
@@ -276,6 +312,324 @@ fn response_header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Op
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+pub fn adapter_log_http_request_json<I, K, V>(
+    provider_id: &str,
+    adapter_kind: &str,
+    operation: &str,
+    method: &str,
+    url: &str,
+    headers: I,
+    body: Option<&serde_json::Value>,
+) where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    if !tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::DEBUG) {
+        return;
+    }
+
+    let sanitized_url = sanitize_url(url);
+    let sanitized_headers = sanitize_headers(headers);
+    let body_fingerprint = body.map(request_shape_fingerprint);
+    let header_count = sanitized_headers
+        .as_object()
+        .map(|object| object.len())
+        .unwrap_or_default();
+
+    tracing::debug!(
+        target: ADAPTER_LOG_TARGET,
+        provider = provider_id,
+        adapter = adapter_kind,
+        operation,
+        method,
+        url = sanitized_url.as_str(),
+        header_count,
+        has_body = body.is_some(),
+        body_fingerprint = body_fingerprint.as_deref().unwrap_or(""),
+        "adapter http request"
+    );
+
+    if tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE) {
+        let headers_json = serde_json::to_string_pretty(&sanitized_headers).unwrap_or_default();
+        let body_json = body.map(sanitize_json_value);
+        let body_text = body_json
+            .as_ref()
+            .and_then(|value| serde_json::to_string_pretty(value).ok())
+            .unwrap_or_default();
+        tracing::trace!(
+            target: ADAPTER_LOG_TARGET,
+            provider = provider_id,
+            adapter = adapter_kind,
+            operation,
+            request_headers = headers_json.as_str(),
+            request_body = body_text.as_str(),
+            "adapter http request payload"
+        );
+    }
+}
+
+pub fn adapter_log_http_response_open(
+    provider_id: &str,
+    adapter_kind: &str,
+    operation: &str,
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) {
+    if !tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::DEBUG) {
+        return;
+    }
+
+    let sanitized_headers = sanitize_header_map(headers);
+    let header_count = sanitized_headers
+        .as_object()
+        .map(|object| object.len())
+        .unwrap_or_default();
+    let content_type = response_header_value(headers, reqwest::header::CONTENT_TYPE.as_str())
+        .unwrap_or_else(|| "<missing>".to_owned());
+
+    tracing::debug!(
+        target: ADAPTER_LOG_TARGET,
+        provider = provider_id,
+        adapter = adapter_kind,
+        operation,
+        status = status.as_u16(),
+        content_type = content_type.as_str(),
+        header_count,
+        "adapter http response opened"
+    );
+
+    if tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE) {
+        let headers_json = serde_json::to_string_pretty(&sanitized_headers).unwrap_or_default();
+        tracing::trace!(
+            target: ADAPTER_LOG_TARGET,
+            provider = provider_id,
+            adapter = adapter_kind,
+            operation,
+            response_headers = headers_json.as_str(),
+            "adapter http response headers"
+        );
+    }
+}
+
+pub fn adapter_log_stream_event(
+    provider_id: &str,
+    adapter_kind: &str,
+    operation: &str,
+    event: &serde_json::Value,
+) {
+    if !tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE) {
+        return;
+    }
+
+    let sanitized = sanitize_json_value(event);
+    let event_text = serde_json::to_string_pretty(&sanitized).unwrap_or_default();
+    tracing::trace!(
+        target: ADAPTER_LOG_TARGET,
+        provider = provider_id,
+        adapter = adapter_kind,
+        operation,
+        stream_event = event_text.as_str(),
+        "adapter stream event"
+    );
+}
+
+fn adapter_log_http_response_text(
+    provider_id: &str,
+    adapter_kind: &str,
+    operation: &str,
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+) {
+    if !tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::DEBUG) {
+        return;
+    }
+
+    let sanitized_headers = sanitize_header_map(headers);
+    let header_count = sanitized_headers
+        .as_object()
+        .map(|object| object.len())
+        .unwrap_or_default();
+    let content_type = response_header_value(headers, reqwest::header::CONTENT_TYPE.as_str())
+        .unwrap_or_else(|| "<missing>".to_owned());
+    let body_chars = body.chars().count();
+
+    tracing::debug!(
+        target: ADAPTER_LOG_TARGET,
+        provider = provider_id,
+        adapter = adapter_kind,
+        operation,
+        status = status.as_u16(),
+        content_type = content_type.as_str(),
+        header_count,
+        body_chars,
+        "adapter http response"
+    );
+
+    if tracing::enabled!(target: ADAPTER_LOG_TARGET, tracing::Level::TRACE) {
+        let headers_json = serde_json::to_string_pretty(&sanitized_headers).unwrap_or_default();
+        let body_text = sanitize_response_body_text(body);
+        tracing::trace!(
+            target: ADAPTER_LOG_TARGET,
+            provider = provider_id,
+            adapter = adapter_kind,
+            operation,
+            response_headers = headers_json.as_str(),
+            response_body = body_text.as_str(),
+            "adapter http response payload"
+        );
+    }
+}
+
+fn sanitize_response_body_text(body: &str) -> String {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+        return serde_json::to_string_pretty(&sanitize_json_value(&value))
+            .unwrap_or_else(|_| truncate_for_log(body));
+    }
+    truncate_for_log(body)
+}
+
+fn sanitize_header_map(headers: &reqwest::header::HeaderMap) -> serde_json::Value {
+    sanitize_headers(headers.iter().filter_map(|(key, value)| {
+        value
+            .to_str()
+            .ok()
+            .map(|text| (key.as_str().to_owned(), text.to_owned()))
+    }))
+}
+
+fn sanitize_headers<I, K, V>(headers: I) -> serde_json::Value
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    let mut map = serde_json::Map::new();
+    for (key, value) in headers {
+        let key = key.as_ref().to_owned();
+        map.insert(
+            key.clone(),
+            serde_json::Value::String(sanitize_named_string(Some(key.as_str()), value.as_ref())),
+        );
+    }
+    serde_json::Value::Object(map)
+}
+
+fn sanitize_url(url: &str) -> String {
+    let Ok(mut parsed) = url::Url::parse(url) else {
+        return truncate_for_log(url);
+    };
+
+    let pairs = parsed
+        .query_pairs()
+        .map(|(key, value)| {
+            let key = key.to_string();
+            let value = if is_sensitive_key(key.as_str()) {
+                redacted_marker(value.len())
+            } else {
+                sanitize_named_string(Some(key.as_str()), value.as_ref())
+            };
+            (key, value)
+        })
+        .collect::<Vec<_>>();
+
+    if !pairs.is_empty() {
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        for (key, value) in pairs {
+            serializer.append_pair(key.as_str(), value.as_str());
+        }
+        parsed.set_query(Some(serializer.finish().as_str()));
+    }
+
+    truncate_for_log(parsed.as_str())
+}
+
+fn sanitize_json_value(value: &serde_json::Value) -> serde_json::Value {
+    sanitize_json_value_with_key(None, value)
+}
+
+fn sanitize_json_value_with_key(
+    key_hint: Option<&str>,
+    value: &serde_json::Value,
+) -> serde_json::Value {
+    if key_hint.is_some_and(is_sensitive_key) {
+        return serde_json::Value::String(redacted_marker(serialized_len(value)));
+    }
+
+    match value {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        sanitize_json_value_with_key(Some(key.as_str()), value),
+                    )
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| sanitize_json_value_with_key(key_hint, item))
+                .collect(),
+        ),
+        serde_json::Value::String(text) => {
+            serde_json::Value::String(sanitize_named_string(key_hint, text))
+        }
+        _ => value.clone(),
+    }
+}
+
+fn sanitize_named_string(key_hint: Option<&str>, value: &str) -> String {
+    if key_hint.is_some_and(is_sensitive_key) {
+        return redacted_marker(value.chars().count());
+    }
+    truncate_for_log(value)
+}
+
+fn truncate_for_log(value: &str) -> String {
+    let char_count = value.chars().count();
+    if char_count <= ADAPTER_LOG_STRING_LIMIT {
+        return value.to_owned();
+    }
+
+    let preview = value
+        .chars()
+        .take(ADAPTER_LOG_STRING_LIMIT)
+        .collect::<String>();
+    format!(
+        "{preview}<truncated {} chars>",
+        char_count - ADAPTER_LOG_STRING_LIMIT
+    )
+}
+
+fn redacted_marker(original_len: usize) -> String {
+    format!("<redacted:{original_len}>")
+}
+
+fn serialized_len(value: &serde_json::Value) -> usize {
+    serde_json::to_string(value)
+        .map(|text| text.chars().count())
+        .unwrap_or_default()
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    key == "authorization"
+        || key == "proxy-authorization"
+        || key == "x-api-key"
+        || key.contains("token")
+        || key.contains("secret")
+        || key.contains("signature")
+        || key.contains("cookie")
+        || key.contains("credential")
+        || key.contains("password")
+        || key.contains("auth")
+        || key.ends_with("key")
+        || key.contains("api_key")
 }
 
 pub async fn send_with_credential_refresh<F>(

@@ -1823,6 +1823,24 @@ mod tests {
         assert!(output.output_text.contains("\"type\": \"object\""));
     }
 
+    #[test]
+    fn agent_tool_schema_has_top_level_object_type() {
+        let agent_decl = entries()
+            .into_iter()
+            .find(|decl| decl.name == "agent")
+            .expect("agent tool should be registered");
+        let schema = agent_decl.sanitized_input_schema();
+
+        assert_eq!(
+            schema.get("type").and_then(serde_json::Value::as_str),
+            Some("object")
+        );
+        assert!(
+            schema.get("oneOf").is_some() || schema.get("anyOf").is_some(),
+            "agent schema should remain a command union: {schema:?}"
+        );
+    }
+
     #[tokio::test]
     async fn provided_workflow_entries_render_prompt_text() {
         let (plugin, host) = initialized_plugin().await;

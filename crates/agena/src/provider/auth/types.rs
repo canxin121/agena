@@ -7,8 +7,24 @@ pub enum CredentialIssuer {
     OpenaiChatgpt,
     GithubCopilot,
     Gitlab,
+    GoogleAdc,
+    SapAiCore,
     #[serde(rename = "atomgit", alias = "atom_git")]
     AtomGit,
+}
+
+impl CredentialIssuer {
+    pub fn uses_http_endpoint(self) -> bool {
+        matches!(self, Self::GoogleAdc | Self::SapAiCore)
+    }
+
+    pub fn supports_saved_model_listing(self) -> bool {
+        self.uses_http_endpoint() || matches!(self, Self::AtomGit)
+    }
+
+    pub fn requires_service_key_env(self) -> bool {
+        matches!(self, Self::SapAiCore)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

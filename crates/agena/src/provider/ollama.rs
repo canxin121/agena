@@ -10,21 +10,23 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy, sse,
+        CompletionToolCall, CompletionUsage, ModelRuntime, ProviderModel, StreamResumePolicy, sse,
         utils, wire_message,
     },
     role::Role,
 };
 
+const ADAPTER_KIND: &str = "ollama";
+
 #[derive(Clone)]
-pub struct OllamaProvider {
+pub struct OllamaAdapter {
     id: String,
     client: reqwest::Client,
     base_url: String,
     default_model: ModelId,
 }
 
-impl OllamaProvider {
+impl OllamaAdapter {
     pub fn new(
         id: impl Into<String>,
         client: reqwest::Client,
@@ -118,7 +120,7 @@ impl OllamaProvider {
 }
 
 #[async_trait]
-impl ModelProvider for OllamaProvider {
+impl ModelRuntime for OllamaAdapter {
     fn id(&self) -> &str {
         &self.id
     }
@@ -136,24 +138,55 @@ impl ModelProvider for OllamaProvider {
     }
 
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        let response = self.client.get(self.tags_endpoint()).send().await?;
-        let payload: OllamaTagsResponse =
-            utils::parse_json_response(self.id.as_str(), response).await?;
+        let endpoint = self.tags_endpoint();
+        utils::adapter_log_http_request_json(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "list_models",
+            "GET",
+            endpoint.as_str(),
+            std::iter::empty::<(&str, &str)>(),
+            None,
+        );
+        let response = self.client.get(endpoint.as_str()).send().await?;
+        let payload: OllamaTagsResponse = utils::parse_json_response_logged(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "list_models",
+            response,
+        )
+        .await?;
         Ok(self.parse_models(payload))
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
         let body = self.to_chat_request(&request, false);
+        let endpoint = self.chat_endpoint();
+        let body_json = serde_json::to_value(&body).map_err(AppError::from)?;
+        utils::adapter_log_http_request_json(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete.chat",
+            "POST",
+            endpoint.as_str(),
+            [(reqwest::header::CONTENT_TYPE.as_str(), "application/json")],
+            Some(&body_json),
+        );
         let response = self
             .client
-            .post(self.chat_endpoint())
+            .post(endpoint.as_str())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&body)
             .send()
             .await?;
-        let payload: OllamaChatResponse =
-            utils::parse_json_response(self.id.as_str(), response).await?;
+        let payload: OllamaChatResponse = utils::parse_json_response_logged(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete.chat",
+            response,
+        )
+        .await?;
         self.completion_from_response(&fallback_model, payload)
     }
 
@@ -165,17 +198,41 @@ impl ModelProvider for OllamaProvider {
         AppError,
     > {
         let body = self.to_chat_request(&request, true);
+        let endpoint = self.chat_endpoint();
+        let body_json = serde_json::to_value(&body).map_err(AppError::from)?;
+        utils::adapter_log_http_request_json(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete_stream.chat",
+            "POST",
+            endpoint.as_str(),
+            [(reqwest::header::CONTENT_TYPE.as_str(), "application/json")],
+            Some(&body_json),
+        );
         let response = self
             .client
-            .post(self.chat_endpoint())
+            .post(endpoint.as_str())
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .json(&body)
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(utils::http_status_error_from_response(self.id.as_str(), response).await);
+            return Err(utils::http_status_error_from_response_logged(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "complete_stream.chat",
+                response,
+            )
+            .await);
         }
 
+        utils::adapter_log_http_response_open(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete_stream.chat",
+            response.status(),
+            response.headers(),
+        );
         let mut events = sse::json_lines(response);
         let provider_id = ProviderId::new(self.id.clone());
         let model_name = request.model.clone();
@@ -189,6 +246,12 @@ impl ModelProvider for OllamaProvider {
 
             while let Some(event) = events.next().await {
                 let event = event?;
+                utils::adapter_log_stream_event(
+                    provider_label.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.chat",
+                    &event,
+                );
                 let chunk: OllamaChatResponse = utils::parse_json_value(
                     provider_label.as_str(),
                     "chat stream chunk",
@@ -504,7 +567,7 @@ mod tests {
 
     #[test]
     fn parses_ollama_tags_models() {
-        let provider = OllamaProvider::new(
+        let provider = OllamaAdapter::new(
             "ollama",
             reqwest::Client::new(),
             "http://localhost:11434",
@@ -530,7 +593,7 @@ mod tests {
 
     #[test]
     fn parses_chat_response_text_tool_calls_and_usage() {
-        let provider = OllamaProvider::new(
+        let provider = OllamaAdapter::new(
             "ollama",
             reqwest::Client::new(),
             "http://localhost:11434",

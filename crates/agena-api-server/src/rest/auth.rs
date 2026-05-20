@@ -454,12 +454,19 @@ fn configured_provider_auth_id(
     resolved: &ResolvedProviderConfig,
 ) -> Option<String> {
     match &resolved.auth {
-        ProviderAuthConfig::None
-        | ProviderAuthConfig::GoogleAdc(_)
-        | ProviderAuthConfig::BedrockSigv4(_) => None,
-        ProviderAuthConfig::Api(_)
-        | ProviderAuthConfig::Credential(_)
-        | ProviderAuthConfig::SapAiCore(_) => Some(provider_id.to_owned()),
+        ProviderAuthConfig::None | ProviderAuthConfig::BedrockSigv4(_) => None,
+        ProviderAuthConfig::Api(_) => Some(provider_id.to_owned()),
+        ProviderAuthConfig::Gitlab(_) => Some(provider_id.to_owned()),
+        ProviderAuthConfig::Credential(config)
+            if matches!(
+                config.issuer,
+                agena::provider::auth::CredentialIssuer::GoogleAdc
+                    | agena::provider::auth::CredentialIssuer::SapAiCore
+            ) =>
+        {
+            None
+        }
+        ProviderAuthConfig::Credential(_) => Some(provider_id.to_owned()),
     }
 }
 
@@ -712,8 +719,8 @@ mod tests {
         BedrockSigv4AuthConfig, HttpProviderAdapterConfig, OpenAiApiModeConfig,
         OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition,
         ProviderApiAuthConfig, ProviderAuthConfig, ProviderCredentialAuthConfig,
-        ProviderGoogleAdcAuthConfig, ProviderProtocolPathsConfig, ProviderSapAiCoreAuthConfig,
-        ResolvedProviderAdapterConfig, ResolvedProviderConfig, StreamTransportMode,
+        ProviderProtocolPathsConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+        StreamTransportMode,
     };
 
     fn openai_adapter(backend: OpenAiBackendConfig) -> (String, ResolvedProviderAdapterConfig) {
@@ -754,12 +761,25 @@ mod tests {
         }
     }
 
+    fn oauth_credential_auth(
+        issuer: agena::provider::auth::CredentialIssuer,
+        credential: agena::provider::auth::AuthData,
+    ) -> ProviderCredentialAuthConfig {
+        ProviderCredentialAuthConfig {
+            issuer,
+            credential: Some(credential),
+            base_url: None,
+            protocol_paths: ProviderProtocolPathsConfig::default(),
+            service_key_env: None,
+        }
+    }
+
     #[test]
     fn configured_provider_auth_id_uses_openai_for_chatgpt_codex_backend() {
         let provider = resolved_provider_with_auth(
-            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
-                issuer: agena::provider::auth::CredentialIssuer::OpenaiChatgpt,
-                credential: Some(agena::provider::auth::AuthData::OAuth {
+            ProviderAuthConfig::Credential(oauth_credential_auth(
+                agena::provider::auth::CredentialIssuer::OpenaiChatgpt,
+                agena::provider::auth::AuthData::OAuth {
                     issuer: Some(agena::provider::auth::CredentialIssuer::OpenaiChatgpt),
                     refresh: "refresh-token".to_owned(),
                     access: "access-token".to_owned(),
@@ -767,8 +787,8 @@ mod tests {
                     account_id: Some("acct-openai".to_owned()),
                     enterprise_url: None,
                     user: None,
-                }),
-            }),
+                },
+            )),
             vec![openai_adapter(OpenAiBackendConfig::ChatgptCodex)],
         );
 
@@ -781,9 +801,9 @@ mod tests {
     #[test]
     fn configured_provider_auth_id_prefers_gitlab_auth_provider_when_no_api_key_is_set() {
         let provider = resolved_provider_with_auth(
-            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
-                issuer: agena::provider::auth::CredentialIssuer::Gitlab,
-                credential: Some(agena::provider::auth::AuthData::OAuth {
+            ProviderAuthConfig::Credential(oauth_credential_auth(
+                agena::provider::auth::CredentialIssuer::Gitlab,
+                agena::provider::auth::AuthData::OAuth {
                     issuer: Some(agena::provider::auth::CredentialIssuer::Gitlab),
                     refresh: "refresh-token".to_owned(),
                     access: "access-token".to_owned(),
@@ -791,8 +811,8 @@ mod tests {
                     account_id: None,
                     enterprise_url: None,
                     user: None,
-                }),
-            }),
+                },
+            )),
             vec![],
         );
 
@@ -806,7 +826,7 @@ mod tests {
     fn configured_provider_auth_id_uses_provider_id_for_direct_gitlab_api_key() {
         let provider = resolved_provider_with_auth(
             ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: "https://gitlab.com/api/v4".to_owned(),
+                base_url: Some("https://gitlab.com/api/v4".to_owned()),
                 protocol_paths: ProviderProtocolPathsConfig::default(),
                 api_key: Some("glpat-test".to_owned()),
                 api_key_env: None,
@@ -823,9 +843,9 @@ mod tests {
     #[test]
     fn configured_provider_auth_id_ignores_empty_gitlab_api_key_overrides() {
         let provider = resolved_provider_with_auth(
-            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
-                issuer: agena::provider::auth::CredentialIssuer::Gitlab,
-                credential: Some(agena::provider::auth::AuthData::OAuth {
+            ProviderAuthConfig::Credential(oauth_credential_auth(
+                agena::provider::auth::CredentialIssuer::Gitlab,
+                agena::provider::auth::AuthData::OAuth {
                     issuer: Some(agena::provider::auth::CredentialIssuer::Gitlab),
                     refresh: "refresh-token".to_owned(),
                     access: "access-token".to_owned(),
@@ -833,8 +853,8 @@ mod tests {
                     account_id: None,
                     enterprise_url: None,
                     user: None,
-                }),
-            }),
+                },
+            )),
             vec![],
         );
 
@@ -848,7 +868,7 @@ mod tests {
     fn configured_provider_auth_id_keeps_direct_http_provider_ids() {
         let provider = resolved_provider_with_auth(
             ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: "https://api.openai.com".to_owned(),
+                base_url: Some("https://api.openai.com".to_owned()),
                 protocol_paths: ProviderProtocolPathsConfig::default(),
                 api_key: Some("sk-test".to_owned()),
                 api_key_env: None,
@@ -865,9 +885,9 @@ mod tests {
     #[test]
     fn configured_provider_auth_id_uses_configured_copilot_auth_provider() {
         let provider = resolved_provider_with_auth(
-            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
-                issuer: agena::provider::auth::CredentialIssuer::GithubCopilot,
-                credential: Some(agena::provider::auth::AuthData::OAuth {
+            ProviderAuthConfig::Credential(oauth_credential_auth(
+                agena::provider::auth::CredentialIssuer::GithubCopilot,
+                agena::provider::auth::AuthData::OAuth {
                     issuer: Some(agena::provider::auth::CredentialIssuer::GithubCopilot),
                     refresh: "refresh-token".to_owned(),
                     access: "access-token".to_owned(),
@@ -875,8 +895,8 @@ mod tests {
                     account_id: None,
                     enterprise_url: Some("github.example.com".to_owned()),
                     user: None,
-                }),
-            }),
+                },
+            )),
             vec![openai_adapter(OpenAiBackendConfig::Api)],
         );
 
@@ -890,7 +910,7 @@ mod tests {
     fn configured_provider_auth_id_keeps_cloudflare_gateway_provider_id() {
         let provider = resolved_provider_with_auth(
             ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: "https://gateway.cloudflare.example".to_owned(),
+                base_url: Some("https://gateway.cloudflare.example".to_owned()),
                 protocol_paths: ProviderProtocolPathsConfig::default(),
                 api_key: Some("cf-test".to_owned()),
                 api_key_env: None,
@@ -907,9 +927,12 @@ mod tests {
     #[test]
     fn configured_provider_auth_id_skips_google_adc_and_sigv4_auth() {
         let google = resolved_provider_with_auth(
-            ProviderAuthConfig::GoogleAdc(ProviderGoogleAdcAuthConfig {
-                base_url: "https://vertex.example.com".to_owned(),
+            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
+                issuer: agena::provider::auth::CredentialIssuer::GoogleAdc,
+                credential: None,
+                base_url: Some("https://vertex.example.com".to_owned()),
                 protocol_paths: ProviderProtocolPathsConfig::default(),
+                service_key_env: None,
             }),
             vec![],
         );
@@ -930,23 +953,18 @@ mod tests {
     }
 
     #[test]
-    fn configured_provider_auth_id_uses_sap_ai_core_secret_routing() {
+    fn configured_provider_auth_id_skips_sap_ai_core_service_key_auth() {
         let provider = resolved_provider_with_auth(
-            ProviderAuthConfig::SapAiCore(ProviderSapAiCoreAuthConfig {
-                api: ProviderApiAuthConfig {
-                    base_url: "https://api.example.com/v2".to_owned(),
-                    protocol_paths: ProviderProtocolPathsConfig::default(),
-                    api_key: Some("sap-inline".to_owned()),
-                    api_key_env: None,
-                },
-                service_key_env: "AICORE_SERVICE_KEY".to_owned(),
+            ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
+                issuer: agena::provider::auth::CredentialIssuer::SapAiCore,
+                credential: None,
+                base_url: Some("https://api.example.com/v2".to_owned()),
+                protocol_paths: ProviderProtocolPathsConfig::default(),
+                service_key_env: Some("AICORE_SERVICE_KEY".to_owned()),
             }),
             vec![],
         );
 
-        assert_eq!(
-            configured_provider_auth_id("sap-ai-core", &provider).as_deref(),
-            Some("sap-ai-core")
-        );
+        assert_eq!(configured_provider_auth_id("sap-ai-core", &provider), None);
     }
 }

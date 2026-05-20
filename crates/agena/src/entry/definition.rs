@@ -22,6 +22,12 @@ fn sanitize_schema_json(value: serde_json::Value) -> serde_json::Value {
                 .into_iter()
                 .map(|(key, value)| (key, sanitize_schema_json(value)))
                 .collect::<serde_json::Map<String, serde_json::Value>>();
+            if !cleaned.contains_key("type") && schema_map_is_object_like(&cleaned) {
+                cleaned.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("object".to_string()),
+                );
+            }
             if cleaned
                 .get("type")
                 .and_then(serde_json::Value::as_str)
@@ -40,4 +46,26 @@ fn sanitize_schema_json(value: serde_json::Value) -> serde_json::Value {
         }
         other => other,
     }
+}
+
+fn schema_map_is_object_like(map: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if map
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind == "object")
+    {
+        return true;
+    }
+    if map.contains_key("properties") || map.contains_key("required") {
+        return true;
+    }
+    ["oneOf", "anyOf", "allOf"].into_iter().any(|key| {
+        map.get(key)
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| !items.is_empty() && items.iter().all(schema_value_is_object_like))
+    })
+}
+
+fn schema_value_is_object_like(value: &serde_json::Value) -> bool {
+    value.as_object().is_some_and(schema_map_is_object_like)
 }

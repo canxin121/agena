@@ -11,8 +11,11 @@ impl App {
 
         let transcript_host_area = vertical[0];
         let composer = vertical[1];
+        let transcript_footer_height =
+            self.transcript_footer_height(transcript_host_area.width, transcript_host_area.height);
 
-        let transcript_layout = transcript_surface_layout(transcript_host_area);
+        let transcript_layout =
+            transcript_surface_layout(transcript_host_area, transcript_footer_height);
         self.layout = LayoutCache {
             transcript_body: transcript_layout.body,
         };
@@ -28,7 +31,8 @@ impl App {
     }
 
     fn render_transcript_surface(&mut self, frame: &mut Frame, area: Rect) {
-        let layout = transcript_surface_layout(area);
+        let footer_height = self.transcript_footer_height(area.width, area.height);
+        let layout = transcript_surface_layout(area, footer_height);
         let header_frame = Block::default().borders(Borders::BOTTOM);
         let header_inner = inset_rect(header_frame.inner(layout.header), 1, 0);
         frame.render_widget(header_frame, layout.header);
@@ -93,6 +97,10 @@ impl App {
             .scroll((min(self.transcript.scroll, u16::MAX as usize) as u16, 0))
             .wrap(Wrap { trim: false });
         frame.render_widget(paragraph, layout.body);
+
+        if layout.footer.height > 0 {
+            self.render_transcript_footer_row(frame, layout.footer);
+        }
     }
 
     fn transcript_surface_top_right(&self) -> Vec<String> {
@@ -111,7 +119,6 @@ impl App {
         } else if self.transcript.loading_older {
             top_right.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
         }
-        top_right.push(self.workspace_context_label());
         if !self.transcript.search_query.trim().is_empty() {
             top_right.push(ui_text::transcript_search_summary(
                 &self.i18n,
@@ -136,41 +143,48 @@ impl App {
         if self.transcript.session_id.is_some() {
             title
         } else {
-            format!(
-                " {} · {} ",
-                ui_text::t(&self.i18n, "pane-transcript"),
-                self.workspace_context_label()
-            )
+            format!(" {} ", ui_text::t(&self.i18n, "pane-transcript"))
         }
     }
 
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
+        let status_rows = u16::from(!self.current_session_status_parts().is_empty());
+        let (composer_area, status_area) = if status_rows > 0 && area.height > status_rows {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(area.height.saturating_sub(status_rows)),
+                    Constraint::Length(status_rows),
+                ])
+                .split(area);
+            (rows[0], Some(rows[1]))
+        } else {
+            (area, None)
+        };
+
         let block = Block::default()
             .title(sanitize_display_text(self.composer_panel_title()))
             .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        let inner = block.inner(composer_area);
+        frame.render_widget(block, composer_area);
 
         if inner.width == 0 || inner.height == 0 {
+            if let Some(status_area) = status_area {
+                self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
+            }
             return;
         }
 
         let item_count = self.composer_items.len();
         let item_rows = u16::from(item_count > 0);
-        let footer_rows = u16::from(self.should_render_composer_footer() && inner.height >= 2);
         let suggestion_rows = min(
             self.slash_command_suggestion_rows(),
-            inner
-                .height
-                .saturating_sub(item_rows)
-                .saturating_sub(footer_rows)
-                .saturating_sub(1),
+            inner.height.saturating_sub(item_rows).saturating_sub(1),
         );
         let editor_rows = inner
             .height
             .saturating_sub(item_rows)
             .saturating_sub(suggestion_rows)
-            .saturating_sub(footer_rows)
             .max(1);
 
         let mut constraints = Vec::new();
@@ -181,9 +195,6 @@ impl App {
             constraints.push(Constraint::Length(suggestion_rows));
         }
         constraints.push(Constraint::Length(editor_rows));
-        if footer_rows > 0 {
-            constraints.push(Constraint::Length(footer_rows));
-        }
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
@@ -205,11 +216,6 @@ impl App {
             None
         };
         let editor_row = rows[next_row];
-        let footer_row = if footer_rows > 0 {
-            Some(rows[next_row + 1])
-        } else {
-            None
-        };
 
         if let Some(item_row) = item_row {
             self.render_composer_items_row(frame, item_row);
@@ -249,15 +255,15 @@ impl App {
             );
         }
 
-        if let Some(footer_row) = footer_row {
-            self.render_composer_footer_row(frame, footer_row);
-        }
-
         if self.overlay.is_none() && self.focus == Focus::Composer {
             frame.set_cursor_position((
                 editor_x.saturating_add(editor_view.cursor_x),
                 editor_row.y.saturating_add(editor_view.cursor_y),
             ));
+        }
+
+        if let Some(status_area) = status_area {
+            self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
         }
     }
 
@@ -374,15 +380,15 @@ impl App {
         );
     }
 
-    fn render_composer_footer_row(&self, frame: &mut Frame, area: Rect) {
-        let lines = self.composer_footer_lines(area.width);
+    fn render_transcript_footer_row(&self, frame: &mut Frame, area: Rect) {
+        let lines = self.transcript_footer_lines(area.width);
         frame.render_widget(
             Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
             area,
         );
     }
 
-    fn composer_footer_lines(&self, width: u16) -> Vec<Line<'static>> {
+    fn transcript_footer_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
         if let Some(flash) = &self.flash {
@@ -394,7 +400,10 @@ impl App {
             return lines;
         }
 
-        let combined = self.composer_footer_text();
+        let combined = self.transcript_footer_text();
+        if combined.trim().is_empty() {
+            return lines;
+        }
         lines.extend(self.wrap_styled_text(
             combined.as_str(),
             width,
@@ -403,11 +412,8 @@ impl App {
         lines
     }
 
-    fn composer_footer_text(&self) -> String {
+    fn transcript_footer_text(&self) -> String {
         let mut parts = Vec::new();
-        if self.transcript.submitting {
-            parts.push("Esc cancel".to_string());
-        }
         if !self.queue.is_empty() {
             let preview = self.queue.first_preview(28).unwrap_or_default();
             if preview.is_empty() {
@@ -416,18 +422,14 @@ impl App {
                 parts.push(format!("queue {} {}", self.queue.len(), preview));
             }
         }
-        if let Some(summary) = self.run_options.summary() {
-            parts.push(summary);
-        }
         if let Some(status_line) = self
             .status_line
             .as_ref()
             .and_then(|status_line| status_line.text.as_ref())
             .map(String::as_str)
+            && !status_line.trim().is_empty()
         {
-            if !status_line.trim().is_empty() {
-                parts.push(status_line.trim().to_string());
-            }
+            parts.push(status_line.trim().to_string());
         }
         for segment in self.backend.plugin_statusline_segments() {
             if segment.content.trim().is_empty() {
@@ -446,15 +448,20 @@ impl App {
                 parts.push(format!("{label}: {}", block.block.body.trim()));
             }
         }
-        if parts.is_empty() {
-            parts.push(ui_text::t(&self.i18n, "status-global"));
-        }
 
         parts.join("  |  ")
     }
 
-    fn should_render_composer_footer(&self) -> bool {
-        true
+    fn transcript_footer_height(&self, width: u16, total_height: u16) -> u16 {
+        if total_height <= transcript_surface_header_height(total_height).saturating_add(1) {
+            return 0;
+        }
+        let line_count = self.transcript_footer_lines(width).len();
+        if line_count == 0 {
+            0
+        } else {
+            min(2, line_count as u16)
+        }
     }
 
     fn slash_command_suggestion_rows(&self) -> u16 {
@@ -512,6 +519,22 @@ impl App {
                 }
             })
             .collect()
+    }
+
+    fn render_composer_status_row(&self, frame: &mut Frame, area: Rect) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        let text = self.current_session_status_parts().join("  |  ");
+        let lines = self.wrap_styled_text(
+            text.as_str(),
+            area.width,
+            Style::default().fg(Color::DarkGray),
+        );
+        frame.render_widget(
+            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
+            area,
+        );
     }
 
     fn theme_color(&self, key: &str, fallback: Color) -> Color {
@@ -618,6 +641,34 @@ impl App {
             Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                 self.render_line_overlay(frame, area, dialog);
             }
+            Overlay::SettingsStudio(dialog) => {
+                self.render_settings_studio_overlay(frame, area, dialog);
+            }
+            Overlay::SettingsValueEdit(dialog) => {
+                self.render_line_overlay(
+                    frame,
+                    area,
+                    &LineInputOverlay {
+                        title: dialog.title.clone(),
+                        prompt: dialog.prompt.clone(),
+                        input: dialog.input.clone(),
+                    },
+                );
+            }
+            Overlay::RuntimeSettingEdit(dialog) => {
+                self.render_line_overlay(
+                    frame,
+                    area,
+                    &LineInputOverlay {
+                        title: dialog.title.clone(),
+                        prompt: dialog.prompt.clone(),
+                        input: dialog.input.clone(),
+                    },
+                );
+            }
+            Overlay::Choice(dialog) => {
+                self.render_choice_overlay(frame, area, dialog);
+            }
             Overlay::PermissionRuleEdit(dialog) => {
                 self.render_permission_rule_edit_overlay(frame, area, dialog);
             }
@@ -636,6 +687,9 @@ impl App {
             Overlay::Picker(dialog) => {
                 self.render_picker_overlay(frame, area, dialog);
             }
+            Overlay::SessionModelChooser(dialog) => {
+                self.render_session_model_chooser_overlay(frame, area, dialog);
+            }
             Overlay::Timeline(dialog) => {
                 self.render_timeline_overlay(frame, area, dialog);
             }
@@ -645,11 +699,14 @@ impl App {
             Overlay::ProviderStudio(dialog) => {
                 self.render_provider_studio_overlay(frame, area, dialog);
             }
+            Overlay::ModelCatalogStudio(dialog) => {
+                self.render_model_catalog_studio_overlay(frame, area, dialog);
+            }
         }
     }
 
     fn render_line_overlay(&self, frame: &mut Frame, area: Rect, dialog: &LineInputOverlay) {
-        let area = centered_rect(area, 70, 7);
+        let area = centered_rect(area, 88, 10);
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -660,29 +717,31 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
+                Constraint::Min(2),
+                Constraint::Length(3),
                 Constraint::Length(1),
-                Constraint::Length(1),
-                Constraint::Min(1),
             ])
             .split(inner);
 
         frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str()))
+                .wrap(Wrap { trim: false }),
             rows[0],
         );
-        let view = dialog.input.render_view(rows[1].width, 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(view.lines.clone()))
-                .block(Block::default().borders(Borders::BOTTOM)),
-            rows[1],
-        );
+        let input_block = Block::default().borders(Borders::ALL);
+        let input_inner = input_block.inner(rows[1]);
+        frame.render_widget(input_block, rows[1]);
+        let view = dialog
+            .input
+            .render_view(input_inner.width.max(1), input_inner.height.max(1));
+        frame.render_widget(Paragraph::new(Text::from(view.lines.clone())), input_inner);
         frame.render_widget(
             Paragraph::new(ui_text::t(&self.i18n, "overlay-line-footer")),
             rows[2],
         );
         frame.set_cursor_position((
-            rows[1].x.saturating_add(view.cursor_x),
-            rows[1].y.saturating_add(view.cursor_y),
+            input_inner.x.saturating_add(view.cursor_x),
+            input_inner.y.saturating_add(view.cursor_y),
         ));
     }
 
@@ -1118,6 +1177,204 @@ impl App {
         ));
     }
 
+    fn render_session_model_chooser_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &SessionModelChooserOverlay,
+    ) {
+        let area = centered_rect(area, 108, 26);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(3),
+                Constraint::Min(10),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
+            rows[0],
+        );
+
+        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
+        frame.render_widget(
+            Paragraph::new(Text::from(input_view.lines.clone()))
+                .block(Block::default().borders(Borders::ALL)),
+            rows[1],
+        );
+
+        let page_size = dialog.page_size.max(1);
+        let page_start = (dialog.selected / page_size) * page_size;
+        let page_items = if dialog.loading {
+            vec![ListItem::new(Line::from(Span::styled(
+                ui_text::t(&self.i18n, "overlay-picker-loading"),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else if dialog.items.is_empty() {
+            vec![ListItem::new(Line::from(Span::styled(
+                sanitize_display_text(dialog.empty_message.as_str()),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else {
+            dialog
+                .items
+                .iter()
+                .skip(page_start)
+                .take(page_size)
+                .map(|item| {
+                    ListItem::new(vec![
+                        Line::from(sanitize_display_text(item.label.as_str())),
+                        Line::from(Span::styled(
+                            sanitize_display_text(item.detail.as_str()),
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        };
+        let list_title = if dialog.items.is_empty() {
+            " Models ".to_string()
+        } else {
+            let page = (dialog.selected / page_size) + 1;
+            let page_count = dialog.items.len().div_ceil(page_size);
+            format!(
+                " Models  ·  page {page}/{page_count}  ·  {} match(es) ",
+                dialog.items.len()
+            )
+        };
+        let list = List::new(page_items)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(list_title))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(selection_highlight_style())
+            .highlight_symbol(">> ");
+        let mut state = ListState::default();
+        state.select(
+            (!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected - page_start),
+        );
+        frame.render_stateful_widget(list, rows[2], &mut state);
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[3],
+        );
+        frame.set_cursor_position((
+            rows[1]
+                .x
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_x),
+            rows[1]
+                .y
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_y),
+        ));
+    }
+
+    fn render_choice_overlay(&self, frame: &mut Frame, area: Rect, dialog: &ChoiceOverlay) {
+        let area = top_centered_rect(area, 96, 24, 1);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(8),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+
+        let input_view = dialog.input.render_view(rows[0].width.saturating_sub(2), 1);
+        frame.render_widget(
+            Paragraph::new(Text::from(input_view.lines.clone()))
+                .block(Block::default().borders(Borders::ALL)),
+            rows[0],
+        );
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str()))
+                .wrap(Wrap { trim: false }),
+            rows[1],
+        );
+
+        let choice_rows = Self::choice_overlay_rows(dialog);
+        let has_rows = !choice_rows.is_empty();
+        let result_items = if !has_rows {
+            vec![ListItem::new(Line::from(Span::styled(
+                sanitize_display_text(dialog.empty_message.as_str()),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else {
+            choice_rows
+                .into_iter()
+                .map(|row| {
+                    let (label, detail, style) = match row {
+                        ChoiceRow::Clear => (
+                            "Clear value".to_string(),
+                            choice_overlay_clear_detail(&dialog.action),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                        ChoiceRow::Custom(value) => (
+                            "Use typed value".to_string(),
+                            format!(
+                                "Apply exactly {}",
+                                format_setting_value_inline(&JsonValue::String(value))
+                            ),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                        ChoiceRow::Item(item) => (item.label, item.detail, Style::default()),
+                    };
+                    ListItem::new(vec![
+                        Line::from(Span::styled(sanitize_display_text(label.as_str()), style)),
+                        Line::from(Span::styled(
+                            sanitize_display_text(detail.as_str()),
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let list = List::new(result_items)
+            .block(Block::default().borders(Borders::ALL))
+            .highlight_style(selection_highlight_style())
+            .highlight_symbol(">> ");
+        let mut state = ListState::default();
+        state.select(has_rows.then_some(dialog.selected));
+        frame.render_stateful_widget(list, rows[2], &mut state);
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[3],
+        );
+        frame.set_cursor_position((
+            rows[0]
+                .x
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_x),
+            rows[0]
+                .y
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_y),
+        ));
+    }
+
     fn render_timeline_overlay(&self, frame: &mut Frame, area: Rect, dialog: &TimelineOverlay) {
         let area = centered_rect(area, 94, 24);
         frame.render_widget(Clear, area);
@@ -1391,13 +1648,194 @@ impl App {
         ));
     }
 
+    fn render_settings_studio_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &SettingsStudioOverlay,
+    ) {
+        let area = centered_rect(area, 122, 36);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(18),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+        let current_section = dialog.sections.get(dialog.selected_section);
+        let section_summary = current_section
+            .map(|section| format!("{}  ·  {} item(s)", section.summary, section.items.len()))
+            .unwrap_or_else(|| "no settings available".to_string());
+        self.render_header_row(
+            frame,
+            rows[0],
+            "Settings".to_string(),
+            section_summary,
+            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::DarkGray),
+        );
+
+        let content = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(28), Constraint::Min(60)])
+            .split(rows[1]);
+        let nav_area = content[0];
+        let right_area = content[1];
+        let right_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(4),
+                Constraint::Min(10),
+                Constraint::Length(7),
+            ])
+            .split(right_area);
+
+        let nav_items = dialog
+            .sections
+            .iter()
+            .map(|section| {
+                ListItem::new(vec![
+                    Line::from(sanitize_display_text(section.label.as_str())),
+                    Line::from(Span::styled(
+                        sanitize_display_text(section.summary.as_str()),
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let nav_list = List::new(nav_items)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(" Sections "))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(if dialog.focus == SettingsStudioFocus::Navigation {
+                selection_highlight_style()
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            })
+            .highlight_symbol(">> ");
+        let mut nav_state = ListState::default();
+        nav_state.select((!dialog.sections.is_empty()).then_some(dialog.selected_section));
+        frame.render_stateful_widget(nav_list, nav_area, &mut nav_state);
+
+        let section_title = current_section
+            .map(|section| section.label.clone())
+            .unwrap_or_else(|| "Section".to_string());
+        let section_description = current_section
+            .map(|section| section.description.clone())
+            .unwrap_or_else(|| "No section selected.".to_string());
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(section_description))
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(format!(" {} ", section_title)))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right_rows[0],
+        );
+
+        let selected_item =
+            current_section.and_then(|section| section.items.get(dialog.selected_item));
+        let item_rows = current_section
+            .map(|section| {
+                if section.items.is_empty() {
+                    vec![ListItem::new(Line::from(Span::styled(
+                        "No settings in this section.",
+                        Style::default().fg(Color::DarkGray),
+                    )))]
+                } else {
+                    section
+                        .items
+                        .iter()
+                        .map(|item| {
+                            let mut first_line = vec![Span::styled(
+                                sanitize_display_text(item.label.as_str()),
+                                Style::default().add_modifier(Modifier::BOLD),
+                            )];
+                            if !item.value.trim().is_empty() {
+                                first_line.push(Span::raw("  "));
+                                first_line.push(Span::styled(
+                                    sanitize_display_text(item.value.as_str()),
+                                    Style::default().fg(Color::Cyan),
+                                ));
+                            }
+                            ListItem::new(vec![
+                                Line::from(first_line),
+                                Line::from(Span::styled(
+                                    sanitize_display_text(item.detail.as_str()),
+                                    Style::default().fg(Color::DarkGray),
+                                )),
+                            ])
+                        })
+                        .collect::<Vec<_>>()
+                }
+            })
+            .unwrap_or_default();
+        let item_list = List::new(item_rows)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(" Options "))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(if dialog.focus == SettingsStudioFocus::Items {
+                selection_highlight_style()
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            })
+            .highlight_symbol(">> ");
+        let mut item_state = ListState::default();
+        let has_items = current_section
+            .map(|section| !section.items.is_empty())
+            .unwrap_or(false);
+        item_state.select(has_items.then_some(dialog.selected_item));
+        frame.render_stateful_widget(item_list, right_rows[1], &mut item_state);
+
+        let detail_text = selected_item
+            .map(|item| {
+                if item.value.trim().is_empty() {
+                    format!("{}\nEnter opens or edits this setting.", item.detail)
+                } else {
+                    format!(
+                        "{}\nCurrent value: {}\nEnter opens or edits this setting.",
+                        item.detail, item.value
+                    )
+                }
+            })
+            .unwrap_or_else(|| "Select a section and an option to inspect or edit it.".to_string());
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(detail_text))
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(" Details "))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right_rows[2],
+        );
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[2],
+        );
+    }
+
     fn render_provider_studio_overlay(
         &self,
         frame: &mut Frame,
         area: Rect,
         dialog: &ProviderStudioOverlay,
     ) {
-        let area = centered_rect(area, 112, 34);
+        let area = centered_rect(area, 122, 38);
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -1414,134 +1852,103 @@ impl App {
             ])
             .split(inner);
 
-        let summary = format!(
-            "draft {}  ·  auth {}  ·  adapters {}  ·  catalog {}  ·  {}{}",
-            if dialog.draft.provider_id.trim().is_empty() {
-                "<new>"
-            } else {
-                dialog.draft.provider_id.trim()
-            },
-            dialog.draft.auth_kind.label(),
-            dialog.selected_adapter_ids.len(),
-            dialog.catalog_total,
-            if dialog.listing_adapter_models {
-                "listing "
-            } else {
-                ""
-            },
-            if dialog.saving { "saving" } else { "" }
-        );
         self.render_header_row(
             frame,
             rows[0],
             ui_text::t(&self.i18n, "overlay-provider-studio-header"),
-            summary,
+            String::new(),
             Style::default().add_modifier(Modifier::BOLD),
             Style::default().fg(Color::DarkGray),
         );
 
-        let content = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(28), Constraint::Min(54)])
-            .split(rows[1]);
-        let providers_area = content[0];
-        let right_area = content[1];
+        let right_area = if dialog.show_provider_list {
+            let content = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Length(28), Constraint::Min(54)])
+                .split(rows[1]);
+            let providers_area = content[0];
+            let provider_items = dialog
+                .providers
+                .iter()
+                .map(|row| {
+                    ListItem::new(vec![
+                        Line::from(sanitize_display_text(row.label.as_str())),
+                        Line::from(Span::styled(
+                            sanitize_display_text(row.detail.as_str()),
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ])
+                })
+                .collect::<Vec<_>>();
+            let provider_list = List::new(provider_items)
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(format!(
+                            " {} ",
+                            ui_text::t(&self.i18n, "overlay-provider-studio-providers")
+                        )))
+                        .borders(Borders::ALL),
+                )
+                .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+                .highlight_symbol(">> ");
+            let mut provider_state = ListState::default();
+            provider_state
+                .select((!dialog.providers.is_empty()).then_some(dialog.selected_provider));
+            frame.render_stateful_widget(provider_list, providers_area, &mut provider_state);
+            content[1]
+        } else {
+            rows[1]
+        };
+        let draft_fields = provider_studio_visible_fields(dialog);
+        let draft_panel_height = u16::try_from(draft_fields.len().saturating_add(3))
+            .unwrap_or(u16::MAX)
+            .clamp(8, 18);
         let right_rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(10),
-                Constraint::Length(10),
-                Constraint::Min(8),
-            ])
+            .constraints([Constraint::Length(draft_panel_height), Constraint::Min(10)])
             .split(right_area);
 
-        let provider_items = dialog
-            .providers
-            .iter()
-            .map(|row| {
-                ListItem::new(vec![
-                    Line::from(sanitize_display_text(row.label.as_str())),
-                    Line::from(Span::styled(
-                        sanitize_display_text(row.detail.as_str()),
-                        Style::default().fg(Color::DarkGray),
-                    )),
-                ])
-            })
-            .collect::<Vec<_>>();
-        let provider_list = List::new(provider_items)
-            .block(
-                Block::default()
-                    .title(sanitize_display_text(format!(
-                        " {} ",
-                        ui_text::t(&self.i18n, "overlay-provider-studio-providers")
-                    )))
-                    .borders(Borders::ALL),
-            )
-            .highlight_style(if dialog.focus == ProviderStudioFocus::Providers {
-                selection_highlight_style()
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            })
-            .highlight_symbol(">> ");
-        let mut provider_state = ListState::default();
-        provider_state.select((!dialog.providers.is_empty()).then_some(dialog.selected_provider));
-        frame.render_stateful_widget(provider_list, providers_area, &mut provider_state);
-
-        let draft_lines = ProviderStudioField::ALL
+        let draft_lines = draft_fields
             .iter()
             .enumerate()
             .map(|(index, field)| {
-                let value = provider_studio_field_value(&dialog.draft, *field);
+                let value = provider_studio_main_field_value(dialog, *field);
                 let display = match field {
-                    ProviderStudioField::ApiKey if !value.trim().is_empty() => {
+                    ProviderStudioField::ApiKey
+                    | ProviderStudioField::RefreshToken
+                    | ProviderStudioField::AccessToken
+                    | ProviderStudioField::AccessKeyId
+                    | ProviderStudioField::SecretAccessKey
+                    | ProviderStudioField::SessionToken
+                        if !value.trim().is_empty() =>
+                    {
                         "********".to_owned()
                     }
                     _ if value.trim().is_empty() => "unset".to_owned(),
                     _ => value,
                 };
-                let label_style = if dialog.focus == ProviderStudioFocus::Fields
-                    && dialog.selected_field == index
-                {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else if provider_studio_field_editable(dialog, *field) {
+                let selected = dialog.detail_page.is_none()
+                    && dialog.focus == ProviderStudioFocus::Fields
+                    && dialog.selected_field == index;
+                let label_style = if selected {
                     Style::default().add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default()
                 };
+                let value_style = label_style;
                 Line::from(vec![
                     Span::styled(
                         format!("{:>16}", provider_studio_field_label(*field)),
                         label_style,
                     ),
                     Span::raw("  "),
-                    Span::styled(
-                        sanitize_display_text(display),
-                        if provider_studio_field_editable(dialog, *field) {
-                            Style::default()
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    ),
+                    Span::styled(sanitize_display_text(display), value_style),
                 ])
             })
             .collect::<Vec<_>>();
-        let mut draft_header = vec![Line::from(Span::styled(
-            format!("auth_kind  {}", dialog.draft.auth_kind.label()),
-            Style::default().fg(Color::DarkGray),
-        ))];
-        draft_header.extend(draft_lines);
         frame.render_widget(
-            Paragraph::new(Text::from(draft_header))
-                .block(
-                    Block::default()
-                        .title(sanitize_display_text(format!(
-                            " {} ",
-                            ui_text::t(&self.i18n, "overlay-provider-studio-draft")
-                        )))
-                        .borders(Borders::ALL),
-                )
+            Paragraph::new(Text::from(draft_lines))
+                .block(Block::default().borders(Borders::ALL))
                 .wrap(Wrap { trim: false }),
             right_rows[0],
         );
@@ -1574,11 +1981,14 @@ impl App {
                         .adapter_models
                         .iter()
                         .find(|adapter_models| adapter_models.adapter_id == *adapter_id);
-                    let enabled = if dialog.selected_adapter_ids.contains(adapter_id.as_str()) {
-                        "[x]"
-                    } else {
-                        "[ ]"
-                    };
+                    let enabled =
+                        if !provider_studio_adapter_selectable(dialog, adapter_id.as_str()) {
+                            "[-]"
+                        } else if dialog.selected_adapter_ids.contains(adapter_id.as_str()) {
+                            "[x]"
+                        } else {
+                            "[ ]"
+                        };
                     let detail = if let Some(adapter) = adapter_models {
                         if adapter.error.is_none() {
                             format!(
@@ -1593,6 +2003,19 @@ impl App {
                         } else {
                             truncate_display_text(adapter.error.as_deref().unwrap_or("error"), 32)
                         }
+                    } else if let Some(rule) =
+                        provider_studio_adapter_rule(dialog, adapter_id.as_str())
+                    {
+                        let mut parts = vec![rule.detail.to_owned()];
+                        if rule.supports_draft_model_listing {
+                            parts.push("live list".to_owned());
+                        }
+                        if dialog.configured_adapter_ids.contains(adapter_id) {
+                            parts.push("configured".to_owned());
+                        }
+                        truncate_display_text(parts.join(" · ").as_str(), 48)
+                    } else if dialog.configured_adapter_ids.contains(adapter_id) {
+                        "configured on disk; not in current auth contract".to_owned()
                     } else {
                         "not listed".to_owned()
                     };
@@ -1642,23 +2065,38 @@ impl App {
                         .models
                         .iter()
                         .map(|model| {
+                            let selected = if provider_studio_model_selected(
+                                dialog,
+                                adapter_models.adapter_id.as_str(),
+                                model.id.as_str(),
+                            ) {
+                                "[x]"
+                            } else {
+                                "[ ]"
+                            };
+                            let match_entry =
+                                dialog.catalog_matches.get(&provider_studio_model_key(
+                                    adapter_models.adapter_id.as_str(),
+                                    model.id.as_str(),
+                                ));
                             let detail = format!(
                                 "{}{}",
-                                model
-                                    .display_name
-                                    .clone()
-                                    .unwrap_or_else(|| model.id.to_string()),
-                                if dialog
-                                    .catalog_resolved_model_ids
-                                    .contains(model.id.as_str())
+                                match_entry
+                                    .map(|entry| entry.model_id.to_string())
+                                    .unwrap_or_else(|| "catalog unmatched".to_owned()),
+                                if dialog.draft.default_adapter == adapter_models.adapter_id
+                                    && dialog.draft.default_model == model.id.as_str()
                                 {
-                                    " · catalog"
+                                    "  ·  default"
                                 } else {
                                     ""
-                                }
+                                },
                             );
                             ListItem::new(vec![
-                                Line::from(sanitize_display_text(model.id.to_string())),
+                                Line::from(sanitize_display_text(format!(
+                                    "{selected} {}",
+                                    model.id.as_str()
+                                ))),
                                 Line::from(Span::styled(
                                     sanitize_display_text(detail),
                                     Style::default().fg(Color::DarkGray),
@@ -1696,59 +2134,244 @@ impl App {
         model_state.select(has_models.then_some(dialog.selected_model));
         frame.render_stateful_widget(model_list, models_area, &mut model_state);
 
-        let catalog_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(5)])
-            .split(right_rows[2]);
         frame.render_widget(
-            Paragraph::new(sanitize_display_text(format!(
-                "query: {}  ·  page {}-{} / {}",
-                if dialog.catalog_query.trim().is_empty() {
-                    "<all>".to_owned()
-                } else {
-                    dialog.catalog_query.clone()
-                },
-                dialog.catalog_offset.saturating_add(1),
-                dialog
-                    .catalog_offset
-                    .saturating_add(dialog.catalog_items.len()),
-                dialog.catalog_total
-            )))
-            .block(
-                Block::default()
-                    .title(sanitize_display_text(format!(
-                        " {} ",
-                        ui_text::t(&self.i18n, "overlay-provider-studio-catalog")
-                    )))
-                    .borders(Borders::ALL),
-            ),
-            catalog_rows[0],
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[2],
         );
 
-        let catalog_split = if should_stack_detail_layout(catalog_rows[1].width, 34, 28) {
+        if let Some(detail_page) = dialog.detail_page.as_ref() {
+            let detail_fields = provider_studio_detail_fields(dialog);
+            let auth_state_lines = provider_studio_auth_state_lines(dialog);
+            let detail_height = u16::try_from(
+                detail_fields
+                    .len()
+                    .saturating_add(auth_state_lines.len())
+                    .saturating_add(4),
+            )
+            .unwrap_or(u16::MAX)
+            .clamp(10, 24);
+            let detail_area = centered_rect(area, 92, detail_height);
+            frame.render_widget(Clear, detail_area);
+            let detail_block = Block::default()
+                .title(sanitize_display_text(format!(" {} ", detail_page.title)))
+                .borders(Borders::ALL);
+            let detail_inner = detail_block.inner(detail_area);
+            frame.render_widget(detail_block, detail_area);
+            let detail_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(6), Constraint::Length(1)])
+                .split(detail_inner);
+
+            let mut lines = auth_state_lines
+                .into_iter()
+                .map(|line| {
+                    Line::from(Span::styled(
+                        sanitize_display_text(line),
+                        Style::default().fg(Color::DarkGray),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            lines.insert(
+                0,
+                Line::from(vec![
+                    Span::styled(
+                        format!(
+                            "{:>16}",
+                            provider_studio_field_label(ProviderStudioField::AuthStatus)
+                        ),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        provider_studio_auth_status_summary(dialog),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]),
+            );
+            lines.extend(detail_fields.iter().enumerate().map(|(index, field)| {
+                let value = provider_studio_field_value(&dialog.draft, *field);
+                let display = match field {
+                    ProviderStudioField::ApiKey
+                    | ProviderStudioField::RefreshToken
+                    | ProviderStudioField::AccessToken
+                    | ProviderStudioField::AccessKeyId
+                    | ProviderStudioField::SecretAccessKey
+                    | ProviderStudioField::SessionToken
+                        if !value.trim().is_empty() =>
+                    {
+                        "********".to_owned()
+                    }
+                    _ if value.trim().is_empty() => "unset".to_owned(),
+                    _ => value,
+                };
+                let selected = dialog.editor.is_none() && detail_page.selected_field == index;
+                let label_style = if selected {
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else if provider_studio_field_editable(dialog, *field) {
+                    Style::default().add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:>16}", provider_studio_field_label(*field)),
+                        label_style,
+                    ),
+                    Span::raw("  "),
+                    Span::styled(
+                        sanitize_display_text(display),
+                        if selected {
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else if provider_studio_field_editable(dialog, *field) {
+                            Style::default()
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        },
+                    ),
+                ])
+            }));
+            frame.render_widget(
+                Paragraph::new(Text::from(lines))
+                    .wrap(Wrap { trim: false })
+                    .block(
+                        Block::default()
+                            .title(sanitize_display_text(format!(
+                                " {} ",
+                                ui_text::t(&self.i18n, "overlay-provider-studio-detail")
+                            )))
+                            .borders(Borders::NONE),
+                    ),
+                detail_rows[0],
+            );
+            frame.render_widget(
+                Paragraph::new(sanitize_display_text(detail_page.footer.as_str())),
+                detail_rows[1],
+            );
+        }
+
+        if let Some(editor) = dialog.editor.as_ref() {
+            let area = if editor.multiline {
+                centered_rect(area, 92, 24)
+            } else {
+                centered_rect(area, 78, 7)
+            };
+            frame.render_widget(Clear, area);
+            let block = Block::default()
+                .title(sanitize_display_text(format!(" {} ", editor.title)))
+                .borders(Borders::ALL);
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+            let editor_rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(if editor.multiline { 8 } else { 3 }),
+                    Constraint::Length(1),
+                ])
+                .split(inner);
+            frame.render_widget(
+                Paragraph::new(sanitize_display_text(editor.prompt.as_str())),
+                editor_rows[0],
+            );
+            let input_view = editor.input.render_view(
+                editor_rows[1].width.saturating_sub(2),
+                editor_rows[1].height.saturating_sub(2).max(1),
+            );
+            frame.render_widget(
+                Paragraph::new(Text::from(input_view.lines.clone()))
+                    .block(Block::default().borders(Borders::ALL)),
+                editor_rows[1],
+            );
+            frame.render_widget(
+                Paragraph::new(sanitize_display_text(editor.footer.as_str())),
+                editor_rows[2],
+            );
+            frame.set_cursor_position((
+                editor_rows[1]
+                    .x
+                    .saturating_add(1)
+                    .saturating_add(input_view.cursor_x),
+                editor_rows[1]
+                    .y
+                    .saturating_add(1)
+                    .saturating_add(input_view.cursor_y),
+            ));
+        }
+    }
+
+    fn render_model_catalog_studio_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &ModelCatalogStudioOverlay,
+    ) {
+        let area = centered_rect(area, 116, 36);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Min(16),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+        let summary = format!(
+            "query {}  ·  page {}-{} / {}  ·  {} official / {} custom",
+            if dialog.query.trim().is_empty() {
+                "<all>".to_owned()
+            } else {
+                dialog.query.clone()
+            },
+            dialog.offset.saturating_add(1),
+            dialog.offset.saturating_add(dialog.items.len()),
+            dialog.total,
+            dialog.summary.official_entry_count,
+            dialog.summary.custom_entry_count,
+        );
+        self.render_header_row(
+            frame,
+            rows[0],
+            "Model Catalog".to_string(),
+            summary,
+            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::DarkGray),
+        );
+
+        let content = if should_stack_detail_layout(rows[1].width, 48, 34) {
             Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-                .split(catalog_rows[1])
+                .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+                .split(rows[1])
         } else {
             Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints(adaptive_detail_split(catalog_rows[1].width, 34, 28))
-                .split(catalog_rows[1])
+                .constraints(adaptive_detail_split(rows[1].width, 48, 34))
+                .split(rows[1])
         };
-        let catalog_list_items = if dialog.catalog_loading {
+
+        let list_items = if dialog.loading {
             vec![ListItem::new(Line::from(Span::styled(
                 ui_text::t(&self.i18n, "overlay-picker-loading"),
                 Style::default().fg(Color::DarkGray),
             )))]
-        } else if dialog.catalog_items.is_empty() {
+        } else if dialog.items.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
                 ui_text::t(&self.i18n, "overlay-provider-studio-catalog-empty"),
                 Style::default().fg(Color::DarkGray),
             )))]
         } else {
             dialog
-                .catalog_items
+                .items
                 .iter()
                 .map(|entry| {
                     ListItem::new(vec![
@@ -1756,11 +2379,13 @@ impl App {
                         Line::from(Span::styled(
                             sanitize_display_text(format!(
                                 "{}{}",
-                                entry.origin.clone().unwrap_or_else(|| "unknown".to_owned()),
+                                entry.display_name.clone().unwrap_or_else(|| {
+                                    entry.origin.clone().unwrap_or_else(|| "unknown".to_owned())
+                                }),
                                 if entry.kind
                                     == agena_api_server::local_api::ModelCatalogEntryKind::Custom
                                 {
-                                    " · custom"
+                                    "  ·  custom"
                                 } else {
                                     ""
                                 }
@@ -1771,24 +2396,21 @@ impl App {
                 })
                 .collect::<Vec<_>>()
         };
-        let catalog_list = List::new(catalog_list_items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_style(if dialog.focus == ProviderStudioFocus::Catalog {
-                selection_highlight_style()
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            })
+        let catalog_list = List::new(list_items)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(" Entries "))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(selection_highlight_style())
             .highlight_symbol(">> ");
-        let mut catalog_state = ListState::default();
-        catalog_state.select(
-            (!dialog.catalog_loading && !dialog.catalog_items.is_empty())
-                .then_some(dialog.selected_catalog),
-        );
-        frame.render_stateful_widget(catalog_list, catalog_split[0], &mut catalog_state);
+        let mut list_state = ListState::default();
+        list_state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
+        frame.render_stateful_widget(catalog_list, content[0], &mut list_state);
 
         let detail = dialog
-            .catalog_items
-            .get(dialog.selected_catalog)
+            .items
+            .get(dialog.selected)
             .map(|entry| {
                 [
                     format!("model_id: {}", entry.model_id),
@@ -1814,23 +2436,28 @@ impl App {
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "?".to_owned())
                     ),
+                    format!("source: {:?}  ·  kind: {:?}", entry.source, entry.kind),
                     entry.description.clone().unwrap_or_default(),
                 ]
+                .into_iter()
+                .filter(|line| !line.trim().is_empty())
+                .collect::<Vec<_>>()
                 .join("\n")
             })
-            .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-provider-studio-catalog-empty"));
+            .unwrap_or_else(|| {
+                dialog.summary.last_error.clone().unwrap_or_else(|| {
+                    ui_text::t(&self.i18n, "overlay-provider-studio-catalog-empty")
+                })
+            });
         frame.render_widget(
             Paragraph::new(sanitize_display_text(detail))
                 .block(
                     Block::default()
-                        .title(sanitize_display_text(format!(
-                            " {} ",
-                            ui_text::t(&self.i18n, "overlay-provider-studio-detail")
-                        )))
+                        .title(sanitize_display_text(" Detail "))
                         .borders(Borders::ALL),
                 )
                 .wrap(Wrap { trim: false }),
-            catalog_split[1],
+            content[1],
         );
 
         frame.render_widget(
@@ -1889,9 +2516,9 @@ impl App {
     fn composer_height(&self) -> u16 {
         let line_count = max(1, self.composer.logical_line_count());
         let item_rows = u16::from(!self.composer_items.is_empty());
+        let status_rows = u16::from(!self.current_session_status_parts().is_empty());
         let suggestion_rows = self.slash_command_suggestion_rows();
-        let footer_rows = u16::from(self.should_render_composer_footer());
-        let chrome_rows = 2_u16 + item_rows + suggestion_rows + footer_rows;
+        let chrome_rows = 2_u16 + item_rows + suggestion_rows + status_rows;
         min(12, line_count as u16 + chrome_rows)
     }
 }
@@ -2004,10 +2631,25 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
+fn top_centered_rect(area: Rect, width: u16, height: u16, top_margin: u16) -> Rect {
+    let width = adaptive_modal_width(area.width, width);
+    let height = adaptive_modal_height(area.height, height);
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let max_margin = area.height.saturating_sub(height);
+    let y = area.y + min(top_margin, max_margin);
+    Rect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TranscriptSurfaceLayout {
     header: Rect,
     body: Rect,
+    footer: Rect,
 }
 
 fn inset_rect(area: Rect, horizontal: u16, vertical: u16) -> Rect {
@@ -2023,19 +2665,28 @@ pub(super) fn transcript_surface_header_height(total_height: u16) -> u16 {
     min(2, total_height)
 }
 
-fn transcript_surface_layout(area: Rect) -> TranscriptSurfaceLayout {
+fn transcript_surface_layout(area: Rect, footer_height: u16) -> TranscriptSurfaceLayout {
     let header_height = min(
         transcript_surface_header_height(area.height),
         area.height.saturating_sub(1),
     );
+    let footer_height = min(
+        footer_height,
+        area.height.saturating_sub(header_height).saturating_sub(1),
+    );
     let split = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(header_height), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(header_height),
+            Constraint::Min(1),
+            Constraint::Length(footer_height),
+        ])
         .split(area);
 
     TranscriptSurfaceLayout {
         header: split[0],
         body: inset_rect(split[1], 1, 0),
+        footer: inset_rect(split[2], 1, 0),
     }
 }
 

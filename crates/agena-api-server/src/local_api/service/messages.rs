@@ -283,7 +283,7 @@ fn paginate_visible_messages(
         .cloned()
         .collect::<Vec<_>>();
 
-    filtered.sort_by(|left, right| message_cursor_key(right).cmp(&message_cursor_key(left)));
+    filtered.sort_by_key(|message| std::cmp::Reverse(message_cursor_key(message)));
     let has_more = filtered.len() > limit as usize;
     filtered.truncate(limit as usize);
     let next_cursor = if has_more {

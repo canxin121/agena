@@ -7,28 +7,29 @@ use crate::{
     error::AppError,
     model::{AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode},
     model_catalog::{
-        ModelCatalogProviderRecord, canonical_model_catalog_id,
-        catalog_definition_to_provider_definition,
+        ModelCatalogProviderRecord, apply_catalog_definition_as_baseline,
+        canonical_model_catalog_id, catalog_definition_to_provider_definition,
+        merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
     },
 };
 
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ModelProvider,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ModelRuntime,
     PromptCacheShape, StreamResumePolicy, chat_wire,
 };
 
 #[derive(Clone)]
 pub struct CatalogedModelsProvider {
-    target: Arc<dyn ModelProvider>,
+    target: Arc<dyn ModelRuntime>,
     provider: Arc<ModelCatalogProviderRecord>,
 }
 
 impl CatalogedModelsProvider {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(
-        target: Arc<dyn ModelProvider>,
+        target: Arc<dyn ModelRuntime>,
         provider: ModelCatalogProviderRecord,
-    ) -> Arc<dyn ModelProvider> {
+    ) -> Arc<dyn ModelRuntime> {
         if provider.models.is_empty() {
             target
         } else {
@@ -73,14 +74,23 @@ impl CatalogedModelsProvider {
         if let Some(display_name) = self.display_name_for_model(model_id) {
             model.display_name = Some(display_name);
         }
-        if let Some(configured) = self.configured_definition(model_id) {
+        if let Some(definition) = self.provider.models.get(model_id.as_str()).or_else(|| {
+            catalog_model_id_for_raw(model_id.as_str())
+                .as_ref()
+                .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
+        }) {
             let capability_fallback = self
                 .target
                 .model_capabilities_for_adapter(model.adapter_id.as_ref(), model_id);
             let metadata_fallback = self
                 .target
                 .model_metadata_for_adapter(model.adapter_id.as_ref(), model_id);
-            configured.apply_to_model(model, &capability_fallback, &metadata_fallback)
+            apply_catalog_definition_as_baseline(
+                definition,
+                &capability_fallback,
+                &metadata_fallback,
+                model,
+            )
         } else {
             model
         }
@@ -117,7 +127,7 @@ impl CatalogedModelsProvider {
 }
 
 #[async_trait]
-impl ModelProvider for CatalogedModelsProvider {
+impl ModelRuntime for CatalogedModelsProvider {
     fn id(&self) -> &str {
         self.target.id()
     }
@@ -139,17 +149,18 @@ impl ModelProvider for CatalogedModelsProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> ModelCapabilities {
-        self.configured_definition(model)
-            .map(|configured| {
-                configured.capabilities.apply_to(
-                    self.target
-                        .model_capabilities_for_adapter(adapter_id, model),
-                )
-            })
-            .unwrap_or_else(|| {
-                self.target
-                    .model_capabilities_for_adapter(adapter_id, model)
-            })
+        let primary = self
+            .target
+            .model_capabilities_for_adapter(adapter_id, model);
+        if let Some(configured) = self.configured_definition(model) {
+            primary.with_fallbacks_from(
+                &configured
+                    .capabilities
+                    .apply_to(ModelCapabilities::default()),
+            )
+        } else {
+            primary
+        }
     }
 
     fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
@@ -162,9 +173,11 @@ impl ModelProvider for CatalogedModelsProvider {
         model: &ModelId,
     ) -> ModelMetadata {
         let metadata = self.target.model_metadata_for_adapter(adapter_id, model);
-        self.configured_definition(model)
-            .map(|configured| configured.metadata().with_fallbacks_from(&metadata))
-            .unwrap_or(metadata)
+        if let Some(configured) = self.configured_definition(model) {
+            metadata.with_fallbacks_from(&configured.metadata())
+        } else {
+            metadata
+        }
     }
 
     fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
@@ -183,16 +196,7 @@ impl ModelProvider for CatalogedModelsProvider {
             modes.entry(name).or_insert(mode);
         }
         if let Some(configured) = self.configured_definition(model) {
-            for (name, configured_mode) in &configured.thinking_modes {
-                match configured_mode.apply_to_mode(modes.get(name)) {
-                    Some(mode) => {
-                        modes.insert(name.clone(), mode);
-                    }
-                    None => {
-                        modes.remove(name);
-                    }
-                }
-            }
+            modes = merge_catalog_baseline_thinking_modes(modes, &configured.thinking_modes);
         }
         modes
     }
@@ -208,18 +212,10 @@ impl ModelProvider for CatalogedModelsProvider {
     ) -> BTreeMap<String, ModelSpeedMode> {
         self.configured_definition(model)
             .map(|configured| {
-                let mut modes = self.target.model_speed_modes_for_adapter(adapter_id, model);
-                for (name, configured_mode) in &configured.speed_modes {
-                    match configured_mode.apply_to_mode(modes.get(name)) {
-                        Some(mode) => {
-                            modes.insert(name.clone(), mode);
-                        }
-                        None => {
-                            modes.remove(name);
-                        }
-                    }
-                }
-                modes
+                merge_catalog_baseline_speed_modes(
+                    self.target.model_speed_modes_for_adapter(adapter_id, model),
+                    &configured.speed_modes,
+                )
             })
             .unwrap_or_else(|| self.target.model_speed_modes_for_adapter(adapter_id, model))
     }
@@ -347,7 +343,8 @@ mod tests {
         model::ModelLifecycle,
         provider::{
             CapabilitySupport, CompletionFinishReason, CompletionResponse,
-            ConfiguredModelThinkingMode, ThinkingRequest,
+            ConfiguredModelThinkingMode, FeatureCapabilityPatch, ModelCapabilityFeature,
+            ModelCapabilityPatch, ThinkingRequest,
         },
         role::Role,
     };
@@ -362,7 +359,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl ModelProvider for StaticProvider {
+    impl ModelRuntime for StaticProvider {
         fn id(&self) -> &str {
             "openai"
         }
@@ -410,7 +407,7 @@ mod tests {
 
     #[tokio::test]
     async fn catalog_wrapper_lists_custom_models_without_overriding_default() {
-        let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
+        let target: Arc<dyn ModelRuntime> = Arc::new(StaticProvider {
             default_model: ModelId::new("gpt-4.1"),
             listed: vec![Model::new("openai", "gpt-4.1").with_display_name("GPT 4.1")],
             captured_requests: Arc::new(Mutex::new(Vec::new())),
@@ -460,9 +457,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn catalog_wrapper_uses_provider_data_to_correct_catalog_baseline() {
+        let target: Arc<dyn ModelRuntime> = Arc::new(StaticProvider {
+            default_model: ModelId::new("glm-5"),
+            listed: vec![
+                Model::new("openai", "glm-5")
+                    .with_display_name("GLM 5 Provider")
+                    .with_capabilities(
+                        ModelCapabilities::default()
+                            .with_streaming(CapabilitySupport::Supported)
+                            .with_reasoning(CapabilitySupport::Supported)
+                            .with_structured_output(CapabilitySupport::Unsupported),
+                    )
+                    .with_metadata(ModelMetadata::default().with_max_output_tokens(8_192)),
+            ],
+            captured_requests: Arc::new(Mutex::new(Vec::new())),
+            capability_family: None,
+        });
+        let provider = CatalogedModelsProvider::new(
+            target,
+            ModelCatalogProviderRecord {
+                models: BTreeMap::from([(
+                    "glm-5".to_owned(),
+                    crate::model_catalog::CatalogModelDefinition {
+                        display_name: Some("GLM-5 Catalog".to_owned()),
+                        max_output_tokens: Some(32_768),
+                        capabilities: ModelCapabilityPatch {
+                            features: Some(FeatureCapabilityPatch::Supported(vec![
+                                ModelCapabilityFeature::StructuredOutput,
+                            ])),
+                            ..ModelCapabilityPatch::default()
+                        },
+                        ..crate::model_catalog::CatalogModelDefinition::default()
+                    },
+                )]),
+                appendable_model_ids: Default::default(),
+            },
+        );
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("list models should work");
+        let glm5 = models
+            .iter()
+            .find(|model| model.id.as_str() == "glm-5")
+            .expect("glm-5 should be present");
+
+        assert_eq!(glm5.display_name.as_deref(), Some("GLM-5 Catalog"));
+        assert_eq!(glm5.metadata.limits.max_output_tokens, Some(8_192));
+        assert_eq!(
+            glm5.capabilities.structured_output,
+            CapabilitySupport::Unsupported
+        );
+        assert_eq!(glm5.capabilities.reasoning, CapabilitySupport::Supported);
+    }
+
+    #[tokio::test]
     async fn catalog_wrapper_backfills_assistant_reasoning_field_from_catalog_metadata() {
         let captured_requests = Arc::new(Mutex::new(Vec::new()));
-        let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
+        let target: Arc<dyn ModelRuntime> = Arc::new(StaticProvider {
             default_model: ModelId::new("deepseek-v4-pro"),
             listed: vec![Model::new("openai", "deepseek-v4-pro")],
             captured_requests: Arc::clone(&captured_requests),
@@ -540,7 +594,7 @@ mod tests {
     #[tokio::test]
     async fn catalog_wrapper_preserves_empty_interleaved_reasoning_field_from_catalog_metadata() {
         let captured_requests = Arc::new(Mutex::new(Vec::new()));
-        let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
+        let target: Arc<dyn ModelRuntime> = Arc::new(StaticProvider {
             default_model: ModelId::new("deepseek-v4-pro"),
             listed: vec![Model::new("openai", "deepseek-v4-pro")],
             captured_requests: Arc::clone(&captured_requests),
@@ -611,7 +665,7 @@ mod tests {
 
     #[tokio::test]
     async fn catalog_wrapper_uses_catalog_metadata_to_enrich_release_gated_thinking_modes() {
-        let target: Arc<dyn ModelProvider> = Arc::new(StaticProvider {
+        let target: Arc<dyn ModelRuntime> = Arc::new(StaticProvider {
             default_model: ModelId::new("gpt-5"),
             listed: vec![Model::new("openai", "gpt-5")],
             captured_requests: Arc::new(Mutex::new(Vec::new())),

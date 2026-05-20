@@ -148,6 +148,7 @@ impl TurnRuntimeState {
         self.prompt_window_generation = None;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_model_request(
         &mut self,
         provider_id: String,

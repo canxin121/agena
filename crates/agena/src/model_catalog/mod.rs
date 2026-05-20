@@ -21,6 +21,10 @@ mod sources;
 mod store;
 mod types;
 
+pub(crate) use decorate::{
+    apply_catalog_definition_as_baseline, merge_catalog_baseline_speed_modes,
+    merge_catalog_baseline_thinking_modes,
+};
 pub use decorate::{catalog_definition_to_provider_definition, decorate_provider_models};
 pub use service::ModelCatalogService;
 pub use store::ModelCatalogStore;
@@ -44,7 +48,7 @@ use crate::{
     provider::{
         ConfiguredModelDefinition, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
         FeatureCapabilityPatch, FeatureCapabilityPatchBody, InputCapabilityPatch,
-        InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch, ModelProvider,
+        InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch, ModelRuntime,
         ProviderRegistry,
     },
 };
@@ -122,7 +126,7 @@ pub fn canonical_model_catalog_id(model_id: &str) -> String {
     curate::normalized_catalog_model_id(model_id)
 }
 use merge::{
-    catalog_definition_from_model, merge_catalog_definition, merge_catalog_document,
+    catalog_definition_from_model, merge_catalog_definition, merge_live_provider_catalog_document,
     merge_public_source_catalog_document, provider_priority,
 };
 

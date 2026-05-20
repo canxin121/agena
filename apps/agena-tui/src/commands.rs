@@ -4,24 +4,16 @@ pub enum CommandId {
     Commands,
     New,
     Sessions,
-    Resume,
     Lineage,
     Rewind,
-    Search,
     Find,
     Rename,
     Timeline,
     Plugins,
-    Mcp,
-    Lsp,
-    Skills,
-    Runtime,
-    Cost,
+    Settings,
+    Model,
     Review,
-    Permissions,
-    Config,
     Worktree,
-    Git,
     Commit,
     Pr,
     Export,
@@ -40,18 +32,6 @@ pub enum CommandId {
     Copy,
     CopyMessage,
     CopyVisible,
-    Providers,
-    Provider,
-    ProviderConfig,
-    Models,
-    Model,
-    ThinkingMode,
-    SpeedMode,
-    Verbosity,
-    ParallelToolCalls,
-    Temperature,
-    MaxOutput,
-    System,
     Fork,
     Children,
     Parent,
@@ -116,13 +96,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-sessions-summary",
     },
     CommandSpec {
-        id: CommandId::Resume,
-        name: "resume",
-        aliases: &["switch", "recent"],
-        arguments: "[query]",
-        summary_key: "command-resume-summary",
-    },
-    CommandSpec {
         id: CommandId::Lineage,
         name: "lineage",
         aliases: &["branch-history", "branches"],
@@ -135,13 +108,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["backtrack"],
         arguments: "",
         summary_key: "command-rewind-summary",
-    },
-    CommandSpec {
-        id: CommandId::Search,
-        name: "search",
-        aliases: &[],
-        arguments: "[query]",
-        summary_key: "command-search-summary",
     },
     CommandSpec {
         id: CommandId::Find,
@@ -172,39 +138,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-plugins-summary",
     },
     CommandSpec {
-        id: CommandId::Mcp,
-        name: "mcp",
+        id: CommandId::Settings,
+        name: "settings",
+        aliases: &["config"],
+        arguments: "[query]",
+        summary_key: "command-settings-summary",
+    },
+    CommandSpec {
+        id: CommandId::Model,
+        name: "model",
         aliases: &[],
-        arguments: "[query]",
-        summary_key: "command-mcp-summary",
-    },
-    CommandSpec {
-        id: CommandId::Lsp,
-        name: "lsp",
-        aliases: &[],
-        arguments: "[query]",
-        summary_key: "command-lsp-summary",
-    },
-    CommandSpec {
-        id: CommandId::Skills,
-        name: "skills",
-        aliases: &["skill"],
-        arguments: "[query]",
-        summary_key: "command-skills-summary",
-    },
-    CommandSpec {
-        id: CommandId::Runtime,
-        name: "runtime",
-        aliases: &["operator"],
-        arguments: "[query]",
-        summary_key: "command-runtime-summary",
-    },
-    CommandSpec {
-        id: CommandId::Cost,
-        name: "cost",
-        aliases: &["usage"],
         arguments: "",
-        summary_key: "command-cost-summary",
+        summary_key: "command-model-summary",
     },
     CommandSpec {
         id: CommandId::Review,
@@ -214,32 +159,11 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-review-summary",
     },
     CommandSpec {
-        id: CommandId::Permissions,
-        name: "permissions",
-        aliases: &["perm"],
-        arguments: "[query]",
-        summary_key: "command-permissions-summary",
-    },
-    CommandSpec {
-        id: CommandId::Config,
-        name: "config",
-        aliases: &[],
-        arguments: "[query]",
-        summary_key: "command-config-summary",
-    },
-    CommandSpec {
         id: CommandId::Worktree,
         name: "worktree",
         aliases: &["wt"],
         arguments: "[query]",
         summary_key: "command-worktree-summary",
-    },
-    CommandSpec {
-        id: CommandId::Git,
-        name: "git",
-        aliases: &["repo"],
-        arguments: "[query]",
-        summary_key: "command-git-summary",
     },
     CommandSpec {
         id: CommandId::Commit,
@@ -368,90 +292,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-copy-visible-summary",
     },
     CommandSpec {
-        id: CommandId::Providers,
-        name: "providers",
-        aliases: &[],
-        arguments: "",
-        summary_key: "command-providers-summary",
-    },
-    CommandSpec {
-        id: CommandId::Provider,
-        name: "provider",
-        aliases: &[],
-        arguments: "[provider_id|clear]",
-        summary_key: "command-provider-summary",
-    },
-    CommandSpec {
-        id: CommandId::ProviderConfig,
-        name: "provider-config",
-        aliases: &["providers-config", "provider-manager"],
-        arguments: "[provider_id]",
-        summary_key: "command-provider-config-summary",
-    },
-    CommandSpec {
-        id: CommandId::Models,
-        name: "models",
-        aliases: &[],
-        arguments: "[provider_id]",
-        summary_key: "command-models-summary",
-    },
-    CommandSpec {
-        id: CommandId::Model,
-        name: "model",
-        aliases: &[],
-        arguments: "[provider_id/model_id|model_id|clear]",
-        summary_key: "command-model-summary",
-    },
-    CommandSpec {
-        id: CommandId::ThinkingMode,
-        name: "thinking",
-        aliases: &["reasoning"],
-        arguments: "<name|clear>",
-        summary_key: "command-thinking-mode-summary",
-    },
-    CommandSpec {
-        id: CommandId::SpeedMode,
-        name: "speed",
-        aliases: &[],
-        arguments: "<name|clear>",
-        summary_key: "command-speed-mode-summary",
-    },
-    CommandSpec {
-        id: CommandId::Verbosity,
-        name: "verbosity",
-        aliases: &["verbose"],
-        arguments: "<low|medium|high|clear>",
-        summary_key: "command-verbosity-summary",
-    },
-    CommandSpec {
-        id: CommandId::ParallelToolCalls,
-        name: "parallel-tool-calls",
-        aliases: &["parallel-tools"],
-        arguments: "<on|off|clear>",
-        summary_key: "command-parallel-tool-calls-summary",
-    },
-    CommandSpec {
-        id: CommandId::Temperature,
-        name: "temperature",
-        aliases: &["temp"],
-        arguments: "<number|clear>",
-        summary_key: "command-temperature-summary",
-    },
-    CommandSpec {
-        id: CommandId::MaxOutput,
-        name: "max-output",
-        aliases: &["max-tokens"],
-        arguments: "<number|clear>",
-        summary_key: "command-max-output-summary",
-    },
-    CommandSpec {
-        id: CommandId::System,
-        name: "system",
-        aliases: &[],
-        arguments: "<text|clear>",
-        summary_key: "command-system-summary",
-    },
-    CommandSpec {
         id: CommandId::Fork,
         name: "fork",
         aliases: &["branch"],
@@ -569,7 +409,7 @@ pub fn command_suggestions_for_prefix(query: &str) -> Vec<&'static CommandSpec> 
 }
 
 fn command_name_exact_match(spec: &CommandSpec, query: &str) -> bool {
-    spec.name == query || spec.aliases.iter().any(|alias| *alias == query)
+    spec.name == query || spec.aliases.contains(&query)
 }
 
 fn command_name_prefix_match(spec: &CommandSpec, query: &str) -> bool {
@@ -582,13 +422,13 @@ mod tests {
 
     #[test]
     fn parse_command_supports_aliases() {
-        let parsed = parse_command("/temp 0.2").expect("command should parse");
-        assert_eq!(parsed.spec.id, CommandId::Temperature);
-        assert_eq!(parsed.args, "0.2");
+        let parsed = parse_command("/config runtime").expect("command should parse");
+        assert_eq!(parsed.spec.id, CommandId::Settings);
+        assert_eq!(parsed.args, "runtime");
 
-        let parsed = parse_command("/reasoning high").expect("command should parse");
-        assert_eq!(parsed.spec.id, CommandId::ThinkingMode);
-        assert_eq!(parsed.args, "high");
+        let parsed = parse_command("/wt").expect("command should parse");
+        assert_eq!(parsed.spec.id, CommandId::Worktree);
+        assert_eq!(parsed.args, "");
     }
 
     #[test]
@@ -605,16 +445,15 @@ mod tests {
 
     #[test]
     fn command_matches_query_uses_aliases_and_arguments() {
-        let spec = find_command("model").expect("model command should exist");
-        assert!(command_matches_query(spec, "models"));
-        assert!(command_matches_query(spec, "provider_id"));
+        let spec = find_command("settings").expect("settings command should exist");
+        assert!(command_matches_query(spec, "config"));
+        assert!(command_matches_query(spec, "query"));
     }
 
     #[test]
-    fn provider_config_command_matches_aliases() {
-        let spec = find_command("provider-config").expect("provider-config command should exist");
-        assert!(command_matches_query(spec, "providers-config"));
-        assert!(command_matches_query(spec, "provider-manager"));
+    fn settings_command_matches_aliases() {
+        let spec = find_command("settings").expect("settings command should exist");
+        assert!(command_matches_query(spec, "config"));
     }
 
     #[test]
@@ -623,15 +462,14 @@ mod tests {
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
-        assert!(names.contains(&"resume"));
         assert!(names.contains(&"rewind"));
         assert!(names.contains(&"review"));
 
-        let alias_names = command_suggestions_for_prefix("temp")
+        let alias_names = command_suggestions_for_prefix("conf")
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
-        assert_eq!(alias_names.first(), Some(&"temperature"));
+        assert_eq!(alias_names.first(), Some(&"settings"));
     }
 
     #[test]
@@ -665,46 +503,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_command_supports_runtime_operator_commands() {
-        assert_eq!(
-            parse_command("/mcp")
-                .expect("mcp command should parse")
-                .spec
-                .id,
-            CommandId::Mcp
-        );
-        assert_eq!(
-            parse_command("/lsp")
-                .expect("lsp command should parse")
-                .spec
-                .id,
-            CommandId::Lsp
-        );
-        assert_eq!(
-            parse_command("/skill search")
-                .expect("skills command should parse")
-                .spec
-                .id,
-            CommandId::Skills
-        );
-        assert_eq!(
-            parse_command("/operator")
-                .expect("runtime command should parse")
-                .spec
-                .id,
-            CommandId::Runtime
-        );
+    fn parse_command_drops_settings_subcommands_from_slash_surface() {
+        assert!(parse_command("/inspect mcp").is_none());
+        assert!(parse_command("/perm").is_none());
+        assert!(parse_command("/provider").is_none());
+        assert!(parse_command("/provider-config").is_none());
+        assert!(parse_command("/thinking high").is_none());
+        assert!(parse_command("/speed low").is_none());
+        assert!(parse_command("/verbosity high").is_none());
+        assert!(parse_command("/parallel-tool-calls on").is_none());
+        assert!(parse_command("/temperature 0.2").is_none());
+        assert!(parse_command("/max-output 1024").is_none());
+        assert!(parse_command("/system test").is_none());
+    }
+
+    #[test]
+    fn parse_command_supports_settings_command() {
+        let parsed = parse_command("/config retry").expect("settings alias should parse");
+        assert_eq!(parsed.spec.id, CommandId::Settings);
+        assert_eq!(parsed.args, "retry");
     }
 
     #[test]
     fn parse_command_supports_workflow_commands() {
-        assert_eq!(
-            parse_command("/cost")
-                .expect("cost command should parse")
-                .spec
-                .id,
-            CommandId::Cost
-        );
         assert_eq!(
             parse_command("/review auth flow")
                 .expect("review command should parse")
@@ -713,32 +534,11 @@ mod tests {
             CommandId::Review
         );
         assert_eq!(
-            parse_command("/perm")
-                .expect("permissions command should parse")
-                .spec
-                .id,
-            CommandId::Permissions
-        );
-        assert_eq!(
-            parse_command("/config")
-                .expect("config command should parse")
-                .spec
-                .id,
-            CommandId::Config
-        );
-        assert_eq!(
             parse_command("/wt")
                 .expect("worktree command should parse")
                 .spec
                 .id,
             CommandId::Worktree
-        );
-        assert_eq!(
-            parse_command("/repo")
-                .expect("git command should parse")
-                .spec
-                .id,
-            CommandId::Git
         );
         assert_eq!(
             parse_command("/commit ship it")
@@ -771,10 +571,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_command_supports_resume_session_picker() {
-        let parsed = parse_command("/recent").expect("resume alias should parse");
-        assert_eq!(parsed.spec.id, CommandId::Resume);
-        assert_eq!(parsed.args, "");
+    fn parse_command_drops_removed_session_aliases() {
+        assert!(parse_command("/resume").is_none());
+        assert!(parse_command("/recent").is_none());
+        assert!(parse_command("/search repo").is_none());
     }
 
     #[test]
@@ -796,5 +596,19 @@ mod tests {
         let parsed = parse_command("/sessions subtree").expect("sessions command should parse");
         assert_eq!(parsed.spec.id, CommandId::Sessions);
         assert_eq!(parsed.args, "subtree");
+    }
+
+    #[test]
+    fn parse_command_drops_removed_plural_and_direct_setting_commands() {
+        assert!(parse_command("/providers").is_none());
+        assert!(parse_command("/models openai").is_none());
+        assert!(parse_command("/provider").is_none());
+    }
+
+    #[test]
+    fn parse_command_supports_model_command() {
+        let parsed = parse_command("/model").expect("model command should parse");
+        assert_eq!(parsed.spec.id, CommandId::Model);
+        assert_eq!(parsed.args, "");
     }
 }

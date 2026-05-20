@@ -13,7 +13,7 @@ pub fn env_filter(
 }
 
 pub fn database_log_level(config: &TracingConfig) -> Result<LevelFilter, log::ParseLevelError> {
-    LevelFilter::from_str(config.database_level.trim())
+    LevelFilter::from_str(config.database.trim())
 }
 
 pub async fn connect_database(

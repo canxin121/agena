@@ -153,6 +153,22 @@ pub struct RuntimeAgentsResource {
     pub agents: Vec<RuntimeAgentResource>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuntimeAgentDefaultResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl RuntimeAgentDefaultResource {
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none() && self.adapter.is_none() && self.model.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeAgentResource {
     pub name: String,
@@ -170,8 +186,12 @@ pub struct RuntimeAgentResource {
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
     pub permission: AgentPermissionConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    #[serde(
+        default,
+        rename = "default",
+        skip_serializing_if = "RuntimeAgentDefaultResource::is_empty"
+    )]
+    pub default: RuntimeAgentDefaultResource,
     pub aliases: Vec<String>,
     pub scope: AgentScope,
     #[serde(skip_serializing_if = "Option::is_none")]

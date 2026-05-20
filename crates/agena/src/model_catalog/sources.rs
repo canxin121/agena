@@ -254,13 +254,12 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
             if model.thinking.is_some() {
                 supported_features.push(ModelCapabilityFeature::Reasoning);
             }
-            if let Some(parameters) = model.supported_parameters.as_ref() {
-                if parameters
+            if let Some(parameters) = model.supported_parameters.as_ref()
+                && parameters
                     .iter()
                     .any(|parameter| parameter.eq_ignore_ascii_case("temperature"))
-                {
-                    supported_features.push(ModelCapabilityFeature::Temperature);
-                }
+            {
+                supported_features.push(ModelCapabilityFeature::Temperature);
             }
 
             let definition = CatalogModelDefinition {
@@ -570,10 +569,11 @@ fn router_input_support(model: &RouterModel) -> (Vec<ModelInputModality>, Vec<Mo
         return (supported, unsupported);
     };
     for modality in modalities {
-        if let Some(mapped) = map_modality_name(modality) {
-            if mapped != ModelInputModality::Text && !supported.contains(&mapped) {
-                supported.push(mapped);
-            }
+        if let Some(mapped) = map_modality_name(modality)
+            && mapped != ModelInputModality::Text
+            && !supported.contains(&mapped)
+        {
+            supported.push(mapped);
         }
     }
     (supported, unsupported)
@@ -754,10 +754,11 @@ fn codex_input_support(input_modalities: Option<&[String]>) -> Vec<ModelInputMod
         return supported;
     };
     for modality in input_modalities {
-        if let Some(mapped) = map_modality_name(modality) {
-            if mapped != ModelInputModality::Text && !supported.contains(&mapped) {
-                supported.push(mapped);
-            }
+        if let Some(mapped) = map_modality_name(modality)
+            && mapped != ModelInputModality::Text
+            && !supported.contains(&mapped)
+        {
+            supported.push(mapped);
         }
     }
     supported
@@ -772,10 +773,11 @@ fn modalities_to_support(
         return (supported, unsupported);
     };
     for modality in &modalities.input {
-        if let Some(mapped) = map_modality_name(modality) {
-            if mapped != ModelInputModality::Text && !supported.contains(&mapped) {
-                supported.push(mapped);
-            }
+        if let Some(mapped) = map_modality_name(modality)
+            && mapped != ModelInputModality::Text
+            && !supported.contains(&mapped)
+        {
+            supported.push(mapped);
         }
     }
     (supported, unsupported)
@@ -796,9 +798,7 @@ fn models_dev_output_modalities(modalities: Option<&ModelsDevModalities>) -> Vec
 }
 
 fn models_dev_pricing(cost: Option<&ModelsDevCost>) -> Option<ModelPricing> {
-    let Some(cost) = cost else {
-        return None;
-    };
+    let cost = cost?;
     let mut pricing = ModelPricing {
         input_usd_per_million_tokens: pricing_value(cost.input.as_ref()),
         output_usd_per_million_tokens: pricing_value(cost.output.as_ref()),

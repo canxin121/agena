@@ -27,9 +27,9 @@ pub async fn init_git_repository(
 pub async fn get_vcs_diff_raw(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(state
+    state
         .service()
         .vcs_diff_raw(state.runtime())
         .await
-        .map_err(server_error_from_http)?)
+        .map_err(server_error_from_http)
 }

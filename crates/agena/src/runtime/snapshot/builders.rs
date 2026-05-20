@@ -288,7 +288,7 @@ pub(super) fn register_config_agents(
                 steps: config.steps,
                 allowed_tools: config.allowed_tools.clone(),
                 permission: config.permission.clone(),
-                model: config.model.clone(),
+                default: config.default.clone(),
                 aliases: config.aliases.clone(),
             },
             prompt: config.prompt.trim().to_string(),

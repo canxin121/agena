@@ -1,7 +1,8 @@
 use std::{
     cmp::{max, min},
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet, hash_map::DefaultHasher},
     env, fs,
+    hash::{Hash, Hasher},
     ops::Range,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -9,17 +10,18 @@ use std::{
 };
 
 use agena::{
+    config::get_json_path,
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, MessagePart, OperationPart, PartContent, ToolInvocation, UserInputReply,
-        UserInputReplyKind, UserInputRequest,
+        AttachmentKind, ExecutionStatus, MessagePart, MessageStatus, OperationPart, PartContent,
+        ToolInvocation, UserInputReply, UserInputReplyKind, UserInputRequest,
     },
     model::ModelRef,
     permission::{
         DecisionTraceStep, PermissionAction, PermissionMode, PermissionReplyKind,
         PermissionRequest, PermissionRiskLevel, PermissionScope, PolicySourceKind,
     },
-    provider::ProviderModel,
+    provider::{ProviderModel, auth::CredentialIssuer},
 };
 use agena_api::{
     commands::UpsertPermissionRuleParams,
@@ -43,6 +45,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     time::interval,
@@ -50,7 +53,10 @@ use tokio::{
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::backend::{Backend, ProviderConfigDraft, ProviderDraftAuthKind, SessionRefresh};
+use crate::backend::{
+    Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
+    ProviderDraftAdapterRule, ProviderDraftAuthKind, SessionRefresh,
+};
 use crate::clipboard::{
     normalize_pasted_path, paste_image_to_temp_png, pasted_image_format, set_clipboard_text,
 };
@@ -58,12 +64,14 @@ use crate::commands::{self, CommandId, CommandSpec};
 use crate::composer_queue::{ComposerQueue, QueuePriority, QueuedMessage};
 use crate::external_editor::{edit_text, open_path};
 use crate::external_pager::page_text;
-use crate::i18n::I18n;
+use crate::i18n::{I18n, SUPPORTED_LOCALES};
 use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
 use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::ui_text;
-use agena_api_server::local_api::{ModelCatalogEntryResource, ModelCatalogListResponse};
+use agena_api_server::local_api::{
+    ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse,
+};
 
 mod transcript_view;
 mod view;
@@ -91,6 +99,188 @@ const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
 const PROMPT_SUMMARY_TAG: &str = "prompt_summary";
 const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
 const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;
+const AWS_REGION_CHOICES: &[&str] = &[
+    "us-east-1",
+    "us-east-2",
+    "us-west-1",
+    "us-west-2",
+    "ca-central-1",
+    "sa-east-1",
+    "eu-west-1",
+    "eu-west-2",
+    "eu-west-3",
+    "eu-central-1",
+    "eu-central-2",
+    "eu-north-1",
+    "eu-south-1",
+    "eu-south-2",
+    "ap-south-1",
+    "ap-south-2",
+    "ap-east-1",
+    "ap-southeast-1",
+    "ap-southeast-2",
+    "ap-southeast-3",
+    "ap-southeast-4",
+    "ap-northeast-1",
+    "ap-northeast-2",
+    "ap-northeast-3",
+    "me-south-1",
+    "me-central-1",
+    "af-south-1",
+];
+
+const SETTINGS_FIELDS: [SettingsFieldSpec; 21] = [
+    SettingsFieldSpec {
+        path: "default.provider",
+        description: "default provider id",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        path: "default.adapter",
+        description: "default adapter for the default provider",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        path: "default.model",
+        description: "default configured model for the default provider adapter",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        path: "default.agent",
+        description: "default agent name",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        path: "ui.locale",
+        description: "ui locale",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        path: "telemetry.enabled",
+        description: "telemetry exporter enabled",
+        kind: SettingsFieldKind::Bool,
+    },
+    SettingsFieldSpec {
+        path: "telemetry.service_name",
+        description: "telemetry service name",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        path: "telemetry.otlp_endpoint",
+        description: "telemetry OTLP endpoint",
+        kind: SettingsFieldKind::String,
+    },
+    SettingsFieldSpec {
+        path: "runtime.provider_http.timeout_secs",
+        description: "provider HTTP timeout seconds",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.provider_http.connect_timeout_secs",
+        description: "provider HTTP connect timeout seconds",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.request_retry.max_retries",
+        description: "provider request retry count",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.request_retry.base_delay_ms",
+        description: "provider retry base delay ms",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.request_retry.max_delay_ms",
+        description: "provider retry max delay ms",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.reload.enabled",
+        description: "runtime config reloader enabled",
+        kind: SettingsFieldKind::Bool,
+    },
+    SettingsFieldSpec {
+        path: "runtime.reload.poll_interval_secs",
+        description: "runtime reload poll interval seconds",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.model_catalog.cache_max_age_secs",
+        description: "model catalog cache age seconds",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.session_cache.max_sessions",
+        description: "session cache max entries",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.session_cache.ttl_secs",
+        description: "session cache ttl seconds",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.session_cache.max_bytes",
+        description: "session cache max bytes",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "plugins.list.\"agena.memory\".options.project_instructions.enabled",
+        description: "project instructions memory enabled",
+        kind: SettingsFieldKind::Bool,
+    },
+    SettingsFieldSpec {
+        path: "plugins.list.\"agena.memory\".options.project_instructions.include_global",
+        description: "project instructions include global files",
+        kind: SettingsFieldKind::Bool,
+    },
+];
+
+const RUNTIME_SETTINGS: [RuntimeSettingSpec; 7] = [
+    RuntimeSettingSpec {
+        id: RuntimeSettingId::ThinkingMode,
+        label: "Thinking Mode",
+        description: "current-session thinking mode override",
+        kind: SettingsFieldKind::String,
+    },
+    RuntimeSettingSpec {
+        id: RuntimeSettingId::SpeedMode,
+        label: "Speed Mode",
+        description: "current-session speed mode override",
+        kind: SettingsFieldKind::String,
+    },
+    RuntimeSettingSpec {
+        id: RuntimeSettingId::Verbosity,
+        label: "Verbosity",
+        description: "current-session verbosity override",
+        kind: SettingsFieldKind::String,
+    },
+    RuntimeSettingSpec {
+        id: RuntimeSettingId::ParallelToolCalls,
+        label: "Parallel Tool Calls",
+        description: "current-session parallel tool calls override",
+        kind: SettingsFieldKind::Bool,
+    },
+    RuntimeSettingSpec {
+        id: RuntimeSettingId::Temperature,
+        label: "Temperature",
+        description: "current-session temperature override",
+        kind: SettingsFieldKind::Float,
+    },
+    RuntimeSettingSpec {
+        id: RuntimeSettingId::MaxOutput,
+        label: "Max Output Tokens",
+        description: "current-session max output token override",
+        kind: SettingsFieldKind::Integer,
+    },
+    RuntimeSettingSpec {
+        id: RuntimeSettingId::System,
+        label: "System Prompt",
+        description: "current-session system prompt override",
+        kind: SettingsFieldKind::String,
+    },
+];
 
 #[derive(Debug, Clone, Default)]
 pub struct LaunchOptions {
@@ -166,6 +356,7 @@ pub struct App {
     should_quit: bool,
     focus: Focus,
     overlay: Option<Overlay>,
+    overlay_stack: Vec<Overlay>,
     flash: Option<FlashMessage>,
     sessions: SessionListState,
     transcript: TranscriptState,
@@ -205,6 +396,9 @@ pub struct App {
     /// Last time the user pressed Esc inside the composer; used to detect
     /// a double-tap that clears the input.
     last_esc_at: Option<Instant>,
+    /// Last time the user pressed Ctrl+C; a second press within the window
+    /// exits the application.
+    last_ctrl_c_at: Option<Instant>,
     double_esc_window: Duration,
 }
 
@@ -308,12 +502,7 @@ enum AppMessage {
         session_id: i64,
         result: UiResult<Vec<MessageResource>>,
     },
-    ModelsLoaded {
-        purpose: ModelLoadPurpose,
-        provider_id: String,
-        result: UiResult<Vec<ProviderModel>>,
-    },
-    ProviderStudioCatalogLoaded {
+    ModelCatalogLoaded {
         query: String,
         offset: usize,
         result: UiResult<ModelCatalogListResponse>,
@@ -322,11 +511,18 @@ enum AppMessage {
         request_key: String,
         result: UiResult<ProviderAdapterModelsResponse>,
     },
+    ProviderStudioAuthCompleted {
+        request_key: String,
+        result: UiResult<crate::backend::ProviderDraftAuthActionResult>,
+    },
+    SessionModelChooserLoaded {
+        result: UiResult<Vec<SessionModelChoiceItem>>,
+    },
     ProviderStudioSaved {
         provider_id: String,
         result: UiResult<String>,
     },
-    ProviderStudioCatalogRefreshed {
+    ModelCatalogRefreshed {
         result: UiResult<()>,
     },
     ChildSessionsLoaded {
@@ -347,7 +543,7 @@ enum AppMessage {
     /// event in real time, with a hint about whether a refresh is needed.
     SessionEventArrived {
         session_id: i64,
-        triggers_refresh: bool,
+        live: LiveEvent,
     },
     /// Result of a `request_steer_input` call. `result` is `Ok` when the
     /// backend accepted the steer; `Err` when the turn was no longer
@@ -386,15 +582,21 @@ enum Overlay {
     Help,
     TranscriptSearch(LineInputOverlay),
     SessionRename(LineInputOverlay),
+    SettingsStudio(SettingsStudioOverlay),
+    SettingsValueEdit(SettingsValueEditOverlay),
+    RuntimeSettingEdit(RuntimeSettingEditOverlay),
+    Choice(ChoiceOverlay),
     PermissionRuleEdit(PermissionRuleEditOverlay),
     FileAttach(FileAttachOverlay),
     Permission(PermissionOverlay),
     UserInputReply(UserInputOverlay),
     Confirm(ConfirmOverlay),
     Picker(PickerOverlay),
+    SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
     PluginInspector(PluginInspectorOverlay),
     ProviderStudio(ProviderStudioOverlay),
+    ModelCatalogStudio(ModelCatalogStudioOverlay),
 }
 
 #[derive(Debug, Clone)]
@@ -402,6 +604,151 @@ struct LineInputOverlay {
     title: String,
     prompt: String,
     input: Editor,
+}
+
+#[derive(Debug, Clone)]
+struct SettingsStudioOverlay {
+    title: String,
+    footer: String,
+    sections: Vec<SettingsStudioSection>,
+    selected_section: usize,
+    selected_item: usize,
+    focus: SettingsStudioFocus,
+}
+
+#[derive(Debug, Clone)]
+struct SettingsStudioSection {
+    id: SettingsStudioSectionId,
+    label: String,
+    summary: String,
+    description: String,
+    items: Vec<SettingsStudioItem>,
+}
+
+#[derive(Debug, Clone)]
+struct SettingsStudioItem {
+    label: String,
+    value: String,
+    detail: String,
+    action: SettingsPickerAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsStudioFocus {
+    Navigation,
+    Items,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsStudioSectionId {
+    General,
+    Runtime,
+    Providers,
+    ModelCatalog,
+    Permissions,
+    Files,
+}
+
+#[derive(Debug, Clone)]
+struct SettingsValueEditOverlay {
+    title: String,
+    prompt: String,
+    input: Editor,
+    field: SettingsFieldSpec,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeSettingEditOverlay {
+    title: String,
+    prompt: String,
+    input: Editor,
+    field: RuntimeSettingSpec,
+}
+
+#[derive(Debug, Clone)]
+struct ChoiceOverlay {
+    title: String,
+    prompt: String,
+    footer: String,
+    empty_message: String,
+    input: Editor,
+    filter_query: String,
+    all_items: Vec<ChoiceItem>,
+    items: Vec<ChoiceItem>,
+    selected: usize,
+    allow_custom: bool,
+    allow_clear: bool,
+    action: ChoiceOverlayAction,
+}
+
+#[derive(Debug, Clone)]
+struct ChoiceItem {
+    label: String,
+    detail: String,
+    value: String,
+    search_text: String,
+}
+
+#[derive(Debug, Clone)]
+enum ChoiceOverlayAction {
+    SettingsField(SettingsFieldSpec),
+    RuntimeSetting(RuntimeSettingSpec),
+    ProviderStudioField(ProviderStudioField),
+}
+
+#[derive(Debug, Clone)]
+enum ChoiceRow {
+    Clear,
+    Custom(String),
+    Item(ChoiceItem),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SettingsFieldSpec {
+    path: &'static str,
+    description: &'static str,
+    kind: SettingsFieldKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SettingsFieldKind {
+    String,
+    Bool,
+    Integer,
+    Float,
+}
+
+#[derive(Debug, Clone)]
+enum SettingsPickerAction {
+    EditField(SettingsFieldSpec),
+    EditRuntimeSetting(RuntimeSettingSpec),
+    OpenProviderWorkbench,
+    OpenProviderWorkbenchFor(String),
+    OpenModelCatalogWorkbench,
+    OpenRuntimeProviderOverride,
+    OpenRuntimeModelOverride,
+    ClearRuntimeModelStack,
+    OpenPermissionRules,
+    OpenConfigFile,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RuntimeSettingSpec {
+    id: RuntimeSettingId,
+    label: &'static str,
+    description: &'static str,
+    kind: SettingsFieldKind,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RuntimeSettingId {
+    ThinkingMode,
+    SpeedMode,
+    Verbosity,
+    ParallelToolCalls,
+    Temperature,
+    MaxOutput,
+    System,
 }
 
 #[derive(Debug, Clone)]
@@ -539,27 +886,26 @@ struct PluginInspectorItem {
 struct ProviderStudioOverlay {
     title: String,
     footer: String,
+    show_provider_list: bool,
     providers: Vec<ProviderStudioProviderRow>,
     selected_provider: usize,
     focus: ProviderStudioFocus,
     selected_field: usize,
     draft: ProviderConfigDraft,
     adapter_models: Vec<ProviderAdapterModelsResource>,
+    configured_adapter_ids: BTreeSet<String>,
     adapter_candidate_ids: Vec<String>,
     selected_adapter: usize,
     selected_model: usize,
+    adapter_selection_touched: bool,
     selected_adapter_ids: BTreeSet<String>,
-    catalog_resolved_model_ids: BTreeSet<String>,
-    catalog_query: String,
-    catalog_items: Vec<ModelCatalogEntryResource>,
-    catalog_total: usize,
-    catalog_offset: usize,
-    catalog_limit: usize,
-    catalog_loading: bool,
-    selected_catalog: usize,
+    selected_model_keys: BTreeSet<String>,
+    catalog_matches: BTreeMap<String, ModelCatalogEntryResource>,
     listing_adapter_models: bool,
     saving: bool,
     pending_adapter_models_key: Option<String>,
+    pending_auth_key: Option<String>,
+    detail_page: Option<ProviderStudioDetailPage>,
     editor: Option<ProviderStudioEditor>,
 }
 
@@ -572,35 +918,84 @@ struct ProviderStudioProviderRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderStudioFocus {
-    Providers,
     Fields,
     Adapters,
     Models,
-    Catalog,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderStudioField {
     ProviderId,
+    AuthMode,
+    CredentialIssuer,
+    AuthStatus,
+    StartAuthAction,
+    ContinueAuthAction,
+    EditAuthDetailsAction,
     BaseUrl,
+    InstanceUrl,
     ApiKeyEnv,
     ApiKey,
+    RedirectUri,
+    CallbackUrl,
+    RefreshToken,
+    AccessToken,
+    ExpiresAtMs,
+    AccountId,
+    EnterpriseDomain,
+    Username,
+    DisplayName,
+    Email,
+    AvatarUrl,
+    Region,
+    Profile,
+    AccessKeyId,
+    SecretAccessKey,
+    SessionToken,
+    ServiceKeyEnv,
     DefaultAdapter,
     DefaultModel,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderStudioDetailPage {
+    title: String,
+    footer: String,
+    selected_field: usize,
 }
 
 #[derive(Debug, Clone)]
 struct ProviderStudioEditor {
     title: String,
     prompt: String,
+    footer: String,
+    multiline: bool,
     input: Editor,
     action: ProviderStudioEditorAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ProviderStudioEditorAction {
     Field(ProviderStudioField),
-    CatalogQuery,
+    ModelJson {
+        adapter_id: String,
+        model_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ModelCatalogStudioOverlay {
+    title: String,
+    footer: String,
+    query: String,
+    items: Vec<ModelCatalogEntryResource>,
+    summary: ModelCatalogResponse,
+    total: usize,
+    offset: usize,
+    limit: usize,
+    loading: bool,
+    selected: usize,
+    editor: Option<LineInputOverlay>,
 }
 
 #[derive(Debug, Clone)]
@@ -618,6 +1013,28 @@ struct PickerOverlay {
 }
 
 #[derive(Debug, Clone)]
+struct SessionModelChooserOverlay {
+    title: String,
+    prompt: String,
+    footer: String,
+    empty_message: String,
+    input: Editor,
+    loading: bool,
+    all_items: Vec<SessionModelChoiceItem>,
+    items: Vec<SessionModelChoiceItem>,
+    selected: usize,
+    page_size: usize,
+}
+
+#[derive(Debug, Clone)]
+struct SessionModelChoiceItem {
+    label: String,
+    detail: String,
+    search_text: String,
+    model: ModelRef,
+}
+
+#[derive(Debug, Clone)]
 struct PickerItem {
     label: String,
     detail: String,
@@ -629,7 +1046,6 @@ enum PickerValue {
     Command(&'static CommandSpec),
     RuntimeEntry(String),
     Provider(ProviderSummaryResource),
-    Model(ModelRef),
     Session(i64),
     Message(i64),
     PermissionRuleCreate,
@@ -640,32 +1056,16 @@ enum PickerValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderPickerPurpose {
     SetProvider,
-    ChooseModelProvider,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ModelLoadPurpose {
-    SetModel,
 }
 
 #[derive(Debug, Clone)]
 enum PickerKind {
     Commands,
     WorkspaceSessions,
-    Lineage {
-        session_id: i64,
-    },
-    RewindMessages {
-        session_id: i64,
-    },
+    Lineage { session_id: i64 },
+    RewindMessages { session_id: i64 },
     Providers(ProviderPickerPurpose),
-    Models {
-        provider_id: String,
-        purpose: ModelLoadPurpose,
-    },
-    ChildSessions {
-        parent_session_id: i64,
-    },
+    ChildSessions { parent_session_id: i64 },
     PermissionRules,
     Inspector,
 }
@@ -990,6 +1390,7 @@ impl App {
             should_quit: false,
             focus: Focus::Composer,
             overlay: None,
+            overlay_stack: Vec::new(),
             flash: None,
             sessions: SessionListState {
                 search_query: launch.initial_session_search.unwrap_or_default(),
@@ -1029,6 +1430,7 @@ impl App {
             plugin_theme,
             keybindings,
             last_esc_at: None,
+            last_ctrl_c_at: None,
             double_esc_window,
         };
         if let Some(draft) = app.draft_store.get(DraftSlot::NewSession).cloned() {
@@ -1157,9 +1559,21 @@ impl App {
         self.flush_input_buffers_if_due(Instant::now());
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
-            self.should_quit = true;
+            let now = Instant::now();
+            let double = self
+                .last_ctrl_c_at
+                .map(|prev| now.duration_since(prev) <= self.double_esc_window)
+                .unwrap_or(false);
+            if double {
+                self.should_quit = true;
+            } else {
+                self.last_ctrl_c_at = Some(now);
+                self.flash_warning(ui_text::t(&self.i18n, "flash-quit-confirm"));
+            }
             return;
         }
+
+        self.last_ctrl_c_at = None;
 
         if self.handle_overlay_key(key) {
             return;
@@ -1372,6 +1786,14 @@ impl App {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }
             Overlay::SessionRename(dialog) => self.handle_session_rename_overlay_key(key, dialog),
+            Overlay::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
+            Overlay::SettingsValueEdit(dialog) => {
+                self.handle_settings_value_edit_overlay_key(key, dialog)
+            }
+            Overlay::RuntimeSettingEdit(dialog) => {
+                self.handle_runtime_setting_edit_overlay_key(key, dialog)
+            }
+            Overlay::Choice(dialog) => self.handle_choice_overlay_key(key, dialog),
             Overlay::PermissionRuleEdit(dialog) => {
                 self.handle_permission_rule_edit_overlay_key(key, dialog)
             }
@@ -1380,15 +1802,27 @@ impl App {
             Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
             Overlay::Confirm(dialog) => self.handle_confirm_overlay_key(key, dialog),
             Overlay::Picker(dialog) => self.handle_picker_overlay_key(key, dialog),
+            Overlay::SessionModelChooser(dialog) => {
+                self.handle_session_model_chooser_overlay_key(key, dialog)
+            }
             Overlay::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),
             Overlay::PluginInspector(dialog) => {
                 self.handle_plugin_inspector_overlay_key(key, dialog)
             }
             Overlay::ProviderStudio(dialog) => self.handle_provider_studio_overlay_key(key, dialog),
+            Overlay::ModelCatalogStudio(dialog) => {
+                self.handle_model_catalog_studio_overlay_key(key, dialog)
+            }
         };
 
         if !close {
-            self.overlay = Some(overlay);
+            if self.overlay.is_none() {
+                self.overlay = Some(overlay);
+            }
+        } else if self.overlay.is_none()
+            && let Some(parent) = self.overlay_stack.pop()
+        {
+            self.overlay = Some(self.refresh_restored_overlay(parent));
         }
 
         true
@@ -1557,6 +1991,191 @@ impl App {
         }
     }
 
+    fn handle_settings_studio_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut SettingsStudioOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Char('r') => {
+                self.refresh_settings_studio_overlay(dialog);
+                false
+            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l')
+                if dialog.focus == SettingsStudioFocus::Navigation =>
+            {
+                dialog.focus = SettingsStudioFocus::Items;
+                false
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h')
+                if dialog.focus == SettingsStudioFocus::Items =>
+            {
+                dialog.focus = SettingsStudioFocus::Navigation;
+                false
+            }
+            KeyCode::PageUp => {
+                self.move_settings_studio_selection(dialog, -10);
+                false
+            }
+            KeyCode::PageDown => {
+                self.move_settings_studio_selection(dialog, 10);
+                false
+            }
+            KeyCode::Home => {
+                self.set_settings_studio_selection(dialog, 0);
+                false
+            }
+            KeyCode::End => {
+                self.set_settings_studio_selection(dialog, usize::MAX);
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.move_settings_studio_selection(dialog, -1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.move_settings_studio_selection(dialog, 1);
+                false
+            }
+            KeyCode::Enter => self.activate_settings_studio_selection(dialog),
+            _ => false,
+        }
+    }
+
+    fn handle_settings_value_edit_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut SettingsValueEditOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Enter => {
+                dialog.input.flush_all_pending_input();
+                let input = dialog.input.text().to_string();
+                match parse_settings_field_input(dialog.field, input.as_str()) {
+                    Ok(Some(value)) => match self
+                        .block_on_async(self.backend.set_config_setting(dialog.field.path, value))
+                    {
+                        Ok(_) => {
+                            self.flash_success(format!("updated {}", dialog.field.path));
+                            true
+                        }
+                        Err(error) => {
+                            self.flash_error(error);
+                            false
+                        }
+                    },
+                    Ok(None) => match self
+                        .block_on_async(self.backend.delete_config_setting(dialog.field.path))
+                    {
+                        Ok(_) => {
+                            self.flash_success(format!("cleared {}", dialog.field.path));
+                            true
+                        }
+                        Err(error) => {
+                            self.flash_error(error);
+                            false
+                        }
+                    },
+                    Err(error) => {
+                        self.flash_warning(error);
+                        false
+                    }
+                }
+            }
+            _ => {
+                dialog.input.handle_line_input_key(key);
+                false
+            }
+        }
+    }
+
+    fn handle_runtime_setting_edit_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut RuntimeSettingEditOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Enter => {
+                dialog.input.flush_all_pending_input();
+                let input = dialog.input.text().to_string();
+                match self
+                    .run_options
+                    .apply_runtime_setting_input(dialog.field, input.as_str())
+                {
+                    Ok(message) => {
+                        self.flash_success(message);
+                        true
+                    }
+                    Err(error) => {
+                        self.flash_warning(error);
+                        false
+                    }
+                }
+            }
+            _ => {
+                dialog.input.handle_line_input_key(key);
+                false
+            }
+        }
+    }
+
+    fn handle_choice_overlay_key(&mut self, key: KeyEvent, dialog: &mut ChoiceOverlay) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let row_count = Self::choice_overlay_rows(dialog).len();
+                if row_count > 0 {
+                    dialog.selected = min(dialog.selected + 1, row_count.saturating_sub(1));
+                }
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.selected = dialog.selected.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown => {
+                let row_count = Self::choice_overlay_rows(dialog).len();
+                if row_count > 0 {
+                    dialog.selected = min(dialog.selected + 10, row_count.saturating_sub(1));
+                }
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected = 0;
+                false
+            }
+            KeyCode::End => {
+                let row_count = Self::choice_overlay_rows(dialog).len();
+                if row_count > 0 {
+                    dialog.selected = row_count.saturating_sub(1);
+                }
+                false
+            }
+            KeyCode::Tab => {
+                if let Some(ChoiceRow::Item(item)) =
+                    Self::choice_overlay_rows(dialog).get(dialog.selected)
+                {
+                    dialog.input.set_text(item.value.clone());
+                    Self::sync_choice_overlay_query(dialog, true);
+                }
+                false
+            }
+            KeyCode::Enter => self.commit_choice_overlay(dialog),
+            _ => {
+                dialog.input.handle_line_input_key(key);
+                Self::sync_choice_overlay_query(dialog, true);
+                false
+            }
+        }
+    }
+
     fn handle_permission_rule_edit_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -1575,31 +2194,23 @@ impl App {
                 };
                 let label = permission_rule_draft_label(&draft);
                 let params = permission_rule_params_from_draft(&draft);
-
-                match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => {
-                        let result = match dialog.rule_id {
-                            Some(rule_id) => handle
-                                .block_on(self.backend.replace_permission_rule(rule_id, params)),
-                            None => handle.block_on(self.backend.create_permission_rule(params)),
-                        };
-                        match result {
-                            Ok(rule) => {
-                                self.flash_success(self.i18n.text_args(
-                                    "flash-permission-rule-saved",
-                                    &crate::fl_args!("name" => permission_rule_label(&rule)),
-                                ));
-                                self.open_permission_rule_picker(dialog.return_query.as_str());
-                                true
-                            }
-                            Err(error) => {
-                                self.flash_error(format!("{}: {}", label, error));
-                                false
-                            }
-                        }
+                let result = match dialog.rule_id {
+                    Some(rule_id) => {
+                        self.block_on_async(self.backend.replace_permission_rule(rule_id, params))
+                    }
+                    None => self.block_on_async(self.backend.create_permission_rule(params)),
+                };
+                match result {
+                    Ok(rule) => {
+                        self.flash_success(self.i18n.text_args(
+                            "flash-permission-rule-saved",
+                            &crate::fl_args!("name" => permission_rule_label(&rule)),
+                        ));
+                        self.open_permission_rule_picker(dialog.return_query.as_str());
+                        true
                     }
                     Err(error) => {
-                        self.flash_error(error.to_string());
+                        self.flash_error(format!("{}: {}", label, error));
                         false
                     }
                 }
@@ -1716,6 +2327,60 @@ impl App {
             _ => {
                 dialog.input.handle_line_input_key(key);
                 Self::refresh_picker_overlay(dialog);
+                false
+            }
+        }
+    }
+
+    fn handle_session_model_chooser_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut SessionModelChooserOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !dialog.items.is_empty() {
+                    dialog.selected =
+                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
+                }
+                false
+            }
+            KeyCode::Left | KeyCode::PageUp => {
+                dialog.selected = dialog.selected.saturating_sub(dialog.page_size.max(1));
+                false
+            }
+            KeyCode::Right | KeyCode::PageDown => {
+                if !dialog.items.is_empty() {
+                    dialog.selected = min(
+                        dialog.selected + dialog.page_size.max(1),
+                        dialog.items.len().saturating_sub(1),
+                    );
+                }
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected = 0;
+                false
+            }
+            KeyCode::End => {
+                dialog.selected = dialog.items.len().saturating_sub(1);
+                false
+            }
+            KeyCode::Enter => {
+                let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+                    return false;
+                };
+                self.apply_model_override(item.model);
+                true
+            }
+            _ => {
+                dialog.input.handle_line_input_key(key);
+                Self::refresh_session_model_chooser_overlay(dialog, false, None);
                 false
             }
         }
@@ -1864,25 +2529,57 @@ impl App {
         dialog: &mut ProviderStudioOverlay,
     ) -> bool {
         if let Some(editor) = dialog.editor.as_mut() {
-            return match key.code {
-                KeyCode::Esc => {
-                    dialog.editor = None;
-                    false
+            if matches!(key.code, KeyCode::Esc) {
+                dialog.editor = None;
+                return false;
+            }
+
+            if editor.multiline {
+                if matches!(key.code, KeyCode::Char('s'))
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    editor.input.flush_all_pending_input();
+                    let value = editor.input.text().trim();
+                    let parsed = if value.is_empty() {
+                        Ok(JsonValue::Object(Default::default()))
+                    } else {
+                        serde_json::from_str::<JsonValue>(value).map_err(|error| error.to_string())
+                    };
+                    match (&editor.action, parsed) {
+                        (
+                            ProviderStudioEditorAction::ModelJson {
+                                adapter_id,
+                                model_id,
+                            },
+                            Ok(model_value),
+                        ) => {
+                            dialog.saving = true;
+                            self.request_provider_studio_save_model_value(
+                                dialog.draft.clone(),
+                                adapter_id.clone(),
+                                model_id.clone(),
+                                model_value,
+                            );
+                            dialog.editor = None;
+                        }
+                        (_, Err(error)) => self.flash_error(format!("invalid model json: {error}")),
+                        _ => {}
+                    }
+                    return false;
                 }
+
+                editor.input.handle_multiline_input_key(key);
+                return false;
+            }
+
+            return match key.code {
                 KeyCode::Enter => {
                     editor.input.flush_all_pending_input();
                     let value = editor.input.text().trim().to_string();
-                    match editor.action {
-                        ProviderStudioEditorAction::Field(field) => {
-                            self.commit_provider_studio_field(dialog, field, value);
-                        }
-                        ProviderStudioEditorAction::CatalogQuery => {
-                            dialog.catalog_query = value.clone();
-                            dialog.catalog_offset = 0;
-                            dialog.selected_catalog = 0;
-                            dialog.editor = None;
-                            self.request_provider_studio_catalog_page(value, 0);
-                            dialog.catalog_loading = true;
+                    if let ProviderStudioEditorAction::Field(field) = editor.action {
+                        if let Err(error) = self.commit_provider_studio_field(dialog, field, value)
+                        {
+                            self.flash_error(error);
                             return false;
                         }
                     }
@@ -1896,36 +2593,34 @@ impl App {
             };
         }
 
+        if dialog.detail_page.is_some() {
+            return self.handle_provider_studio_detail_page_key(key, dialog);
+        }
+
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Tab => {
-                dialog.focus = dialog.focus.next();
+                dialog.focus = dialog.focus.next(dialog.show_provider_list);
                 false
             }
             KeyCode::BackTab => {
-                dialog.focus = dialog.focus.prev();
+                dialog.focus = dialog.focus.prev(dialog.show_provider_list);
                 false
             }
             KeyCode::Char('n') => {
                 self.load_provider_studio_draft(dialog, None, Some(String::new()));
                 false
             }
-            KeyCode::Char('/') => {
-                dialog.editor = Some(ProviderStudioEditor {
-                    title: ui_text::t(&self.i18n, "overlay-provider-studio-search-title"),
-                    prompt: ui_text::t(&self.i18n, "overlay-provider-studio-search-prompt"),
-                    input: Editor::from_text(dialog.catalog_query.clone()),
-                    action: ProviderStudioEditorAction::CatalogQuery,
-                });
+            KeyCode::Char('o') | KeyCode::Char('O') => {
+                self.request_provider_studio_start_auth(dialog);
+                false
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                self.request_provider_studio_continue_auth(dialog);
                 false
             }
             KeyCode::Char('r') => {
                 self.request_provider_studio_adapter_models(dialog);
-                false
-            }
-            KeyCode::Char('R') => {
-                dialog.catalog_loading = true;
-                self.request_provider_studio_catalog_refresh();
                 false
             }
             KeyCode::Char('s') | KeyCode::Char('S') => {
@@ -1933,7 +2628,7 @@ impl App {
                 self.request_provider_studio_save_draft(dialog.clone());
                 false
             }
-            KeyCode::Char('a') | KeyCode::Char('A') => {
+            KeyCode::Char('a') => {
                 if provider_studio_selected_adapter_models(dialog).is_none() {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
@@ -1943,6 +2638,26 @@ impl App {
                 }
                 dialog.saving = true;
                 self.request_provider_studio_save_selected_adapter(dialog.clone());
+                false
+            }
+            KeyCode::Char('A') if dialog.focus == ProviderStudioFocus::Adapters => {
+                Self::select_all_provider_studio_adapters(dialog);
+                false
+            }
+            KeyCode::Char('A') if dialog.focus == ProviderStudioFocus::Models => {
+                Self::select_all_provider_studio_models(dialog);
+                false
+            }
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if dialog.focus == ProviderStudioFocus::Adapters =>
+            {
+                Self::clear_provider_studio_selected_adapters(dialog);
+                false
+            }
+            KeyCode::Char('c') | KeyCode::Char('C')
+                if dialog.focus == ProviderStudioFocus::Models =>
+            {
+                Self::clear_provider_studio_selected_models(dialog);
                 false
             }
             KeyCode::Char('m') | KeyCode::Char('M') => {
@@ -1961,12 +2676,8 @@ impl App {
                 self.toggle_provider_studio_selected_adapter(dialog);
                 false
             }
-            KeyCode::Left | KeyCode::Char('h') if dialog.focus == ProviderStudioFocus::Catalog => {
-                self.request_provider_studio_catalog_previous_page(dialog);
-                false
-            }
-            KeyCode::Right | KeyCode::Char('l') if dialog.focus == ProviderStudioFocus::Catalog => {
-                self.request_provider_studio_catalog_next_page(dialog);
+            KeyCode::Char(' ') if dialog.focus == ProviderStudioFocus::Models => {
+                self.toggle_provider_studio_selected_model(dialog);
                 false
             }
             KeyCode::PageUp => {
@@ -2001,6 +2712,104 @@ impl App {
         }
     }
 
+    fn handle_model_catalog_studio_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut ModelCatalogStudioOverlay,
+    ) -> bool {
+        if let Some(editor) = dialog.editor.as_mut() {
+            return match key.code {
+                KeyCode::Esc => {
+                    dialog.editor = None;
+                    false
+                }
+                KeyCode::Enter => {
+                    editor.input.flush_all_pending_input();
+                    dialog.query = editor.input.text().trim().to_string();
+                    dialog.offset = 0;
+                    dialog.selected = 0;
+                    dialog.loading = true;
+                    dialog.editor = None;
+                    self.request_model_catalog_page(dialog.query.clone(), 0);
+                    false
+                }
+                _ => {
+                    editor.input.handle_line_input_key(key);
+                    false
+                }
+            };
+        }
+
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Char('/') => {
+                dialog.editor = Some(LineInputOverlay {
+                    title: ui_text::t(&self.i18n, "overlay-model-catalog-search-title"),
+                    prompt: ui_text::t(&self.i18n, "overlay-model-catalog-search-prompt"),
+                    input: Editor::from_text(dialog.query.clone()),
+                });
+                false
+            }
+            KeyCode::Char('R') => {
+                dialog.loading = true;
+                self.request_model_catalog_refresh();
+                false
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if dialog.offset == 0 {
+                    return false;
+                }
+                let offset = dialog.offset.saturating_sub(dialog.limit.max(1));
+                dialog.offset = offset;
+                dialog.selected = 0;
+                dialog.loading = true;
+                self.request_model_catalog_page(dialog.query.clone(), offset);
+                false
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if dialog.offset + dialog.items.len() >= dialog.total {
+                    return false;
+                }
+                dialog.offset += dialog.limit.max(1);
+                dialog.selected = 0;
+                dialog.loading = true;
+                self.request_model_catalog_page(dialog.query.clone(), dialog.offset);
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.selected = dialog.selected.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown => {
+                dialog.selected = min(
+                    dialog.selected.saturating_add(10),
+                    dialog.items.len().saturating_sub(1),
+                );
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected = 0;
+                false
+            }
+            KeyCode::End => {
+                dialog.selected = dialog.items.len().saturating_sub(1);
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dialog.selected = min(
+                    dialog.selected.saturating_add(1),
+                    dialog.items.len().saturating_sub(1),
+                );
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn handle_paste(&mut self, text: String) {
         let backend = self.backend.clone();
         if let Some(overlay) = &mut self.overlay {
@@ -2008,6 +2817,20 @@ impl App {
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
+                }
+                Overlay::SettingsStudio(_) => {}
+                Overlay::SettingsValueEdit(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                }
+                Overlay::RuntimeSettingEdit(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                }
+                Overlay::Choice(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::sync_choice_overlay_query(dialog, true);
                 }
                 Overlay::PermissionRuleEdit(dialog) => {
                     dialog.input.flush_all_pending_input();
@@ -2030,7 +2853,18 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_picker_overlay(dialog);
                 }
+                Overlay::SessionModelChooser(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::refresh_session_model_chooser_overlay(dialog, false, None);
+                }
                 Overlay::ProviderStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_all_pending_input();
+                        editor.input.insert_str(text.as_str());
+                    }
+                }
+                Overlay::ModelCatalogStudio(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
                         editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
@@ -2435,8 +3269,7 @@ impl App {
             .collect::<Vec<_>>();
 
         items.extend(
-            self.backend
-                .runtime_entry_rows()
+            self.runtime_entry_command_rows()
                 .into_iter()
                 .filter(|entry| runtime_entry_matches_slash_query(entry.label.as_str(), &query))
                 .map(|entry| {
@@ -2558,26 +3391,28 @@ impl App {
             AppMessage::ProvidersLoaded { purpose, result } => {
                 self.handle_providers_loaded(purpose, result)
             }
-            AppMessage::ModelsLoaded {
-                purpose,
-                provider_id,
-                result,
-            } => self.handle_models_loaded(purpose, provider_id, result),
-            AppMessage::ProviderStudioCatalogLoaded {
+            AppMessage::ModelCatalogLoaded {
                 query,
                 offset,
                 result,
-            } => self.handle_provider_studio_catalog_loaded(query, offset, result),
+            } => self.handle_model_catalog_loaded(query, offset, result),
             AppMessage::ProviderStudioAdapterModelsLoaded {
                 request_key,
                 result,
             } => self.handle_provider_studio_adapter_models_loaded(request_key, result),
+            AppMessage::ProviderStudioAuthCompleted {
+                request_key,
+                result,
+            } => self.handle_provider_studio_auth_completed(request_key, result),
+            AppMessage::SessionModelChooserLoaded { result } => {
+                self.handle_session_model_chooser_loaded(result)
+            }
             AppMessage::ProviderStudioSaved {
                 provider_id,
                 result,
             } => self.handle_provider_studio_saved(provider_id, result),
-            AppMessage::ProviderStudioCatalogRefreshed { result } => {
-                self.handle_provider_studio_catalog_refreshed(result)
+            AppMessage::ModelCatalogRefreshed { result } => {
+                self.handle_model_catalog_refreshed(result)
             }
             AppMessage::ChildSessionsLoaded {
                 parent_session_id,
@@ -2591,10 +3426,9 @@ impl App {
                 target,
                 result,
             } => self.handle_session_rewound(session_id, target, result),
-            AppMessage::SessionEventArrived {
-                session_id,
-                triggers_refresh,
-            } => self.handle_session_event_arrived(session_id, triggers_refresh),
+            AppMessage::SessionEventArrived { session_id, live } => {
+                self.handle_session_event_arrived(session_id, live)
+            }
             AppMessage::SteerSubmitted {
                 session_id,
                 draft,
@@ -3169,91 +4003,58 @@ impl App {
         self.overlay = Some(Overlay::Picker(dialog));
     }
 
-    fn handle_models_loaded(
+    fn handle_session_model_chooser_loaded(
         &mut self,
-        purpose: ModelLoadPurpose,
-        provider_id: String,
-        result: UiResult<Vec<ProviderModel>>,
+        result: UiResult<Vec<SessionModelChoiceItem>>,
     ) {
-        let Some(Overlay::Picker(mut dialog)) = self.overlay.take() else {
+        let Some(Overlay::SessionModelChooser(mut dialog)) = self.overlay.take() else {
             return;
         };
-        let PickerKind::Models {
-            provider_id: current_provider_id,
-            purpose: current_purpose,
-        } = &dialog.kind
-        else {
-            self.overlay = Some(Overlay::Picker(dialog));
-            return;
-        };
-        if *current_provider_id != provider_id || *current_purpose != purpose {
-            self.overlay = Some(Overlay::Picker(dialog));
-            return;
-        }
 
         dialog.loading = false;
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match result {
-            Ok(models) => {
-                dialog.all_items = models
-                    .into_iter()
-                    .map(|model| {
-                        let context_window = model
-                            .metadata
-                            .limits
-                            .context_window_tokens
-                            .map(|value| format!("ctx {value}"))
-                            .unwrap_or_else(|| "ctx ?".to_string());
-                        let display_name = model
-                            .display_name
-                            .clone()
-                            .unwrap_or_else(|| model.id.to_string());
-                        PickerItem {
-                            label: model.id.to_string(),
-                            detail: format!("{display_name} | {context_window}"),
-                            value: PickerValue::Model(model.reference()),
-                        }
-                    })
-                    .collect();
-                Self::refresh_picker_overlay(&mut dialog);
+            Ok(items) => {
+                dialog.all_items = items;
+                let current_model = self.current_session_model_ref();
+                Self::refresh_session_model_chooser_overlay(
+                    &mut dialog,
+                    true,
+                    current_model.as_ref(),
+                );
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::Picker(dialog));
+        self.overlay = Some(Overlay::SessionModelChooser(dialog));
     }
 
-    fn handle_provider_studio_catalog_loaded(
+    fn handle_model_catalog_loaded(
         &mut self,
         query: String,
         offset: usize,
         result: UiResult<ModelCatalogListResponse>,
     ) {
-        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+        let Some(Overlay::ModelCatalogStudio(mut dialog)) = self.overlay.take() else {
             return;
         };
-        if dialog.catalog_query != query || dialog.catalog_offset != offset {
-            self.overlay = Some(Overlay::ProviderStudio(dialog));
+        if dialog.query != query || dialog.offset != offset {
+            self.overlay = Some(Overlay::ModelCatalogStudio(dialog));
             return;
         }
 
-        dialog.catalog_loading = false;
+        dialog.loading = false;
         match result {
             Ok(response) => {
-                dialog
-                    .catalog_resolved_model_ids
-                    .extend(response.items.iter().map(|entry| entry.model_id.clone()));
-                dialog.catalog_items = response.items;
-                dialog.catalog_total = response.total;
-                dialog.catalog_offset = response.offset;
-                dialog.catalog_limit = response.limit;
-                dialog.selected_catalog = min(
-                    dialog.selected_catalog,
-                    dialog.catalog_items.len().saturating_sub(1),
-                );
+                dialog.items = response.items;
+                dialog.summary = response.summary;
+                dialog.total = response.total;
+                dialog.offset = response.offset;
+                dialog.limit = response.limit;
+                dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::ProviderStudio(dialog));
+        self.overlay = Some(Overlay::ModelCatalogStudio(dialog));
     }
 
     fn handle_provider_studio_adapter_models_loaded(
@@ -3273,23 +4074,51 @@ impl App {
         dialog.pending_adapter_models_key = None;
         match result {
             Ok(response) => {
+                let preserved_model_keys = dialog.selected_model_keys.clone();
                 dialog.adapter_models = response.adapters;
                 dialog.selected_adapter = min(
                     dialog.selected_adapter,
                     dialog.adapter_candidate_ids.len().saturating_sub(1),
                 );
                 dialog.selected_model = 0;
-                let lookup_ids = dialog
-                    .adapter_models
-                    .iter()
-                    .flat_map(|adapter| adapter.models.iter().map(|model| model.id.to_string()))
-                    .collect::<Vec<_>>();
-                dialog.catalog_resolved_model_ids.extend(
-                    self.backend
-                        .lookup_model_catalog_entries(&lookup_ids)
-                        .into_iter()
-                        .map(|entry| entry.model_id),
-                );
+                self.reload_provider_studio_catalog_matches(&mut dialog);
+                dialog.selected_model_keys = preserved_model_keys;
+                provider_studio_restore_model_selection(&mut dialog);
+                provider_studio_ensure_default_selection(&mut dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
+        self.overlay = Some(Overlay::ProviderStudio(dialog));
+    }
+
+    fn handle_provider_studio_auth_completed(
+        &mut self,
+        request_key: String,
+        result: UiResult<crate::backend::ProviderDraftAuthActionResult>,
+    ) {
+        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+            match result {
+                Ok(action) => self.flash_success(action.message),
+                Err(error) => self.flash_error(error),
+            }
+            return;
+        };
+        if dialog.pending_auth_key.as_deref() != Some(request_key.as_str()) {
+            self.overlay = Some(Overlay::ProviderStudio(dialog));
+            return;
+        }
+
+        dialog.pending_auth_key = None;
+        match result {
+            Ok(action) => {
+                dialog.draft = action.draft;
+                self.sync_provider_studio_shape(&mut dialog);
+                if let Some(text) = action.clipboard_text
+                    && let Err(error) = set_clipboard_text(text.as_str())
+                {
+                    self.flash_error(format!("clipboard copy failed: {error}"));
+                }
+                self.flash_success(action.message);
             }
             Err(error) => self.flash_error(error),
         }
@@ -3307,6 +4136,9 @@ impl App {
         dialog.saving = false;
         match result {
             Ok(message) => {
+                let preserved_selected_adapter_ids = dialog.selected_adapter_ids.clone();
+                let preserved_selected_adapter_id = provider_studio_selected_adapter_id(&dialog);
+                let preserved_selected_model_keys = dialog.selected_model_keys.clone();
                 self.flash_success(message);
                 let providers = self.backend.list_configured_providers();
                 dialog.providers = provider_studio_provider_rows(providers.as_slice());
@@ -3316,17 +4148,21 @@ impl App {
                     .position(|row| row.provider_id.as_deref() == Some(provider_id.as_str()))
                     .unwrap_or(0);
                 self.load_provider_studio_draft(&mut dialog, Some(provider_id.as_str()), None);
-                if dialog.draft.auth_kind.is_api() || dialog.draft.source_provider_id.is_some() {
-                    self.request_provider_studio_adapter_models(&mut dialog);
-                }
+                restore_provider_studio_adapter_selection(
+                    &mut dialog,
+                    &preserved_selected_adapter_ids,
+                    preserved_selected_adapter_id.as_deref(),
+                );
+                dialog.selected_model_keys = preserved_selected_model_keys;
+                provider_studio_ensure_default_selection(&mut dialog);
             }
             Err(error) => self.flash_error(error),
         }
         self.overlay = Some(Overlay::ProviderStudio(dialog));
     }
 
-    fn handle_provider_studio_catalog_refreshed(&mut self, result: UiResult<()>) {
-        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+    fn handle_model_catalog_refreshed(&mut self, result: UiResult<()>) {
+        let Some(Overlay::ModelCatalogStudio(mut dialog)) = self.overlay.take() else {
             match result {
                 Ok(()) => self.flash_success(ui_text::t(
                     &self.i18n,
@@ -3343,17 +4179,17 @@ impl App {
                     &self.i18n,
                     "flash-provider-studio-catalog-refreshed",
                 ));
-                dialog.catalog_loading = true;
-                dialog.catalog_offset = 0;
-                dialog.selected_catalog = 0;
-                self.request_provider_studio_catalog_page(dialog.catalog_query.clone(), 0);
+                dialog.loading = true;
+                dialog.offset = 0;
+                dialog.selected = 0;
+                self.request_model_catalog_page(dialog.query.clone(), 0);
             }
             Err(error) => {
-                dialog.catalog_loading = false;
+                dialog.loading = false;
                 self.flash_error(error);
             }
         }
-        self.overlay = Some(Overlay::ProviderStudio(dialog));
+        self.overlay = Some(Overlay::ModelCatalogStudio(dialog));
     }
 
     fn handle_child_sessions_loaded(
@@ -3558,22 +4394,6 @@ impl App {
                 .await
                 .map_err(|error| error.to_string());
             let _ = tx.send(AppMessage::RewindMessagesLoaded { session_id, result });
-        });
-    }
-
-    fn request_models(&mut self, provider_id: String, purpose: ModelLoadPurpose) {
-        let backend = self.backend.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = backend
-                .list_provider_models(provider_id.as_str())
-                .await
-                .map_err(|error| error.to_string());
-            let _ = tx.send(AppMessage::ModelsLoaded {
-                purpose,
-                provider_id,
-                result,
-            });
         });
     }
 
@@ -3890,10 +4710,7 @@ impl App {
         let handle = tokio::spawn(async move {
             while let Some(live) = rx.recv().await {
                 if tx
-                    .send(AppMessage::SessionEventArrived {
-                        session_id,
-                        triggers_refresh: live.triggers_refresh,
-                    })
+                    .send(AppMessage::SessionEventArrived { session_id, live })
                     .is_err()
                 {
                     break;
@@ -3903,15 +4720,22 @@ impl App {
         self.active_subscription = Some(handle);
     }
 
-    fn handle_session_event_arrived(&mut self, session_id: i64, triggers_refresh: bool) {
+    fn handle_session_event_arrived(&mut self, session_id: i64, live: LiveEvent) {
         // Ignore events for sessions the user has already navigated away
         // from. The forwarder is normally aborted in that case but a few
         // in-flight messages may still land.
         if self.transcript.session_id != Some(session_id) {
             return;
         }
-        if triggers_refresh {
-            self.request_refresh(session_id, false);
+        let refresh_needed_from_event = live.event.as_ref().is_some_and(|event| {
+            self.transcript.apply_live_event(
+                event,
+                self.layout.transcript_body.width,
+                self.layout.transcript_body.height,
+            )
+        });
+        if live.force_refresh || live.triggers_refresh || refresh_needed_from_event {
+            self.request_refresh(session_id, live.force_refresh);
         }
     }
 
@@ -4255,6 +5079,804 @@ impl App {
         self.overlay = Some(Overlay::PluginInspector(dialog));
     }
 
+    fn open_settings_studio(&mut self, query: &str) {
+        match self.build_settings_studio_overlay(None, None, SettingsStudioFocus::Navigation) {
+            Ok(mut dialog) => {
+                self.select_settings_studio_query(&mut dialog, query);
+                self.overlay_stack.clear();
+                self.overlay = Some(Overlay::SettingsStudio(dialog));
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn build_settings_studio_overlay(
+        &self,
+        preferred_section: Option<SettingsStudioSectionId>,
+        preferred_item_label: Option<&str>,
+        focus: SettingsStudioFocus,
+    ) -> UiResult<SettingsStudioOverlay> {
+        let sources = self
+            .backend
+            .config_json_sources()
+            .map_err(|error| error.to_string())?;
+        let configured_providers = self.backend.list_configured_providers();
+        let permission_rule_count = self
+            .block_on_async(self.backend.list_permission_rules())
+            .map(|rules| rules.len())
+            .unwrap_or_default();
+        let model_catalog = self
+            .backend
+            .list_model_catalog_entries("", 0, 1)
+            .map_err(|error| error.to_string())?;
+
+        let general_items = settings_studio_general_items(&sources);
+        let runtime_items = settings_studio_runtime_items(&self.run_options);
+        let provider_items = settings_studio_provider_items(&configured_providers);
+        let model_catalog_items = settings_studio_model_catalog_items(&model_catalog);
+        let file_items = settings_studio_file_items(&sources);
+        let mut sections = vec![
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::General,
+                label: "General".to_string(),
+                summary: format!("{} agena.toml fields", general_items.len()),
+                description:
+                    "Persistent agena.toml settings. Enter edits the selected field and writes the file override."
+                        .to_string(),
+                items: general_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::Runtime,
+                label: "Runtime".to_string(),
+                summary: "Session-scoped provider, model, and generation overrides".to_string(),
+                description:
+                    "These settings affect the current session only. Provider and model actions open the existing pickers."
+                        .to_string(),
+                items: runtime_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::Providers,
+                label: "Providers".to_string(),
+                summary: format!(
+                    "{} configured provider{}",
+                    configured_providers.len(),
+                    if configured_providers.len() == 1 { "" } else { "s" }
+                ),
+                description:
+                    "Saved providers, auth modes, adapter discovery, and per-model configuration. Enter opens the provider studio."
+                        .to_string(),
+                items: provider_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::ModelCatalog,
+                label: "Model Catalog".to_string(),
+                summary: format!(
+                    "{} entries · {} official · {} custom",
+                    model_catalog.summary.entry_count,
+                    model_catalog.summary.official_entry_count,
+                    model_catalog.summary.custom_entry_count
+                ),
+                description:
+                    "Browse the resolved model catalog, inspect entry metadata, and refresh the local cache."
+                        .to_string(),
+                items: model_catalog_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::Permissions,
+                label: "Permissions".to_string(),
+                summary: format!("{permission_rule_count} persisted permission rule(s)"),
+                description:
+                    "Permission policies are managed in the existing rules workbench. Enter opens it and Esc returns here."
+                        .to_string(),
+                items: vec![SettingsStudioItem {
+                    label: "Manage Permission Rules".to_string(),
+                    value: permission_rule_count.to_string(),
+                    detail:
+                        "Create, inspect, edit, or revoke persisted permission rules."
+                            .to_string(),
+                    action: SettingsPickerAction::OpenPermissionRules,
+                }],
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::Files,
+                label: "Files".to_string(),
+                summary: "Open raw configuration files".to_string(),
+                description:
+                    "Direct file access when visual editing is not enough."
+                        .to_string(),
+                items: file_items,
+            },
+        ];
+
+        let selected_section = preferred_section
+            .and_then(|target| sections.iter().position(|section| section.id == target))
+            .unwrap_or(0);
+        let mut selected_item = preferred_item_label
+            .and_then(|label| {
+                sections
+                    .get(selected_section)
+                    .and_then(|section| section.items.iter().position(|item| item.label == label))
+            })
+            .unwrap_or(0);
+        if sections
+            .get(selected_section)
+            .is_none_or(|section| section.items.is_empty())
+        {
+            selected_item = 0;
+        } else {
+            selected_item = min(
+                selected_item,
+                sections[selected_section].items.len().saturating_sub(1),
+            );
+        }
+
+        Ok(SettingsStudioOverlay {
+            title: "Configuration".to_string(),
+            footer:
+                "Left/Right switch pane | Up/Down move | Enter edit/open | r refresh | Esc close"
+                    .to_string(),
+            sections: std::mem::take(&mut sections),
+            selected_section,
+            selected_item,
+            focus,
+        })
+    }
+
+    fn refresh_settings_studio_overlay(&mut self, dialog: &mut SettingsStudioOverlay) {
+        let preferred_section = dialog
+            .sections
+            .get(dialog.selected_section)
+            .map(|section| section.id);
+        let preferred_item = dialog
+            .sections
+            .get(dialog.selected_section)
+            .and_then(|section| section.items.get(dialog.selected_item))
+            .map(|item| item.label.as_str());
+        match self.build_settings_studio_overlay(preferred_section, preferred_item, dialog.focus) {
+            Ok(updated) => *dialog = updated,
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn select_settings_studio_query(&self, dialog: &mut SettingsStudioOverlay, query: &str) {
+        let query = query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        for (section_index, section) in dialog.sections.iter().enumerate() {
+            for (item_index, item) in section.items.iter().enumerate() {
+                if section.label.to_ascii_lowercase().contains(query.as_str())
+                    || section
+                        .summary
+                        .to_ascii_lowercase()
+                        .contains(query.as_str())
+                    || section
+                        .description
+                        .to_ascii_lowercase()
+                        .contains(query.as_str())
+                    || item.label.to_ascii_lowercase().contains(query.as_str())
+                    || item.value.to_ascii_lowercase().contains(query.as_str())
+                    || item.detail.to_ascii_lowercase().contains(query.as_str())
+                {
+                    dialog.selected_section = section_index;
+                    dialog.selected_item = item_index;
+                    dialog.focus = SettingsStudioFocus::Items;
+                    return;
+                }
+            }
+        }
+    }
+
+    fn set_settings_studio_selection(&mut self, dialog: &mut SettingsStudioOverlay, target: usize) {
+        match dialog.focus {
+            SettingsStudioFocus::Navigation => {
+                dialog.selected_section = min(target, dialog.sections.len().saturating_sub(1));
+                dialog.selected_item = min(
+                    dialog.selected_item,
+                    dialog
+                        .sections
+                        .get(dialog.selected_section)
+                        .map(|section| section.items.len().saturating_sub(1))
+                        .unwrap_or_default(),
+                );
+            }
+            SettingsStudioFocus::Items => {
+                let max_index = dialog
+                    .sections
+                    .get(dialog.selected_section)
+                    .map(|section| section.items.len().saturating_sub(1))
+                    .unwrap_or_default();
+                dialog.selected_item = min(target, max_index);
+            }
+        }
+    }
+
+    fn move_settings_studio_selection(&mut self, dialog: &mut SettingsStudioOverlay, delta: isize) {
+        let current = match dialog.focus {
+            SettingsStudioFocus::Navigation => dialog.selected_section,
+            SettingsStudioFocus::Items => dialog.selected_item,
+        };
+        let next = if delta.is_negative() {
+            current.saturating_sub(delta.unsigned_abs())
+        } else {
+            current.saturating_add(delta as usize)
+        };
+        self.set_settings_studio_selection(dialog, next);
+    }
+
+    fn activate_settings_studio_selection(&mut self, dialog: &mut SettingsStudioOverlay) -> bool {
+        if dialog.focus == SettingsStudioFocus::Navigation {
+            dialog.focus = SettingsStudioFocus::Items;
+            return false;
+        }
+        let Some(item) = dialog
+            .sections
+            .get(dialog.selected_section)
+            .and_then(|section| section.items.get(dialog.selected_item))
+            .cloned()
+        else {
+            return false;
+        };
+        match item.action {
+            SettingsPickerAction::EditField(field) => {
+                self.overlay_stack
+                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.open_settings_field_editor(field, "");
+                true
+            }
+            SettingsPickerAction::EditRuntimeSetting(field) => {
+                self.overlay_stack
+                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.open_runtime_setting_editor(field, "");
+                true
+            }
+            SettingsPickerAction::OpenProviderWorkbench => {
+                self.overlay_stack
+                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.open_provider_studio(None);
+                true
+            }
+            SettingsPickerAction::OpenProviderWorkbenchFor(provider_id) => {
+                self.overlay_stack
+                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.open_provider_studio(Some(provider_id.as_str()));
+                true
+            }
+            SettingsPickerAction::OpenModelCatalogWorkbench => {
+                self.overlay_stack
+                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.open_model_catalog_studio();
+                true
+            }
+            SettingsPickerAction::OpenRuntimeProviderOverride => {
+                self.overlay_stack
+                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.open_provider_picker(ProviderPickerPurpose::SetProvider);
+                true
+            }
+            SettingsPickerAction::OpenRuntimeModelOverride => {
+                self.overlay_stack
+                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.open_session_model_chooser();
+                true
+            }
+            SettingsPickerAction::ClearRuntimeModelStack => {
+                self.clear_provider_model_overrides();
+                self.flash_success("cleared provider/model runtime override stack");
+                self.refresh_settings_studio_overlay(dialog);
+                false
+            }
+            SettingsPickerAction::OpenPermissionRules => {
+                self.overlay_stack
+                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.open_permission_rule_picker("");
+                true
+            }
+            SettingsPickerAction::OpenConfigFile => {
+                self.open_runtime_config_in_editor();
+                false
+            }
+        }
+    }
+
+    fn refresh_restored_overlay(&self, overlay: Overlay) -> Overlay {
+        match overlay {
+            Overlay::SettingsStudio(dialog) => self
+                .build_settings_studio_overlay(
+                    dialog
+                        .sections
+                        .get(dialog.selected_section)
+                        .map(|section| section.id),
+                    dialog
+                        .sections
+                        .get(dialog.selected_section)
+                        .and_then(|section| section.items.get(dialog.selected_item))
+                        .map(|item| item.label.as_str()),
+                    dialog.focus,
+                )
+                .map(Overlay::SettingsStudio)
+                .unwrap_or(Overlay::SettingsStudio(dialog)),
+            other => other,
+        }
+    }
+
+    fn open_choice_overlay(&mut self, mut dialog: ChoiceOverlay) {
+        Self::refresh_choice_overlay(&mut dialog);
+        dialog.selected = Self::preferred_choice_overlay_selection(&dialog);
+        self.overlay = Some(Overlay::Choice(dialog));
+    }
+
+    fn refresh_choice_overlay(dialog: &mut ChoiceOverlay) {
+        let search = dialog.filter_query.trim().to_lowercase();
+        dialog.items = dialog
+            .all_items
+            .iter()
+            .filter(|item| search.is_empty() || item.search_text.contains(search.as_str()))
+            .cloned()
+            .collect();
+        let row_count = Self::choice_overlay_rows(dialog).len();
+        if row_count == 0 {
+            dialog.selected = 0;
+        } else {
+            dialog.selected = min(dialog.selected, row_count.saturating_sub(1));
+        }
+    }
+
+    fn sync_choice_overlay_query(dialog: &mut ChoiceOverlay, prefer_input_value: bool) {
+        let next_query = dialog.input.text().to_string();
+        let changed = dialog.filter_query != next_query;
+        dialog.filter_query = next_query;
+        Self::refresh_choice_overlay(dialog);
+        if prefer_input_value && changed {
+            dialog.selected = Self::preferred_choice_overlay_selection(dialog);
+        }
+    }
+
+    fn choice_overlay_rows(dialog: &ChoiceOverlay) -> Vec<ChoiceRow> {
+        let mut rows = Vec::new();
+        if dialog.allow_clear {
+            rows.push(ChoiceRow::Clear);
+        }
+        let trimmed = dialog.input.text().trim();
+        if dialog.allow_custom && !trimmed.is_empty() {
+            rows.push(ChoiceRow::Custom(trimmed.to_string()));
+        }
+        rows.extend(dialog.items.iter().cloned().map(ChoiceRow::Item));
+        rows
+    }
+
+    fn preferred_choice_overlay_selection(dialog: &ChoiceOverlay) -> usize {
+        let trimmed = dialog.input.text().trim();
+        if trimmed.is_empty() {
+            return 0;
+        }
+
+        let clear_offset = usize::from(dialog.allow_clear);
+        if dialog.allow_custom {
+            if let Some(index) = dialog.items.iter().position(|item| {
+                item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
+            }) {
+                return clear_offset + usize::from(dialog.allow_custom) + index;
+            }
+            return clear_offset;
+        }
+
+        if let Some(index) = dialog.items.iter().position(|item| {
+            item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
+        }) {
+            return clear_offset + index;
+        }
+
+        0
+    }
+
+    fn commit_choice_overlay(&mut self, dialog: &mut ChoiceOverlay) -> bool {
+        let rows = Self::choice_overlay_rows(dialog);
+        let Some(selection) = rows.get(dialog.selected).cloned() else {
+            return false;
+        };
+        match dialog.action.clone() {
+            ChoiceOverlayAction::SettingsField(field) => {
+                let input = match selection {
+                    ChoiceRow::Clear => String::new(),
+                    ChoiceRow::Custom(value) => value,
+                    ChoiceRow::Item(item) => item.value,
+                };
+                match parse_settings_field_input(field, input.as_str()) {
+                    Ok(Some(value)) => match self
+                        .block_on_async(self.backend.set_config_setting(field.path, value))
+                    {
+                        Ok(_) => {
+                            self.flash_success(format!("updated {}", field.path));
+                            true
+                        }
+                        Err(error) => {
+                            self.flash_error(error);
+                            false
+                        }
+                    },
+                    Ok(None) => {
+                        match self.block_on_async(self.backend.delete_config_setting(field.path)) {
+                            Ok(_) => {
+                                self.flash_success(format!("cleared {}", field.path));
+                                true
+                            }
+                            Err(error) => {
+                                self.flash_error(error);
+                                false
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        self.flash_warning(error);
+                        false
+                    }
+                }
+            }
+            ChoiceOverlayAction::RuntimeSetting(field) => {
+                let input = match selection {
+                    ChoiceRow::Clear => String::new(),
+                    ChoiceRow::Custom(value) => value,
+                    ChoiceRow::Item(item) => item.value,
+                };
+                match self
+                    .run_options
+                    .apply_runtime_setting_input(field, input.as_str())
+                {
+                    Ok(message) => {
+                        self.flash_success(message);
+                        true
+                    }
+                    Err(error) => {
+                        self.flash_warning(error);
+                        false
+                    }
+                }
+            }
+            ChoiceOverlayAction::ProviderStudioField(field) => {
+                let value = match selection {
+                    ChoiceRow::Clear => String::new(),
+                    ChoiceRow::Custom(value) => value,
+                    ChoiceRow::Item(item) => item.value,
+                };
+                let Some(Overlay::ProviderStudio(mut parent)) = self.overlay_stack.pop() else {
+                    self.flash_error("provider studio context was lost");
+                    return true;
+                };
+                match self.commit_provider_studio_field(&mut parent, field, value) {
+                    Ok(()) => {
+                        self.overlay = Some(Overlay::ProviderStudio(parent));
+                        true
+                    }
+                    Err(error) => {
+                        self.flash_error(error);
+                        self.overlay_stack.push(Overlay::ProviderStudio(parent));
+                        false
+                    }
+                }
+            }
+        }
+    }
+
+    fn open_settings_field_editor(&mut self, field: SettingsFieldSpec, _return_query: &str) {
+        let sources = match self.backend.config_json_sources() {
+            Ok(sources) => sources,
+            Err(error) => {
+                self.flash_error(error.to_string());
+                return;
+            }
+        };
+        let file_value = get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
+        let effective_value =
+            get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
+        let prefill = if !file_value.is_null() {
+            file_value.clone()
+        } else {
+            JsonValue::Null
+        };
+        if let Some(all_items) = self.settings_field_choice_items(field) {
+            self.open_choice_overlay(ChoiceOverlay {
+                title: format!("Edit {}", field.path),
+                prompt: settings_value_edit_prompt(field, &file_value, &effective_value),
+                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
+                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
+                input: Editor::from_text(setting_value_input_text(&prefill)),
+                filter_query: String::new(),
+                all_items,
+                items: Vec::new(),
+                selected: 0,
+                allow_custom: true,
+                allow_clear: true,
+                action: ChoiceOverlayAction::SettingsField(field),
+            });
+            return;
+        }
+        self.overlay = Some(Overlay::SettingsValueEdit(SettingsValueEditOverlay {
+            title: format!("Edit {}", field.path),
+            prompt: settings_value_edit_prompt(field, &file_value, &effective_value),
+            input: Editor::from_text(setting_value_input_text(&prefill)),
+            field,
+        }));
+    }
+
+    fn open_runtime_setting_editor(&mut self, field: RuntimeSettingSpec, _return_query: &str) {
+        let current_summary = self.run_options.runtime_setting_summary(field);
+        if let Some(all_items) = self.runtime_setting_choice_items(field) {
+            self.open_choice_overlay(ChoiceOverlay {
+                title: format!("Edit {}", field.label),
+                prompt: runtime_setting_edit_prompt(field, current_summary.as_str()),
+                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
+                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
+                input: Editor::from_text(self.run_options.runtime_setting_input_text(field)),
+                filter_query: String::new(),
+                all_items,
+                items: Vec::new(),
+                selected: 0,
+                allow_custom: true,
+                allow_clear: true,
+                action: ChoiceOverlayAction::RuntimeSetting(field),
+            });
+            return;
+        }
+        self.overlay = Some(Overlay::RuntimeSettingEdit(RuntimeSettingEditOverlay {
+            title: format!("Edit {}", field.label),
+            prompt: runtime_setting_edit_prompt(field, current_summary.as_str()),
+            input: Editor::from_text(self.run_options.runtime_setting_input_text(field)),
+            field,
+        }));
+    }
+
+    fn settings_field_choice_items(&self, field: SettingsFieldSpec) -> Option<Vec<ChoiceItem>> {
+        match field.path {
+            "default.provider" => Some(
+                self.backend
+                    .list_providers()
+                    .into_iter()
+                    .map(|provider| {
+                        choice_item(
+                            provider.provider_id,
+                            format!(
+                                "default {}/{}",
+                                provider.default_adapter.as_deref().unwrap_or("adapter"),
+                                provider.default_model
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
+            "default.adapter" => Some(self.default_adapter_choice_items()),
+            "default.model" => Some(self.default_model_choice_items()),
+            "default.agent" => Some(
+                self.backend
+                    .list_agent_names()
+                    .into_iter()
+                    .map(|agent| choice_item(agent, "registered agent profile"))
+                    .collect(),
+            ),
+            "ui.locale" => Some(
+                SUPPORTED_LOCALES
+                    .iter()
+                    .map(|(code, detail)| choice_item(*code, *detail))
+                    .collect(),
+            ),
+            _ if matches!(field.kind, SettingsFieldKind::Bool) => {
+                Some(boolean_choice_items("write a boolean override"))
+            }
+            _ => None,
+        }
+    }
+
+    fn runtime_setting_choice_items(
+        &mut self,
+        field: RuntimeSettingSpec,
+    ) -> Option<Vec<ChoiceItem>> {
+        match field.id {
+            RuntimeSettingId::ThinkingMode => match self
+                .backend
+                .runtime_thinking_mode_rows(&self.run_options.to_request())
+            {
+                Ok(rows) => Some(inspector_rows_to_choice_items(rows)),
+                Err(error) => {
+                    self.flash_warning(error.to_string());
+                    Some(Vec::new())
+                }
+            },
+            RuntimeSettingId::SpeedMode => match self
+                .backend
+                .runtime_speed_mode_rows(&self.run_options.to_request())
+            {
+                Ok(rows) => Some(inspector_rows_to_choice_items(rows)),
+                Err(error) => {
+                    self.flash_warning(error.to_string());
+                    Some(Vec::new())
+                }
+            },
+            RuntimeSettingId::Verbosity => match self
+                .backend
+                .runtime_verbosity_values(&self.run_options.to_request())
+            {
+                Ok(values) => Some(
+                    values
+                        .into_iter()
+                        .map(|value| choice_item(value, "supported by the current model"))
+                        .collect(),
+                ),
+                Err(error) => {
+                    self.flash_warning(error.to_string());
+                    Some(Vec::new())
+                }
+            },
+            RuntimeSettingId::ParallelToolCalls => {
+                Some(boolean_choice_items("apply a parallel-tool-calls override"))
+            }
+            RuntimeSettingId::Temperature
+            | RuntimeSettingId::MaxOutput
+            | RuntimeSettingId::System => None,
+        }
+    }
+
+    fn default_model_choice_items(&self) -> Vec<ChoiceItem> {
+        dedupe_choice_items(
+            self.backend
+                .default_model_options()
+                .into_iter()
+                .map(|model| {
+                    let adapter_id = model
+                        .adapter_id
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "adapter".to_owned());
+                    let mut detail_parts = vec![format!(
+                        "configured on {}/{}",
+                        model.provider_id, adapter_id
+                    )];
+                    if let Some(display_name) = model
+                        .display_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        detail_parts.push(display_name.to_owned());
+                    }
+                    choice_item(model.id.to_string(), detail_parts.join(" · "))
+                })
+                .collect(),
+        )
+    }
+
+    fn default_adapter_choice_items(&self) -> Vec<ChoiceItem> {
+        self.backend
+            .default_adapter_options()
+            .into_iter()
+            .map(|adapter| {
+                let model_label = if adapter.configured_model_count == 1 {
+                    "configured model"
+                } else {
+                    "configured models"
+                };
+                choice_item(
+                    adapter.adapter_id,
+                    format!(
+                        "enabled on default provider · {} {}",
+                        adapter.configured_model_count, model_label
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    fn provider_studio_field_choice_items(
+        &self,
+        dialog: &ProviderStudioOverlay,
+        field: ProviderStudioField,
+    ) -> Option<Vec<ChoiceItem>> {
+        match field {
+            ProviderStudioField::AuthMode => Some(vec![
+                choice_item("none", "disable provider auth metadata"),
+                choice_item("api", "API key or endpoint-based provider auth"),
+                choice_item(
+                    "gitlab_api",
+                    "GitLab token auth routed through openai or anthropic",
+                ),
+                choice_item(
+                    "credential",
+                    "credential-backed auth resolved from a local issuer",
+                ),
+                choice_item("bedrock_sigv4", "AWS Bedrock SigV4 signing"),
+            ]),
+            ProviderStudioField::CredentialIssuer => Some(vec![
+                choice_item("openai_chatgpt", "OpenAI ChatGPT credentials"),
+                choice_item("github_copilot", "GitHub Copilot credentials"),
+                choice_item("gitlab", "GitLab OAuth credentials"),
+                choice_item("google_adc", "Google Application Default Credentials"),
+                choice_item("sap_ai_core", "SAP AI Core service key auth"),
+                choice_item("atomgit", "AtomGit credentials"),
+            ]),
+            ProviderStudioField::InstanceUrl => Some(vec![choice_item(
+                "https://gitlab.com",
+                "GitLab.com browser OAuth endpoint",
+            )]),
+            ProviderStudioField::RedirectUri => Some(vec![
+                choice_item(
+                    "http://127.0.0.1:1455/callback",
+                    "localhost callback URL for copy/paste OAuth redirects",
+                ),
+                choice_item(
+                    "http://127.0.0.1:1455/auth/callback",
+                    "localhost callback URL that matches the Studio web route",
+                ),
+            ]),
+            ProviderStudioField::Region => Some(
+                AWS_REGION_CHOICES
+                    .iter()
+                    .map(|region| choice_item(*region, "AWS region"))
+                    .collect(),
+            ),
+            ProviderStudioField::Profile => {
+                Some(provider_studio_profile_choice_items(&self.backend))
+            }
+            ProviderStudioField::ApiKeyEnv => {
+                Some(provider_studio_api_key_env_choice_items(dialog))
+            }
+            ProviderStudioField::ServiceKeyEnv => Some(vec![choice_item(
+                "AICORE_SERVICE_KEY",
+                "default SAP AI Core service key env var",
+            )]),
+            ProviderStudioField::DefaultAdapter => Some(
+                dialog
+                    .adapter_candidate_ids
+                    .iter()
+                    .map(|adapter_id| {
+                        let detail = provider_studio_adapter_rule(dialog, adapter_id.as_str())
+                            .map(|rule| {
+                                let mut parts = vec![rule.detail.to_owned()];
+                                if dialog.configured_adapter_ids.contains(adapter_id) {
+                                    parts.push("configured".to_owned());
+                                }
+                                parts.join(" · ")
+                            })
+                            .unwrap_or_else(|| {
+                                if dialog.configured_adapter_ids.contains(adapter_id) {
+                                    "configured on disk; not part of the current auth contract"
+                                        .to_owned()
+                                } else {
+                                    "not supported by the current auth contract".to_owned()
+                                }
+                            });
+                        choice_item(adapter_id.clone(), detail)
+                    })
+                    .collect(),
+            ),
+            ProviderStudioField::DefaultModel => {
+                Some(provider_studio_default_model_choice_items(dialog))
+            }
+            _ => None,
+        }
+    }
+
+    fn open_runtime_config_in_editor(&mut self) {
+        let path = self.backend.config_path();
+        if !path.exists() {
+            if let Some(parent) = path.parent()
+                && let Err(error) = fs::create_dir_all(parent)
+            {
+                self.flash_error(format!(
+                    "failed to prepare config directory {}: {error}",
+                    parent.display()
+                ));
+                return;
+            }
+            if let Err(error) = fs::write(&path, "") {
+                self.flash_error(format!(
+                    "failed to create config file {}: {error}",
+                    path.display()
+                ));
+                return;
+            }
+        }
+        self.pending_ui_action = Some(UiAction::OpenPath { path });
+    }
+
     fn open_inspector_picker(
         &mut self,
         title: String,
@@ -4286,37 +5908,34 @@ impl App {
     }
 
     fn open_permission_rule_picker(&mut self, query: &str) {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => match handle.block_on(self.backend.list_permission_rules()) {
-                Ok(rules) => {
-                    let mut all_items = vec![PickerItem {
-                        label: ui_text::t(&self.i18n, "permission-rule-create-label"),
-                        detail: ui_text::t(&self.i18n, "permission-rule-create-detail"),
-                        value: PickerValue::PermissionRuleCreate,
-                    }];
-                    all_items.extend(rules.into_iter().map(|rule| PickerItem {
-                        label: permission_rule_label(&rule),
-                        detail: permission_rule_detail(&rule),
-                        value: PickerValue::PermissionRule(rule),
-                    }));
-                    let mut overlay = PickerOverlay {
-                        title: ui_text::t(&self.i18n, "overlay-permission-rules-title"),
-                        prompt: ui_text::t(&self.i18n, "overlay-permission-rules-prompt"),
-                        empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                        footer: ui_text::t(&self.i18n, "overlay-permission-rules-footer"),
-                        input: Editor::from_text(query.to_string()),
-                        all_items,
-                        items: Vec::new(),
-                        selected: 0,
-                        loading: false,
-                        kind: PickerKind::PermissionRules,
-                    };
-                    Self::refresh_picker_overlay(&mut overlay);
-                    self.overlay = Some(Overlay::Picker(overlay));
-                }
-                Err(error) => self.flash_error(error.to_string()),
-            },
-            Err(error) => self.flash_error(error.to_string()),
+        match self.block_on_async(self.backend.list_permission_rules()) {
+            Ok(rules) => {
+                let mut all_items = vec![PickerItem {
+                    label: ui_text::t(&self.i18n, "permission-rule-create-label"),
+                    detail: ui_text::t(&self.i18n, "permission-rule-create-detail"),
+                    value: PickerValue::PermissionRuleCreate,
+                }];
+                all_items.extend(rules.into_iter().map(|rule| PickerItem {
+                    label: permission_rule_label(&rule),
+                    detail: permission_rule_detail(&rule),
+                    value: PickerValue::PermissionRule(rule),
+                }));
+                let mut overlay = PickerOverlay {
+                    title: ui_text::t(&self.i18n, "overlay-permission-rules-title"),
+                    prompt: ui_text::t(&self.i18n, "overlay-permission-rules-prompt"),
+                    empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
+                    footer: ui_text::t(&self.i18n, "overlay-permission-rules-footer"),
+                    input: Editor::from_text(query.to_string()),
+                    all_items,
+                    items: Vec::new(),
+                    selected: 0,
+                    loading: false,
+                    kind: PickerKind::PermissionRules,
+                };
+                Self::refresh_picker_overlay(&mut overlay);
+                self.overlay = Some(Overlay::Picker(overlay));
+            }
+            Err(error) => self.flash_error(error),
         }
     }
 
@@ -4401,8 +6020,7 @@ impl App {
             })
             .collect::<Vec<_>>();
         all_items.extend(
-            self.backend
-                .runtime_entry_rows()
+            self.runtime_entry_command_rows()
                 .into_iter()
                 .map(|entry| PickerItem {
                     label: format!("/{}", entry.label),
@@ -4424,6 +6042,14 @@ impl App {
         };
         Self::refresh_picker_overlay(&mut overlay);
         self.overlay = Some(Overlay::Picker(overlay));
+    }
+
+    fn runtime_entry_command_rows(&self) -> Vec<crate::backend::InspectorRow> {
+        self.backend
+            .runtime_entry_rows()
+            .into_iter()
+            .filter(|entry| commands::find_command(entry.label.as_str()).is_none())
+            .collect()
     }
 
     fn open_resume_session_picker(&mut self) {
@@ -4499,17 +6125,9 @@ impl App {
     }
 
     fn open_provider_picker(&mut self, purpose: ProviderPickerPurpose) {
-        let title_key = match purpose {
-            ProviderPickerPurpose::SetProvider => "overlay-providers-title",
-            ProviderPickerPurpose::ChooseModelProvider => "overlay-model-providers-title",
-        };
-        let prompt_key = match purpose {
-            ProviderPickerPurpose::SetProvider => "overlay-providers-prompt",
-            ProviderPickerPurpose::ChooseModelProvider => "overlay-model-providers-prompt",
-        };
         self.overlay = Some(Overlay::Picker(PickerOverlay {
-            title: ui_text::t(&self.i18n, title_key),
-            prompt: ui_text::t(&self.i18n, prompt_key),
+            title: ui_text::t(&self.i18n, "overlay-providers-title"),
+            prompt: ui_text::t(&self.i18n, "overlay-providers-prompt"),
             empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
             footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
             input: Editor::default(),
@@ -4522,31 +6140,21 @@ impl App {
         self.request_providers(purpose);
     }
 
-    fn open_model_picker(&mut self, provider_id: String) {
-        let title = self.i18n.text_args(
-            "overlay-models-title",
-            &crate::fl_args!("provider" => provider_id.clone()),
-        );
-        let prompt = self.i18n.text_args(
-            "overlay-models-prompt",
-            &crate::fl_args!("provider" => provider_id.clone()),
-        );
-        self.overlay = Some(Overlay::Picker(PickerOverlay {
-            title,
-            prompt,
+    fn open_session_model_chooser(&mut self) {
+        self.overlay = Some(Overlay::SessionModelChooser(SessionModelChooserOverlay {
+            title: "Session Model".to_string(),
+            prompt: "Search provider, adapter, or model".to_string(),
+            footer: "Type filter | Up/Down move | Left/Right page | Enter select | Esc close"
+                .to_string(),
             empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
             input: Editor::default(),
+            loading: true,
             all_items: Vec::new(),
             items: Vec::new(),
             selected: 0,
-            loading: true,
-            kind: PickerKind::Models {
-                provider_id: provider_id.clone(),
-                purpose: ModelLoadPurpose::SetModel,
-            },
+            page_size: 18,
         }));
-        self.request_models(provider_id, ModelLoadPurpose::SetModel);
+        self.request_session_model_chooser_items();
     }
 
     fn open_provider_studio(&mut self, initial_provider: Option<&str>) {
@@ -4571,6 +6179,7 @@ impl App {
         let mut overlay = ProviderStudioOverlay {
             title: ui_text::t(&self.i18n, "overlay-provider-studio-title"),
             footer: ui_text::t(&self.i18n, "overlay-provider-studio-footer"),
+            show_provider_list: false,
             providers: provider_rows,
             selected_provider,
             focus: ProviderStudioFocus::Fields,
@@ -4578,32 +6187,43 @@ impl App {
             draft: self
                 .backend
                 .provider_config_draft(None)
-                .unwrap_or_else(|_| ProviderConfigDraft {
-                    source_provider_id: None,
-                    provider_id: String::new(),
-                    auth_kind: ProviderDraftAuthKind::Api,
-                    base_url: String::new(),
-                    api_key_env: String::new(),
-                    api_key: String::new(),
-                    default_adapter: "openai".to_owned(),
-                    default_model: String::new(),
+                .unwrap_or_else(|_| {
+                    let mut draft = ProviderConfigDraft {
+                        source_provider_id: None,
+                        provider_id: String::new(),
+                        auth_kind: ProviderDraftAuthKind::Unset,
+                        base_url: String::new(),
+                        instance_url: String::new(),
+                        api_key_env: String::new(),
+                        api_key: String::new(),
+                        credential_issuer: String::new(),
+                        region: String::new(),
+                        profile: String::new(),
+                        access_key_id: String::new(),
+                        secret_access_key: String::new(),
+                        session_token: String::new(),
+                        service_key_env: String::new(),
+                        credential_drafts: Default::default(),
+                        default_adapter: String::new(),
+                        default_model: String::new(),
+                    };
+                    draft.normalize_shape();
+                    draft
                 }),
             adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::new(),
             adapter_candidate_ids: Vec::new(),
             selected_adapter: 0,
             selected_model: 0,
+            adapter_selection_touched: false,
             selected_adapter_ids: BTreeSet::new(),
-            catalog_resolved_model_ids: BTreeSet::new(),
-            catalog_query: String::new(),
-            catalog_items: Vec::new(),
-            catalog_total: 0,
-            catalog_offset: 0,
-            catalog_limit: 50,
-            catalog_loading: true,
-            selected_catalog: 0,
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
             listing_adapter_models: false,
             saving: false,
             pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
             editor: None,
         };
         let selected_id = overlay
@@ -4612,7 +6232,6 @@ impl App {
             .and_then(|row| row.provider_id.clone());
         self.load_provider_studio_draft(&mut overlay, selected_id.as_deref(), draft_prefill);
         self.overlay = Some(Overlay::ProviderStudio(overlay));
-        self.request_provider_studio_catalog_page(String::new(), 0);
     }
 
     fn load_provider_studio_draft(
@@ -4630,7 +6249,8 @@ impl App {
                 }
                 dialog.draft = draft;
                 dialog.selected_field = 0;
-                dialog.adapter_models.clear();
+                dialog.adapter_models =
+                    self.backend.configured_provider_adapter_models(provider_id);
                 let configured_adapter_ids = provider_id
                     .and_then(|id| {
                         self.backend
@@ -4643,29 +6263,80 @@ impl App {
                             .adapters
                             .into_iter()
                             .map(|adapter| adapter.adapter_id)
-                            .collect()
+                            .collect::<BTreeSet<_>>()
                     })
                     .unwrap_or_default();
-                dialog.adapter_candidate_ids =
-                    provider_studio_candidate_adapter_ids(&dialog.draft, configured_adapter_ids);
+                dialog.configured_adapter_ids = configured_adapter_ids.clone();
                 dialog.selected_adapter = 0;
                 dialog.selected_model = 0;
                 dialog.pending_adapter_models_key = None;
+                dialog.pending_auth_key = None;
+                dialog.detail_page = None;
                 dialog.listing_adapter_models = false;
-                dialog.selected_adapter_ids.clear();
+                dialog.adapter_selection_touched = provider_id.is_some();
+                dialog.selected_adapter_ids = configured_adapter_ids;
+                dialog.selected_model_keys = self
+                    .backend
+                    .configured_provider_model_routes(provider_id)
+                    .into_iter()
+                    .map(|(adapter_id, model_id)| {
+                        provider_studio_model_key(adapter_id.as_str(), model_id.as_str())
+                    })
+                    .collect();
+                dialog.catalog_matches.clear();
+                self.reload_provider_studio_catalog_matches(dialog);
+                self.sync_provider_studio_shape(dialog);
+                if let Some(index) = dialog
+                    .adapter_candidate_ids
+                    .iter()
+                    .position(|candidate| candidate == dialog.draft.default_adapter.trim())
+                {
+                    dialog.selected_adapter = index;
+                } else if let Some(first_selected) = dialog
+                    .adapter_candidate_ids
+                    .iter()
+                    .position(|candidate| dialog.selected_adapter_ids.contains(candidate.as_str()))
+                {
+                    dialog.selected_adapter = first_selected;
+                }
             }
             Err(error) => self.flash_error(error.to_string()),
         }
     }
 
-    fn request_provider_studio_catalog_page(&mut self, query: String, offset: usize) {
+    fn open_model_catalog_studio(&mut self) {
+        let dialog = ModelCatalogStudioOverlay {
+            title: "Model Catalog".to_string(),
+            footer: ui_text::t(&self.i18n, "overlay-model-catalog-footer"),
+            query: String::new(),
+            items: Vec::new(),
+            summary: ModelCatalogResponse {
+                last_refresh_at: None,
+                last_successful_source: None,
+                last_error: None,
+                entry_count: 0,
+                official_entry_count: 0,
+                custom_entry_count: 0,
+            },
+            total: 0,
+            offset: 0,
+            limit: 50,
+            loading: true,
+            selected: 0,
+            editor: None,
+        };
+        self.request_model_catalog_page(String::new(), 0);
+        self.overlay = Some(Overlay::ModelCatalogStudio(dialog.clone()));
+    }
+
+    fn request_model_catalog_page(&mut self, query: String, offset: usize) {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
                 .list_model_catalog_entries(query.as_str(), offset, 50)
                 .map_err(|error| error.to_string());
-            let _ = tx.send(AppMessage::ProviderStudioCatalogLoaded {
+            let _ = tx.send(AppMessage::ModelCatalogLoaded {
                 query,
                 offset,
                 result,
@@ -4673,7 +6344,7 @@ impl App {
         });
     }
 
-    fn request_provider_studio_catalog_refresh(&mut self) {
+    fn request_model_catalog_refresh(&mut self) {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -4681,38 +6352,54 @@ impl App {
                 .refresh_model_catalog()
                 .await
                 .map_err(|error| error.to_string());
-            let _ = tx.send(AppMessage::ProviderStudioCatalogRefreshed { result });
+            let _ = tx.send(AppMessage::ModelCatalogRefreshed { result });
         });
     }
 
     fn request_provider_studio_adapter_models(&mut self, dialog: &mut ProviderStudioOverlay) {
-        if dialog.selected_adapter_ids.is_empty() {
-            self.flash_error(
-                "listing adapter models requires at least one explicit adapter selection",
-            );
+        let adapter_ids = provider_studio_request_adapter_ids(dialog);
+        if adapter_ids.is_empty() {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-adapter-required",
+            ));
+            return;
+        }
+        if !provider_studio_can_request_adapter_models(dialog) {
+            self.flash_warning(format!(
+                "live model listing is unavailable for auth {}",
+                dialog.draft.auth_kind.label()
+            ));
             return;
         }
 
-        let request_key = provider_studio_request_key(
-            &dialog.draft,
-            &dialog
-                .selected_adapter_ids
+        if dialog.draft.auth_kind.supports_draft_model_listing() {
+            let unsupported = adapter_ids
                 .iter()
+                .filter(|adapter_id| {
+                    provider_studio_adapter_rule(dialog, adapter_id.as_str())
+                        .map(|rule| !rule.supports_draft_model_listing)
+                        .unwrap_or(true)
+                })
                 .cloned()
-                .collect::<Vec<_>>(),
-        );
+                .collect::<Vec<_>>();
+            if !unsupported.is_empty() {
+                self.flash_error(format!(
+                    "Draft model listing only supports live HTTP adapters. Unsupported: {}",
+                    unsupported.join(", ")
+                ));
+                return;
+            }
+        }
+
+        let request_key = provider_studio_request_key(&dialog.draft, &adapter_ids);
         dialog.pending_adapter_models_key = Some(request_key.clone());
         dialog.listing_adapter_models = true;
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let draft = dialog.draft.clone();
-        let adapter_ids = dialog
-            .selected_adapter_ids
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
         tokio::spawn(async move {
-            let result = if draft.auth_kind.is_api() {
+            let result = if draft.auth_kind.supports_draft_model_listing() {
                 backend
                     .list_draft_provider_adapter_models(&draft, &adapter_ids)
                     .await
@@ -4724,7 +6411,7 @@ impl App {
                     .map_err(|error| error.to_string())
             } else {
                 Err(format!(
-                    "listing adapter models requires api auth or an existing saved provider; current auth is {}",
+                    "listing adapter models requires api/gitlab_api auth or an existing saved provider; current auth is {}",
                     draft.auth_kind.label()
                 ))
             };
@@ -4735,19 +6422,103 @@ impl App {
         });
     }
 
+    fn request_provider_studio_start_auth(&mut self, dialog: &mut ProviderStudioOverlay) {
+        let request_key = provider_studio_auth_request_key(&dialog.draft, "start");
+        dialog.pending_auth_key = Some(request_key.clone());
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        let draft = dialog.draft.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .start_provider_draft_auth(draft)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::ProviderStudioAuthCompleted {
+                request_key,
+                result,
+            });
+        });
+    }
+
+    fn request_provider_studio_continue_auth(&mut self, dialog: &mut ProviderStudioOverlay) {
+        let request_key = provider_studio_auth_request_key(&dialog.draft, "continue");
+        dialog.pending_auth_key = Some(request_key.clone());
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        let draft = dialog.draft.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .continue_provider_draft_auth(draft)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::ProviderStudioAuthCompleted {
+                request_key,
+                result,
+            });
+        });
+    }
+
+    fn request_session_model_chooser_items(&mut self) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = async {
+                let providers = backend.list_providers();
+                let mut items = Vec::new();
+                for provider in providers {
+                    let default_adapter = provider.default_adapter.clone();
+                    let provider_id = provider.provider_id.clone();
+                    let models = backend
+                        .list_provider_models(provider_id.as_str())
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    for model in models {
+                        items.push(session_model_choice_item(
+                            provider_id.as_str(),
+                            default_adapter.as_deref(),
+                            model,
+                        ));
+                    }
+                }
+                items.sort_by(|left, right| {
+                    (
+                        left.model.provider_id.to_string(),
+                        left.model
+                            .adapter_id
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .unwrap_or_default(),
+                        left.model.model_id.to_string(),
+                    )
+                        .cmp(&(
+                            right.model.provider_id.to_string(),
+                            right
+                                .model
+                                .adapter_id
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .unwrap_or_default(),
+                            right.model.model_id.to_string(),
+                        ))
+                });
+                Ok(items)
+            }
+            .await;
+            let _ = tx.send(AppMessage::SessionModelChooserLoaded { result });
+        });
+    }
+
     fn request_provider_studio_save_draft(&mut self, dialog: ProviderStudioOverlay) {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
+        let adapter_ids = provider_studio_request_adapter_ids(&dialog);
         tokio::spawn(async move {
             let result = backend
                 .save_provider_draft(
                     dialog.draft.clone(),
                     dialog.adapter_models.as_slice(),
-                    &dialog
-                        .selected_adapter_ids
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>(),
+                    &adapter_ids,
+                    &dialog.selected_model_keys,
                 )
                 .await
                 .map_err(|error| error.to_string());
@@ -4759,7 +6530,7 @@ impl App {
     }
 
     fn request_provider_studio_save_selected_adapter(&mut self, dialog: ProviderStudioOverlay) {
-        let Some(adapter_models) = provider_studio_selected_adapter_models(&dialog).cloned() else {
+        let Some(adapter_models) = provider_studio_selected_adapter_models_for_save(&dialog) else {
             self.flash_warning(ui_text::t(
                 &self.i18n,
                 "flash-provider-studio-adapter-required",
@@ -4810,6 +6581,33 @@ impl App {
         });
     }
 
+    fn request_provider_studio_save_model_value(
+        &mut self,
+        draft: ProviderConfigDraft,
+        adapter_id: String,
+        model_id: String,
+        model_value: JsonValue,
+    ) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .save_provider_model_value(
+                    draft.clone(),
+                    adapter_id.as_str(),
+                    model_id.as_str(),
+                    model_value,
+                    false,
+                )
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::ProviderStudioSaved {
+                provider_id: draft.provider_id.clone(),
+                result,
+            });
+        });
+    }
+
     fn move_provider_studio_selection(&mut self, dialog: &mut ProviderStudioOverlay, delta: isize) {
         let current = self.current_provider_studio_selection(dialog);
         let next = if delta.is_negative() {
@@ -4822,20 +6620,13 @@ impl App {
 
     fn set_provider_studio_selection(&mut self, dialog: &mut ProviderStudioOverlay, target: usize) {
         match dialog.focus {
-            ProviderStudioFocus::Providers => {
-                let next = min(target, dialog.providers.len().saturating_sub(1));
-                if next != dialog.selected_provider {
-                    dialog.selected_provider = next;
-                    let provider_id = dialog
-                        .providers
-                        .get(next)
-                        .and_then(|row| row.provider_id.clone());
-                    self.load_provider_studio_draft(dialog, provider_id.as_deref(), None);
-                }
-            }
             ProviderStudioFocus::Fields => {
-                dialog.selected_field =
-                    min(target, ProviderStudioField::ALL.len().saturating_sub(1));
+                dialog.selected_field = min(
+                    target,
+                    provider_studio_visible_fields(dialog)
+                        .len()
+                        .saturating_sub(1),
+                );
             }
             ProviderStudioFocus::Adapters => {
                 dialog.selected_adapter =
@@ -4853,36 +6644,164 @@ impl App {
                     .unwrap_or_default();
                 dialog.selected_model = min(target, max_index);
             }
-            ProviderStudioFocus::Catalog => {
-                dialog.selected_catalog = min(target, dialog.catalog_items.len().saturating_sub(1));
-            }
         }
     }
 
     fn current_provider_studio_selection(&self, dialog: &ProviderStudioOverlay) -> usize {
         match dialog.focus {
-            ProviderStudioFocus::Providers => dialog.selected_provider,
             ProviderStudioFocus::Fields => dialog.selected_field,
             ProviderStudioFocus::Adapters => dialog.selected_adapter,
             ProviderStudioFocus::Models => dialog.selected_model,
-            ProviderStudioFocus::Catalog => dialog.selected_catalog,
+        }
+    }
+
+    fn open_provider_studio_detail_page(&mut self, dialog: &mut ProviderStudioOverlay) {
+        if provider_studio_detail_fields(dialog).is_empty() {
+            self.flash_warning("no auth details are available for the current auth mode");
+            return;
+        }
+        dialog.detail_page = Some(ProviderStudioDetailPage {
+            title: ui_text::t(&self.i18n, "overlay-provider-studio-detail"),
+            footer: ui_text::t(&self.i18n, "overlay-provider-studio-detail-footer"),
+            selected_field: 0,
+        });
+    }
+
+    fn activate_provider_studio_field_editor(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        field: ProviderStudioField,
+    ) {
+        if !provider_studio_field_editable(dialog, field) {
+            return;
+        }
+        if let Some(all_items) = self.provider_studio_field_choice_items(dialog, field) {
+            self.overlay_stack
+                .push(Overlay::ProviderStudio(dialog.clone()));
+            self.open_choice_overlay(ChoiceOverlay {
+                title: ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
+                prompt: provider_studio_field_prompt(&self.i18n, field),
+                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
+                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
+                input: Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
+                filter_query: String::new(),
+                all_items,
+                items: Vec::new(),
+                selected: 0,
+                allow_custom: true,
+                allow_clear: provider_studio_field_allows_clear(field),
+                action: ChoiceOverlayAction::ProviderStudioField(field),
+            });
+            return;
+        }
+        dialog.editor = Some(ProviderStudioEditor {
+            title: ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
+            prompt: provider_studio_field_prompt(&self.i18n, field),
+            footer: ui_text::t(&self.i18n, "overlay-provider-studio-edit-footer"),
+            multiline: false,
+            input: Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
+            action: ProviderStudioEditorAction::Field(field),
+        });
+    }
+
+    fn activate_provider_studio_detail_page_selection(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+    ) {
+        let Some(selected_field) = dialog.detail_page.as_ref().map(|page| page.selected_field)
+        else {
+            return;
+        };
+        let fields = provider_studio_detail_fields(dialog);
+        let Some(field) = fields.get(selected_field).copied() else {
+            return;
+        };
+        self.activate_provider_studio_field_editor(dialog, field);
+    }
+
+    fn handle_provider_studio_detail_page_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut ProviderStudioOverlay,
+    ) -> bool {
+        let field_count = provider_studio_detail_fields(dialog).len();
+        let Some(detail_page) = dialog.detail_page.as_mut() else {
+            return false;
+        };
+        match key.code {
+            KeyCode::Esc => {
+                dialog.detail_page = None;
+                false
+            }
+            KeyCode::Char('o') | KeyCode::Char('O')
+                if provider_studio_supports_interactive_auth(&dialog.draft) =>
+            {
+                self.request_provider_studio_start_auth(dialog);
+                false
+            }
+            KeyCode::Char('p') | KeyCode::Char('P')
+                if provider_studio_supports_interactive_auth(&dialog.draft) =>
+            {
+                self.request_provider_studio_continue_auth(dialog);
+                false
+            }
+            KeyCode::Enter => {
+                self.activate_provider_studio_detail_page_selection(dialog);
+                false
+            }
+            KeyCode::PageUp => {
+                detail_page.selected_field = detail_page.selected_field.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown => {
+                detail_page.selected_field = min(
+                    detail_page.selected_field.saturating_add(10),
+                    field_count.saturating_sub(1),
+                );
+                false
+            }
+            KeyCode::Home => {
+                detail_page.selected_field = 0;
+                false
+            }
+            KeyCode::End => {
+                detail_page.selected_field = field_count.saturating_sub(1);
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                detail_page.selected_field = detail_page.selected_field.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                detail_page.selected_field = min(
+                    detail_page.selected_field.saturating_add(1),
+                    field_count.saturating_sub(1),
+                );
+                false
+            }
+            _ => false,
         }
     }
 
     fn activate_provider_studio_focus(&mut self, dialog: &mut ProviderStudioOverlay) {
         match dialog.focus {
-            ProviderStudioFocus::Providers => {}
             ProviderStudioFocus::Fields => {
-                let field = ProviderStudioField::ALL[dialog.selected_field];
-                if !provider_studio_field_editable(dialog, field) {
+                let fields = provider_studio_visible_fields(dialog);
+                let Some(field) = fields.get(dialog.selected_field).copied() else {
                     return;
+                };
+                match field {
+                    ProviderStudioField::StartAuthAction => {
+                        self.request_provider_studio_start_auth(dialog);
+                    }
+                    ProviderStudioField::ContinueAuthAction => {
+                        self.request_provider_studio_continue_auth(dialog);
+                    }
+                    ProviderStudioField::EditAuthDetailsAction => {
+                        self.open_provider_studio_detail_page(dialog);
+                    }
+                    _ => self.activate_provider_studio_field_editor(dialog, field),
                 }
-                dialog.editor = Some(ProviderStudioEditor {
-                    title: ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
-                    prompt: provider_studio_field_prompt(&self.i18n, field),
-                    input: Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
-                    action: ProviderStudioEditorAction::Field(field),
-                });
             }
             ProviderStudioFocus::Adapters => {
                 if let Some(adapter_id) = provider_studio_selected_adapter_models(dialog)
@@ -4896,26 +6815,32 @@ impl App {
                     && let Some(model) = adapter_models.models.get(dialog.selected_model).cloned()
                 {
                     let adapter_id = adapter_models.adapter_id.clone();
-                    dialog.draft.default_adapter = adapter_id.clone();
-                    dialog.draft.default_model = model.id.to_string();
-                }
-            }
-            ProviderStudioFocus::Catalog => {
-                if let Some(model_id) = dialog
-                    .catalog_items
-                    .get(dialog.selected_catalog)
-                    .map(|entry| entry.model_id.clone())
-                {
-                    if dialog.draft.default_adapter.trim().is_empty() {
-                        if let Some(adapter_id) = provider_studio_selected_adapter_models(dialog)
-                            .map(|adapter_models| adapter_models.adapter_id.clone())
-                        {
-                            dialog.draft.default_adapter = adapter_id;
-                        } else {
-                            dialog.draft.default_adapter = "openai".to_owned();
+                    match self.backend.provider_model_draft_value(
+                        &dialog.draft,
+                        adapter_id.as_str(),
+                        model.id.as_str(),
+                        Some(&model),
+                    ) {
+                        Ok(model_value) => {
+                            let text = serde_json::to_string_pretty(&model_value)
+                                .unwrap_or_else(|_| "{}".to_owned());
+                            dialog.editor = Some(ProviderStudioEditor {
+                                title: format!("Model Config · {adapter_id}/{}", model.id),
+                                prompt: "Edit the persisted provider model JSON.".to_string(),
+                                footer: ui_text::t(
+                                    &self.i18n,
+                                    "overlay-provider-studio-model-edit-footer",
+                                ),
+                                multiline: true,
+                                input: Editor::from_text(text),
+                                action: ProviderStudioEditorAction::ModelJson {
+                                    adapter_id,
+                                    model_id: model.id.to_string(),
+                                },
+                            });
                         }
+                        Err(error) => self.flash_error(error.to_string()),
                     }
-                    dialog.draft.default_model = model_id;
                 }
             }
         }
@@ -4926,13 +6851,52 @@ impl App {
         dialog: &mut ProviderStudioOverlay,
         field: ProviderStudioField,
         value: String,
-    ) {
+    ) -> UiResult<()> {
         match field {
             ProviderStudioField::ProviderId => {
                 dialog.draft.provider_id = value;
             }
+            ProviderStudioField::AuthStatus
+            | ProviderStudioField::StartAuthAction
+            | ProviderStudioField::ContinueAuthAction
+            | ProviderStudioField::EditAuthDetailsAction => {}
+            ProviderStudioField::AuthMode => {
+                match ProviderDraftAuthKind::parse_mode(
+                    value.as_str(),
+                    dialog.draft.auth_kind.credential_issuer(),
+                ) {
+                    Ok(auth_kind) => {
+                        dialog.draft.auth_kind = auth_kind;
+                        dialog.draft.normalize_shape();
+                        self.refresh_provider_studio_adapter_state(dialog);
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            ProviderStudioField::CredentialIssuer => {
+                let mode_value = if value.trim().is_empty() {
+                    "credential".to_owned()
+                } else {
+                    format!("credential:{value}")
+                };
+                match ProviderDraftAuthKind::parse_mode(
+                    mode_value.as_str(),
+                    dialog.draft.auth_kind.credential_issuer(),
+                ) {
+                    Ok(auth_kind) => {
+                        dialog.draft.auth_kind = auth_kind;
+                        dialog.draft.credential_issuer = value.trim().to_owned();
+                        dialog.draft.normalize_shape();
+                        self.refresh_provider_studio_adapter_state(dialog);
+                    }
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
             ProviderStudioField::BaseUrl => {
                 dialog.draft.base_url = value;
+            }
+            ProviderStudioField::InstanceUrl => {
+                dialog.draft.instance_url = value;
             }
             ProviderStudioField::ApiKeyEnv => {
                 dialog.draft.api_key_env = value;
@@ -4940,51 +6904,239 @@ impl App {
             ProviderStudioField::ApiKey => {
                 dialog.draft.api_key = value;
             }
+            ProviderStudioField::RedirectUri => {
+                provider_studio_set_redirect_uri(&mut dialog.draft, value);
+            }
+            ProviderStudioField::CallbackUrl => {
+                provider_studio_set_callback_url(&mut dialog.draft, value);
+            }
+            ProviderStudioField::RefreshToken => {
+                provider_studio_set_refresh_token(&mut dialog.draft, value);
+            }
+            ProviderStudioField::AccessToken => {
+                provider_studio_set_access_token(&mut dialog.draft, value);
+            }
+            ProviderStudioField::ExpiresAtMs => {
+                provider_studio_set_expires_at_ms(&mut dialog.draft, value);
+            }
+            ProviderStudioField::AccountId => {
+                provider_studio_set_account_id(&mut dialog.draft, value);
+            }
+            ProviderStudioField::EnterpriseDomain => {
+                dialog
+                    .draft
+                    .credential_drafts
+                    .github_copilot
+                    .enterprise_domain = value;
+            }
+            ProviderStudioField::Username => {
+                dialog.draft.credential_drafts.atomgit.username = value;
+            }
+            ProviderStudioField::DisplayName => {
+                dialog.draft.credential_drafts.atomgit.display_name = value;
+            }
+            ProviderStudioField::Email => {
+                dialog.draft.credential_drafts.atomgit.email = value;
+            }
+            ProviderStudioField::AvatarUrl => {
+                dialog.draft.credential_drafts.atomgit.avatar_url = value;
+            }
+            ProviderStudioField::Region => {
+                dialog.draft.region = value;
+            }
+            ProviderStudioField::Profile => {
+                dialog.draft.profile = value;
+            }
+            ProviderStudioField::AccessKeyId => {
+                dialog.draft.access_key_id = value;
+            }
+            ProviderStudioField::SecretAccessKey => {
+                dialog.draft.secret_access_key = value;
+            }
+            ProviderStudioField::SessionToken => {
+                dialog.draft.session_token = value;
+            }
+            ProviderStudioField::ServiceKeyEnv => {
+                dialog.draft.service_key_env = value;
+            }
             ProviderStudioField::DefaultAdapter => {
                 dialog.draft.default_adapter = value;
+                self.sync_provider_studio_shape(dialog);
             }
             ProviderStudioField::DefaultModel => {
                 dialog.draft.default_model = value;
             }
         }
+        Ok(())
     }
 
     fn toggle_provider_studio_selected_adapter(&mut self, dialog: &mut ProviderStudioOverlay) {
         let Some(adapter_id) = provider_studio_selected_adapter_id(dialog) else {
             return;
         };
+        if !provider_studio_adapter_selectable(dialog, adapter_id.as_str()) {
+            self.flash_warning(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-adapter-unavailable",
+            ));
+            return;
+        }
         if !dialog.selected_adapter_ids.remove(adapter_id.as_str()) {
             dialog.selected_adapter_ids.insert(adapter_id);
         }
+        dialog.adapter_selection_touched = true;
+        self.sync_provider_studio_shape(dialog);
     }
 
-    fn request_provider_studio_catalog_previous_page(
-        &mut self,
-        dialog: &mut ProviderStudioOverlay,
-    ) {
-        if dialog.catalog_offset == 0 {
+    fn toggle_provider_studio_selected_model(&mut self, dialog: &mut ProviderStudioOverlay) {
+        let Some((adapter_id, model_id, _)) = provider_studio_selected_model_target(dialog) else {
             return;
+        };
+        let key = provider_studio_model_key(adapter_id.as_str(), model_id.as_str());
+        if !dialog.selected_model_keys.remove(key.as_str()) {
+            dialog.selected_model_keys.insert(key);
         }
-        let offset = dialog
-            .catalog_offset
-            .saturating_sub(dialog.catalog_limit.max(1));
-        dialog.catalog_offset = offset;
-        dialog.selected_catalog = 0;
-        dialog.catalog_loading = true;
-        self.request_provider_studio_catalog_page(dialog.catalog_query.clone(), offset);
+        provider_studio_ensure_default_selection(dialog);
     }
 
-    fn request_provider_studio_catalog_next_page(&mut self, dialog: &mut ProviderStudioOverlay) {
-        if dialog.catalog_offset + dialog.catalog_items.len() >= dialog.catalog_total {
+    fn select_all_provider_studio_adapters(dialog: &mut ProviderStudioOverlay) {
+        dialog.selected_adapter_ids = dialog
+            .adapter_candidate_ids
+            .iter()
+            .filter(|adapter_id| provider_studio_adapter_selectable(dialog, adapter_id.as_str()))
+            .cloned()
+            .collect();
+        dialog.adapter_selection_touched = true;
+    }
+
+    fn clear_provider_studio_selected_adapters(dialog: &mut ProviderStudioOverlay) {
+        dialog.selected_adapter_ids.clear();
+        dialog.adapter_selection_touched = true;
+        provider_studio_ensure_default_selection(dialog);
+    }
+
+    fn select_all_provider_studio_models(dialog: &mut ProviderStudioOverlay) {
+        let Some(adapter_models) = provider_studio_selected_adapter_models(dialog) else {
             return;
+        };
+        let adapter_id = adapter_models.adapter_id.clone();
+        let model_ids = adapter_models
+            .models
+            .iter()
+            .map(|model| model.id.to_string())
+            .collect::<Vec<_>>();
+        for model_id in model_ids {
+            dialog.selected_model_keys.insert(provider_studio_model_key(
+                adapter_id.as_str(),
+                model_id.as_str(),
+            ));
         }
-        dialog.catalog_offset += dialog.catalog_limit.max(1);
-        dialog.selected_catalog = 0;
-        dialog.catalog_loading = true;
-        self.request_provider_studio_catalog_page(
-            dialog.catalog_query.clone(),
-            dialog.catalog_offset,
+        provider_studio_ensure_default_selection(dialog);
+    }
+
+    fn clear_provider_studio_selected_models(dialog: &mut ProviderStudioOverlay) {
+        let Some(adapter_models) = provider_studio_selected_adapter_models(dialog) else {
+            return;
+        };
+        let adapter_id = adapter_models.adapter_id.clone();
+        dialog
+            .selected_model_keys
+            .retain(|key| !key.starts_with(format!("{adapter_id}\u{1f}").as_str()));
+        provider_studio_ensure_default_selection(dialog);
+    }
+
+    fn sync_provider_studio_shape(&mut self, dialog: &mut ProviderStudioOverlay) {
+        dialog.draft.normalize_shape();
+        dialog.adapter_candidate_ids = provider_studio_candidate_adapter_ids(
+            &dialog.draft,
+            dialog.configured_adapter_ids.clone(),
         );
+        let selectable_adapter_ids = dialog
+            .adapter_candidate_ids
+            .iter()
+            .filter(|adapter_id| provider_studio_adapter_selectable(dialog, adapter_id.as_str()))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        dialog.selected_field = min(
+            dialog.selected_field,
+            provider_studio_visible_fields(dialog)
+                .len()
+                .saturating_sub(1),
+        );
+        let detail_field_count = provider_studio_detail_fields(dialog).len();
+        if let Some(detail_page) = dialog.detail_page.as_mut() {
+            detail_page.selected_field = min(
+                detail_page.selected_field,
+                detail_field_count.saturating_sub(1),
+            );
+        }
+        dialog.selected_adapter_ids.retain(|adapter_id| {
+            dialog
+                .adapter_candidate_ids
+                .iter()
+                .any(|candidate| candidate == adapter_id)
+                && selectable_adapter_ids.contains(adapter_id)
+        });
+        if !dialog.adapter_selection_touched && dialog.selected_adapter_ids.is_empty() {
+            dialog.selected_adapter_ids = selectable_adapter_ids.clone();
+        }
+        dialog.selected_adapter = min(
+            dialog.selected_adapter,
+            dialog.adapter_candidate_ids.len().saturating_sub(1),
+        );
+        dialog.selected_model = min(
+            dialog.selected_model,
+            provider_studio_selected_adapter_models(dialog)
+                .map(|adapter| adapter.models.len().saturating_sub(1))
+                .unwrap_or_default(),
+        );
+        if !dialog.adapter_models.is_empty() {
+            provider_studio_restore_model_selection(dialog);
+        }
+        provider_studio_ensure_default_selection(dialog);
+    }
+
+    fn reload_provider_studio_catalog_matches(&self, dialog: &mut ProviderStudioOverlay) {
+        let lookup_ids = dialog
+            .adapter_models
+            .iter()
+            .flat_map(|adapter| {
+                adapter.models.iter().flat_map(|model| {
+                    [
+                        model.id.to_string(),
+                        provider_model_catalog_lookup_id(model),
+                    ]
+                })
+            })
+            .collect::<Vec<_>>();
+        let catalog_entries = self.backend.lookup_model_catalog_entries(&lookup_ids);
+        dialog.catalog_matches = dialog
+            .adapter_models
+            .iter()
+            .flat_map(|adapter| {
+                adapter.models.iter().filter_map(|model| {
+                    provider_studio_catalog_match_entry(model, &catalog_entries).map(|entry| {
+                        (
+                            provider_studio_model_key(
+                                adapter.adapter_id.as_str(),
+                                model.id.as_str(),
+                            ),
+                            entry.clone(),
+                        )
+                    })
+                })
+            })
+            .collect();
+    }
+
+    fn refresh_provider_studio_adapter_state(&mut self, dialog: &mut ProviderStudioOverlay) {
+        dialog.adapter_models.clear();
+        dialog.selected_model_keys.clear();
+        dialog.catalog_matches.clear();
+        self.sync_provider_studio_shape(dialog);
+        dialog.selected_model = 0;
+        dialog.pending_adapter_models_key = None;
+        dialog.listing_adapter_models = false;
     }
 
     fn open_child_sessions_picker(&mut self) {
@@ -5133,6 +7285,51 @@ impl App {
         dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
     }
 
+    fn refresh_session_model_chooser_overlay(
+        dialog: &mut SessionModelChooserOverlay,
+        prefer_current_model: bool,
+        current_model: Option<&ModelRef>,
+    ) {
+        let query = dialog.input.text().trim().to_ascii_lowercase();
+        let previous_model = dialog
+            .items
+            .get(dialog.selected)
+            .map(|item| item.model.clone());
+        dialog.items = dialog
+            .all_items
+            .iter()
+            .filter(|item| query.is_empty() || item.search_text.contains(query.as_str()))
+            .cloned()
+            .collect();
+        if dialog.items.is_empty() {
+            dialog.selected = 0;
+            return;
+        }
+
+        if let Some(previous_model) = previous_model
+            && let Some(index) = dialog
+                .items
+                .iter()
+                .position(|item| item.model == previous_model)
+        {
+            dialog.selected = index;
+            return;
+        }
+
+        if prefer_current_model
+            && let Some(current_model) = current_model
+            && let Some(index) = dialog
+                .items
+                .iter()
+                .position(|item| session_model_matches_current(&item.model, current_model))
+        {
+            dialog.selected = index;
+            return;
+        }
+
+        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+    }
+
     fn refresh_timeline_overlay(dialog: &mut TimelineOverlay) {
         let query = dialog.input.text().trim().to_ascii_lowercase();
         dialog.items = dialog
@@ -5206,14 +7403,7 @@ impl App {
     fn handle_picker_selection(&mut self, kind: PickerKind, item: PickerItem) {
         match (kind, item.value) {
             (PickerKind::Commands, PickerValue::Command(spec)) => {
-                if matches!(
-                    spec.id,
-                    CommandId::Temperature | CommandId::MaxOutput | CommandId::System
-                ) {
-                    self.prefill_command(spec);
-                } else {
-                    self.execute_command(spec, "");
-                }
+                self.execute_command(spec, "");
             }
             (PickerKind::Commands, PickerValue::RuntimeEntry(entry_name)) => {
                 self.composer
@@ -5249,15 +7439,6 @@ impl App {
             ) => {
                 self.apply_provider_override(provider);
             }
-            (
-                PickerKind::Providers(ProviderPickerPurpose::ChooseModelProvider),
-                PickerValue::Provider(provider),
-            ) => {
-                self.open_model_picker(provider.provider_id.clone());
-            }
-            (PickerKind::Models { .. }, PickerValue::Model(model)) => {
-                self.apply_model_override(model);
-            }
             (PickerKind::ChildSessions { .. }, PickerValue::Session(session_id)) => {
                 self.open_session(
                     session_id,
@@ -5274,21 +7455,6 @@ impl App {
             (PickerKind::Inspector, PickerValue::Inspector) => {}
             _ => {}
         }
-    }
-
-    fn prefill_command(&mut self, spec: &'static CommandSpec) {
-        if !self.composer.text().trim().is_empty() || !self.composer_items.is_empty() {
-            self.flash_warning(ui_text::t(
-                &self.i18n,
-                "flash-command-prefill-requires-empty-composer",
-            ));
-            self.focus = Focus::Composer;
-            return;
-        }
-        self.composer.set_text(format!("/{} ", spec.name));
-        self.composer.cursor = self.composer.text().len();
-        self.focus = Focus::Composer;
-        self.sync_slash_command_suggestions();
     }
 
     fn apply_provider_override(&mut self, provider: ProviderSummaryResource) {
@@ -5413,12 +7579,21 @@ impl App {
         self.focus = Focus::Transcript;
     }
 
-    fn resolve_model_provider_for_picker(&self) -> Option<String> {
+    fn current_session_model_ref(&self) -> Option<ModelRef> {
         if let Some(model) = self.run_options.model.as_ref() {
-            return Some(model.provider_id.to_string());
+            return Some(model.clone());
         }
-        let providers = self.backend.list_providers();
-        (providers.len() == 1).then(|| providers[0].provider_id.clone())
+        let execution = self.transcript.execution.as_ref()?;
+        let provider_id = execution.execution.model_provider_id.as_deref()?;
+        let model_id = execution.execution.model_id.as_deref()?;
+        Some(
+            execution
+                .execution
+                .model_adapter_id
+                .as_deref()
+                .map(|adapter_id| ModelRef::new_with_adapter(provider_id, adapter_id, model_id))
+                .unwrap_or_else(|| ModelRef::new(provider_id, model_id)),
+        )
     }
 
     fn handle_confirm_action(&mut self, action: ConfirmAction) {
@@ -5432,18 +7607,15 @@ impl App {
                 rule_id,
                 label,
                 return_query,
-            } => match tokio::runtime::Handle::try_current() {
-                Ok(handle) => match handle.block_on(self.backend.revoke_permission_rule(rule_id)) {
-                    Ok(_) => {
-                        self.flash_success(self.i18n.text_args(
-                            "flash-permission-rule-revoked",
-                            &crate::fl_args!("name" => label),
-                        ));
-                        self.open_permission_rule_picker(return_query.as_str());
-                    }
-                    Err(error) => self.flash_error(error.to_string()),
-                },
-                Err(error) => self.flash_error(error.to_string()),
+            } => match self.block_on_async(self.backend.revoke_permission_rule(rule_id)) {
+                Ok(_) => {
+                    self.flash_success(self.i18n.text_args(
+                        "flash-permission-rule-revoked",
+                        &crate::fl_args!("name" => label),
+                    ));
+                    self.open_permission_rule_picker(return_query.as_str());
+                }
+                Err(error) => self.flash_error(error),
             },
             ConfirmAction::ExitWorktree {
                 session_id,
@@ -5468,12 +7640,8 @@ impl App {
             CommandId::Commands => self.open_command_palette(),
             CommandId::New => self.create_session(None),
             CommandId::Sessions => self.handle_sessions_command(spec, args),
-            CommandId::Resume => self.open_resume_session_picker_with_query(args.trim()),
             CommandId::Lineage => self.open_lineage_picker(),
             CommandId::Rewind => self.open_rewind_messages_picker(),
-            CommandId::Search => {
-                self.open_resume_session_picker_with_query(args.trim());
-            }
             CommandId::Find => {
                 self.focus = Focus::Transcript;
                 if args.trim().is_empty() {
@@ -5490,16 +7658,10 @@ impl App {
             CommandId::Rename => self.handle_rename_command(spec, args),
             CommandId::Timeline => self.handle_timeline_command(spec, args),
             CommandId::Plugins => self.handle_plugins_command(spec, args),
-            CommandId::Mcp => self.handle_mcp_command(args),
-            CommandId::Lsp => self.handle_lsp_command(args),
-            CommandId::Skills => self.handle_skills_command(args),
-            CommandId::Runtime => self.handle_runtime_command(args),
-            CommandId::Cost => self.handle_cost_command(),
+            CommandId::Settings => self.handle_settings_command(args),
+            CommandId::Model => self.open_session_model_chooser(),
             CommandId::Review => self.handle_review_command(args),
-            CommandId::Permissions => self.handle_permissions_command(args),
-            CommandId::Config => self.handle_config_command(args),
             CommandId::Worktree => self.handle_worktree_command(args),
-            CommandId::Git => self.handle_git_command(args),
             CommandId::Commit => self.handle_commit_command(args),
             CommandId::Pr => self.handle_pr_command(args),
             CommandId::Export => self.handle_export_command(args),
@@ -5526,21 +7688,6 @@ impl App {
             CommandId::Copy => self.copy_loaded_transcript(),
             CommandId::CopyMessage => self.copy_last_assistant_message(),
             CommandId::CopyVisible => self.copy_visible_transcript(),
-            CommandId::Providers => self.open_provider_picker(ProviderPickerPurpose::SetProvider),
-            CommandId::Provider => self.handle_provider_command(args),
-            CommandId::ProviderConfig => {
-                let initial = args.trim();
-                self.open_provider_studio((!initial.is_empty()).then_some(initial));
-            }
-            CommandId::Models => self.handle_models_command(args),
-            CommandId::Model => self.handle_model_command(args),
-            CommandId::ThinkingMode => self.handle_thinking_mode_command(args),
-            CommandId::SpeedMode => self.handle_speed_mode_command(args),
-            CommandId::Verbosity => self.handle_verbosity_command(spec, args),
-            CommandId::ParallelToolCalls => self.handle_parallel_tool_calls_command(spec, args),
-            CommandId::Temperature => self.handle_temperature_command(spec, args),
-            CommandId::MaxOutput => self.handle_max_output_command(spec, args),
-            CommandId::System => self.handle_system_command(spec, args),
             CommandId::Fork => {
                 let Some(session_id) = self.transcript.session_id else {
                     self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
@@ -5735,73 +7882,12 @@ impl App {
         self.open_plugin_inspector_overlay(args.trim());
     }
 
-    fn handle_mcp_command(&mut self, args: &str) {
-        self.open_inspector_picker(
-            "MCP".to_string(),
-            "Inspect configured MCP servers".to_string(),
-            args.trim(),
-            self.backend.mcp_inspector_rows(),
-        );
-    }
-
-    fn handle_lsp_command(&mut self, args: &str) {
-        self.open_inspector_picker(
-            "LSP".to_string(),
-            "Inspect configured LSP servers".to_string(),
-            args.trim(),
-            self.backend.lsp_inspector_rows(),
-        );
-    }
-
-    fn handle_skills_command(&mut self, args: &str) {
-        self.open_inspector_picker(
-            "Skills".to_string(),
-            "Inspect discovered skills".to_string(),
-            args.trim(),
-            self.backend.skills_inspector_rows(),
-        );
-    }
-
-    fn handle_runtime_command(&mut self, args: &str) {
-        self.open_inspector_picker(
-            "Runtime".to_string(),
-            "Inspect runtime summary".to_string(),
-            args.trim(),
-            self.backend.runtime_inspector_rows(),
-        );
-    }
-
-    fn handle_cost_command(&mut self) {
-        let session_id = self.current_or_selected_session_id();
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => match handle.block_on(self.backend.usage_inspector_rows(session_id)) {
-                Ok(rows) => self.open_inspector_picker(
-                    "Usage".to_string(),
-                    "Inspect usage, cost, cache rate, and selected session cost".to_string(),
-                    "",
-                    rows,
-                ),
-                Err(error) => self.flash_error(error.to_string()),
-            },
-            Err(error) => self.flash_error(error.to_string()),
-        }
+    fn handle_settings_command(&mut self, args: &str) {
+        self.open_settings_studio(args.trim());
     }
 
     fn handle_review_command(&mut self, args: &str) {
         self.execute_runtime_entry_prompt("review", args);
-    }
-
-    fn handle_permissions_command(&mut self, args: &str) {
-        self.open_permission_rule_picker(args.trim());
-    }
-
-    fn handle_config_command(&mut self, args: &str) {
-        self.open_inspector_picker(
-            "Config".to_string(),
-            "Inspect resolved config".to_string(),
-            args.trim(),
-            self.backend.config_inspector_rows(),
-        );
     }
 
     fn handle_worktree_command(&mut self, args: &str) {
@@ -5892,21 +7978,6 @@ impl App {
         }
     }
 
-    fn handle_git_command(&mut self, args: &str) {
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => match handle.block_on(self.backend.git_inspector_rows()) {
-                Ok(rows) => self.open_inspector_picker(
-                    "Git".to_string(),
-                    "Inspect git branch, diff, and worktree status".to_string(),
-                    args.trim(),
-                    rows,
-                ),
-                Err(error) => self.flash_error(error.to_string()),
-            },
-            Err(error) => self.flash_error(error.to_string()),
-        }
-    }
-
     fn handle_commit_command(&mut self, args: &str) {
         let message = args.trim();
         if message.is_empty() {
@@ -5917,18 +7988,15 @@ impl App {
             return;
         }
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => match handle.block_on(self.backend.create_commit(message.to_string())) {
-                Ok((commit, summary)) => {
-                    self.flash_success(format!(
-                        "commit created: {} {}",
-                        &commit[..commit.len().min(12)],
-                        summary
-                    ));
-                }
-                Err(error) => self.flash_error(error.to_string()),
-            },
-            Err(error) => self.flash_error(error.to_string()),
+        match self.block_on_async(self.backend.create_commit(message.to_string())) {
+            Ok((commit, summary)) => {
+                self.flash_success(format!(
+                    "commit created: {} {}",
+                    &commit[..commit.len().min(12)],
+                    summary
+                ));
+            }
+            Err(error) => self.flash_error(error),
         }
     }
 
@@ -5953,12 +8021,9 @@ impl App {
             }
         };
 
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => match handle.block_on(self.backend.create_pr(title, body, base, head)) {
-                Ok(url) => self.flash_success(format!("pull request created: {url}")),
-                Err(error) => self.flash_error(error.to_string()),
-            },
-            Err(error) => self.flash_error(error.to_string()),
+        match self.block_on_async(self.backend.create_pr(title, body, base, head)) {
+            Ok(url) => self.flash_success(format!("pull request created: {url}")),
+            Err(error) => self.flash_error(error),
         }
     }
 
@@ -6082,250 +8147,34 @@ impl App {
         true
     }
 
-    fn handle_provider_command(&mut self, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.open_provider_picker(ProviderPickerPurpose::SetProvider);
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.model = None;
-            self.run_options.thinking_mode = None;
-            self.run_options.speed_mode = None;
-            self.run_options.verbosity = None;
-            self.run_options.parallel_tool_calls = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-provider-cleared"));
-            return;
-        }
-        let Some(provider) = self
-            .backend
-            .list_providers()
-            .into_iter()
-            .find(|provider| provider.provider_id == trimmed)
-        else {
-            self.flash_error(self.i18n.text_args(
-                "flash-provider-not-found",
-                &crate::fl_args!("provider" => trimmed),
-            ));
-            return;
-        };
-        self.apply_provider_override(provider);
+    fn clear_provider_model_overrides(&mut self) {
+        self.run_options.clear_model_stack();
     }
 
-    fn handle_models_command(&mut self, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            if let Some(provider_id) = self.resolve_model_provider_for_picker() {
-                self.open_model_picker(provider_id);
-            } else {
-                self.open_provider_picker(ProviderPickerPurpose::ChooseModelProvider);
+    fn block_on_async<F, T, E>(&self, fut: F) -> UiResult<T>
+    where
+        F: std::future::Future<Output = std::result::Result<T, E>>,
+        E: ToString,
+    {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => match handle.runtime_flavor() {
+                tokio::runtime::RuntimeFlavor::MultiThread => {
+                    tokio::task::block_in_place(|| handle.block_on(fut))
+                        .map_err(|error| error.to_string())
+                }
+                _ => Err(
+                    "cannot synchronously wait for async work inside the current-thread runtime"
+                        .to_string(),
+                ),
+            },
+            Err(_) => {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|error| error.to_string())?;
+                runtime.block_on(fut).map_err(|error| error.to_string())
             }
-            return;
         }
-        self.open_model_picker(trimmed.to_string());
-    }
-
-    fn handle_model_command(&mut self, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.handle_models_command("");
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.model = None;
-            self.run_options.thinking_mode = None;
-            self.run_options.speed_mode = None;
-            self.run_options.verbosity = None;
-            self.run_options.parallel_tool_calls = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-model-cleared"));
-            return;
-        }
-        match self.resolve_model_argument(trimmed) {
-            Ok(model) => self.apply_model_override(model),
-            Err(error) => self.flash_error(error),
-        }
-    }
-
-    fn handle_thinking_mode_command(&mut self, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-thinking-mode-required"));
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.thinking_mode = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-thinking-mode-cleared"));
-            return;
-        }
-        self.run_options.thinking_mode = Some(trimmed.to_string());
-        self.flash_success(self.i18n.text_args(
-            "flash-thinking-mode-set",
-            &crate::fl_args!("mode" => trimmed),
-        ));
-    }
-
-    fn handle_speed_mode_command(&mut self, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-speed-mode-required"));
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.speed_mode = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-speed-mode-cleared"));
-            return;
-        }
-        self.run_options.speed_mode = Some(trimmed.to_string());
-        self.flash_success(
-            self.i18n
-                .text_args("flash-speed-mode-set", &crate::fl_args!("mode" => trimmed)),
-        );
-    }
-
-    fn handle_temperature_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &crate::fl_args!("usage" => spec.invocation()),
-            ));
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.temperature = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-temperature-cleared"));
-            return;
-        }
-        match trimmed.parse::<f32>() {
-            Ok(value) if value.is_finite() => {
-                self.run_options.temperature = Some(value);
-                self.flash_success(self.i18n.text_args(
-                    "flash-temperature-set",
-                    &crate::fl_args!("value" => format!("{value:.2}")),
-                ));
-            }
-            _ => self.flash_error(ui_text::t(&self.i18n, "flash-temperature-invalid")),
-        }
-    }
-
-    fn handle_verbosity_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &crate::fl_args!("usage" => spec.invocation()),
-            ));
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.verbosity = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-verbosity-cleared"));
-            return;
-        }
-        self.run_options.verbosity = Some(trimmed.to_ascii_lowercase());
-        self.flash_success(self.i18n.text_args(
-            "flash-verbosity-set",
-            &crate::fl_args!("value" => trimmed.to_ascii_lowercase()),
-        ));
-    }
-
-    fn handle_parallel_tool_calls_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &crate::fl_args!("usage" => spec.invocation()),
-            ));
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.parallel_tool_calls = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-parallel-tool-calls-cleared"));
-            return;
-        }
-        let value = match trimmed.to_ascii_lowercase().as_str() {
-            "on" | "true" | "enabled" => Some(true),
-            "off" | "false" | "disabled" => Some(false),
-            _ => None,
-        };
-        let Some(value) = value else {
-            self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &crate::fl_args!("usage" => spec.invocation()),
-            ));
-            return;
-        };
-        self.run_options.parallel_tool_calls = Some(value);
-        self.flash_success(self.i18n.text_args(
-            "flash-parallel-tool-calls-set",
-            &crate::fl_args!("value" => if value { "on" } else { "off" }),
-        ));
-    }
-
-    fn handle_max_output_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &crate::fl_args!("usage" => spec.invocation()),
-            ));
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.max_output_tokens = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-max-output-cleared"));
-            return;
-        }
-        match trimmed.parse::<u32>() {
-            Ok(value) if value > 0 => {
-                self.run_options.max_output_tokens = Some(value);
-                self.flash_success(self.i18n.text_args(
-                    "flash-max-output-set",
-                    &crate::fl_args!("value" => value as i64),
-                ));
-            }
-            _ => self.flash_error(ui_text::t(&self.i18n, "flash-max-output-invalid")),
-        }
-    }
-
-    fn handle_system_command(&mut self, spec: &'static CommandSpec, args: &str) {
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.flash_warning(self.i18n.text_args(
-                "flash-command-usage",
-                &crate::fl_args!("usage" => spec.invocation()),
-            ));
-            return;
-        }
-        if trimmed.eq_ignore_ascii_case("clear") {
-            self.run_options.system = None;
-            self.flash_success(ui_text::t(&self.i18n, "flash-system-cleared"));
-            return;
-        }
-        self.run_options.system = Some(trimmed.to_string());
-        self.flash_success(ui_text::t(&self.i18n, "flash-system-set"));
-    }
-
-    fn resolve_model_argument(&self, arg: &str) -> UiResult<ModelRef> {
-        let trimmed = arg.trim();
-        if trimmed.contains('/') {
-            return self
-                .backend
-                .resolve_model_target(trimmed, None)
-                .map_err(|error| error.to_string());
-        }
-        if let Some((target, model)) = split_command_args_once(trimmed) {
-            return self
-                .backend
-                .resolve_model_target(target, Some(model))
-                .map_err(|error| error.to_string());
-        }
-        let Some(provider_id) = self.resolve_model_provider_for_picker() else {
-            return Err(ui_text::t(&self.i18n, "flash-model-provider-required"));
-        };
-        self.backend
-            .resolve_model_target(provider_id.as_str(), Some(trimmed))
-            .map_err(|error| error.to_string())
     }
 
     fn current_runtime_status_summary(&self) -> String {
@@ -6474,6 +8323,72 @@ impl App {
         parts
     }
 
+    fn current_session_status_parts(&self) -> Vec<String> {
+        if let Some(execution) = self.transcript.execution.as_ref() {
+            let mut parts = Vec::new();
+            if let (Some(provider_id), Some(model_id)) = (
+                execution.execution.model_provider_id.as_deref(),
+                execution.execution.model_id.as_deref(),
+            ) {
+                let model_part = execution
+                    .execution
+                    .model_adapter_id
+                    .as_deref()
+                    .map(|adapter_id| format!("{provider_id}/{adapter_id}/{model_id}"))
+                    .unwrap_or_else(|| format!("{provider_id}/{model_id}"));
+                parts.push(model_part);
+            }
+            if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
+                && !thinking_mode.trim().is_empty()
+            {
+                parts.push(format!("thinking {thinking_mode}"));
+            }
+            if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
+                && !speed_mode.trim().is_empty()
+            {
+                parts.push(format!("speed {speed_mode}"));
+            }
+            if let Some(goal) = execution.goal.as_ref() {
+                if let Some(token_budget) = goal.token_budget.filter(|value| *value > 0) {
+                    let percent =
+                        ((goal.tokens_used as f64 / token_budget as f64) * 100.0).clamp(0.0, 999.0);
+                    parts.push(format!(
+                        "tokens {}/{} ({percent:.0}%)",
+                        goal.tokens_used, token_budget
+                    ));
+                } else if goal.tokens_used > 0 {
+                    parts.push(format!("tokens {}", goal.tokens_used));
+                }
+            }
+            if !parts.is_empty() {
+                return parts;
+            }
+        }
+
+        let mut parts = Vec::new();
+        if let Some(model) = self.run_options.model.as_ref() {
+            let model_part = model
+                .adapter_id
+                .as_ref()
+                .map(|adapter_id| {
+                    format!("{}/{}/{}", model.provider_id, adapter_id, model.model_id)
+                })
+                .unwrap_or_else(|| format!("{}/{}", model.provider_id, model.model_id));
+            parts.push(model_part);
+        }
+        if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
+            && !thinking_mode.trim().is_empty()
+        {
+            parts.push(format!("thinking {thinking_mode}"));
+        }
+        if let Some(speed_mode) = self.run_options.speed_mode.as_deref()
+            && !speed_mode.trim().is_empty()
+        {
+            parts.push(format!("speed {speed_mode}"));
+        }
+        parts
+    }
+
     fn jump_search_match(&mut self, forward: bool) {
         self.transcript.jump_search_match(
             self.layout.transcript_body.width,
@@ -6499,15 +8414,35 @@ impl App {
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
+                Overlay::SettingsStudio(_) => {}
+                Overlay::SettingsValueEdit(dialog) => {
+                    dialog.input.flush_pending_input_if_due(now);
+                }
+                Overlay::RuntimeSettingEdit(dialog) => {
+                    dialog.input.flush_pending_input_if_due(now);
+                }
+                Overlay::Choice(dialog) => {
+                    dialog.input.flush_pending_input_if_due(now);
+                    Self::sync_choice_overlay_query(dialog, true);
+                }
                 Overlay::PermissionRuleEdit(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
                 Overlay::FileAttach(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::UserInputReply(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
+                Overlay::SessionModelChooser(dialog) => {
+                    dialog.input.flush_pending_input_if_due(now);
+                    Self::refresh_session_model_chooser_overlay(dialog, false, None);
+                }
                 Overlay::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::PluginInspector(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::ProviderStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_pending_input_if_due(now);
+                    }
+                }
+                Overlay::ModelCatalogStudio(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
                         editor.input.flush_pending_input_if_due(now);
                     }
@@ -7359,37 +9294,448 @@ enum OverlayCommit {
     TranscriptSearch,
 }
 
-impl ProviderStudioFocus {
-    fn next(self) -> Self {
-        match self {
-            Self::Providers => Self::Fields,
-            Self::Fields => Self::Adapters,
-            Self::Adapters => Self::Models,
-            Self::Models => Self::Catalog,
-            Self::Catalog => Self::Providers,
-        }
-    }
+fn settings_studio_general_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
+    SETTINGS_FIELDS
+        .iter()
+        .map(|field| {
+            let file_value =
+                get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
+            let effective_value =
+                get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
+            SettingsStudioItem {
+                label: field.path.to_string(),
+                value: format_setting_value_inline(&effective_value),
+                detail: format!(
+                    "{} · {}",
+                    field.description,
+                    format_setting_field_summary(&file_value, &effective_value)
+                ),
+                action: SettingsPickerAction::EditField(*field),
+            }
+        })
+        .collect()
+}
 
-    fn prev(self) -> Self {
-        match self {
-            Self::Providers => Self::Catalog,
-            Self::Fields => Self::Providers,
-            Self::Adapters => Self::Fields,
-            Self::Models => Self::Adapters,
-            Self::Catalog => Self::Models,
+fn settings_studio_runtime_items(run_options: &RunOptionsState) -> Vec<SettingsStudioItem> {
+    let runtime_model = run_options
+        .model
+        .as_ref()
+        .map(|model| format!("{}/{}", model.provider_id, model.model_id))
+        .unwrap_or_else(|| "default".to_string());
+    let runtime_provider = run_options
+        .model
+        .as_ref()
+        .map(|model| model.provider_id.to_string())
+        .unwrap_or_else(|| "default".to_string());
+    let mut items = vec![
+        SettingsStudioItem {
+            label: "Provider Override".to_string(),
+            value: runtime_provider,
+            detail: "Choose the current session provider override with the provider picker."
+                .to_string(),
+            action: SettingsPickerAction::OpenRuntimeProviderOverride,
+        },
+        SettingsStudioItem {
+            label: "Model Override".to_string(),
+            value: runtime_model,
+            detail: "Choose the current session model override with the model picker."
+                .to_string(),
+            action: SettingsPickerAction::OpenRuntimeModelOverride,
+        },
+        SettingsStudioItem {
+            label: "Clear Runtime Stack".to_string(),
+            value: "reset".to_string(),
+            detail:
+                "Clear provider/model plus thinking, speed, verbosity, and parallel-tool-call overrides."
+                    .to_string(),
+            action: SettingsPickerAction::ClearRuntimeModelStack,
+        },
+    ];
+    items.extend(RUNTIME_SETTINGS.iter().map(|field| SettingsStudioItem {
+        label: field.label.to_string(),
+        value: run_options.runtime_setting_summary(*field),
+        detail: field.description.to_string(),
+        action: SettingsPickerAction::EditRuntimeSetting(*field),
+    }));
+    items
+}
+
+fn settings_studio_provider_items(
+    providers: &[ProviderSummaryResource],
+) -> Vec<SettingsStudioItem> {
+    let mut items = vec![SettingsStudioItem {
+        label: "+ New provider".to_string(),
+        value: String::new(),
+        detail:
+            "Create a new provider, list live adapter models, and edit the persisted default route."
+                .to_string(),
+        action: SettingsPickerAction::OpenProviderWorkbench,
+    }];
+    items.extend(providers.iter().map(|provider| SettingsStudioItem {
+        label: provider.provider_id.clone(),
+        value: format!(
+            "{}/{}",
+            provider.default_adapter.as_deref().unwrap_or("adapter"),
+            provider.default_model
+        ),
+        detail: format!(
+            "{} adapter{} configured",
+            provider.adapters.len(),
+            if provider.adapters.len() == 1 {
+                ""
+            } else {
+                "s"
+            }
+        ),
+        action: SettingsPickerAction::OpenProviderWorkbenchFor(provider.provider_id.clone()),
+    }));
+    items
+}
+
+fn settings_studio_model_catalog_items(
+    response: &ModelCatalogListResponse,
+) -> Vec<SettingsStudioItem> {
+    vec![SettingsStudioItem {
+        label: "Open Model Catalog".to_string(),
+        value: response.summary.entry_count.to_string(),
+        detail: "Inspect resolved catalog entries and refresh the local model catalog cache."
+            .to_string(),
+        action: SettingsPickerAction::OpenModelCatalogWorkbench,
+    }]
+}
+
+fn settings_studio_file_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
+    vec![SettingsStudioItem {
+        label: "Open agena.toml".to_string(),
+        value: if sources.config_found {
+            "present".to_string()
+        } else {
+            "create on open".to_string()
+        },
+        detail: sources.config_path.display().to_string(),
+        action: SettingsPickerAction::OpenConfigFile,
+    }]
+}
+
+fn format_setting_field_summary(file_value: &JsonValue, effective_value: &JsonValue) -> String {
+    if !file_value.is_null() {
+        if file_value == effective_value {
+            format!("configured {}", format_setting_value_inline(file_value))
+        } else {
+            format!(
+                "file {} · effective {}",
+                format_setting_value_inline(file_value),
+                format_setting_value_inline(effective_value)
+            )
+        }
+    } else if !effective_value.is_null() {
+        format!("effective {}", format_setting_value_inline(effective_value))
+    } else {
+        "unset".to_string()
+    }
+}
+
+fn format_setting_value_inline(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => "unset".to_string(),
+        JsonValue::Bool(value) => value.to_string(),
+        JsonValue::Number(value) => value.to_string(),
+        JsonValue::String(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                "\"\"".to_string()
+            } else if trimmed.chars().count() > 64 {
+                format!("\"{}…\"", trimmed.chars().take(64).collect::<String>())
+            } else {
+                format!("\"{trimmed}\"")
+            }
+        }
+        other => {
+            let rendered = other.to_string();
+            if rendered.chars().count() > 72 {
+                format!("{}…", rendered.chars().take(72).collect::<String>())
+            } else {
+                rendered
+            }
         }
     }
 }
 
-impl ProviderStudioField {
-    const ALL: [Self; 6] = [
-        Self::ProviderId,
-        Self::BaseUrl,
-        Self::ApiKeyEnv,
-        Self::ApiKey,
-        Self::DefaultAdapter,
-        Self::DefaultModel,
+fn setting_value_input_text(value: &JsonValue) -> String {
+    match value {
+        JsonValue::Null => String::new(),
+        JsonValue::Bool(value) => value.to_string(),
+        JsonValue::Number(value) => value.to_string(),
+        JsonValue::String(value) => value.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn settings_value_edit_prompt(
+    field: SettingsFieldSpec,
+    file_value: &JsonValue,
+    effective_value: &JsonValue,
+) -> String {
+    let mut lines = vec![field.description.to_string()];
+    if !file_value.is_null() {
+        lines.push(format!(
+            "File override: {}",
+            format_setting_value_inline(file_value)
+        ));
+        if file_value != effective_value {
+            lines.push(format!(
+                "Effective value: {}",
+                format_setting_value_inline(effective_value)
+            ));
+        }
+    } else {
+        lines.push(format!(
+            "Effective value: {}",
+            format_setting_value_inline(effective_value)
+        ));
+    }
+    lines.push(settings_field_help_suffix(field.kind).to_string());
+    lines.join("\n")
+}
+
+fn runtime_setting_edit_prompt(field: RuntimeSettingSpec, current_summary: &str) -> String {
+    format!(
+        "{}\nCurrent override: {}\n{}",
+        field.description,
+        current_summary,
+        settings_field_help_suffix(field.kind)
+    )
+}
+
+fn settings_field_help_suffix(kind: SettingsFieldKind) -> &'static str {
+    match kind {
+        SettingsFieldKind::String => {
+            "Enter text. Leave empty or type `clear` to remove the file override."
+        }
+        SettingsFieldKind::Bool => {
+            "Enter true/false, on/off, yes/no, or 1/0. Leave empty or type `clear` to remove the file override."
+        }
+        SettingsFieldKind::Integer => {
+            "Enter a whole number. Leave empty or type `clear` to remove the file override."
+        }
+        SettingsFieldKind::Float => {
+            "Enter a number. Leave empty or type `clear` to remove the override."
+        }
+    }
+}
+
+fn choice_item(value: impl Into<String>, detail: impl Into<String>) -> ChoiceItem {
+    let value = value.into();
+    let detail = detail.into();
+    let search_text = format!("{} {}", value.to_lowercase(), detail.to_lowercase());
+    ChoiceItem {
+        label: value.clone(),
+        detail,
+        value,
+        search_text,
+    }
+}
+
+fn dedupe_choice_items(items: Vec<ChoiceItem>) -> Vec<ChoiceItem> {
+    let mut deduped = Vec::new();
+    let mut seen = BTreeSet::new();
+    for item in items {
+        if seen.insert(item.value.clone()) {
+            deduped.push(item);
+        }
+    }
+    deduped
+}
+
+fn inspector_rows_to_choice_items(rows: Vec<InspectorRow>) -> Vec<ChoiceItem> {
+    rows.into_iter()
+        .map(|row| choice_item(row.label, row.detail))
+        .collect()
+}
+
+fn boolean_choice_items(detail: &str) -> Vec<ChoiceItem> {
+    vec![choice_item("true", detail), choice_item("false", detail)]
+}
+
+fn provider_studio_default_model_choice_items(dialog: &ProviderStudioOverlay) -> Vec<ChoiceItem> {
+    let mut preferred_adapter_id = dialog.draft.default_adapter.trim().to_owned();
+    if preferred_adapter_id.is_empty() {
+        preferred_adapter_id = provider_studio_selected_adapter_id(dialog).unwrap_or_default();
+    }
+    let mut items = Vec::new();
+    let mut adapter_models = dialog.adapter_models.iter().collect::<Vec<_>>();
+    adapter_models.sort_by_key(|adapter_models| {
+        (
+            adapter_models.adapter_id != preferred_adapter_id,
+            adapter_models.adapter_id.clone(),
+        )
+    });
+    for adapter_models in adapter_models {
+        for model in &adapter_models.models {
+            if !dialog.selected_model_keys.is_empty()
+                && !provider_studio_model_selected(
+                    dialog,
+                    adapter_models.adapter_id.as_str(),
+                    model.id.as_str(),
+                )
+            {
+                continue;
+            }
+            let mut detail_parts = vec![adapter_models.adapter_id.clone()];
+            if let Some(display_name) = model
+                .display_name
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
+                detail_parts.push(display_name.trim().to_owned());
+            }
+            let key =
+                provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_str());
+            if let Some(entry) = dialog.catalog_matches.get(key.as_str()) {
+                detail_parts.push(format!("catalog {}", entry.model_id));
+            } else {
+                detail_parts.push("no catalog match".to_owned());
+            }
+            items.push(choice_item(model.id.to_string(), detail_parts.join(" · ")));
+        }
+    }
+    dedupe_choice_items(items)
+}
+
+fn provider_studio_profile_choice_items(backend: &Backend) -> Vec<ChoiceItem> {
+    let mut items = backend
+        .list_aws_profile_names()
+        .into_iter()
+        .map(|profile| choice_item(profile, "AWS shared config profile"))
+        .collect::<Vec<_>>();
+    if !items.iter().any(|item| item.value == "default") {
+        items.insert(0, choice_item("default", "AWS default profile"));
+    }
+    dedupe_choice_items(items)
+}
+
+fn provider_studio_api_key_env_choice_items(_dialog: &ProviderStudioOverlay) -> Vec<ChoiceItem> {
+    let items = vec![
+        choice_item("OPENAI_API_KEY", "OpenAI-compatible API key env var"),
+        choice_item("ANTHROPIC_API_KEY", "Anthropic API key env var"),
+        choice_item("GEMINI_API_KEY", "Gemini API key env var"),
+        choice_item("GITLAB_TOKEN", "GitLab token env var"),
+        choice_item(
+            "GOOGLE_VERTEX_ACCESS_TOKEN",
+            "Google Vertex access token env var",
+        ),
+        choice_item("SHARED_GATEWAY_API_KEY", "shared gateway API key env var"),
+        choice_item("OPENCODE_API_KEY", "Opencode API key env var"),
     ];
+    dedupe_choice_items(items)
+}
+
+fn provider_studio_field_allows_clear(field: ProviderStudioField) -> bool {
+    matches!(
+        field,
+        ProviderStudioField::AuthMode
+            | ProviderStudioField::CredentialIssuer
+            | ProviderStudioField::BaseUrl
+            | ProviderStudioField::InstanceUrl
+            | ProviderStudioField::ApiKeyEnv
+            | ProviderStudioField::ApiKey
+            | ProviderStudioField::RedirectUri
+            | ProviderStudioField::CallbackUrl
+            | ProviderStudioField::RefreshToken
+            | ProviderStudioField::AccessToken
+            | ProviderStudioField::ExpiresAtMs
+            | ProviderStudioField::AccountId
+            | ProviderStudioField::EnterpriseDomain
+            | ProviderStudioField::Username
+            | ProviderStudioField::DisplayName
+            | ProviderStudioField::Email
+            | ProviderStudioField::AvatarUrl
+            | ProviderStudioField::Region
+            | ProviderStudioField::Profile
+            | ProviderStudioField::AccessKeyId
+            | ProviderStudioField::SecretAccessKey
+            | ProviderStudioField::SessionToken
+            | ProviderStudioField::ServiceKeyEnv
+            | ProviderStudioField::DefaultAdapter
+            | ProviderStudioField::DefaultModel
+    )
+}
+
+fn choice_overlay_clear_detail(action: &ChoiceOverlayAction) -> String {
+    match action {
+        ChoiceOverlayAction::SettingsField(field) => {
+            format!("Remove the file override for {}.", field.path)
+        }
+        ChoiceOverlayAction::RuntimeSetting(field) => {
+            format!("Remove the current-session override for {}.", field.label)
+        }
+        ChoiceOverlayAction::ProviderStudioField(field) => format!(
+            "Set {} to an empty draft value.",
+            provider_studio_field_label(*field)
+        ),
+    }
+}
+
+fn parse_settings_field_input(
+    field: SettingsFieldSpec,
+    input: &str,
+) -> std::result::Result<Option<JsonValue>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("clear") {
+        return Ok(None);
+    }
+    match field.kind {
+        SettingsFieldKind::String => Ok(Some(JsonValue::String(trimmed.to_string()))),
+        SettingsFieldKind::Bool => {
+            let value = match trimmed.to_ascii_lowercase().as_str() {
+                "true" | "on" | "yes" | "1" => true,
+                "false" | "off" | "no" | "0" => false,
+                _ => {
+                    return Err(format!(
+                        "{} expects a boolean like true/false or on/off",
+                        field.path
+                    ));
+                }
+            };
+            Ok(Some(JsonValue::Bool(value)))
+        }
+        SettingsFieldKind::Integer => {
+            let value = trimmed
+                .parse::<u64>()
+                .map_err(|_| format!("{} expects an unsigned integer value", field.path))?;
+            Ok(Some(JsonValue::from(value)))
+        }
+        SettingsFieldKind::Float => {
+            let value = trimmed
+                .parse::<f64>()
+                .map_err(|_| format!("{} expects a numeric value", field.path))?;
+            Ok(Some(JsonValue::from(value)))
+        }
+    }
+}
+
+impl ProviderStudioFocus {
+    fn next(self, show_provider_list: bool) -> Self {
+        match (show_provider_list, self) {
+            (true, Self::Fields) => Self::Adapters,
+            (true, Self::Adapters) => Self::Models,
+            (true, Self::Models) => Self::Fields,
+            (false, Self::Fields) => Self::Adapters,
+            (false, Self::Adapters) => Self::Models,
+            (false, Self::Models) => Self::Fields,
+        }
+    }
+
+    fn prev(self, show_provider_list: bool) -> Self {
+        match (show_provider_list, self) {
+            (true, Self::Fields) => Self::Models,
+            (true, Self::Adapters) => Self::Fields,
+            (true, Self::Models) => Self::Adapters,
+            (false, Self::Fields) => Self::Models,
+            (false, Self::Adapters) => Self::Fields,
+            (false, Self::Models) => Self::Adapters,
+        }
+    }
 }
 
 fn provider_studio_provider_rows(
@@ -7398,7 +9744,7 @@ fn provider_studio_provider_rows(
     let mut rows = vec![ProviderStudioProviderRow {
         provider_id: None,
         label: "+ New provider".to_owned(),
-        detail: "API provider draft".to_owned(),
+        detail: "Empty provider draft".to_owned(),
     }];
     rows.extend(providers.iter().map(|provider| ProviderStudioProviderRow {
         provider_id: Some(provider.provider_id.clone()),
@@ -7419,36 +9765,306 @@ fn provider_studio_provider_rows(
 }
 
 fn provider_studio_request_key(draft: &ProviderConfigDraft, adapter_ids: &[String]) -> String {
-    format!(
-        "{}|{}|{}|{}",
-        draft.source_provider_id.as_deref().unwrap_or("<new>"),
-        draft.provider_id.trim(),
-        draft.base_url.trim(),
-        adapter_ids
-            .iter()
-            .map(|adapter_id| adapter_id.trim())
-            .filter(|adapter_id| !adapter_id.is_empty())
-            .collect::<Vec<_>>()
-            .join(",")
-    )
+    let mut hasher = DefaultHasher::new();
+    draft
+        .source_provider_id
+        .as_deref()
+        .unwrap_or("<new>")
+        .trim()
+        .hash(&mut hasher);
+    draft.provider_id.trim().hash(&mut hasher);
+    draft.auth_kind.label().hash(&mut hasher);
+    draft.base_url.trim().hash(&mut hasher);
+    draft.instance_url.trim().hash(&mut hasher);
+    draft.api_key_env.trim().hash(&mut hasher);
+    draft.api_key.trim().hash(&mut hasher);
+    draft.credential_issuer.trim().hash(&mut hasher);
+    draft
+        .credential_drafts
+        .openai_chatgpt
+        .redirect_uri
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .openai_chatgpt
+        .callback_url
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .openai_chatgpt
+        .tokens
+        .refresh_token
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .openai_chatgpt
+        .tokens
+        .access_token
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .openai_chatgpt
+        .tokens
+        .expires_at_ms
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .openai_chatgpt
+        .account_id
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .github_copilot
+        .enterprise_domain
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .github_copilot
+        .tokens
+        .refresh_token
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .github_copilot
+        .tokens
+        .access_token
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .github_copilot
+        .tokens
+        .expires_at_ms
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .gitlab
+        .redirect_uri
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .gitlab
+        .callback_url
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .gitlab
+        .tokens
+        .refresh_token
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .gitlab
+        .tokens
+        .access_token
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .gitlab
+        .tokens
+        .expires_at_ms
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .atomgit
+        .tokens
+        .refresh_token
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .atomgit
+        .tokens
+        .access_token
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .atomgit
+        .tokens
+        .expires_at_ms
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .atomgit
+        .account_id
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .atomgit
+        .username
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .atomgit
+        .display_name
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .atomgit
+        .email
+        .trim()
+        .hash(&mut hasher);
+    draft
+        .credential_drafts
+        .atomgit
+        .avatar_url
+        .trim()
+        .hash(&mut hasher);
+    draft.region.trim().hash(&mut hasher);
+    draft.profile.trim().hash(&mut hasher);
+    draft.access_key_id.trim().hash(&mut hasher);
+    draft.secret_access_key.trim().hash(&mut hasher);
+    draft.session_token.trim().hash(&mut hasher);
+    draft.service_key_env.trim().hash(&mut hasher);
+    draft.default_adapter.trim().hash(&mut hasher);
+    draft.default_model.trim().hash(&mut hasher);
+    let mut normalized_adapter_ids = adapter_ids
+        .iter()
+        .map(|adapter_id| adapter_id.trim())
+        .filter(|adapter_id| !adapter_id.is_empty())
+        .collect::<Vec<_>>();
+    normalized_adapter_ids.sort_unstable();
+    normalized_adapter_ids.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn provider_studio_auth_request_key(draft: &ProviderConfigDraft, action: &str) -> String {
+    format!("{action}:{}", provider_studio_request_key(draft, &[]))
 }
 
 fn provider_studio_candidate_adapter_ids(
     draft: &ProviderConfigDraft,
     configured_adapter_ids: BTreeSet<String>,
 ) -> Vec<String> {
-    let mut adapter_ids = configured_adapter_ids;
-    let has_shared_gateway_adapter = adapter_ids.iter().any(|adapter_id| {
-        agena::config::HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS.contains(&adapter_id.as_str())
-    });
-    if draft.auth_kind.is_api() && (adapter_ids.is_empty() || has_shared_gateway_adapter) {
-        adapter_ids.extend(
-            agena::config::HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS
-                .iter()
-                .map(|adapter_id| (*adapter_id).to_owned()),
-        );
+    let mut adapter_ids = draft
+        .auth_kind
+        .adapter_rules()
+        .iter()
+        .map(|rule| rule.adapter_id.to_owned())
+        .collect::<Vec<_>>();
+    let mut configured_extras = configured_adapter_ids.into_iter().collect::<Vec<_>>();
+    configured_extras.sort();
+    for adapter_id in configured_extras {
+        if !adapter_ids.iter().any(|candidate| candidate == &adapter_id) {
+            adapter_ids.push(adapter_id);
+        }
     }
-    adapter_ids.into_iter().collect()
+    let default_adapter = draft.default_adapter.trim();
+    if !default_adapter.is_empty()
+        && !adapter_ids
+            .iter()
+            .any(|candidate| candidate.as_str() == default_adapter)
+    {
+        adapter_ids.push(default_adapter.to_owned());
+    }
+    adapter_ids
+}
+
+fn provider_studio_effective_adapter_ids(dialog: &ProviderStudioOverlay) -> BTreeSet<String> {
+    let mut adapter_ids = dialog.configured_adapter_ids.clone();
+    adapter_ids.extend(dialog.selected_adapter_ids.iter().cloned());
+    let default_adapter = dialog.draft.default_adapter.trim();
+    if !default_adapter.is_empty() {
+        adapter_ids.insert(default_adapter.to_owned());
+    }
+    adapter_ids
+}
+
+fn provider_studio_adapter_selectable(dialog: &ProviderStudioOverlay, adapter_id: &str) -> bool {
+    provider_studio_adapter_rule(dialog, adapter_id).is_some()
+}
+
+fn provider_studio_request_adapter_ids(dialog: &ProviderStudioOverlay) -> Vec<String> {
+    dialog
+        .selected_adapter_ids
+        .iter()
+        .filter(|adapter_id| provider_studio_adapter_selectable(dialog, adapter_id.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn restore_provider_studio_adapter_selection(
+    dialog: &mut ProviderStudioOverlay,
+    selected_adapter_ids: &BTreeSet<String>,
+    selected_adapter_id: Option<&str>,
+) {
+    dialog.selected_adapter_ids = selected_adapter_ids
+        .iter()
+        .filter(|adapter_id| {
+            dialog
+                .adapter_candidate_ids
+                .iter()
+                .any(|candidate| candidate == *adapter_id)
+                && provider_studio_adapter_selectable(dialog, adapter_id.as_str())
+        })
+        .cloned()
+        .collect();
+    if let Some(adapter_id) = selected_adapter_id
+        && let Some(index) = dialog
+            .adapter_candidate_ids
+            .iter()
+            .position(|candidate| candidate == adapter_id)
+    {
+        dialog.selected_adapter = index;
+    }
+}
+
+fn provider_studio_adapter_rule(
+    dialog: &ProviderStudioOverlay,
+    adapter_id: &str,
+) -> Option<&'static ProviderDraftAdapterRule> {
+    dialog.draft.auth_kind.adapter_rule(adapter_id)
+}
+
+fn provider_studio_base_url_visible(dialog: &ProviderStudioOverlay) -> bool {
+    if !dialog.draft.base_url.trim().is_empty() {
+        return true;
+    }
+    match dialog.draft.auth_kind {
+        ProviderDraftAuthKind::Unset => false,
+        ProviderDraftAuthKind::Api => {
+            let effective = provider_studio_effective_adapter_ids(dialog);
+            if effective.is_empty() {
+                dialog
+                    .draft
+                    .auth_kind
+                    .adapter_rules()
+                    .iter()
+                    .any(|rule| rule.requires_base_url)
+            } else {
+                effective
+                    .iter()
+                    .filter_map(|adapter_id| {
+                        provider_studio_adapter_rule(dialog, adapter_id.as_str())
+                    })
+                    .any(|rule| rule.requires_base_url)
+            }
+        }
+        ProviderDraftAuthKind::Gitlab => false,
+        ProviderDraftAuthKind::Credential(Some(issuer)) => issuer.uses_http_endpoint(),
+        ProviderDraftAuthKind::Credential(None) => false,
+        ProviderDraftAuthKind::BedrockSigv4 => true,
+        ProviderDraftAuthKind::None => false,
+    }
 }
 
 fn provider_studio_selected_adapter_id(dialog: &ProviderStudioOverlay) -> Option<String> {
@@ -7471,18 +10087,6 @@ fn provider_studio_selected_adapter_models(
 fn provider_studio_selected_model_target(
     dialog: &ProviderStudioOverlay,
 ) -> Option<(String, String, Option<ProviderModel>)> {
-    if dialog.focus == ProviderStudioFocus::Catalog {
-        let entry = dialog.catalog_items.get(dialog.selected_catalog)?;
-        let adapter_id = if dialog.draft.default_adapter.trim().is_empty() {
-            provider_studio_selected_adapter_models(dialog)
-                .map(|adapter| adapter.adapter_id.clone())
-                .unwrap_or_else(|| "openai".to_owned())
-        } else {
-            dialog.draft.default_adapter.clone()
-        };
-        return Some((adapter_id, entry.model_id.clone(), None));
-    }
-
     let adapter_models = provider_studio_selected_adapter_models(dialog)?;
     let model = adapter_models.models.get(dialog.selected_model)?.clone();
     Some((
@@ -7492,30 +10096,930 @@ fn provider_studio_selected_model_target(
     ))
 }
 
+fn provider_studio_selected_adapter_models_for_save(
+    dialog: &ProviderStudioOverlay,
+) -> Option<ProviderAdapterModelsResource> {
+    let adapter_models = provider_studio_selected_adapter_models(dialog)?.clone();
+    let ProviderAdapterModelsResource {
+        adapter_id,
+        enabled,
+        resolved_base_url,
+        models,
+        error,
+    } = adapter_models;
+    let selected_models = models
+        .into_iter()
+        .filter(|model| {
+            provider_studio_model_selected(dialog, adapter_id.as_str(), model.id.as_str())
+        })
+        .collect::<Vec<_>>();
+    Some(ProviderAdapterModelsResource {
+        adapter_id,
+        enabled,
+        resolved_base_url,
+        models: selected_models,
+        error,
+    })
+}
+
+fn provider_studio_model_selected(
+    dialog: &ProviderStudioOverlay,
+    adapter_id: &str,
+    model_id: &str,
+) -> bool {
+    dialog
+        .selected_model_keys
+        .contains(provider_studio_model_key(adapter_id, model_id).as_str())
+}
+
+fn provider_studio_selected_models_for_adapter<'a>(
+    dialog: &'a ProviderStudioOverlay,
+    adapter_models: &'a ProviderAdapterModelsResource,
+) -> Vec<&'a ProviderModel> {
+    adapter_models
+        .models
+        .iter()
+        .filter(|model| {
+            provider_studio_model_selected(
+                dialog,
+                adapter_models.adapter_id.as_str(),
+                model.id.as_str(),
+            )
+        })
+        .collect()
+}
+
+fn provider_studio_restore_model_selection(dialog: &mut ProviderStudioOverlay) {
+    let available = dialog
+        .adapter_models
+        .iter()
+        .flat_map(|adapter_models| {
+            adapter_models.models.iter().map(|model| {
+                provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_str())
+            })
+        })
+        .collect::<BTreeSet<_>>();
+    dialog
+        .selected_model_keys
+        .retain(|model_key| available.contains(model_key));
+    for adapter_models in &dialog.adapter_models {
+        let adapter_selected = dialog
+            .selected_adapter_ids
+            .contains(adapter_models.adapter_id.as_str());
+        if !adapter_selected || adapter_models.error.is_some() {
+            continue;
+        }
+        let has_any = adapter_models.models.iter().any(|model| {
+            provider_studio_model_selected(
+                dialog,
+                adapter_models.adapter_id.as_str(),
+                model.id.as_str(),
+            )
+        });
+        if !has_any {
+            for model in &adapter_models.models {
+                dialog.selected_model_keys.insert(provider_studio_model_key(
+                    adapter_models.adapter_id.as_str(),
+                    model.id.as_str(),
+                ));
+            }
+        }
+    }
+}
+
+fn provider_studio_first_selected_model<'a>(
+    dialog: &'a ProviderStudioOverlay,
+    adapter_id: &str,
+) -> Option<&'a ProviderModel> {
+    dialog
+        .adapter_models
+        .iter()
+        .find(|adapter_models| adapter_models.adapter_id == adapter_id)
+        .and_then(|adapter_models| {
+            adapter_models
+                .models
+                .iter()
+                .find(|model| provider_studio_model_selected(dialog, adapter_id, model.id.as_str()))
+        })
+}
+
+fn provider_studio_ensure_default_selection(dialog: &mut ProviderStudioOverlay) {
+    let default_adapter_valid = dialog.adapter_models.iter().any(|adapter_models| {
+        adapter_models.error.is_none()
+            && dialog
+                .selected_adapter_ids
+                .contains(adapter_models.adapter_id.as_str())
+            && adapter_models.adapter_id == dialog.draft.default_adapter
+            && adapter_models.models.iter().any(|model| {
+                provider_studio_model_selected(
+                    dialog,
+                    adapter_models.adapter_id.as_str(),
+                    model.id.as_str(),
+                )
+            })
+    });
+    if !default_adapter_valid {
+        if let Some(adapter_models) = dialog.adapter_models.iter().find(|adapter_models| {
+            adapter_models.error.is_none()
+                && dialog
+                    .selected_adapter_ids
+                    .contains(adapter_models.adapter_id.as_str())
+                && !provider_studio_selected_models_for_adapter(dialog, adapter_models).is_empty()
+        }) {
+            dialog.draft.default_adapter = adapter_models.adapter_id.clone();
+        }
+    }
+
+    let default_model_valid =
+        provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str())
+            .is_some_and(|model| model.id.as_str() == dialog.draft.default_model.as_str());
+    if !default_model_valid {
+        if let Some(model) =
+            provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str())
+        {
+            dialog.draft.default_model = model.id.to_string();
+        } else {
+            dialog.draft.default_model.clear();
+        }
+    }
+}
+
+fn provider_studio_active_tokens(
+    draft: &ProviderConfigDraft,
+) -> Option<&crate::backend::ProviderOAuthTokensDraft> {
+    match draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => {
+            Some(&draft.credential_drafts.openai_chatgpt.tokens)
+        }
+        Some(CredentialIssuer::GithubCopilot) => {
+            Some(&draft.credential_drafts.github_copilot.tokens)
+        }
+        Some(CredentialIssuer::Gitlab) => Some(&draft.credential_drafts.gitlab.tokens),
+        Some(CredentialIssuer::AtomGit) => Some(&draft.credential_drafts.atomgit.tokens),
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+    }
+}
+
+fn provider_studio_active_tokens_mut(
+    draft: &mut ProviderConfigDraft,
+) -> Option<&mut crate::backend::ProviderOAuthTokensDraft> {
+    match draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => {
+            Some(&mut draft.credential_drafts.openai_chatgpt.tokens)
+        }
+        Some(CredentialIssuer::GithubCopilot) => {
+            Some(&mut draft.credential_drafts.github_copilot.tokens)
+        }
+        Some(CredentialIssuer::Gitlab) => Some(&mut draft.credential_drafts.gitlab.tokens),
+        Some(CredentialIssuer::AtomGit) => Some(&mut draft.credential_drafts.atomgit.tokens),
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+    }
+}
+
+fn provider_studio_set_redirect_uri(draft: &mut ProviderConfigDraft, value: String) {
+    match draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => {
+            draft.credential_drafts.openai_chatgpt.redirect_uri = value
+        }
+        Some(CredentialIssuer::Gitlab) => draft.credential_drafts.gitlab.redirect_uri = value,
+        _ => {}
+    }
+}
+
+fn provider_studio_set_callback_url(draft: &mut ProviderConfigDraft, value: String) {
+    match draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => {
+            draft.credential_drafts.openai_chatgpt.callback_url = value
+        }
+        Some(CredentialIssuer::Gitlab) => draft.credential_drafts.gitlab.callback_url = value,
+        _ => {}
+    }
+}
+
+fn provider_studio_set_refresh_token(draft: &mut ProviderConfigDraft, value: String) {
+    if let Some(tokens) = provider_studio_active_tokens_mut(draft) {
+        tokens.refresh_token = value;
+    }
+}
+
+fn provider_studio_set_access_token(draft: &mut ProviderConfigDraft, value: String) {
+    if let Some(tokens) = provider_studio_active_tokens_mut(draft) {
+        tokens.access_token = value;
+    }
+}
+
+fn provider_studio_set_expires_at_ms(draft: &mut ProviderConfigDraft, value: String) {
+    if let Some(tokens) = provider_studio_active_tokens_mut(draft) {
+        tokens.expires_at_ms = value;
+    }
+}
+
+fn provider_studio_set_account_id(draft: &mut ProviderConfigDraft, value: String) {
+    match draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => {
+            draft.credential_drafts.openai_chatgpt.account_id = value
+        }
+        Some(CredentialIssuer::AtomGit) => draft.credential_drafts.atomgit.account_id = value,
+        _ => {}
+    }
+}
+
+fn provider_studio_supports_interactive_auth(draft: &ProviderConfigDraft) -> bool {
+    matches!(
+        draft.auth_kind,
+        ProviderDraftAuthKind::Credential(Some(
+            CredentialIssuer::OpenaiChatgpt
+                | CredentialIssuer::GithubCopilot
+                | CredentialIssuer::Gitlab
+                | CredentialIssuer::AtomGit
+        ))
+    )
+}
+
+fn provider_studio_supports_saved_model_listing(draft: &ProviderConfigDraft) -> bool {
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Api | ProviderDraftAuthKind::Gitlab => true,
+        ProviderDraftAuthKind::Credential(Some(issuer)) => issuer.supports_saved_model_listing(),
+        ProviderDraftAuthKind::Unset
+        | ProviderDraftAuthKind::None
+        | ProviderDraftAuthKind::Credential(None)
+        | ProviderDraftAuthKind::BedrockSigv4 => false,
+    }
+}
+
+fn provider_studio_can_request_adapter_models(dialog: &ProviderStudioOverlay) -> bool {
+    if dialog.draft.auth_kind.supports_draft_model_listing() {
+        return true;
+    }
+    dialog.draft.source_provider_id.is_some()
+        && provider_studio_supports_saved_model_listing(&dialog.draft)
+}
+
+fn provider_studio_summary_value(value: &str, max_width: usize) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| truncate_display_width(value, max_width))
+}
+
+fn provider_studio_labeled_summary(label: &str, value: &str, max_width: usize) -> Option<String> {
+    provider_studio_summary_value(value, max_width).map(|value| format!("{label} {value}"))
+}
+
+fn provider_studio_tokens_present(draft: &ProviderConfigDraft) -> bool {
+    provider_studio_active_tokens(draft).is_some_and(|tokens| {
+        !tokens.refresh_token.trim().is_empty() || !tokens.access_token.trim().is_empty()
+    })
+}
+
+fn provider_studio_status_with_summary(status: &str, summary: Option<String>) -> String {
+    summary
+        .map(|summary| format!("{status}  ·  {summary}"))
+        .unwrap_or_else(|| status.to_owned())
+}
+
+fn provider_studio_browser_continue_summary(prefix: &str, state: &str) -> String {
+    provider_studio_summary_value(state, 20)
+        .map(|state| format!("{prefix}  ·  state {state}"))
+        .unwrap_or_else(|| prefix.to_owned())
+}
+
+fn provider_studio_start_auth_summary(dialog: &ProviderStudioOverlay) -> String {
+    let status = provider_studio_auth_status_summary(dialog);
+    match dialog.draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => dialog
+            .draft
+            .credential_drafts
+            .openai_chatgpt
+            .browser
+            .as_ref()
+            .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
+            .unwrap_or_else(|| status.to_owned()),
+        Some(CredentialIssuer::GithubCopilot) => dialog
+            .draft
+            .credential_drafts
+            .github_copilot
+            .device
+            .as_ref()
+            .and_then(|device| {
+                let mut parts = Vec::new();
+                if let Some(url) =
+                    provider_studio_summary_value(device.verification_url.as_str(), 40)
+                {
+                    parts.push(url);
+                }
+                if let Some(code) = provider_studio_summary_value(device.user_code.as_str(), 18) {
+                    parts.push(format!("code {code}"));
+                }
+                (!parts.is_empty()).then(|| parts.join("  ·  "))
+            })
+            .unwrap_or_else(|| status.to_owned()),
+        Some(CredentialIssuer::Gitlab) => dialog
+            .draft
+            .credential_drafts
+            .gitlab
+            .browser
+            .as_ref()
+            .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
+            .unwrap_or_else(|| status.to_owned()),
+        Some(CredentialIssuer::AtomGit) => dialog
+            .draft
+            .credential_drafts
+            .atomgit
+            .browser
+            .as_ref()
+            .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
+            .unwrap_or_else(|| status.to_owned()),
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status.to_owned(),
+    }
+}
+
+fn provider_studio_continue_auth_summary(dialog: &ProviderStudioOverlay) -> String {
+    let status = provider_studio_auth_status_summary(dialog);
+    match dialog.draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => provider_studio_labeled_summary(
+            "callback",
+            dialog
+                .draft
+                .credential_drafts
+                .openai_chatgpt
+                .callback_url
+                .as_str(),
+            44,
+        )
+        .or_else(|| {
+            dialog
+                .draft
+                .credential_drafts
+                .openai_chatgpt
+                .browser
+                .as_ref()
+                .map(|session| {
+                    provider_studio_browser_continue_summary(
+                        "paste callback_url",
+                        session.state.as_str(),
+                    )
+                })
+        })
+        .unwrap_or_else(|| status.to_owned()),
+        Some(CredentialIssuer::GithubCopilot) => dialog
+            .draft
+            .credential_drafts
+            .github_copilot
+            .device
+            .as_ref()
+            .map(|device| {
+                let mut parts = vec![format!("poll every {}s", device.interval_seconds.max(1))];
+                if let Some(code) = provider_studio_summary_value(device.user_code.as_str(), 18) {
+                    parts.push(format!("code {code}"));
+                }
+                parts.join("  ·  ")
+            })
+            .unwrap_or_else(|| status.to_owned()),
+        Some(CredentialIssuer::Gitlab) => provider_studio_labeled_summary(
+            "callback",
+            dialog.draft.credential_drafts.gitlab.callback_url.as_str(),
+            44,
+        )
+        .or_else(|| {
+            dialog
+                .draft
+                .credential_drafts
+                .gitlab
+                .browser
+                .as_ref()
+                .map(|session| {
+                    provider_studio_browser_continue_summary(
+                        "paste callback_url",
+                        session.state.as_str(),
+                    )
+                })
+        })
+        .unwrap_or_else(|| status.to_owned()),
+        Some(CredentialIssuer::AtomGit) => dialog
+            .draft
+            .credential_drafts
+            .atomgit
+            .browser
+            .as_ref()
+            .map(|session| {
+                provider_studio_browser_continue_summary(
+                    "poll browser result",
+                    session.state.as_str(),
+                )
+            })
+            .unwrap_or_else(|| status.to_owned()),
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status.to_owned(),
+    }
+}
+
+fn provider_studio_auth_details_hint(draft: &ProviderConfigDraft) -> Option<String> {
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Unset
+        | ProviderDraftAuthKind::None
+        | ProviderDraftAuthKind::Credential(None) => None,
+        ProviderDraftAuthKind::Api => {
+            provider_studio_labeled_summary("env", draft.api_key_env.as_str(), 28)
+                .or_else(|| provider_studio_summary_value(draft.base_url.as_str(), 48))
+        }
+        ProviderDraftAuthKind::Gitlab => {
+            provider_studio_summary_value(draft.instance_url.as_str(), 48)
+                .or_else(|| provider_studio_labeled_summary("env", draft.api_key_env.as_str(), 28))
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
+            provider_studio_labeled_summary(
+                "account",
+                draft.credential_drafts.openai_chatgpt.account_id.as_str(),
+                24,
+            )
+            .or_else(|| {
+                provider_studio_labeled_summary(
+                    "callback",
+                    draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
+                    36,
+                )
+            })
+            .or_else(|| {
+                provider_studio_labeled_summary(
+                    "redirect",
+                    draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
+                    36,
+                )
+            })
+            .or_else(|| provider_studio_tokens_present(draft).then(|| "tokens set".to_owned()))
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
+            provider_studio_summary_value(
+                draft
+                    .credential_drafts
+                    .github_copilot
+                    .enterprise_domain
+                    .as_str(),
+                32,
+            )
+            .or_else(|| provider_studio_tokens_present(draft).then(|| "tokens set".to_owned()))
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
+            provider_studio_summary_value(draft.instance_url.as_str(), 48)
+                .or_else(|| {
+                    provider_studio_labeled_summary(
+                        "callback",
+                        draft.credential_drafts.gitlab.callback_url.as_str(),
+                        36,
+                    )
+                })
+                .or_else(|| {
+                    provider_studio_labeled_summary(
+                        "redirect",
+                        draft.credential_drafts.gitlab.redirect_uri.as_str(),
+                        36,
+                    )
+                })
+                .or_else(|| provider_studio_tokens_present(draft).then(|| "tokens set".to_owned()))
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc)) => {
+            provider_studio_summary_value(draft.base_url.as_str(), 48)
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::SapAiCore)) => {
+            provider_studio_labeled_summary("env", draft.service_key_env.as_str(), 28)
+                .or_else(|| provider_studio_summary_value(draft.base_url.as_str(), 48))
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+            provider_studio_labeled_summary(
+                "name",
+                draft.credential_drafts.atomgit.display_name.as_str(),
+                28,
+            )
+            .or_else(|| {
+                provider_studio_labeled_summary(
+                    "user",
+                    draft.credential_drafts.atomgit.username.as_str(),
+                    28,
+                )
+            })
+            .or_else(|| {
+                provider_studio_labeled_summary(
+                    "email",
+                    draft.credential_drafts.atomgit.email.as_str(),
+                    32,
+                )
+            })
+            .or_else(|| {
+                provider_studio_labeled_summary(
+                    "account",
+                    draft.credential_drafts.atomgit.account_id.as_str(),
+                    24,
+                )
+            })
+            .or_else(|| provider_studio_tokens_present(draft).then(|| "tokens set".to_owned()))
+        }
+        ProviderDraftAuthKind::BedrockSigv4 => {
+            provider_studio_labeled_summary("profile", draft.profile.as_str(), 24)
+                .or_else(|| provider_studio_labeled_summary("region", draft.region.as_str(), 24))
+                .or_else(|| provider_studio_summary_value(draft.base_url.as_str(), 48))
+                .or_else(|| {
+                    (!draft.access_key_id.trim().is_empty()
+                        && !draft.secret_access_key.trim().is_empty())
+                    .then(|| "keys set".to_owned())
+                })
+        }
+    }
+}
+
+fn provider_studio_auth_details_summary(dialog: &ProviderStudioOverlay) -> String {
+    provider_studio_status_with_summary(
+        provider_studio_auth_status_summary(dialog),
+        provider_studio_auth_details_hint(&dialog.draft),
+    )
+}
+
+fn provider_studio_main_field_value(
+    dialog: &ProviderStudioOverlay,
+    field: ProviderStudioField,
+) -> String {
+    match field {
+        ProviderStudioField::AuthStatus => provider_studio_auth_status_summary(dialog).to_owned(),
+        ProviderStudioField::StartAuthAction => provider_studio_start_auth_summary(dialog),
+        ProviderStudioField::ContinueAuthAction => provider_studio_continue_auth_summary(dialog),
+        ProviderStudioField::EditAuthDetailsAction => provider_studio_auth_details_summary(dialog),
+        _ => provider_studio_field_value(&dialog.draft, field),
+    }
+}
+
+fn provider_studio_auth_state_lines(dialog: &ProviderStudioOverlay) -> Vec<String> {
+    match dialog.draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => dialog
+            .draft
+            .credential_drafts
+            .openai_chatgpt
+            .browser
+            .as_ref()
+            .map(|session| {
+                vec![
+                    "oauth browser session ready · open the copied authorize URL".to_owned(),
+                    format!(
+                        "authorize {}",
+                        truncate_display_width(session.authorize_url.as_str(), 56)
+                    ),
+                    format!(
+                        "paste the final callback URL, then press p  ·  state {}",
+                        truncate_display_width(session.state.as_str(), 24)
+                    ),
+                ]
+            })
+            .unwrap_or_default(),
+        Some(CredentialIssuer::GithubCopilot) => dialog
+            .draft
+            .credential_drafts
+            .github_copilot
+            .device
+            .as_ref()
+            .map(|device| {
+                vec![
+                    format!(
+                        "device login ready · open the copied verification URL and enter {}",
+                        device.user_code
+                    ),
+                    format!(
+                        "verify {}",
+                        truncate_display_width(device.verification_url.as_str(), 56)
+                    ),
+                    format!("press p to poll  ·  interval {}s", device.interval_seconds),
+                ]
+            })
+            .unwrap_or_default(),
+        Some(CredentialIssuer::Gitlab) => dialog
+            .draft
+            .credential_drafts
+            .gitlab
+            .browser
+            .as_ref()
+            .map(|session| {
+                vec![
+                    "gitlab browser session ready · open the copied authorize URL".to_owned(),
+                    format!(
+                        "authorize {}",
+                        truncate_display_width(session.authorize_url.as_str(), 56)
+                    ),
+                    format!(
+                        "paste the final callback URL, then press p  ·  state {}",
+                        truncate_display_width(session.state.as_str(), 24)
+                    ),
+                ]
+            })
+            .unwrap_or_default(),
+        Some(CredentialIssuer::AtomGit) => dialog
+            .draft
+            .credential_drafts
+            .atomgit
+            .browser
+            .as_ref()
+            .map(|session| {
+                vec![
+                    "atomgit browser session ready · open the copied authorize URL".to_owned(),
+                    format!(
+                        "authorize {}",
+                        truncate_display_width(session.authorize_url.as_str(), 56)
+                    ),
+                    format!(
+                        "finish the browser flow, then press p  ·  state {}",
+                        truncate_display_width(session.state.as_str(), 24)
+                    ),
+                ]
+            })
+            .unwrap_or_default(),
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => Vec::new(),
+    }
+}
+
+fn provider_studio_detail_fields(dialog: &ProviderStudioOverlay) -> Vec<ProviderStudioField> {
+    match dialog.draft.auth_kind {
+        ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::None => Vec::new(),
+        ProviderDraftAuthKind::Api => {
+            let mut fields = Vec::new();
+            if provider_studio_base_url_visible(dialog) {
+                fields.push(ProviderStudioField::BaseUrl);
+            }
+            fields.extend([ProviderStudioField::ApiKeyEnv, ProviderStudioField::ApiKey]);
+            fields
+        }
+        ProviderDraftAuthKind::Gitlab => vec![
+            ProviderStudioField::InstanceUrl,
+            ProviderStudioField::ApiKeyEnv,
+            ProviderStudioField::ApiKey,
+        ],
+        ProviderDraftAuthKind::Credential(issuer) => match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => vec![
+                ProviderStudioField::RedirectUri,
+                ProviderStudioField::CallbackUrl,
+                ProviderStudioField::RefreshToken,
+                ProviderStudioField::AccessToken,
+                ProviderStudioField::ExpiresAtMs,
+                ProviderStudioField::AccountId,
+            ],
+            Some(CredentialIssuer::GithubCopilot) => vec![
+                ProviderStudioField::EnterpriseDomain,
+                ProviderStudioField::RefreshToken,
+                ProviderStudioField::AccessToken,
+                ProviderStudioField::ExpiresAtMs,
+            ],
+            Some(CredentialIssuer::Gitlab) => vec![
+                ProviderStudioField::InstanceUrl,
+                ProviderStudioField::RedirectUri,
+                ProviderStudioField::CallbackUrl,
+                ProviderStudioField::RefreshToken,
+                ProviderStudioField::AccessToken,
+                ProviderStudioField::ExpiresAtMs,
+            ],
+            Some(CredentialIssuer::GoogleAdc) => {
+                if provider_studio_base_url_visible(dialog) {
+                    vec![ProviderStudioField::BaseUrl]
+                } else {
+                    Vec::new()
+                }
+            }
+            Some(CredentialIssuer::SapAiCore) => {
+                let mut fields = Vec::new();
+                if provider_studio_base_url_visible(dialog) {
+                    fields.push(ProviderStudioField::BaseUrl);
+                }
+                fields.push(ProviderStudioField::ServiceKeyEnv);
+                fields
+            }
+            Some(CredentialIssuer::AtomGit) => vec![
+                ProviderStudioField::RefreshToken,
+                ProviderStudioField::AccessToken,
+                ProviderStudioField::ExpiresAtMs,
+                ProviderStudioField::AccountId,
+                ProviderStudioField::Username,
+                ProviderStudioField::DisplayName,
+                ProviderStudioField::Email,
+                ProviderStudioField::AvatarUrl,
+            ],
+            None => Vec::new(),
+        },
+        ProviderDraftAuthKind::BedrockSigv4 => vec![
+            ProviderStudioField::BaseUrl,
+            ProviderStudioField::Region,
+            ProviderStudioField::Profile,
+            ProviderStudioField::AccessKeyId,
+            ProviderStudioField::SecretAccessKey,
+            ProviderStudioField::SessionToken,
+        ],
+    }
+}
+
+fn provider_studio_has_any_auth_detail_value(
+    draft: &ProviderConfigDraft,
+    fields: &[ProviderStudioField],
+) -> bool {
+    fields
+        .iter()
+        .any(|field| !provider_studio_field_value(draft, *field).trim().is_empty())
+}
+
+fn provider_studio_auth_is_configured(dialog: &ProviderStudioOverlay) -> bool {
+    match dialog.draft.auth_kind {
+        ProviderDraftAuthKind::Unset => false,
+        ProviderDraftAuthKind::None => true,
+        ProviderDraftAuthKind::Api => {
+            !dialog.draft.base_url.trim().is_empty()
+                && (!dialog.draft.api_key.trim().is_empty()
+                    || !dialog.draft.api_key_env.trim().is_empty())
+        }
+        ProviderDraftAuthKind::Gitlab => {
+            !dialog.draft.instance_url.trim().is_empty()
+                && (!dialog.draft.api_key.trim().is_empty()
+                    || !dialog.draft.api_key_env.trim().is_empty())
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt))
+        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot))
+        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab))
+        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+            provider_studio_active_tokens(&dialog.draft).is_some_and(|tokens| {
+                !tokens.refresh_token.trim().is_empty() || !tokens.access_token.trim().is_empty()
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc)) => {
+            !dialog.draft.base_url.trim().is_empty()
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::SapAiCore)) => {
+            !dialog.draft.base_url.trim().is_empty()
+                && !dialog.draft.service_key_env.trim().is_empty()
+        }
+        ProviderDraftAuthKind::Credential(None) => false,
+        ProviderDraftAuthKind::BedrockSigv4 => {
+            !dialog.draft.base_url.trim().is_empty()
+                && !dialog.draft.region.trim().is_empty()
+                && ((!dialog.draft.profile.trim().is_empty())
+                    || (!dialog.draft.access_key_id.trim().is_empty()
+                        && !dialog.draft.secret_access_key.trim().is_empty()))
+        }
+    }
+}
+
+fn provider_studio_auth_status_summary(dialog: &ProviderStudioOverlay) -> &'static str {
+    if !provider_studio_auth_state_lines(dialog).is_empty() {
+        return "pending";
+    }
+    let detail_fields = provider_studio_detail_fields(dialog);
+    if detail_fields.is_empty() {
+        return match dialog.draft.auth_kind {
+            ProviderDraftAuthKind::Unset => "unset",
+            ProviderDraftAuthKind::None => "none",
+            ProviderDraftAuthKind::Credential(None) => "select issuer",
+            ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::Gitlab
+            | ProviderDraftAuthKind::Credential(Some(_))
+            | ProviderDraftAuthKind::BedrockSigv4 => "unset",
+        };
+    }
+    if provider_studio_auth_is_configured(dialog) {
+        "configured"
+    } else if provider_studio_has_any_auth_detail_value(&dialog.draft, &detail_fields) {
+        "partial"
+    } else {
+        "unset"
+    }
+}
+
+fn provider_studio_visible_fields(dialog: &ProviderStudioOverlay) -> Vec<ProviderStudioField> {
+    let mut fields = vec![
+        ProviderStudioField::ProviderId,
+        ProviderStudioField::AuthMode,
+    ];
+    if matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::Credential(_)) {
+        fields.push(ProviderStudioField::CredentialIssuer);
+    }
+    if !provider_studio_detail_fields(dialog).is_empty() {
+        if provider_studio_supports_interactive_auth(&dialog.draft) {
+            fields.push(ProviderStudioField::StartAuthAction);
+            fields.push(ProviderStudioField::ContinueAuthAction);
+        }
+        fields.push(ProviderStudioField::EditAuthDetailsAction);
+    }
+    if !matches!(
+        dialog.draft.auth_kind,
+        ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::Credential(None)
+    ) {
+        fields.extend([
+            ProviderStudioField::DefaultAdapter,
+            ProviderStudioField::DefaultModel,
+        ]);
+    }
+    fields
+}
+
 fn provider_studio_field_label(field: ProviderStudioField) -> &'static str {
     match field {
         ProviderStudioField::ProviderId => "provider_id",
+        ProviderStudioField::AuthMode => "auth_mode",
+        ProviderStudioField::CredentialIssuer => "credential_issuer",
+        ProviderStudioField::AuthStatus => "auth_status",
+        ProviderStudioField::StartAuthAction => "start_auth",
+        ProviderStudioField::ContinueAuthAction => "continue_auth",
+        ProviderStudioField::EditAuthDetailsAction => "auth_details",
         ProviderStudioField::BaseUrl => "base_url",
+        ProviderStudioField::InstanceUrl => "instance_url",
         ProviderStudioField::ApiKeyEnv => "api_key_env",
         ProviderStudioField::ApiKey => "api_key",
+        ProviderStudioField::RedirectUri => "redirect_uri",
+        ProviderStudioField::CallbackUrl => "callback_url",
+        ProviderStudioField::RefreshToken => "refresh_token",
+        ProviderStudioField::AccessToken => "access_token",
+        ProviderStudioField::ExpiresAtMs => "expires_at_ms",
+        ProviderStudioField::AccountId => "account_id",
+        ProviderStudioField::EnterpriseDomain => "enterprise_domain",
+        ProviderStudioField::Username => "username",
+        ProviderStudioField::DisplayName => "display_name",
+        ProviderStudioField::Email => "email",
+        ProviderStudioField::AvatarUrl => "avatar_url",
+        ProviderStudioField::Region => "region",
+        ProviderStudioField::Profile => "profile",
+        ProviderStudioField::AccessKeyId => "access_key_id",
+        ProviderStudioField::SecretAccessKey => "secret_access_key",
+        ProviderStudioField::SessionToken => "session_token",
+        ProviderStudioField::ServiceKeyEnv => "service_key_env",
         ProviderStudioField::DefaultAdapter => "default_adapter",
         ProviderStudioField::DefaultModel => "default_model",
     }
 }
 
 fn provider_studio_field_prompt(i18n: &I18n, field: ProviderStudioField) -> String {
-    i18n.text_args(
-        "overlay-provider-studio-edit-prompt",
-        &crate::fl_args!("field" => provider_studio_field_label(field)),
-    )
+    match field {
+        ProviderStudioField::AuthMode => {
+            "Update auth_mode (none | api | gitlab_api | credential | bedrock_sigv4)".to_string()
+        }
+        ProviderStudioField::CredentialIssuer => {
+            "Update credential_issuer (openai_chatgpt | github_copilot | gitlab | google_adc | sap_ai_core | atomgit)".to_string()
+        }
+        ProviderStudioField::AuthStatus
+        | ProviderStudioField::StartAuthAction
+        | ProviderStudioField::ContinueAuthAction
+        | ProviderStudioField::EditAuthDetailsAction => String::new(),
+        _ => i18n.text_args(
+            "overlay-provider-studio-edit-prompt",
+            &crate::fl_args!("field" => provider_studio_field_label(field)),
+        ),
+    }
 }
 
 fn provider_studio_field_value(draft: &ProviderConfigDraft, field: ProviderStudioField) -> String {
     match field {
         ProviderStudioField::ProviderId => draft.provider_id.clone(),
+        ProviderStudioField::AuthMode => draft.auth_kind.mode_label().to_owned(),
+        ProviderStudioField::CredentialIssuer => draft.credential_issuer.clone(),
+        ProviderStudioField::AuthStatus => String::new(),
+        ProviderStudioField::StartAuthAction
+        | ProviderStudioField::ContinueAuthAction
+        | ProviderStudioField::EditAuthDetailsAction => String::new(),
         ProviderStudioField::BaseUrl => draft.base_url.clone(),
+        ProviderStudioField::InstanceUrl => draft.instance_url.clone(),
         ProviderStudioField::ApiKeyEnv => draft.api_key_env.clone(),
         ProviderStudioField::ApiKey => draft.api_key.clone(),
+        ProviderStudioField::RedirectUri => match draft.auth_kind.credential_issuer() {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                draft.credential_drafts.openai_chatgpt.redirect_uri.clone()
+            }
+            Some(CredentialIssuer::Gitlab) => draft.credential_drafts.gitlab.redirect_uri.clone(),
+            _ => String::new(),
+        },
+        ProviderStudioField::CallbackUrl => match draft.auth_kind.credential_issuer() {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                draft.credential_drafts.openai_chatgpt.callback_url.clone()
+            }
+            Some(CredentialIssuer::Gitlab) => draft.credential_drafts.gitlab.callback_url.clone(),
+            _ => String::new(),
+        },
+        ProviderStudioField::RefreshToken => provider_studio_active_tokens(draft)
+            .map(|tokens| tokens.refresh_token.clone())
+            .unwrap_or_default(),
+        ProviderStudioField::AccessToken => provider_studio_active_tokens(draft)
+            .map(|tokens| tokens.access_token.clone())
+            .unwrap_or_default(),
+        ProviderStudioField::ExpiresAtMs => provider_studio_active_tokens(draft)
+            .map(|tokens| tokens.expires_at_ms.clone())
+            .unwrap_or_default(),
+        ProviderStudioField::AccountId => match draft.auth_kind.credential_issuer() {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                draft.credential_drafts.openai_chatgpt.account_id.clone()
+            }
+            Some(CredentialIssuer::AtomGit) => draft.credential_drafts.atomgit.account_id.clone(),
+            _ => String::new(),
+        },
+        ProviderStudioField::EnterpriseDomain => draft
+            .credential_drafts
+            .github_copilot
+            .enterprise_domain
+            .clone(),
+        ProviderStudioField::Username => draft.credential_drafts.atomgit.username.clone(),
+        ProviderStudioField::DisplayName => draft.credential_drafts.atomgit.display_name.clone(),
+        ProviderStudioField::Email => draft.credential_drafts.atomgit.email.clone(),
+        ProviderStudioField::AvatarUrl => draft.credential_drafts.atomgit.avatar_url.clone(),
+        ProviderStudioField::Region => draft.region.clone(),
+        ProviderStudioField::Profile => draft.profile.clone(),
+        ProviderStudioField::AccessKeyId => draft.access_key_id.clone(),
+        ProviderStudioField::SecretAccessKey => draft.secret_access_key.clone(),
+        ProviderStudioField::SessionToken => draft.session_token.clone(),
+        ProviderStudioField::ServiceKeyEnv => draft.service_key_env.clone(),
         ProviderStudioField::DefaultAdapter => draft.default_adapter.clone(),
         ProviderStudioField::DefaultModel => draft.default_model.clone(),
     }
@@ -7527,11 +11031,184 @@ fn provider_studio_field_editable(
 ) -> bool {
     match field {
         ProviderStudioField::ProviderId => dialog.draft.source_provider_id.is_none(),
-        ProviderStudioField::BaseUrl
-        | ProviderStudioField::ApiKeyEnv
-        | ProviderStudioField::ApiKey => dialog.draft.auth_kind.is_api(),
+        ProviderStudioField::AuthMode => true,
+        ProviderStudioField::CredentialIssuer => {
+            matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::Credential(_))
+        }
+        ProviderStudioField::AuthStatus => false,
+        ProviderStudioField::StartAuthAction | ProviderStudioField::ContinueAuthAction => {
+            provider_studio_supports_interactive_auth(&dialog.draft)
+        }
+        ProviderStudioField::EditAuthDetailsAction => {
+            !provider_studio_detail_fields(dialog).is_empty()
+        }
+        ProviderStudioField::BaseUrl => match dialog.draft.auth_kind {
+            ProviderDraftAuthKind::Unset => false,
+            ProviderDraftAuthKind::Api | ProviderDraftAuthKind::BedrockSigv4 => {
+                provider_studio_base_url_visible(dialog)
+            }
+            ProviderDraftAuthKind::Credential(_) => provider_studio_base_url_visible(dialog),
+            ProviderDraftAuthKind::Gitlab | ProviderDraftAuthKind::None => false,
+        },
+        ProviderStudioField::InstanceUrl => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Gitlab
+                | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab))
+        ),
+        ProviderStudioField::ApiKeyEnv | ProviderStudioField::ApiKey => {
+            matches!(
+                dialog.draft.auth_kind,
+                ProviderDraftAuthKind::Api | ProviderDraftAuthKind::Gitlab
+            )
+        }
+        ProviderStudioField::RedirectUri => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(
+                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::Gitlab
+            ))
+        ),
+        ProviderStudioField::CallbackUrl => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(
+                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::Gitlab
+            ))
+        ),
+        ProviderStudioField::RefreshToken
+        | ProviderStudioField::AccessToken
+        | ProviderStudioField::ExpiresAtMs => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(
+                CredentialIssuer::OpenaiChatgpt
+                    | CredentialIssuer::GithubCopilot
+                    | CredentialIssuer::Gitlab
+                    | CredentialIssuer::AtomGit
+            ))
+        ),
+        ProviderStudioField::AccountId => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(
+                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::AtomGit
+            ))
+        ),
+        ProviderStudioField::EnterpriseDomain => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot))
+        ),
+        ProviderStudioField::Username
+        | ProviderStudioField::DisplayName
+        | ProviderStudioField::Email
+        | ProviderStudioField::AvatarUrl => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit))
+        ),
+        ProviderStudioField::Region
+        | ProviderStudioField::Profile
+        | ProviderStudioField::AccessKeyId
+        | ProviderStudioField::SecretAccessKey
+        | ProviderStudioField::SessionToken => {
+            matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::BedrockSigv4)
+        }
+        ProviderStudioField::ServiceKeyEnv => matches!(
+            dialog.draft.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(issuer)) if issuer.requires_service_key_env()
+        ),
         ProviderStudioField::DefaultAdapter | ProviderStudioField::DefaultModel => true,
     }
+}
+
+fn provider_studio_model_key(adapter_id: &str, model_id: &str) -> String {
+    format!("{adapter_id}\u{1f}{model_id}")
+}
+
+fn session_model_choice_item(
+    provider_id: &str,
+    default_adapter: Option<&str>,
+    model: ProviderModel,
+) -> SessionModelChoiceItem {
+    let adapter_id = model
+        .adapter_id
+        .as_ref()
+        .map(ToString::to_string)
+        .or_else(|| default_adapter.map(str::to_owned));
+    let model_ref = adapter_id
+        .as_deref()
+        .map(|adapter_id| ModelRef::new_with_adapter(provider_id, adapter_id, model.id.as_str()))
+        .unwrap_or_else(|| ModelRef::new(provider_id, model.id.as_str()));
+    let display_name = model
+        .display_name
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned();
+    let adapter_label = adapter_id
+        .clone()
+        .unwrap_or_else(|| default_adapter.unwrap_or("default").to_owned());
+    let context_window = model
+        .metadata
+        .limits
+        .context_window_tokens
+        .map(|value| format!("ctx {value}"))
+        .unwrap_or_else(|| "ctx ?".to_string());
+    let mut detail_parts = vec![provider_id.to_owned(), adapter_label, context_window];
+    if !display_name.is_empty() && display_name != model.id.as_str() {
+        detail_parts.push(display_name.clone());
+    }
+    let search_text = format!(
+        "{} {} {} {}",
+        provider_id,
+        model_ref
+            .adapter_id
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        model.id,
+        display_name
+    )
+    .to_ascii_lowercase();
+    SessionModelChoiceItem {
+        label: format!(
+            "{provider_id} / {} / {}",
+            model_ref
+                .adapter_id
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "default".to_owned()),
+            model.id
+        ),
+        detail: detail_parts.join(" · "),
+        search_text,
+        model: model_ref,
+    }
+}
+
+fn session_model_matches_current(candidate: &ModelRef, current: &ModelRef) -> bool {
+    candidate.provider_id == current.provider_id
+        && candidate.model_id == current.model_id
+        && (candidate.adapter_id == current.adapter_id || current.adapter_id.is_none())
+}
+
+fn provider_model_catalog_lookup_id(model: &ProviderModel) -> String {
+    model
+        .catalog_model_id
+        .as_ref()
+        .map(ToString::to_string)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| agena::model_catalog::canonical_model_catalog_id(model.id.as_str()))
+}
+
+fn provider_studio_catalog_match_entry<'a>(
+    model: &ProviderModel,
+    entries: &'a [ModelCatalogEntryResource],
+) -> Option<&'a ModelCatalogEntryResource> {
+    let lookup_id = provider_model_catalog_lookup_id(model);
+    entries
+        .iter()
+        .filter(|entry| entry.model_id == model.id.as_str() || entry.model_id == lookup_id)
+        .min_by_key(|entry| match entry.kind {
+            agena_api_server::local_api::ModelCatalogEntryKind::Custom => 0,
+            agena_api_server::local_api::ModelCatalogEntryKind::Official => 1,
+        })
 }
 
 impl SessionViewMode {
@@ -8047,7 +11724,17 @@ impl TranscriptState {
             .filter(|message| !latest_ids.contains(&message.id))
             .cloned()
             .collect::<Vec<_>>();
-        merged.extend(page.items);
+        for incoming in page.items {
+            if let Some(existing) = self
+                .messages
+                .iter()
+                .find(|message| message.id == incoming.id)
+            {
+                merged.push(merge_message_resources(existing, &incoming));
+            } else {
+                merged.push(incoming);
+            }
+        }
         merged.sort_by_key(message_sort_key);
         merged.dedup_by_key(|message| message.id);
         self.messages = merged;
@@ -8057,6 +11744,147 @@ impl TranscriptState {
         } else {
             self.clamp_scroll(width, height);
         }
+    }
+
+    fn apply_live_event(&mut self, event: &DomainEvent, width: u16, height: u16) -> bool {
+        let refresh_needed = match &event.kind {
+            AgenaSessionEvent::MessagePartUpdated(update) => {
+                self.apply_message_part_updated(update);
+                false
+            }
+            AgenaSessionEvent::MessagePartDelta(delta) => {
+                self.apply_message_part_delta(delta).is_err()
+            }
+            AgenaSessionEvent::AssistantMessageCompleted(completed) => {
+                let message = MessageResource {
+                    id: completed.message_id.raw(),
+                    session_id: self.session_id.unwrap_or_default(),
+                    role: MessageRole::Assistant,
+                    state: MessageStatus::Completed,
+                    created_at: completed.created_at,
+                    updated_at: completed.created_at,
+                    metadata: completed.metadata.clone(),
+                    usage: completed.usage.clone(),
+                    finish: Some(completed.finish_reason.to_string()),
+                    part_count: completed.parts.len() as u64,
+                    parts: Some(completed.parts.clone()),
+                };
+                self.upsert_message(message);
+                self.invalidate_render();
+                false
+            }
+            _ => false,
+        };
+
+        if !refresh_needed && let Some(seq) = event.meta.seq_session {
+            self.last_event_seq = Some(seq);
+        }
+
+        if self.follow_tail {
+            self.scroll_to_bottom(width, height);
+        } else {
+            self.clamp_scroll(width, height);
+        }
+
+        refresh_needed
+    }
+
+    fn apply_message_part_updated(&mut self, update: &agena::event::MessagePartUpdatedEvent) {
+        let shell = MessageResource {
+            id: update.message_id,
+            session_id: update.session_id,
+            role: api_message_role(update.message_role),
+            state: update.message_state,
+            created_at: update.message_created_at,
+            updated_at: timestamp_ms_or(update.ts_ms, update.message_created_at),
+            metadata: Default::default(),
+            usage: None,
+            finish: None,
+            part_count: 1,
+            parts: Some(vec![update.part.clone()]),
+        };
+
+        let Some(index) = self.upsert_message(shell) else {
+            return;
+        };
+        let message = &mut self.messages[index];
+        message.state = update.message_state;
+        message.updated_at = timestamp_ms_or(update.ts_ms, message.updated_at);
+        let parts = message.parts.get_or_insert_with(Vec::new);
+        if let Some(existing) = parts.iter_mut().find(|part| part.id == update.part.id) {
+            *existing = update.part.clone();
+        } else {
+            parts.push(update.part.clone());
+        }
+        parts.sort_by_key(|part| part.part_index);
+        message.part_count = parts.len() as u64;
+        self.invalidate_render();
+    }
+
+    fn apply_message_part_delta(
+        &mut self,
+        delta: &agena::event::MessagePartDeltaEvent,
+    ) -> Result<(), ()> {
+        let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.id == delta.message_id)
+        else {
+            return Err(());
+        };
+        let Some(parts) = message.parts.as_mut() else {
+            return Err(());
+        };
+        let Some(part) = parts.iter_mut().find(|part| part.id == delta.part_id) else {
+            return Err(());
+        };
+
+        if part.status == ExecutionStatus::Pending {
+            let _ = part.transition_status(ExecutionStatus::InProgress);
+        }
+        message.state = MessageStatus::InProgress;
+        message.updated_at = timestamp_ms_or(delta.ts_ms, message.updated_at);
+
+        let updated = match &delta.field {
+            agena::event::PartDeltaField::Text => part.append_text_delta(delta.delta.as_str()),
+            agena::event::PartDeltaField::ReasoningSummary => {
+                part.append_reasoning_summary_delta(delta.delta.clone())
+            }
+            agena::event::PartDeltaField::ReasoningRawContent => {
+                part.append_reasoning_raw_delta(delta.delta.clone())
+            }
+            agena::event::PartDeltaField::CommandStdout
+            | agena::event::PartDeltaField::CommandStderr => {
+                part.append_command_output_delta(delta.delta.as_str())
+            }
+            agena::event::PartDeltaField::ToolOutputText => {
+                part.append_tool_output_delta(delta.delta.as_str())
+            }
+            agena::event::PartDeltaField::Custom { .. } => false,
+        };
+        if !updated {
+            return Err(());
+        }
+        self.invalidate_render();
+        Ok(())
+    }
+
+    fn upsert_message(&mut self, incoming: MessageResource) -> Option<usize> {
+        let message_id = incoming.id;
+        if let Some(existing) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+        {
+            let merged = merge_message_resources(existing, &incoming);
+            *existing = merged;
+        } else {
+            self.messages.push(incoming);
+        }
+        self.messages.sort_by_key(message_sort_key);
+        self.messages
+            .iter()
+            .position(|message| message.id == message_id)
     }
 
     fn set_search_query(&mut self, query: String) {
@@ -9147,6 +12975,112 @@ impl Editor {
 
 fn message_sort_key(message: &MessageResource) -> (i64, i64) {
     (message.created_at.timestamp_millis(), message.id)
+}
+
+fn merge_message_resources(
+    current: &MessageResource,
+    incoming: &MessageResource,
+) -> MessageResource {
+    let mut merged = if incoming.updated_at >= current.updated_at {
+        incoming.clone()
+    } else {
+        current.clone()
+    };
+
+    let current_parts_score = message_parts_score(current.parts.as_ref());
+    let incoming_parts_score = message_parts_score(incoming.parts.as_ref());
+    merged.parts = if incoming.parts.is_none() && current.parts.is_some() {
+        current.parts.clone()
+    } else if current_parts_score > incoming_parts_score {
+        current.parts.clone()
+    } else {
+        incoming.parts.clone()
+    };
+
+    if message_status_rank(current.state) > message_status_rank(merged.state) {
+        merged.state = current.state;
+    }
+    if current.updated_at > merged.updated_at {
+        merged.updated_at = current.updated_at;
+    }
+    if merged.usage.is_none() {
+        merged.usage = current.usage.clone();
+    }
+    if merged.finish.is_none() {
+        merged.finish = current.finish.clone();
+    }
+    if let Some(parts) = merged.parts.as_mut() {
+        parts.sort_by_key(|part| part.part_index);
+        merged.part_count = parts.len() as u64;
+    } else {
+        merged.part_count = merged.part_count.max(current.part_count);
+    }
+
+    merged
+}
+
+fn message_parts_score(parts: Option<&Vec<MessagePart>>) -> usize {
+    parts
+        .map(|parts| parts.iter().map(message_part_score).sum())
+        .unwrap_or(0)
+}
+
+fn message_part_score(part: &MessagePart) -> usize {
+    let mut score = 0;
+    if part.content.is_some() {
+        score += 1;
+    }
+    if part
+        .summary
+        .as_deref()
+        .is_some_and(|summary| !summary.trim().is_empty())
+    {
+        score += 4;
+    }
+    match part.content.as_ref() {
+        Some(PartContent::Text(text)) if !text.text.trim().is_empty() => score += 16,
+        Some(PartContent::Reasoning(reasoning))
+            if !reasoning.summary.is_empty() || !reasoning.raw_content.is_empty() =>
+        {
+            score += 16;
+        }
+        Some(PartContent::Operation(operation)) => {
+            if operation.output_text().is_some() {
+                score += 16;
+            } else if operation.title().is_some() || operation.error_message().is_some() {
+                score += 8;
+            }
+        }
+        Some(PartContent::Attachment(_))
+        | Some(PartContent::Request(_))
+        | Some(PartContent::Error(_)) => {
+            score += 16;
+        }
+        _ => {}
+    }
+    score
+}
+
+fn message_status_rank(status: MessageStatus) -> u8 {
+    match status {
+        MessageStatus::Pending => 0,
+        MessageStatus::InProgress => 1,
+        MessageStatus::Completed => 2,
+        MessageStatus::Failed => 3,
+        MessageStatus::Cancelled => 4,
+    }
+}
+
+fn api_message_role(role: agena::role::Role) -> MessageRole {
+    match role {
+        agena::role::Role::User => MessageRole::User,
+        agena::role::Role::Assistant => MessageRole::Assistant,
+        agena::role::Role::System => MessageRole::System,
+    }
+}
+
+fn timestamp_ms_or(timestamp_ms: i64, fallback: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::<Utc>::from_timestamp_millis(timestamp_ms).unwrap_or(fallback)
 }
 
 fn assistant_message_text(message: &MessageResource) -> Option<String> {
@@ -10740,6 +14674,144 @@ impl PasteBurst {
 }
 
 impl RunOptionsState {
+    fn clear_model_stack(&mut self) {
+        self.model = None;
+        self.thinking_mode = None;
+        self.speed_mode = None;
+        self.verbosity = None;
+        self.parallel_tool_calls = None;
+    }
+
+    fn runtime_setting_summary(&self, field: RuntimeSettingSpec) -> String {
+        match field.id {
+            RuntimeSettingId::ThinkingMode => self
+                .thinking_mode
+                .as_deref()
+                .map(|value| format!("override \"{value}\""))
+                .unwrap_or_else(|| "default".to_string()),
+            RuntimeSettingId::SpeedMode => self
+                .speed_mode
+                .as_deref()
+                .map(|value| format!("override \"{value}\""))
+                .unwrap_or_else(|| "default".to_string()),
+            RuntimeSettingId::Verbosity => self
+                .verbosity
+                .as_deref()
+                .map(|value| format!("override \"{value}\""))
+                .unwrap_or_else(|| "default".to_string()),
+            RuntimeSettingId::ParallelToolCalls => self
+                .parallel_tool_calls
+                .map(|value| format!("override {}", if value { "on" } else { "off" }))
+                .unwrap_or_else(|| "default".to_string()),
+            RuntimeSettingId::Temperature => self
+                .temperature
+                .map(|value| format!("override {value:.2}"))
+                .unwrap_or_else(|| "default".to_string()),
+            RuntimeSettingId::MaxOutput => self
+                .max_output_tokens
+                .map(|value| format!("override {}", value))
+                .unwrap_or_else(|| "default".to_string()),
+            RuntimeSettingId::System => self
+                .system
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| {
+                    format!(
+                        "override {}",
+                        format_setting_value_inline(&JsonValue::String(value.clone()))
+                    )
+                })
+                .unwrap_or_else(|| "default".to_string()),
+        }
+    }
+
+    fn runtime_setting_input_text(&self, field: RuntimeSettingSpec) -> String {
+        match field.id {
+            RuntimeSettingId::ThinkingMode => self.thinking_mode.clone().unwrap_or_default(),
+            RuntimeSettingId::SpeedMode => self.speed_mode.clone().unwrap_or_default(),
+            RuntimeSettingId::Verbosity => self.verbosity.clone().unwrap_or_default(),
+            RuntimeSettingId::ParallelToolCalls => self
+                .parallel_tool_calls
+                .map(|value| {
+                    if value {
+                        "on".to_string()
+                    } else {
+                        "off".to_string()
+                    }
+                })
+                .unwrap_or_default(),
+            RuntimeSettingId::Temperature => self
+                .temperature
+                .map(|value| format!("{value:.2}"))
+                .unwrap_or_default(),
+            RuntimeSettingId::MaxOutput => self
+                .max_output_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            RuntimeSettingId::System => self.system.clone().unwrap_or_default(),
+        }
+    }
+
+    fn apply_runtime_setting_input(
+        &mut self,
+        field: RuntimeSettingSpec,
+        input: &str,
+    ) -> std::result::Result<String, String> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("clear") {
+            match field.id {
+                RuntimeSettingId::ThinkingMode => self.thinking_mode = None,
+                RuntimeSettingId::SpeedMode => self.speed_mode = None,
+                RuntimeSettingId::Verbosity => self.verbosity = None,
+                RuntimeSettingId::ParallelToolCalls => self.parallel_tool_calls = None,
+                RuntimeSettingId::Temperature => self.temperature = None,
+                RuntimeSettingId::MaxOutput => self.max_output_tokens = None,
+                RuntimeSettingId::System => self.system = None,
+            }
+            return Ok(format!("cleared {}", field.label.to_ascii_lowercase()));
+        }
+
+        match field.id {
+            RuntimeSettingId::ThinkingMode => self.thinking_mode = Some(trimmed.to_string()),
+            RuntimeSettingId::SpeedMode => self.speed_mode = Some(trimmed.to_string()),
+            RuntimeSettingId::Verbosity => self.verbosity = Some(trimmed.to_ascii_lowercase()),
+            RuntimeSettingId::ParallelToolCalls => {
+                let value = match trimmed.to_ascii_lowercase().as_str() {
+                    "true" | "on" | "yes" | "1" | "enabled" => true,
+                    "false" | "off" | "no" | "0" | "disabled" => false,
+                    _ => {
+                        return Err(format!(
+                            "{} expects true/false, on/off, yes/no, or 1/0",
+                            field.label
+                        ));
+                    }
+                };
+                self.parallel_tool_calls = Some(value);
+            }
+            RuntimeSettingId::Temperature => {
+                let value = trimmed
+                    .parse::<f32>()
+                    .map_err(|_| format!("{} expects a numeric value", field.label))?;
+                if !value.is_finite() {
+                    return Err(format!("{} expects a finite number", field.label));
+                }
+                self.temperature = Some(value);
+            }
+            RuntimeSettingId::MaxOutput => {
+                let value = trimmed
+                    .parse::<u32>()
+                    .map_err(|_| format!("{} expects a positive integer", field.label))?;
+                if value == 0 {
+                    return Err(format!("{} expects a positive integer", field.label));
+                }
+                self.max_output_tokens = Some(value);
+            }
+            RuntimeSettingId::System => self.system = Some(trimmed.to_string()),
+        }
+
+        Ok(format!("updated {}", field.label.to_ascii_lowercase()))
+    }
+
     fn to_request(&self) -> RunOptions {
         RunOptions {
             model: self.model.clone(),
@@ -11381,13 +15453,21 @@ fn slash_command_suggestion_context_for_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::{
+        ProviderBrowserAuthSessionDraft, ProviderCredentialDraftBundle,
+        ProviderDeviceAuthSessionDraft,
+    };
     use agena::{
         config::LoadConfigRequest,
-        event::{CommandContext, CommandEndEvent},
-        message::{
-            ExecutionStatus, MessageMetadata, MessageStatus, PartContent, UserInputOption,
-            UserInputQuestion,
+        event::{
+            CommandContext, CommandEndEvent, MessagePartDeltaEvent, MessagePartUpdatedEvent,
+            PartDeltaField,
         },
+        message::{
+            ExecutionStatus, MessageMetadata, MessageStatus, PartContent, ReasoningPart,
+            UserInputOption, UserInputQuestion,
+        },
+        provider::auth::CredentialIssuer,
         runtime::AgenaRuntime,
     };
     use chrono::Utc;
@@ -11395,6 +15475,72 @@ mod tests {
     use sea_orm::Database;
     use serde_json::json;
     use std::{fs, sync::Arc};
+
+    fn provider_studio_test_draft() -> ProviderConfigDraft {
+        ProviderConfigDraft {
+            source_provider_id: None,
+            provider_id: "test".to_string(),
+            auth_kind: ProviderDraftAuthKind::Unset,
+            base_url: String::new(),
+            instance_url: String::new(),
+            api_key_env: String::new(),
+            api_key: String::new(),
+            credential_issuer: String::new(),
+            region: String::new(),
+            profile: String::new(),
+            access_key_id: String::new(),
+            secret_access_key: String::new(),
+            session_token: String::new(),
+            service_key_env: String::new(),
+            credential_drafts: ProviderCredentialDraftBundle::default(),
+            default_adapter: String::new(),
+            default_model: String::new(),
+        }
+    }
+
+    fn provider_studio_test_dialog(draft: ProviderConfigDraft) -> ProviderStudioOverlay {
+        ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Fields,
+            selected_field: 0,
+            draft,
+            adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: Vec::new(),
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        }
+    }
+
+    fn terminal_buffer_lines(terminal: &Terminal<TestBackend>) -> Vec<String> {
+        let buffer = terminal.backend().buffer();
+        let width = buffer.area.width as usize;
+        buffer
+            .content()
+            .chunks(width.max(1))
+            .map(|row| {
+                row.iter()
+                    .map(|cell| cell.symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
 
     #[test]
     fn derive_title_uses_first_non_empty_line() {
@@ -11486,6 +15632,1043 @@ mod tests {
     fn parse_pr_command_args_requires_title_before_options() {
         let error = parse_pr_command_args("--base main").expect_err("title should be required");
         assert!(error.to_string().contains("title"));
+    }
+
+    #[test]
+    fn choice_overlay_rows_include_clear_and_custom_entries() {
+        let dialog = ChoiceOverlay {
+            title: "Edit test".to_string(),
+            prompt: "prompt".to_string(),
+            footer: "footer".to_string(),
+            empty_message: "empty".to_string(),
+            input: Editor::from_text("custom-value".to_string()),
+            filter_query: "custom".to_string(),
+            all_items: vec![choice_item("preset", "preset option")],
+            items: vec![choice_item("preset", "preset option")],
+            selected: 0,
+            allow_custom: true,
+            allow_clear: true,
+            action: ChoiceOverlayAction::SettingsField(SETTINGS_FIELDS[0]),
+        };
+
+        let rows = App::choice_overlay_rows(&dialog);
+        assert!(matches!(rows[0], ChoiceRow::Clear));
+        assert!(matches!(rows[1], ChoiceRow::Custom(ref value) if value == "custom-value"));
+        assert!(matches!(rows[2], ChoiceRow::Item(_)));
+    }
+
+    #[test]
+    fn preferred_choice_overlay_selection_prefers_exact_option_then_custom() {
+        let option = choice_item("build", "agent");
+        let default_agent_field = SETTINGS_FIELDS
+            .iter()
+            .find(|field| field.path == "default.agent")
+            .copied()
+            .expect("default.agent field should exist");
+        let exact = ChoiceOverlay {
+            title: "Edit default.agent".to_string(),
+            prompt: "prompt".to_string(),
+            footer: "footer".to_string(),
+            empty_message: "empty".to_string(),
+            input: Editor::from_text("build".to_string()),
+            filter_query: String::new(),
+            all_items: vec![option.clone()],
+            items: vec![option.clone()],
+            selected: 0,
+            allow_custom: true,
+            allow_clear: true,
+            action: ChoiceOverlayAction::SettingsField(default_agent_field),
+        };
+        assert_eq!(App::preferred_choice_overlay_selection(&exact), 2);
+
+        let custom = ChoiceOverlay {
+            input: Editor::from_text("bespoke".to_string()),
+            ..exact
+        };
+        assert_eq!(App::preferred_choice_overlay_selection(&custom), 1);
+    }
+
+    #[test]
+    fn sync_choice_overlay_query_does_not_reset_selection_when_query_is_unchanged() {
+        let default_agent_field = SETTINGS_FIELDS
+            .iter()
+            .find(|field| field.path == "default.agent")
+            .copied()
+            .expect("default.agent field should exist");
+        let mut dialog = ChoiceOverlay {
+            title: "Edit".to_string(),
+            prompt: "prompt".to_string(),
+            footer: "footer".to_string(),
+            empty_message: "empty".to_string(),
+            input: Editor::from_text("a".to_string()),
+            filter_query: "a".to_string(),
+            all_items: vec![
+                choice_item("default", "default agent"),
+                choice_item("plan", "plan agent"),
+                choice_item("agent", "generic agent"),
+            ],
+            items: vec![
+                choice_item("default", "default agent"),
+                choice_item("plan", "plan agent"),
+                choice_item("agent", "generic agent"),
+            ],
+            selected: 3,
+            allow_custom: true,
+            allow_clear: true,
+            action: ChoiceOverlayAction::SettingsField(default_agent_field),
+        };
+
+        App::sync_choice_overlay_query(&mut dialog, true);
+
+        assert_eq!(dialog.selected, 3);
+    }
+
+    #[test]
+    fn provider_studio_default_model_choice_items_dedupes_and_marks_catalog_matches() {
+        let mut dialog = ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Fields,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: Some("openai".to_string()),
+                provider_id: "openai".to_string(),
+                auth_kind: ProviderDraftAuthKind::Api,
+                base_url: String::new(),
+                instance_url: String::new(),
+                api_key_env: String::new(),
+                api_key: String::new(),
+                credential_issuer: "openai_chatgpt".to_string(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: "openai".to_string(),
+                default_model: String::new(),
+            },
+            adapter_models: vec![
+                ProviderAdapterModelsResource {
+                    adapter_id: "openai".to_string(),
+                    enabled: true,
+                    resolved_base_url: None,
+                    models: vec![
+                        ProviderModel::new("openai", "gpt-5.4"),
+                        ProviderModel::new("openai", "gpt-5.4"),
+                    ],
+                    error: None,
+                },
+                ProviderAdapterModelsResource {
+                    adapter_id: "responses".to_string(),
+                    enabled: true,
+                    resolved_base_url: None,
+                    models: vec![ProviderModel::new("openai", "gpt-5.5")],
+                    error: None,
+                },
+            ],
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: vec!["openai".to_string(), "responses".to_string()],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::from([(
+                provider_studio_model_key("openai", "gpt-5.4"),
+                ModelCatalogEntryResource {
+                    model_id: "gpt-5.4".to_string(),
+                    kind: agena_api_server::local_api::ModelCatalogEntryKind::Official,
+                    source: agena_api_server::local_api::ModelCatalogSourceKind::Generated,
+                    source_label: None,
+                    has_local_override: false,
+                    display_name: Some("GPT-5.4".to_string()),
+                    origin: Some("openai".to_string()),
+                    lifecycle: None,
+                    context_window_tokens: None,
+                    max_input_tokens: None,
+                    max_output_tokens: None,
+                    description: None,
+                    knowledge_cutoff: None,
+                    release_date: None,
+                    last_updated: None,
+                    open_weights: None,
+                    default_thinking_mode: None,
+                    supports_parallel_tool_calls: None,
+                    supports_verbosity: None,
+                    default_verbosity: None,
+                    default_temperature: None,
+                    default_top_p: None,
+                    default_top_k: None,
+                    assistant_reasoning_interleaved: None,
+                    assistant_reasoning_field: None,
+                    output_modalities: Vec::new(),
+                    pricing: None,
+                    thinking_modes: BTreeMap::new(),
+                    speed_modes: BTreeMap::new(),
+                    capabilities: Default::default(),
+                },
+            )]),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+        dialog.selected_adapter = 0;
+
+        let items = provider_studio_default_model_choice_items(&dialog);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].value, "gpt-5.4");
+        assert!(items[0].detail.contains("catalog gpt-5.4"));
+        assert_eq!(items[1].value, "gpt-5.5");
+    }
+
+    #[test]
+    fn provider_draft_auth_mode_legacy_aliases_map_to_credential_issuers() {
+        assert_eq!(
+            ProviderDraftAuthKind::parse_mode("google_adc", None)
+                .expect("google adc alias should parse"),
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc))
+        );
+        assert_eq!(
+            ProviderDraftAuthKind::parse_mode("sap_ai_core", None)
+                .expect("sap ai core alias should parse"),
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::SapAiCore))
+        );
+    }
+
+    #[test]
+    fn provider_studio_visible_fields_follow_endpoint_credential_issuer_shape() {
+        let base_dialog = || ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Fields,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: None,
+                provider_id: "test".to_string(),
+                auth_kind: ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc)),
+                base_url: String::new(),
+                instance_url: String::new(),
+                api_key_env: String::new(),
+                api_key: String::new(),
+                credential_issuer: "google_adc".to_string(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: "openai".to_string(),
+                default_model: String::new(),
+            },
+            adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: Vec::new(),
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+
+        let google_fields = provider_studio_visible_fields(&base_dialog());
+        let google_detail_fields = provider_studio_detail_fields(&base_dialog());
+        assert!(google_fields.contains(&ProviderStudioField::CredentialIssuer));
+        assert!(google_fields.contains(&ProviderStudioField::EditAuthDetailsAction));
+        assert!(!google_fields.contains(&ProviderStudioField::BaseUrl));
+        assert!(google_detail_fields.contains(&ProviderStudioField::BaseUrl));
+        assert!(!google_detail_fields.contains(&ProviderStudioField::ServiceKeyEnv));
+
+        let mut sap_dialog = base_dialog();
+        sap_dialog.draft.auth_kind =
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::SapAiCore));
+        sap_dialog.draft.credential_issuer = "sap_ai_core".to_string();
+        let sap_fields = provider_studio_visible_fields(&sap_dialog);
+        let sap_detail_fields = provider_studio_detail_fields(&sap_dialog);
+        assert!(sap_fields.contains(&ProviderStudioField::EditAuthDetailsAction));
+        assert!(!sap_fields.contains(&ProviderStudioField::BaseUrl));
+        assert!(sap_detail_fields.contains(&ProviderStudioField::BaseUrl));
+        assert!(sap_detail_fields.contains(&ProviderStudioField::ServiceKeyEnv));
+        assert!(!sap_detail_fields.contains(&ProviderStudioField::ApiKey));
+        assert!(!sap_detail_fields.contains(&ProviderStudioField::ApiKeyEnv));
+    }
+
+    #[test]
+    fn provider_studio_visible_fields_follow_oauth_credential_issuer_shape() {
+        let dialog_for = |issuer: CredentialIssuer, issuer_label: &str| {
+            let mut draft = provider_studio_test_draft();
+            draft.provider_id = "oauth".to_string();
+            draft.auth_kind = ProviderDraftAuthKind::Credential(Some(issuer));
+            draft.credential_issuer = issuer_label.to_string();
+            draft.normalize_shape();
+            provider_studio_test_dialog(draft)
+        };
+
+        let openai_fields = provider_studio_visible_fields(&dialog_for(
+            CredentialIssuer::OpenaiChatgpt,
+            "openai_chatgpt",
+        ));
+        let openai_detail_fields = provider_studio_detail_fields(&dialog_for(
+            CredentialIssuer::OpenaiChatgpt,
+            "openai_chatgpt",
+        ));
+        assert!(openai_fields.contains(&ProviderStudioField::StartAuthAction));
+        assert!(openai_fields.contains(&ProviderStudioField::ContinueAuthAction));
+        assert!(openai_fields.contains(&ProviderStudioField::EditAuthDetailsAction));
+        assert!(!openai_fields.contains(&ProviderStudioField::RedirectUri));
+        assert!(openai_detail_fields.contains(&ProviderStudioField::RedirectUri));
+        assert!(openai_detail_fields.contains(&ProviderStudioField::CallbackUrl));
+        assert!(openai_detail_fields.contains(&ProviderStudioField::AccountId));
+        assert!(!openai_detail_fields.contains(&ProviderStudioField::EnterpriseDomain));
+
+        let copilot_fields = provider_studio_visible_fields(&dialog_for(
+            CredentialIssuer::GithubCopilot,
+            "github_copilot",
+        ));
+        let copilot_detail_fields = provider_studio_detail_fields(&dialog_for(
+            CredentialIssuer::GithubCopilot,
+            "github_copilot",
+        ));
+        assert!(copilot_fields.contains(&ProviderStudioField::StartAuthAction));
+        assert!(copilot_fields.contains(&ProviderStudioField::ContinueAuthAction));
+        assert!(!copilot_fields.contains(&ProviderStudioField::EnterpriseDomain));
+        assert!(copilot_detail_fields.contains(&ProviderStudioField::EnterpriseDomain));
+        assert!(copilot_detail_fields.contains(&ProviderStudioField::RefreshToken));
+        assert!(!copilot_detail_fields.contains(&ProviderStudioField::CallbackUrl));
+
+        let gitlab_dialog = dialog_for(CredentialIssuer::Gitlab, "gitlab");
+        let gitlab_fields = provider_studio_visible_fields(&gitlab_dialog);
+        let gitlab_detail_fields = provider_studio_detail_fields(&gitlab_dialog);
+        assert!(gitlab_fields.contains(&ProviderStudioField::StartAuthAction));
+        assert!(!gitlab_fields.contains(&ProviderStudioField::InstanceUrl));
+        assert!(gitlab_detail_fields.contains(&ProviderStudioField::InstanceUrl));
+        assert!(gitlab_detail_fields.contains(&ProviderStudioField::RedirectUri));
+        assert!(gitlab_detail_fields.contains(&ProviderStudioField::CallbackUrl));
+
+        let atomgit_dialog = dialog_for(CredentialIssuer::AtomGit, "atomgit");
+        let atomgit_fields = provider_studio_visible_fields(&atomgit_dialog);
+        let atomgit_detail_fields = provider_studio_detail_fields(&atomgit_dialog);
+        assert!(atomgit_fields.contains(&ProviderStudioField::StartAuthAction));
+        assert!(!atomgit_fields.contains(&ProviderStudioField::Username));
+        assert!(atomgit_detail_fields.contains(&ProviderStudioField::Username));
+        assert!(atomgit_detail_fields.contains(&ProviderStudioField::DisplayName));
+        assert!(atomgit_detail_fields.contains(&ProviderStudioField::Email));
+        assert!(atomgit_detail_fields.contains(&ProviderStudioField::AvatarUrl));
+    }
+
+    #[test]
+    fn provider_studio_main_action_rows_show_contextual_auth_summaries() {
+        let mut openai_draft = provider_studio_test_draft();
+        openai_draft.provider_id = "oauth".to_string();
+        openai_draft.auth_kind =
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt));
+        openai_draft.credential_issuer = "openai_chatgpt".to_string();
+        openai_draft.normalize_shape();
+
+        let empty_dialog = provider_studio_test_dialog(openai_draft.clone());
+        let empty_status = provider_studio_auth_status_summary(&empty_dialog);
+        assert_eq!(
+            provider_studio_main_field_value(&empty_dialog, ProviderStudioField::StartAuthAction),
+            empty_status
+        );
+        assert_eq!(
+            provider_studio_main_field_value(
+                &empty_dialog,
+                ProviderStudioField::ContinueAuthAction
+            ),
+            empty_status
+        );
+        let empty_details = provider_studio_main_field_value(
+            &empty_dialog,
+            ProviderStudioField::EditAuthDetailsAction,
+        );
+        assert!(empty_details.contains(empty_status));
+        assert!(!empty_details.contains('['));
+
+        let mut pending_openai = openai_draft.clone();
+        pending_openai.credential_drafts.openai_chatgpt.redirect_uri =
+            "http://localhost:1455/callback".to_string();
+        pending_openai.credential_drafts.openai_chatgpt.browser =
+            Some(ProviderBrowserAuthSessionDraft {
+                authorize_url: "https://auth.example.com/authorize?client_id=abc".to_string(),
+                state: "state-1234567890".to_string(),
+                pkce_verifier: "pkce".to_string(),
+            });
+        let pending_openai_dialog = provider_studio_test_dialog(pending_openai);
+        let start_value = provider_studio_main_field_value(
+            &pending_openai_dialog,
+            ProviderStudioField::StartAuthAction,
+        );
+        let continue_value = provider_studio_main_field_value(
+            &pending_openai_dialog,
+            ProviderStudioField::ContinueAuthAction,
+        );
+        let details_value = provider_studio_main_field_value(
+            &pending_openai_dialog,
+            ProviderStudioField::EditAuthDetailsAction,
+        );
+        assert!(start_value.contains("https://auth.example.com/authorize"));
+        assert!(continue_value.contains("paste callback_url"));
+        assert!(continue_value.contains("state-1234567890"));
+        assert!(details_value.contains("pending"));
+        assert!(!start_value.contains('['));
+        assert!(!continue_value.contains('['));
+        assert!(!details_value.contains('['));
+
+        let mut copilot_draft = provider_studio_test_draft();
+        copilot_draft.provider_id = "copilot".to_string();
+        copilot_draft.auth_kind =
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot));
+        copilot_draft.credential_issuer = "github_copilot".to_string();
+        copilot_draft.normalize_shape();
+        copilot_draft.credential_drafts.github_copilot.device =
+            Some(ProviderDeviceAuthSessionDraft {
+                verification_url: "https://github.com/login/device".to_string(),
+                user_code: "ABCD-EFGH".to_string(),
+                device_code: "device-code".to_string(),
+                interval_seconds: 5,
+            });
+        let copilot_dialog = provider_studio_test_dialog(copilot_draft);
+        assert!(
+            provider_studio_main_field_value(&copilot_dialog, ProviderStudioField::StartAuthAction)
+                .contains("https://github.com/login/device")
+        );
+        let copilot_continue = provider_studio_main_field_value(
+            &copilot_dialog,
+            ProviderStudioField::ContinueAuthAction,
+        );
+        assert!(copilot_continue.contains("poll every 5s"));
+        assert!(copilot_continue.contains("ABCD-EFGH"));
+    }
+
+    #[test]
+    fn provider_studio_api_fields_show_base_url_before_adapter_selection() {
+        let dialog = ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Fields,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: None,
+                provider_id: "shared_gateway".to_string(),
+                auth_kind: ProviderDraftAuthKind::Api,
+                base_url: String::new(),
+                instance_url: String::new(),
+                api_key_env: "OPENAI_API_KEY".to_string(),
+                api_key: String::new(),
+                credential_issuer: "openai_chatgpt".to_string(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: String::new(),
+                default_model: String::new(),
+            },
+            adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: vec![
+                "anthropic".to_string(),
+                "gemini".to_string(),
+                "openai".to_string(),
+            ],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+        let fields = provider_studio_visible_fields(&dialog);
+        let detail_fields = provider_studio_detail_fields(&dialog);
+        assert!(fields.contains(&ProviderStudioField::EditAuthDetailsAction));
+        assert!(!fields.contains(&ProviderStudioField::BaseUrl));
+        assert!(detail_fields.contains(&ProviderStudioField::BaseUrl));
+        assert!(detail_fields.contains(&ProviderStudioField::ApiKeyEnv));
+    }
+
+    #[test]
+    fn provider_studio_gitlab_api_fields_hide_base_url() {
+        let mut dialog = ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Fields,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: None,
+                provider_id: "gitlab_token".to_string(),
+                auth_kind: ProviderDraftAuthKind::Gitlab,
+                base_url: String::new(),
+                instance_url: String::new(),
+                api_key_env: "GITLAB_TOKEN".to_string(),
+                api_key: String::new(),
+                credential_issuer: "openai_chatgpt".to_string(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: "openai".to_string(),
+                default_model: "duo-chat-gpt-5-2".to_string(),
+            },
+            adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: vec!["anthropic".to_string(), "openai".to_string()],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+        dialog.draft.normalize_shape();
+
+        let fields = provider_studio_visible_fields(&dialog);
+        let detail_fields = provider_studio_detail_fields(&dialog);
+        assert!(!fields.contains(&ProviderStudioField::BaseUrl));
+        assert!(!fields.contains(&ProviderStudioField::ApiKeyEnv));
+        assert!(!detail_fields.contains(&ProviderStudioField::BaseUrl));
+        assert!(detail_fields.contains(&ProviderStudioField::InstanceUrl));
+        assert!(detail_fields.contains(&ProviderStudioField::ApiKeyEnv));
+    }
+
+    #[test]
+    fn provider_studio_request_adapter_ids_require_explicit_selection() {
+        let make_dialog = || ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Fields,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: None,
+                provider_id: "shared_gateway".to_string(),
+                auth_kind: ProviderDraftAuthKind::Api,
+                base_url: "https://opencode.ai/zen".to_string(),
+                instance_url: String::new(),
+                api_key_env: "OPENCODE_API_KEY".to_string(),
+                api_key: String::new(),
+                credential_issuer: String::new(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: "anthropic".to_string(),
+                default_model: "claude-sonnet-4-5".to_string(),
+            },
+            adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: vec!["openai".to_string(), "anthropic".to_string()],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+
+        let mut default_dialog = make_dialog();
+        assert!(provider_studio_request_adapter_ids(&default_dialog).is_empty());
+
+        default_dialog.focus = ProviderStudioFocus::Adapters;
+        assert!(provider_studio_request_adapter_ids(&default_dialog).is_empty());
+
+        default_dialog.selected_adapter_ids = BTreeSet::from(["anthropic".to_string()]);
+        assert_eq!(
+            provider_studio_request_adapter_ids(&default_dialog),
+            vec!["anthropic".to_string()]
+        );
+
+        default_dialog.selected_adapter_ids =
+            BTreeSet::from(["anthropic".to_string(), "gitlab".to_string()]);
+        assert_eq!(
+            provider_studio_request_adapter_ids(&default_dialog),
+            vec!["anthropic".to_string()]
+        );
+    }
+
+    #[test]
+    fn provider_studio_adapter_multiselect_supports_select_all_and_clear() {
+        let mut dialog = ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Adapters,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: None,
+                provider_id: "shared_gateway".to_string(),
+                auth_kind: ProviderDraftAuthKind::Api,
+                base_url: "https://opencode.ai/zen".to_string(),
+                instance_url: String::new(),
+                api_key_env: String::new(),
+                api_key: String::new(),
+                credential_issuer: String::new(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: "openai".to_string(),
+                default_model: "gpt-5.5".to_string(),
+            },
+            adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: vec![
+                "openai".to_string(),
+                "anthropic".to_string(),
+                "gemini".to_string(),
+            ],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+
+        App::select_all_provider_studio_adapters(&mut dialog);
+        assert_eq!(
+            dialog.selected_adapter_ids,
+            BTreeSet::from([
+                "anthropic".to_string(),
+                "gemini".to_string(),
+                "openai".to_string(),
+            ])
+        );
+
+        App::clear_provider_studio_selected_adapters(&mut dialog);
+        assert!(dialog.selected_adapter_ids.is_empty());
+    }
+
+    #[test]
+    fn provider_studio_model_selection_defaults_to_all_loaded_models() {
+        let mut dialog = ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Models,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: None,
+                provider_id: "shared_gateway".to_string(),
+                auth_kind: ProviderDraftAuthKind::Api,
+                base_url: "https://opencode.ai/zen".to_string(),
+                instance_url: String::new(),
+                api_key_env: String::new(),
+                api_key: String::new(),
+                credential_issuer: String::new(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: String::new(),
+                default_model: String::new(),
+            },
+            adapter_models: vec![ProviderAdapterModelsResource {
+                adapter_id: "openai".to_string(),
+                enabled: true,
+                resolved_base_url: Some("https://opencode.ai/zen/v1".to_string()),
+                models: vec![
+                    ProviderModel::new("openai", "gpt-5.5"),
+                    ProviderModel::new("openai", "gpt-5.4-mini"),
+                ],
+                error: None,
+            }],
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: vec!["openai".to_string()],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::from(["openai".to_string()]),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+
+        provider_studio_restore_model_selection(&mut dialog);
+        provider_studio_ensure_default_selection(&mut dialog);
+
+        assert_eq!(
+            dialog.selected_model_keys,
+            BTreeSet::from([
+                provider_studio_model_key("openai", "gpt-5.4-mini"),
+                provider_studio_model_key("openai", "gpt-5.5"),
+            ])
+        );
+        assert_eq!(dialog.draft.default_adapter, "openai");
+        assert_eq!(dialog.draft.default_model, "gpt-5.5");
+    }
+
+    #[test]
+    fn provider_studio_selected_adapter_models_for_save_filters_to_checked_models() {
+        let dialog = ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Models,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: None,
+                provider_id: "shared_gateway".to_string(),
+                auth_kind: ProviderDraftAuthKind::Api,
+                base_url: "https://opencode.ai/zen".to_string(),
+                instance_url: String::new(),
+                api_key_env: String::new(),
+                api_key: String::new(),
+                credential_issuer: String::new(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: "openai".to_string(),
+                default_model: "gpt-5.5".to_string(),
+            },
+            adapter_models: vec![ProviderAdapterModelsResource {
+                adapter_id: "openai".to_string(),
+                enabled: true,
+                resolved_base_url: Some("https://opencode.ai/zen/v1".to_string()),
+                models: vec![
+                    ProviderModel::new("openai", "gpt-5.5"),
+                    ProviderModel::new("openai", "gpt-5.4-mini"),
+                ],
+                error: None,
+            }],
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: vec!["openai".to_string()],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::from(["openai".to_string()]),
+            selected_model_keys: BTreeSet::from([provider_studio_model_key(
+                "openai",
+                "gpt-5.4-mini",
+            )]),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+
+        let selected =
+            provider_studio_selected_adapter_models_for_save(&dialog).expect("selected adapter");
+        assert_eq!(selected.adapter_id, "openai");
+        assert_eq!(
+            selected
+                .models
+                .into_iter()
+                .map(|model| model.id.to_string())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5.4-mini".to_string()]
+        );
+    }
+
+    #[test]
+    fn provider_studio_select_all_skips_incompatible_legacy_adapters() {
+        let mut dialog = ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Adapters,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: Some("legacy".to_string()),
+                provider_id: "legacy".to_string(),
+                auth_kind: ProviderDraftAuthKind::Api,
+                base_url: "https://opencode.ai/zen".to_string(),
+                instance_url: String::new(),
+                api_key_env: String::new(),
+                api_key: String::new(),
+                credential_issuer: String::new(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: "openai".to_string(),
+                default_model: "gpt-5.5".to_string(),
+            },
+            adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::from(["gitlab".to_string()]),
+            adapter_candidate_ids: vec![
+                "openai".to_string(),
+                "anthropic".to_string(),
+                "gemini".to_string(),
+                "gitlab".to_string(),
+            ],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+
+        App::select_all_provider_studio_adapters(&mut dialog);
+        assert_eq!(
+            dialog.selected_adapter_ids,
+            BTreeSet::from([
+                "anthropic".to_string(),
+                "gemini".to_string(),
+                "openai".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn provider_studio_restore_adapter_selection_preserves_explicit_checks() {
+        let mut dialog = ProviderStudioOverlay {
+            title: "Providers".to_string(),
+            footer: "footer".to_string(),
+            show_provider_list: false,
+            providers: Vec::new(),
+            selected_provider: 0,
+            focus: ProviderStudioFocus::Adapters,
+            selected_field: 0,
+            draft: ProviderConfigDraft {
+                source_provider_id: Some("oc".to_string()),
+                provider_id: "oc".to_string(),
+                auth_kind: ProviderDraftAuthKind::Api,
+                base_url: "https://opencode.ai/zen".to_string(),
+                instance_url: String::new(),
+                api_key_env: "OPENCODE_API_KEY".to_string(),
+                api_key: String::new(),
+                credential_issuer: String::new(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: "openai".to_string(),
+                default_model: "gpt-5.5".to_string(),
+            },
+            adapter_models: Vec::new(),
+            configured_adapter_ids: BTreeSet::new(),
+            adapter_candidate_ids: vec![
+                "openai".to_string(),
+                "anthropic".to_string(),
+                "gemini".to_string(),
+            ],
+            selected_adapter: 0,
+            selected_model: 0,
+            adapter_selection_touched: false,
+            selected_adapter_ids: BTreeSet::new(),
+            selected_model_keys: BTreeSet::new(),
+            catalog_matches: BTreeMap::new(),
+            listing_adapter_models: false,
+            saving: false,
+            pending_adapter_models_key: None,
+            pending_auth_key: None,
+            detail_page: None,
+            editor: None,
+        };
+
+        restore_provider_studio_adapter_selection(
+            &mut dialog,
+            &BTreeSet::from([
+                "anthropic".to_string(),
+                "openai".to_string(),
+                "responses".to_string(),
+            ]),
+            Some("anthropic"),
+        );
+
+        assert_eq!(
+            dialog.selected_adapter_ids,
+            BTreeSet::from(["anthropic".to_string(), "openai".to_string()])
+        );
+        assert_eq!(dialog.selected_adapter, 1);
+    }
+
+    #[test]
+    fn provider_studio_request_key_changes_when_auth_inputs_change() {
+        let mut draft = provider_studio_test_draft();
+        draft.provider_id = "oc".to_string();
+        draft.auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt));
+        draft.credential_issuer = "openai_chatgpt".to_string();
+        draft.default_adapter = "openai".to_string();
+        draft.default_model = "gpt-5.5".to_string();
+        draft.credential_drafts.openai_chatgpt.callback_url =
+            "http://127.0.0.1:1455/callback?code=alpha".to_string();
+        draft.normalize_shape();
+        let adapter_ids = vec!["anthropic".to_string(), "openai".to_string()];
+        let baseline = provider_studio_request_key(&draft, &adapter_ids);
+
+        draft.credential_drafts.openai_chatgpt.callback_url =
+            "http://127.0.0.1:1455/callback?code=beta".to_string();
+        let callback_changed = provider_studio_request_key(&draft, &adapter_ids);
+        assert_ne!(baseline, callback_changed);
+
+        draft.credential_drafts.openai_chatgpt.callback_url =
+            "http://127.0.0.1:1455/callback?code=alpha".to_string();
+        draft.credential_drafts.openai_chatgpt.tokens.access_token = "token".to_string();
+        let token_changed = provider_studio_request_key(&draft, &adapter_ids);
+        assert_ne!(baseline, token_changed);
+    }
+
+    #[test]
+    fn provider_studio_candidate_adapter_ids_follow_auth_contract() {
+        let mut draft = provider_studio_test_draft();
+        draft.provider_id = "vertex".to_string();
+        draft.auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc));
+        draft.credential_issuer = "google_adc".to_string();
+        draft.default_adapter = "openai".to_string();
+        draft.normalize_shape();
+
+        assert_eq!(
+            provider_studio_candidate_adapter_ids(&draft, BTreeSet::new()),
+            vec!["openai".to_string()]
+        );
+
+        let legacy =
+            provider_studio_candidate_adapter_ids(&draft, BTreeSet::from(["gitlab".to_string()]));
+        assert_eq!(legacy, vec!["openai".to_string(), "gitlab".to_string()]);
+    }
+
+    #[test]
+    fn provider_studio_live_model_listing_uses_saved_atomgit_gateway() {
+        let mut atomgit_draft = provider_studio_test_draft();
+        atomgit_draft.provider_id = "atomgit".to_string();
+        atomgit_draft.auth_kind =
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit));
+        atomgit_draft.credential_issuer = "atomgit".to_string();
+        atomgit_draft.default_adapter = "openai".to_string();
+        atomgit_draft.normalize_shape();
+
+        let mut atomgit_dialog = provider_studio_test_dialog(atomgit_draft);
+        atomgit_dialog.selected_adapter_ids = BTreeSet::from(["openai".to_string()]);
+        assert!(provider_studio_can_request_adapter_models(&atomgit_dialog));
+
+        atomgit_dialog.draft.source_provider_id = Some("atomgit".to_string());
+        assert!(provider_studio_can_request_adapter_models(&atomgit_dialog));
+
+        let mut vertex_draft = provider_studio_test_draft();
+        vertex_draft.source_provider_id = Some("vertex".to_string());
+        vertex_draft.provider_id = "vertex".to_string();
+        vertex_draft.auth_kind =
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc));
+        vertex_draft.credential_issuer = "google_adc".to_string();
+        vertex_draft.base_url = "https://example.com".to_string();
+        vertex_draft.default_adapter = "openai".to_string();
+        vertex_draft.normalize_shape();
+
+        let mut vertex_dialog = provider_studio_test_dialog(vertex_draft);
+        vertex_dialog.selected_adapter_ids = BTreeSet::from(["openai".to_string()]);
+        assert!(provider_studio_can_request_adapter_models(&vertex_dialog));
+    }
+
+    #[test]
+    fn settings_studio_provider_items_only_include_new_and_real_providers() {
+        let items = settings_studio_provider_items(&[
+            ProviderSummaryResource {
+                provider_id: "oc".to_string(),
+                default_adapter: Some("openai".to_string()),
+                default_model: "gpt-5.5".to_string(),
+                adapters: Vec::new(),
+            },
+            ProviderSummaryResource {
+                provider_id: "copilot".to_string(),
+                default_adapter: Some("anthropic".to_string()),
+                default_model: "claude-sonnet-4-5".to_string(),
+                adapters: Vec::new(),
+            },
+        ]);
+
+        assert_eq!(items[0].label, "+ New provider");
+        assert!(!items.iter().any(|item| item.label == "Manage Providers"));
+        assert_eq!(items[1].label, "oc");
+        assert_eq!(items[2].label, "copilot");
     }
 
     #[test]
@@ -11746,7 +16929,6 @@ enabled = true
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(rendered.contains("ws "));
         assert!(rendered.contains("bad"));
         assert!(rendered.contains("title"));
         assert!(rendered.contains("rtl"));
@@ -11800,6 +16982,12 @@ enabled = true
             LaunchOptions::default(),
             I18n::english(),
         );
+        app.run_options.model = Some(ModelRef::new_with_adapter(
+            "openai",
+            "openai",
+            "gpt-4.1-mini",
+        ));
+        app.run_options.thinking_mode = Some("deep".to_string());
         let now = Utc::now();
         app.sessions.initialized = true;
         app.sessions.items = vec![
@@ -11826,8 +17014,11 @@ enabled = true
         assert!(!rendered.contains("Sessions"));
         assert!(!rendered.contains("Root Session"));
         assert!(rendered.contains("Child Session"));
-        assert!(rendered.contains("Alt+S sessions"));
-        assert!(rendered.contains("ws "));
+        assert!(rendered.contains("openai/openai/gpt-4.1-mini"));
+        assert!(rendered.contains("thinking deep"));
+        assert!(!rendered.contains("model openai/openai/gpt-4.1-mini"));
+        assert!(!rendered.contains("Alt+S sessions"));
+        assert!(!rendered.contains("ws "));
 
         app.focus = Focus::Composer;
         app.clear_composer_state();
@@ -11843,6 +17034,90 @@ enabled = true
                 ..
             }))
         ));
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn draw_places_model_status_below_composer_border() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com"
+api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        app.run_options.model = Some(ModelRef::new_with_adapter(
+            "oc",
+            "openai",
+            "deepseek-v4-flash-free",
+        ));
+        app.composer.set_text("hi".to_string());
+
+        let backend = TestBackend::new(80, 14);
+        let mut terminal = Terminal::new(backend).expect("test terminal should build");
+        terminal
+            .draw(|frame| app.draw(frame))
+            .expect("draw should succeed");
+
+        let lines = terminal_buffer_lines(&terminal);
+        let model_line_index = lines
+            .iter()
+            .position(|line| line.contains("oc/openai/deepseek-v4-flash-free"))
+            .expect("model status line should render");
+        assert!(
+            model_line_index > 0,
+            "model status line should not be first"
+        );
+        assert!(
+            !lines[model_line_index].contains('│'),
+            "model status should render outside the composer border: {}",
+            lines[model_line_index]
+        );
+        assert!(
+            lines[model_line_index - 1].contains('└'),
+            "composer bottom border should sit above the model status: {}",
+            lines[model_line_index - 1]
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("hi") && line.contains('│')),
+            "composer text should remain inside the bordered composer"
+        );
 
         runtime.shutdown();
         let _ = fs::remove_file(path);
@@ -12040,6 +17315,229 @@ enabled = true
     #[test]
     fn plugin_inspector_logs_empty_state_is_readable() {
         assert_eq!(format_plugin_inspector_logs(&[]), "No retained logs");
+    }
+
+    #[test]
+    fn parse_settings_field_input_supports_clear_bool_and_integer_values() {
+        let bool_field = SettingsFieldSpec {
+            path: "runtime.reload.enabled",
+            description: "runtime config reloader enabled",
+            kind: SettingsFieldKind::Bool,
+        };
+        let int_field = SettingsFieldSpec {
+            path: "runtime.request_retry.max_retries",
+            description: "provider request retry count",
+            kind: SettingsFieldKind::Integer,
+        };
+
+        assert_eq!(
+            parse_settings_field_input(bool_field, "on").expect("bool should parse"),
+            Some(JsonValue::Bool(true))
+        );
+        assert_eq!(
+            parse_settings_field_input(int_field, "42").expect("integer should parse"),
+            Some(JsonValue::from(42_u64))
+        );
+        assert_eq!(
+            parse_settings_field_input(int_field, "clear").expect("clear should parse"),
+            None
+        );
+    }
+
+    #[test]
+    fn settings_studio_general_items_show_configured_and_effective_values() {
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena.toml"),
+            config_found: true,
+            file: serde_json::json!({
+                "default": {
+                    "provider": "openai",
+                }
+            }),
+            effective: serde_json::json!({
+                "default": {
+                    "provider": "openai",
+                    "agent": "build",
+                }
+            }),
+        };
+
+        let items = settings_studio_general_items(&sources);
+        let provider = items
+            .iter()
+            .find(|item| item.label == "default.provider")
+            .expect("default provider item should exist");
+        let agent = items
+            .iter()
+            .find(|item| item.label == "default.agent")
+            .expect("default agent item should exist");
+
+        assert!(provider.detail.contains("configured"));
+        assert!(provider.detail.contains("\"openai\""));
+        assert!(agent.detail.contains("effective"));
+        assert!(agent.detail.contains("\"build\""));
+    }
+
+    #[test]
+    fn settings_studio_runtime_items_expose_runtime_override_rows() {
+        let run_options = RunOptionsState {
+            thinking_mode: Some("deep".to_string()),
+            parallel_tool_calls: Some(true),
+            temperature: Some(0.7),
+            ..RunOptionsState::default()
+        };
+
+        let items = settings_studio_runtime_items(&run_options);
+        let thinking = items
+            .iter()
+            .find(|item| item.label == "Thinking Mode")
+            .expect("thinking mode item should exist");
+        let parallel = items
+            .iter()
+            .find(|item| item.label == "Parallel Tool Calls")
+            .expect("parallel tool calls item should exist");
+
+        assert_eq!(thinking.value, "override \"deep\"");
+        assert!(thinking.detail.contains("thinking mode"));
+        assert_eq!(parallel.value, "override on");
+    }
+
+    #[tokio::test]
+    async fn settings_default_adapter_and_model_choices_use_default_provider_config() {
+        let path = write_test_runtime_config(
+            r#"
+[default]
+provider = "gateway"
+adapter = "openai"
+model = "gpt-5"
+
+[providers.gateway]
+default_adapter = "openai"
+default_model = "gpt-5"
+
+[providers.gateway.auth]
+mode = "api"
+base_url = "https://example.com"
+api_key = "test"
+
+[providers.gateway.adapters.openai]
+enabled = true
+
+[providers.gateway.adapters.openai.models."gpt-5"]
+display_name = "GPT 5"
+
+[providers.gateway.adapters.openai.models."gpt-disabled"]
+enabled = false
+
+[providers.gateway.adapters.anthropic]
+enabled = false
+
+[providers.gateway.adapters.anthropic.models."claude-sonnet-4-5"]
+enabled = true
+
+[providers.gateway.adapters.gemini]
+enabled = true
+
+[providers.gateway.adapters.gemini.models."gemini-2.5-pro"]
+enabled = true
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+        let app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+
+        let adapter_field = SETTINGS_FIELDS
+            .iter()
+            .find(|field| field.path == "default.adapter")
+            .copied()
+            .expect("default.adapter field should exist");
+        let adapter_values = app
+            .settings_field_choice_items(adapter_field)
+            .expect("default adapter choices should exist")
+            .into_iter()
+            .map(|item| item.value)
+            .collect::<Vec<_>>();
+        assert_eq!(adapter_values, vec!["gemini", "openai"]);
+
+        let model_field = SETTINGS_FIELDS
+            .iter()
+            .find(|field| field.path == "default.model")
+            .copied()
+            .expect("default.model field should exist");
+        let model_items = app
+            .settings_field_choice_items(model_field)
+            .expect("default model choices should exist");
+        assert_eq!(
+            model_items
+                .iter()
+                .map(|item| item.value.as_str())
+                .collect::<Vec<_>>(),
+            vec!["gpt-5"]
+        );
+        assert!(
+            model_items[0]
+                .detail
+                .contains("configured on gateway/openai")
+        );
+        assert!(model_items[0].detail.contains("GPT 5"));
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn settings_value_edit_prompt_breaks_context_into_multiple_lines() {
+        let field = SETTINGS_FIELDS
+            .iter()
+            .find(|field| field.path == "default.agent")
+            .copied()
+            .expect("default.agent field should exist");
+        let prompt = settings_value_edit_prompt(
+            field,
+            &JsonValue::Null,
+            &JsonValue::String("build".to_string()),
+        );
+
+        let lines = prompt.lines().collect::<Vec<_>>();
+        assert_eq!(lines[0], "default agent name");
+        assert!(lines[1].contains("Effective value: \"build\""));
+        assert!(lines[2].contains("Enter text"));
+    }
+
+    #[test]
+    fn runtime_setting_edit_prompt_breaks_override_into_multiple_lines() {
+        let field = RUNTIME_SETTINGS
+            .iter()
+            .find(|field| field.label == "System Prompt")
+            .copied()
+            .expect("system prompt field should exist");
+        let prompt = runtime_setting_edit_prompt(field, "inherit");
+
+        let lines = prompt.lines().collect::<Vec<_>>();
+        assert!(lines[0].contains("system prompt"));
+        assert_eq!(lines[1], "Current override: inherit");
+        assert!(lines[2].contains("Enter text"));
     }
 
     #[test]
@@ -12321,6 +17819,264 @@ enabled = true
         let _ = fs::remove_file(path);
     }
 
+    #[tokio::test]
+    async fn slash_command_suggestions_filter_runtime_entries_that_shadow_local_commands() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        let runtime_rows = app.runtime_entry_command_rows();
+        assert!(
+            runtime_rows.iter().all(|entry| entry.label != "review"),
+            "runtime entry named review should be filtered when a local /review exists"
+        );
+
+        let labels = app
+            .slash_command_suggestion_items("review")
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels
+                .iter()
+                .filter(|label| label.as_str() == "/review")
+                .count(),
+            1
+        );
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn sync_provider_studio_shape_selects_all_adapters_for_untouched_new_draft() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.openai]
+default_model = "openai/gpt-4.1-mini"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com/v1"
+api_key = "test"
+
+[providers.openai.adapters.openai]
+enabled = true
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        let mut dialog = provider_studio_test_dialog(
+            app.backend
+                .provider_config_draft(None)
+                .expect("blank provider draft"),
+        );
+        dialog.draft.provider_id = "shared_gateway".to_string();
+        dialog.draft.auth_kind = ProviderDraftAuthKind::Api;
+        dialog.draft.base_url = "https://opencode.ai/zen".to_string();
+        dialog.draft.api_key = "public".to_string();
+
+        app.sync_provider_studio_shape(&mut dialog);
+
+        assert_eq!(
+            dialog.selected_adapter_ids,
+            BTreeSet::from([
+                "anthropic".to_string(),
+                "gemini".to_string(),
+                "openai".to_string(),
+            ])
+        );
+        assert!(!dialog.adapter_selection_touched);
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn load_provider_studio_draft_prefills_saved_adapter_and_model_selection() {
+        let path = write_test_runtime_config(
+            r#"
+[providers.oc]
+default_adapter = "openai"
+default_model = "gpt-5.5"
+
+[providers.oc.auth]
+mode = "api"
+base_url = "https://opencode.ai/zen"
+api_key = "public"
+
+[providers.oc.adapters.openai]
+enabled = true
+
+[providers.oc.adapters.openai.models."gpt-5.5"]
+enabled = true
+
+[providers.oc.adapters.anthropic]
+enabled = true
+
+[providers.oc.adapters.anthropic.models."claude-sonnet-4-5"]
+enabled = true
+"#,
+        );
+        let workspace_root = path
+            .parent()
+            .expect("config should have parent")
+            .to_path_buf();
+        let db = Arc::new(
+            Database::connect("sqlite::memory:")
+                .await
+                .expect("sqlite memory db should connect"),
+        );
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(path.clone()),
+                ..LoadConfigRequest::default()
+            })
+            .with_workspace_root(workspace_root.clone())
+            .with_database_connection(db.as_ref().clone())
+            .build()
+            .await
+            .expect("runtime should build");
+
+        let mut app = App::new(
+            Backend::new(runtime.clone(), db, workspace_root),
+            LaunchOptions::default(),
+            I18n::english(),
+        );
+        let mut dialog = provider_studio_test_dialog(
+            app.backend
+                .provider_config_draft(None)
+                .expect("blank provider draft"),
+        );
+
+        app.load_provider_studio_draft(&mut dialog, Some("oc"), None);
+
+        assert!(dialog.adapter_selection_touched);
+        assert_eq!(
+            dialog.selected_adapter_ids,
+            BTreeSet::from(["anthropic".to_string(), "openai".to_string()])
+        );
+        assert_eq!(
+            dialog
+                .adapter_models
+                .iter()
+                .map(|adapter| adapter.adapter_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["anthropic", "openai"]
+        );
+        assert_eq!(
+            dialog.selected_model_keys,
+            BTreeSet::from([
+                provider_studio_model_key("anthropic", "claude-sonnet-4-5"),
+                provider_studio_model_key("openai", "gpt-5.5"),
+            ])
+        );
+        assert_eq!(
+            dialog
+                .adapter_candidate_ids
+                .get(dialog.selected_adapter)
+                .map(String::as_str),
+            Some("openai")
+        );
+
+        dialog.adapter_models = vec![
+            ProviderAdapterModelsResource {
+                adapter_id: "openai".to_string(),
+                enabled: true,
+                resolved_base_url: Some("https://opencode.ai/zen/v1".to_string()),
+                models: vec![
+                    ProviderModel::new("openai", "gpt-5.5"),
+                    ProviderModel::new("openai", "gpt-5.4-mini"),
+                ],
+                error: None,
+            },
+            ProviderAdapterModelsResource {
+                adapter_id: "anthropic".to_string(),
+                enabled: true,
+                resolved_base_url: Some("https://opencode.ai/zen/v1".to_string()),
+                models: vec![
+                    ProviderModel::new("anthropic", "claude-sonnet-4-5"),
+                    ProviderModel::new("anthropic", "claude-opus-4-7"),
+                ],
+                error: None,
+            },
+        ];
+
+        provider_studio_restore_model_selection(&mut dialog);
+        provider_studio_ensure_default_selection(&mut dialog);
+
+        assert_eq!(
+            dialog.selected_model_keys,
+            BTreeSet::from([
+                provider_studio_model_key("anthropic", "claude-sonnet-4-5"),
+                provider_studio_model_key("openai", "gpt-5.5"),
+            ])
+        );
+        assert_eq!(dialog.draft.default_adapter, "openai");
+        assert_eq!(dialog.draft.default_model, "gpt-5.5");
+
+        runtime.shutdown();
+        let _ = fs::remove_file(path);
+    }
+
     #[test]
     fn ctrl_a_and_ctrl_e_cross_line_boundaries_like_shell_editors() {
         let mut editor = Editor::from_text("alpha\nbeta".to_string());
@@ -12538,6 +18294,211 @@ enabled = true
     }
 
     #[test]
+    fn transcript_live_events_fill_assistant_message_parts() {
+        let now = Utc::now();
+        let mut transcript = TranscriptState::default();
+        transcript.reset(42, "Live".to_string());
+
+        let reasoning_part = MessagePart::with_content(
+            501,
+            77,
+            now,
+            ExecutionStatus::Pending,
+            PartContent::Reasoning(ReasoningPart {
+                summary: Vec::new(),
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+        let text_part = MessagePart::with_content(
+            502,
+            77,
+            now,
+            ExecutionStatus::Pending,
+            PartContent::text(String::new()),
+        );
+
+        assert!(!transcript.apply_live_event(
+            &test_domain_event(
+                42,
+                1,
+                AgenaSessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
+                    session_id: 42,
+                    message_id: 77,
+                    message_role: agena::role::Role::Assistant,
+                    message_state: MessageStatus::InProgress,
+                    message_created_at: now,
+                    part: reasoning_part.clone(),
+                    ts_ms: now.timestamp_millis(),
+                }),
+            ),
+            80,
+            20,
+        ));
+        assert!(!transcript.apply_live_event(
+            &test_domain_event(
+                42,
+                2,
+                AgenaSessionEvent::MessagePartDelta(MessagePartDeltaEvent {
+                    session_id: 42,
+                    message_id: 77,
+                    part_id: reasoning_part.id,
+                    call_id: None,
+                    field: PartDeltaField::ReasoningSummary,
+                    delta: "thinking".to_string(),
+                    seq: 1,
+                    ts_ms: now.timestamp_millis(),
+                }),
+            ),
+            80,
+            20,
+        ));
+        assert!(!transcript.apply_live_event(
+            &test_domain_event(
+                42,
+                3,
+                AgenaSessionEvent::MessagePartUpdated(MessagePartUpdatedEvent {
+                    session_id: 42,
+                    message_id: 77,
+                    message_role: agena::role::Role::Assistant,
+                    message_state: MessageStatus::InProgress,
+                    message_created_at: now,
+                    part: text_part.clone(),
+                    ts_ms: now.timestamp_millis(),
+                }),
+            ),
+            80,
+            20,
+        ));
+        assert!(!transcript.apply_live_event(
+            &test_domain_event(
+                42,
+                4,
+                AgenaSessionEvent::MessagePartDelta(MessagePartDeltaEvent {
+                    session_id: 42,
+                    message_id: 77,
+                    part_id: text_part.id,
+                    call_id: None,
+                    field: PartDeltaField::Text,
+                    delta: "Hi there".to_string(),
+                    seq: 1,
+                    ts_ms: now.timestamp_millis(),
+                }),
+            ),
+            80,
+            20,
+        ));
+        assert!(
+            !transcript.apply_live_event(
+                &test_domain_event(
+                    42,
+                    5,
+                    serde_json::from_value::<AgenaSessionEvent>(json!({
+                        "kind": "assistant_message_completed",
+                        "payload": {
+                            "message_id": 77,
+                            "turn_id": uuid::Uuid::new_v4(),
+                            "created_at": now,
+                            "content": { "blocks": [] },
+                            "parts": [
+                                MessagePart::with_content(
+                                    501,
+                                    77,
+                                    now,
+                                    ExecutionStatus::Completed,
+                                    PartContent::reasoning_summary("thinking"),
+                                ),
+                                MessagePart::with_content(
+                                    502,
+                                    77,
+                                    now,
+                                    ExecutionStatus::Completed,
+                                    PartContent::text("Hi there"),
+                                ),
+                            ],
+                            "usage": null,
+                            "finish_reason": "stop",
+                            "metadata": MessageMetadata::default(),
+                        }
+                    }))
+                    .expect("assistant completion event should deserialize"),
+                ),
+                80,
+                20,
+            )
+        );
+
+        let message = transcript
+            .messages
+            .iter()
+            .find(|message| message.id == 77)
+            .expect("assistant message should exist");
+        assert_eq!(message.state, MessageStatus::Completed);
+        assert_eq!(assistant_message_text(message).as_deref(), Some("Hi there"));
+    }
+
+    #[test]
+    fn merge_latest_messages_keeps_richer_live_message_over_empty_snapshot() {
+        let now = Utc::now();
+        let mut transcript = TranscriptState::default();
+        transcript.session_id = Some(42);
+        transcript.messages = vec![MessageResource {
+            id: 77,
+            session_id: 42,
+            role: MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at: now,
+            updated_at: now + chrono::Duration::milliseconds(10),
+            metadata: MessageMetadata::default(),
+            usage: None,
+            finish: Some("stop".to_string()),
+            part_count: 1,
+            parts: Some(vec![MessagePart::with_content(
+                502,
+                77,
+                now,
+                ExecutionStatus::Completed,
+                PartContent::text("Hi there"),
+            )]),
+        }];
+
+        transcript.merge_latest_messages(
+            PaginatedResponse {
+                items: vec![MessageResource {
+                    id: 77,
+                    session_id: 42,
+                    role: MessageRole::Assistant,
+                    state: MessageStatus::InProgress,
+                    created_at: now,
+                    updated_at: now,
+                    metadata: MessageMetadata::default(),
+                    usage: None,
+                    finish: None,
+                    part_count: 1,
+                    parts: Some(vec![MessagePart::with_content(
+                        502,
+                        77,
+                        now,
+                        ExecutionStatus::Pending,
+                        PartContent::text(String::new()),
+                    )]),
+                }],
+                page: Default::default(),
+            },
+            80,
+            20,
+        );
+
+        let message = transcript
+            .messages
+            .iter()
+            .find(|message| message.id == 77)
+            .expect("assistant message should still exist");
+        assert_eq!(message.state, MessageStatus::Completed);
+        assert_eq!(assistant_message_text(message).as_deref(), Some("Hi there"));
+    }
+
+    #[test]
     fn build_visible_session_items_keeps_ancestors_for_tree_search() {
         let now = Utc::now();
         let items = vec![
@@ -12733,6 +18694,27 @@ enabled = true
         assert_eq!(SessionViewMode::All.next(), SessionViewMode::Roots);
         assert_eq!(SessionViewMode::Roots.next(), SessionViewMode::Subtree);
         assert_eq!(SessionViewMode::Subtree.next(), SessionViewMode::All);
+    }
+
+    fn test_domain_event(
+        session_id: i64,
+        seq_session: i64,
+        kind: AgenaSessionEvent,
+    ) -> DomainEvent {
+        DomainEvent {
+            meta: agena::event::EventMeta {
+                id: uuid::Uuid::new_v4(),
+                seq_global: seq_session,
+                seq_session: Some(seq_session),
+                session_id: Some(session_id),
+                workspace_id: None,
+                created_at: Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: agena::event::envelope::ENVELOPE_SCHEMA_VERSION,
+            },
+            kind,
+        }
     }
 
     fn test_session(

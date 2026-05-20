@@ -611,7 +611,7 @@ impl SessionManager {
             provider_id = %options.model.provider_id,
             model_id = %options.model.model_id,
         );
-        loop {
+        {
             let active_messages = prompt_window::active_prompt_messages(&session);
             let scoped_executor = state
                 .tool_executor
@@ -906,7 +906,7 @@ impl SessionManager {
                         return Err(err);
                     }
 
-                    return Ok(persisted_session);
+                    Ok(persisted_session)
                 }
                 Err(err) => {
                     if is_user_cancelled_error(&err) {
@@ -919,7 +919,7 @@ impl SessionManager {
                     }
                     self.persist_run_failed_event(session.id, err.to_string(), state)
                         .await?;
-                    return Err(err);
+                    Err(err)
                 }
             }
         }
@@ -1450,6 +1450,7 @@ impl SessionManager {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn apply_permission_request(
         &self,
         mut session: Session,
@@ -2340,6 +2341,8 @@ impl SessionManager {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
+        let requested_explicitly = requested.is_some();
+        let persisted_explicitly = persisted.is_some();
         let effective = requested
             .or(persisted)
             .or_else(|| state.config.default_agent.clone());
@@ -2372,8 +2375,14 @@ impl SessionManager {
             *options = self.apply_execution_context_to_run_options(&session, options.clone())?;
             return Ok(session);
         }
-        self.apply_agent_profile_to_session(session, options, profile, state)
-            .await
+        self.apply_agent_profile_to_session(
+            session,
+            options,
+            profile,
+            state,
+            requested_explicitly || persisted_explicitly,
+        )
+        .await
     }
 
     async fn apply_agent_profile_to_session(
@@ -2382,6 +2391,7 @@ impl SessionManager {
         options: &mut SessionRunOptions,
         profile: crate::agents::AgentProfile,
         state: Arc<SessionManagerState>,
+        apply_profile_model_override: bool,
     ) -> Result<Session, AppError> {
         let next_allowed_tools = profile.frontmatter.allowed_tools.clone();
         let next_permission = profile
@@ -2389,8 +2399,16 @@ impl SessionManager {
             .permission
             .effective_with_defaults(&state.config.permission);
         let next_system = profile.prompt.trim().to_string();
-        let next_model =
-            self.resolve_root_agent_model(&session, options, profile.frontmatter.model.as_deref())?;
+        let next_model = self.resolve_root_agent_model(
+            &session,
+            options,
+            &state,
+            if apply_profile_model_override {
+                Some(&profile.frontmatter.default)
+            } else {
+                None
+            },
+        )?;
         let next_model_provider_id = next_model.provider_id.to_string();
         let next_model_adapter_id = next_model.adapter_id.as_ref().map(ToString::to_string);
         let next_model_id = next_model.model_id.to_string();
@@ -2466,11 +2484,9 @@ impl SessionManager {
         &self,
         session: &Session,
         options: &SessionRunOptions,
-        requested_model: Option<&str>,
+        state: &SessionManagerState,
+        requested_default: Option<&crate::agents::AgentDefaultModelConfig>,
     ) -> Result<ModelRef, AppError> {
-        let requested_model = requested_model
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
         let base_model = session
             .runtime
             .model_override()
@@ -2491,15 +2507,51 @@ impl SessionManager {
             .transpose()?
             .or_else(|| infer_session_model(session).ok().flatten())
             .unwrap_or_else(|| options.model.clone());
-        Ok(match requested_model {
-            Some(model_id) => {
-                let mut model =
-                    ModelRef::new(base_model.provider_id.to_string(), model_id.to_string());
-                model.adapter_id = base_model.adapter_id.clone();
-                model
-            }
-            None => base_model,
-        })
+        match requested_default.filter(|value| !value.is_empty()) {
+            Some(default_config) => self.resolve_agent_default_model_ref(
+                &state.processor.provider_registry(),
+                &base_model,
+                default_config,
+            ),
+            None => Ok(base_model),
+        }
+    }
+
+    fn resolve_agent_default_model_ref(
+        &self,
+        provider_registry: &crate::provider::ProviderRegistry,
+        base_model: &ModelRef,
+        requested_default: &crate::agents::AgentDefaultModelConfig,
+    ) -> Result<ModelRef, AppError> {
+        if requested_default.is_empty() {
+            return Ok(base_model.clone());
+        }
+        let requested_provider = requested_default
+            .provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let requested_adapter = requested_default
+            .adapter
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let requested_model = requested_default
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let provider_changed =
+            requested_provider.is_some_and(|provider| provider != base_model.provider_id.as_str());
+        let provider_id = requested_provider.unwrap_or(base_model.provider_id.as_str());
+        let base_adapter = (!provider_changed)
+            .then(|| base_model.adapter_id.as_ref().map(|value| value.as_str()))
+            .flatten();
+        let adapter_id = requested_adapter.or(base_adapter);
+        let base_model_id = (!provider_changed && requested_adapter.is_none())
+            .then(|| base_model.model_id.as_str());
+        let model_id = requested_model.or(base_model_id);
+        provider_registry.resolve_model_selection(provider_id, adapter_id, model_id)
     }
 
     pub(super) fn apply_tool_success_execution_context(
@@ -2660,7 +2712,9 @@ impl SessionManager {
         &self,
         child: &Session,
         parent: &Session,
+        state: &SessionManagerState,
         requested_model: Option<&str>,
+        requested_default: Option<&crate::agents::AgentDefaultModelConfig>,
     ) -> Result<SessionRunOptions, AppError> {
         let requested_model = requested_model
             .map(str::trim)
@@ -2690,14 +2744,16 @@ impl SessionManager {
                 "subtask requires a parent or child session model before it can run".to_string(),
             )
         })?;
-        let model = match requested_model {
-            Some(model_id) => {
-                let mut model =
-                    ModelRef::new(base_model.provider_id.to_string(), model_id.to_string());
-                model.adapter_id = base_model.adapter_id.clone();
-                model
-            }
-            None => base_model,
+        let model = if let Some(model_id) = requested_model {
+            self.resolve_requested_session_model_ref(&base_model, model_id)?
+        } else if let Some(default_config) = requested_default.filter(|value| !value.is_empty()) {
+            self.resolve_agent_default_model_ref(
+                &state.processor.provider_registry(),
+                &base_model,
+                default_config,
+            )?
+        } else {
+            base_model
         };
         Ok(SessionRunOptions {
             model,
@@ -2717,6 +2773,34 @@ impl SessionManager {
             agent_profile: child.runtime.execution.agent_profile.clone(),
             max_turn_loops: child.runtime.execution.agent_run.steps,
         })
+    }
+
+    fn resolve_requested_session_model_ref(
+        &self,
+        base_model: &ModelRef,
+        requested_model: &str,
+    ) -> Result<ModelRef, AppError> {
+        let requested_model = requested_model.trim();
+        if requested_model.is_empty() {
+            return Ok(base_model.clone());
+        }
+
+        if requested_model.matches('/').count() >= 2
+            && let Some((provider_id, model_id)) = requested_model.split_once('/')
+        {
+            return ModelRef::try_new(provider_id, model_id).map_err(|error| {
+                AppError::Config(format!(
+                    "invalid requested model reference `{requested_model}`: {error}"
+                ))
+            });
+        }
+
+        let mut model = ModelRef::new(
+            base_model.provider_id.to_string(),
+            requested_model.to_string(),
+        );
+        model.adapter_id = base_model.adapter_id.clone();
+        Ok(model)
     }
 
     /// Drain every pending steer message (non-blocking) and append each as

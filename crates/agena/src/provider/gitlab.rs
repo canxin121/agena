@@ -13,13 +13,14 @@ use crate::{
     model::{ModelId, ProviderId},
     model_catalog::canonical_model_catalog_id,
     provider::{
-        AnthropicProvider, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ManagedCredential, ModelProvider, OpenAiCompatibleProvider, OpenAiProvider, ProviderModel,
-        auth::AuthData, should_retry_credential, utils,
+        AnthropicAdapter, CapabilityFamily, CompletionRequest, CompletionResponse,
+        CompletionStreamEvent, ManagedCredential, ModelRuntime, OpenAiAdapter, OpenAiApiMode,
+        ProviderModel, auth::AuthData, should_retry_credential, utils,
     },
 };
 
 const PROVIDER_ID: &str = "gitlab";
+const ADAPTER_KIND: &str = "gitlab";
 const DEFAULT_INSTANCE_URL: &str = "https://gitlab.com";
 const DEFAULT_AI_GATEWAY_URL: &str = "https://cloud.gitlab.com";
 const DEFAULT_MODEL: &str = "claude-sonnet-4-5";
@@ -169,7 +170,7 @@ impl GitlabProvider {
         format!("{}/ai/v1/proxy/anthropic/v1", self.ai_gateway_url)
     }
 
-    fn mapped_model(model: &str) -> String {
+    pub(crate) fn mapped_model(model: &str) -> String {
         match model {
             "duo-chat-opus-4-6" => "claude-opus-4-6".to_owned(),
             "duo-chat-sonnet-4-6" => "claude-sonnet-4-6".to_owned(),
@@ -185,7 +186,7 @@ impl GitlabProvider {
         }
     }
 
-    fn use_openai_backend(model: &str) -> bool {
+    pub(crate) fn use_openai_backend(model: &str) -> bool {
         let model = model.to_ascii_lowercase();
         !model.contains("claude")
     }
@@ -239,16 +240,32 @@ impl GitlabProvider {
         &self,
         token: &DirectAccessToken,
     ) -> Result<Vec<ProviderModel>, AppError> {
+        let endpoint = format!("{}/models", self.openai_proxy_base_url());
+        let mut headers = BTreeMap::from([(
+            reqwest::header::AUTHORIZATION.as_str().to_owned(),
+            format!("Bearer {}", token.token),
+        )]);
+        headers.extend(token.headers.clone());
+        utils::adapter_log_http_request_json(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "list_models.openai_proxy",
+            "GET",
+            endpoint.as_str(),
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+            None,
+        );
         let response = self
-            .apply_direct_access_headers(
-                self.client
-                    .get(format!("{}/models", self.openai_proxy_base_url())),
-                token,
-            )
+            .apply_direct_access_headers(self.client.get(endpoint.as_str()), token)
             .send()
             .await?;
-        let payload: OpenAiModelListResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+        let payload: OpenAiModelListResponse = utils::parse_json_response_logged(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "list_models.openai_proxy",
+            response,
+        )
+        .await?;
         let mut models = BTreeMap::new();
         for item in payload.into_items() {
             self.upsert_listed_model(&mut models, item.id.as_str(), item.name);
@@ -260,16 +277,32 @@ impl GitlabProvider {
         &self,
         token: &DirectAccessToken,
     ) -> Result<Vec<ProviderModel>, AppError> {
+        let endpoint = format!("{}/models", self.anthropic_proxy_base_url());
+        let mut headers = BTreeMap::from([(
+            reqwest::header::AUTHORIZATION.as_str().to_owned(),
+            format!("Bearer {}", token.token),
+        )]);
+        headers.extend(token.headers.clone());
+        utils::adapter_log_http_request_json(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "list_models.anthropic_proxy",
+            "GET",
+            endpoint.as_str(),
+            headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+            None,
+        );
         let response = self
-            .apply_direct_access_headers(
-                self.client
-                    .get(format!("{}/models", self.anthropic_proxy_base_url())),
-                token,
-            )
+            .apply_direct_access_headers(self.client.get(endpoint.as_str()), token)
             .send()
             .await?;
-        let payload: AnthropicModelListResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+        let payload: AnthropicModelListResponse = utils::parse_json_response_logged(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "list_models.anthropic_proxy",
+            response,
+        )
+        .await?;
         let mut models = BTreeMap::new();
         for item in payload.into_items() {
             let display_name = item.display_name.or(item.name);
@@ -348,9 +381,29 @@ impl GitlabProvider {
                 self.api_key.resolve().await?
             };
 
+            let endpoint = self.direct_access_endpoint();
+            let headers = [
+                (
+                    reqwest::header::AUTHORIZATION.as_str(),
+                    format!("Bearer {api_key}"),
+                ),
+                (
+                    reqwest::header::CONTENT_TYPE.as_str(),
+                    "application/json".to_owned(),
+                ),
+            ];
+            utils::adapter_log_http_request_json(
+                PROVIDER_ID,
+                ADAPTER_KIND,
+                "direct_access.token",
+                "POST",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (*k, v.as_str())),
+                Some(&body),
+            );
             let response = self
                 .client
-                .post(self.direct_access_endpoint())
+                .post(endpoint)
                 .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .json(&body)
@@ -365,8 +418,13 @@ impl GitlabProvider {
             break response;
         };
 
-        let mut parsed: DirectAccessResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+        let mut parsed: DirectAccessResponse = utils::parse_json_response_logged(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "direct_access.token",
+            response,
+        )
+        .await?;
         parsed
             .headers
             .retain(|key, _| !key.eq_ignore_ascii_case("x-api-key"));
@@ -412,7 +470,7 @@ impl GitlabProvider {
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
-                let provider = OpenAiProvider::new(
+                let provider = OpenAiAdapter::new(
                     self.client.clone(),
                     token.token,
                     self.openai_proxy_base_url(),
@@ -424,19 +482,21 @@ impl GitlabProvider {
                 return Ok(result);
             }
 
-            let provider = OpenAiCompatibleProvider::new(
+            let provider = OpenAiAdapter::new_with_id(
                 PROVIDER_ID,
                 self.client.clone(),
                 token.token,
                 self.openai_proxy_base_url(),
                 model,
             )
+            .with_api_mode(OpenAiApiMode::Chat)
+            .with_capability_family(CapabilityFamily::OpenAiCompatible)
             .with_auth_header("authorization", Some("Bearer"))
             .with_extra_headers(token.headers);
             return provider.complete(request).await;
         }
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             self.client.clone(),
             token.token,
             self.anthropic_proxy_base_url(),
@@ -483,7 +543,7 @@ impl GitlabProvider {
 
         if Self::use_openai_backend(model.as_str()) {
             if Self::use_responses_api(model.as_str()) {
-                let provider = OpenAiProvider::new(
+                let provider = OpenAiAdapter::new(
                     self.client.clone(),
                     token.token,
                     self.openai_proxy_base_url(),
@@ -495,19 +555,21 @@ impl GitlabProvider {
                 return Ok(Box::pin(mapped));
             }
 
-            let provider = OpenAiCompatibleProvider::new(
+            let provider = OpenAiAdapter::new_with_id(
                 PROVIDER_ID,
                 self.client.clone(),
                 token.token,
                 self.openai_proxy_base_url(),
                 model,
             )
+            .with_api_mode(OpenAiApiMode::Chat)
+            .with_capability_family(CapabilityFamily::OpenAiCompatible)
             .with_auth_header("authorization", Some("Bearer"))
             .with_extra_headers(token.headers);
             return provider.complete_stream(request).await;
         }
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             self.client.clone(),
             token.token,
             self.anthropic_proxy_base_url(),
@@ -544,7 +606,7 @@ impl GitlabProvider {
 }
 
 #[async_trait]
-impl ModelProvider for GitlabProvider {
+impl ModelRuntime for GitlabProvider {
     fn id(&self) -> &str {
         PROVIDER_ID
     }

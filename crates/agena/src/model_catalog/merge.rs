@@ -315,7 +315,7 @@ pub(super) fn merge_catalog_speed_mode_fill_missing(
     current.disabled |= next.disabled;
 }
 
-pub(super) fn merge_catalog_document(
+pub(super) fn merge_live_provider_catalog_document(
     current: &mut ModelCatalogDocument,
     next: ModelCatalogDocument,
 ) {
@@ -323,7 +323,11 @@ pub(super) fn merge_catalog_document(
         current
             .models
             .entry(model_id)
-            .and_modify(|existing| merge_catalog_definition(existing, &definition))
+            .and_modify(|existing| {
+                let mut merged = definition.clone();
+                merge_catalog_definition(&mut merged, existing);
+                *existing = merged;
+            })
             .or_insert(definition);
     }
 }
@@ -455,18 +459,17 @@ pub(super) fn merge_json_value_fill_missing(
     current: &mut serde_json::Value,
     next: &serde_json::Value,
 ) {
-    match (current, next) {
-        (serde_json::Value::Object(current_map), serde_json::Value::Object(next_map)) => {
-            for (key, value) in next_map {
-                match current_map.get_mut(key) {
-                    Some(existing) => merge_json_value_fill_missing(existing, value),
-                    None => {
-                        current_map.insert(key.clone(), value.clone());
-                    }
+    if let (serde_json::Value::Object(current_map), serde_json::Value::Object(next_map)) =
+        (current, next)
+    {
+        for (key, value) in next_map {
+            match current_map.get_mut(key) {
+                Some(existing) => merge_json_value_fill_missing(existing, value),
+                None => {
+                    current_map.insert(key.clone(), value.clone());
                 }
             }
         }
-        _ => {}
     }
 }
 
@@ -515,64 +518,82 @@ pub(super) fn merge_input_patch(
     current: &mut Option<InputCapabilityPatch>,
     next: Option<&InputCapabilityPatch>,
 ) {
-    match (current.as_mut(), next) {
-        (None, Some(next)) => *current = Some(next.clone()),
-        (
-            Some(InputCapabilityPatch::Supported(current_values)),
-            Some(InputCapabilityPatch::Supported(next_values)),
-        ) => {
-            merge_unique(current_values, next_values);
+    let Some(next) = next else {
+        return;
+    };
+    let Some(current_patch) = current.as_mut() else {
+        *current = Some(next.clone());
+        return;
+    };
+
+    let mut supported = match current_patch {
+        InputCapabilityPatch::Supported(values) => values.clone(),
+        InputCapabilityPatch::Patch(values) => values.supported.clone(),
+    };
+    let mut unsupported = match current_patch {
+        InputCapabilityPatch::Supported(_) => Vec::new(),
+        InputCapabilityPatch::Patch(values) => values.unsupported.clone(),
+    };
+
+    match next {
+        InputCapabilityPatch::Supported(values) => {
+            merge_unique_without_conflicts(&mut supported, &unsupported, values);
         }
-        (
-            Some(InputCapabilityPatch::Patch(current_values)),
-            Some(InputCapabilityPatch::Patch(next_values)),
-        ) => {
-            merge_unique(&mut current_values.supported, &next_values.supported);
-            merge_unique(&mut current_values.unsupported, &next_values.unsupported);
+        InputCapabilityPatch::Patch(values) => {
+            merge_unique_without_conflicts(&mut supported, &unsupported, &values.supported);
+            merge_unique_without_conflicts(&mut unsupported, &supported, &values.unsupported);
         }
-        (
-            Some(InputCapabilityPatch::Supported(current_values)),
-            Some(InputCapabilityPatch::Patch(next_values)),
-        ) => {
-            merge_unique(current_values, &next_values.supported);
-        }
-        (
-            Some(InputCapabilityPatch::Patch(current_values)),
-            Some(InputCapabilityPatch::Supported(next_values)),
-        ) => {
-            merge_unique(&mut current_values.supported, next_values);
-        }
-        _ => {}
     }
+
+    *current_patch = if unsupported.is_empty() {
+        InputCapabilityPatch::Supported(supported)
+    } else {
+        InputCapabilityPatch::Patch(InputCapabilityPatchBody {
+            supported,
+            unsupported,
+        })
+    };
 }
 
 pub(super) fn merge_feature_patch(
     current: &mut Option<FeatureCapabilityPatch>,
     next: Option<&FeatureCapabilityPatch>,
 ) {
-    match (current.as_mut(), next) {
-        (None, Some(next)) => *current = Some(next.clone()),
-        (
-            Some(FeatureCapabilityPatch::Supported(current_values)),
-            Some(FeatureCapabilityPatch::Supported(next_values)),
-        ) => merge_unique(current_values, next_values),
-        (
-            Some(FeatureCapabilityPatch::Patch(current_values)),
-            Some(FeatureCapabilityPatch::Patch(next_values)),
-        ) => {
-            merge_unique(&mut current_values.supported, &next_values.supported);
-            merge_unique(&mut current_values.unsupported, &next_values.unsupported);
+    let Some(next) = next else {
+        return;
+    };
+    let Some(current_patch) = current.as_mut() else {
+        *current = Some(next.clone());
+        return;
+    };
+
+    let mut supported = match current_patch {
+        FeatureCapabilityPatch::Supported(values) => values.clone(),
+        FeatureCapabilityPatch::Patch(values) => values.supported.clone(),
+    };
+    let mut unsupported = match current_patch {
+        FeatureCapabilityPatch::Supported(_) => Vec::new(),
+        FeatureCapabilityPatch::Patch(values) => values.unsupported.clone(),
+    };
+
+    match next {
+        FeatureCapabilityPatch::Supported(values) => {
+            merge_unique_without_conflicts(&mut supported, &unsupported, values);
         }
-        (
-            Some(FeatureCapabilityPatch::Supported(current_values)),
-            Some(FeatureCapabilityPatch::Patch(next_values)),
-        ) => merge_unique(current_values, &next_values.supported),
-        (
-            Some(FeatureCapabilityPatch::Patch(current_values)),
-            Some(FeatureCapabilityPatch::Supported(next_values)),
-        ) => merge_unique(&mut current_values.supported, next_values),
-        _ => {}
+        FeatureCapabilityPatch::Patch(values) => {
+            merge_unique_without_conflicts(&mut supported, &unsupported, &values.supported);
+            merge_unique_without_conflicts(&mut unsupported, &supported, &values.unsupported);
+        }
     }
+
+    *current_patch = if unsupported.is_empty() {
+        FeatureCapabilityPatch::Supported(supported)
+    } else {
+        FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+            supported,
+            unsupported,
+        })
+    };
 }
 
 pub(super) fn merge_unique<T: Clone + PartialEq>(current: &mut Vec<T>, next: &[T]) {
@@ -580,6 +601,19 @@ pub(super) fn merge_unique<T: Clone + PartialEq>(current: &mut Vec<T>, next: &[T
         if !current.contains(value) {
             current.push(value.clone());
         }
+    }
+}
+
+fn merge_unique_without_conflicts<T: Clone + PartialEq>(
+    current: &mut Vec<T>,
+    opposite: &[T],
+    next: &[T],
+) {
+    for value in next {
+        if opposite.contains(value) || current.contains(value) {
+            continue;
+        }
+        current.push(value.clone());
     }
 }
 

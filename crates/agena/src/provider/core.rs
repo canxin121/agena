@@ -14,7 +14,7 @@ use super::{
 };
 
 #[async_trait]
-pub trait ModelProvider: Send + Sync {
+pub trait ModelRuntime: Send + Sync {
     fn id(&self) -> &str;
     fn default_model(&self) -> &ModelId;
     fn default_adapter(&self) -> Option<&AdapterId> {
@@ -22,11 +22,12 @@ pub trait ModelProvider: Send + Sync {
     }
 
     /// Return the capability family used to look up model capabilities and
-    /// metadata from the global registries.  Providers that use the standard
-    /// registries only need to override this one method; `model_capabilities`
-    /// and `model_metadata` are derived from it automatically.
+    /// metadata from the global registries. Implementations that use the
+    /// standard registries only need to override this one method;
+    /// `model_capabilities` and `model_metadata` are derived from it
+    /// automatically.
     ///
-    /// Providers that need custom logic can still override
+    /// Implementations that need custom logic can still override
     /// `model_capabilities`/`model_metadata` directly.
     fn capability_family(&self) -> Option<CapabilityFamily> {
         None

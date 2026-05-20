@@ -15,7 +15,6 @@ mod model_modes;
 mod multi_adapter;
 mod ollama;
 mod openai;
-mod openai_compatible;
 mod prompt_cache;
 mod prompt_cache_shape;
 mod registry;
@@ -30,8 +29,8 @@ pub use crate::model::{
     ModelLifecycle, ModelMetadata, ModelRef, ModelSpeedMode, ModelSpeedModeRequestOverride,
     ModelThinkingMode, ModelTokenLimits, ProviderId,
 };
-pub use amazon_bedrock::AmazonBedrockProvider;
-pub use anthropic::{AnthropicProfile, AnthropicProvider};
+pub use amazon_bedrock::AmazonBedrockAdapter;
+pub use anthropic::{AnthropicAdapter, AnthropicProfile};
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
 pub use cataloged_models::CatalogedModelsProvider;
 pub use configured_models::{
@@ -39,19 +38,18 @@ pub use configured_models::{
     ConfiguredModelsProvider, FeatureCapabilityPatch, FeatureCapabilityPatchBody,
     InputCapabilityPatch, InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch,
 };
-pub use core::{ModelProvider, StreamResumePolicy};
+pub use core::{ModelRuntime, StreamResumePolicy};
 pub use credential::{
     AuthRefreshStrategy, AuthSecretSelector, ManagedCredential, SapAiCoreServiceKey,
     parse_sap_ai_core_service_key, should_retry_credential,
 };
-pub use gemini::GeminiProvider;
+pub use gemini::GeminiAdapter;
 pub use gitlab::{GitlabProvider, GitlabProviderConfig};
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
 pub use model_modes::{ModelModeRegistry, default_model_mode_registry};
 pub use multi_adapter::{MultiAdapterProvider, ProviderModelRoute, ProviderModelRouteKey};
-pub use ollama::OllamaProvider;
-pub use openai::{OpenAiApiMode, OpenAiBackend, OpenAiProfile, OpenAiProvider, OpenAiStreamMode};
-pub use openai_compatible::{OpenAiCompatibleProvider, OpenAiCompatibleStreamMode};
+pub use ollama::OllamaAdapter;
+pub use openai::{OpenAiAdapter, OpenAiApiMode, OpenAiBackend, OpenAiProfile, OpenAiStreamMode};
 pub use prompt_cache_shape::{PromptCacheShape, PromptCacheShapeChange, PromptCacheShapeDiff};
 pub use registry::{NamedProvider, ProviderRegistry};
 pub use runtime::{

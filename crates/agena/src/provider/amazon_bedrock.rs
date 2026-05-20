@@ -19,6 +19,7 @@ use http_body::Frame;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
+    collections::{BTreeMap, HashMap},
     error::Error as StdError,
     fmt,
     sync::{Arc, Mutex},
@@ -30,7 +31,7 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ModelProvider, ProviderModel, StreamResumePolicy,
+        CompletionToolCall, CompletionUsage, ModelRuntime, ProviderModel, StreamResumePolicy,
         ThinkingRequest, prompt_cache, sse, utils, wire_message,
     },
     role::Role,
@@ -40,6 +41,7 @@ const PROVIDER_ID: &str = "amazon-bedrock";
 const BEDROCK_ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
 const JSON_CONTENT_TYPE: &str = "application/json";
 const EVENTSTREAM_CONTENT_TYPE: &str = "application/vnd.amazon.eventstream";
+const ADAPTER_KIND: &str = "amazon_bedrock";
 
 const CROSS_REGION_PREFIXES: &[&str] = &["global.", "us.", "eu.", "jp.", "apac.", "au."];
 const US_MODELS: &[&str] = &[
@@ -80,7 +82,7 @@ enum BedrockAuthMode {
 }
 
 #[derive(Clone)]
-pub struct AmazonBedrockProvider {
+pub struct AmazonBedrockAdapter {
     client: reqwest::Client,
     base_url: String,
     default_model: ModelId,
@@ -89,7 +91,7 @@ pub struct AmazonBedrockProvider {
     resolved_sigv4_shape: Arc<Mutex<Option<crate::provider::PromptCacheShape>>>,
 }
 
-impl AmazonBedrockProvider {
+impl AmazonBedrockAdapter {
     pub fn new_sigv4(
         client: reqwest::Client,
         base_url: impl Into<String>,
@@ -286,12 +288,14 @@ impl AmazonBedrockProvider {
 
     async fn send_sigv4_request(
         &self,
+        operation: &str,
         profile: Option<&str>,
         static_credentials: Option<&Credentials>,
         method: reqwest::Method,
         url: String,
         body: Option<Vec<u8>>,
         headers: Vec<(String, String)>,
+        body_debug: Option<&Value>,
     ) -> Result<reqwest::Response, AppError> {
         let credentials = self
             .resolve_sigv4_credentials(profile, static_credentials)
@@ -305,12 +309,32 @@ impl AmazonBedrockProvider {
             self.region.as_str(),
         )?;
 
-        let mut request = self.client.request(method, url);
+        let mut request = self.client.request(method.clone(), url.as_str());
         for (name, value) in signing_headers.iter() {
             request = request.header(name, value);
         }
-        // Apply chat.headers plugin hook on top of signed headers.
-        request = utils::apply_request_headers(PROVIDER_ID, request, &Default::default());
+        let plugin_headers: HashMap<String, String> = Default::default();
+        let plugin_headers = utils::resolved_request_headers(PROVIDER_ID, &plugin_headers);
+        let mut final_headers = signing_headers
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|text| (name.as_str().to_owned(), text.to_owned()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        final_headers.extend(plugin_headers.clone());
+        utils::adapter_log_http_request_json(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            operation,
+            method.as_str(),
+            url.as_str(),
+            final_headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+            body_debug,
+        );
+        request = utils::apply_resolved_request_headers(request, &plugin_headers);
         if let Some(payload) = body {
             request = request.body(payload);
         }
@@ -345,16 +369,20 @@ impl AmazonBedrockProvider {
     ) -> Result<Vec<ProviderModel>, AppError> {
         let response = self
             .send_sigv4_request(
+                "list_models",
                 profile,
                 static_credentials,
                 reqwest::Method::GET,
                 self.models_endpoint(),
                 None,
                 Vec::new(),
+                None,
             )
             .await?;
 
-        let payload: Value = utils::parse_json_response(PROVIDER_ID, response).await?;
+        let payload: Value =
+            utils::parse_json_response_logged(PROVIDER_ID, ADAPTER_KIND, "list_models", response)
+                .await?;
         self.parse_models(payload)
     }
 
@@ -819,17 +847,24 @@ impl AmazonBedrockProvider {
 
         let response = self
             .send_sigv4_request(
+                "complete.native_anthropic",
                 profile,
                 static_credentials,
                 reqwest::Method::POST,
                 self.native_anthropic_invoke_endpoint(model.as_str(), false)?,
                 Some(serde_json::to_vec(&body_json)?),
                 headers,
+                Some(&body_json),
             )
             .await?;
 
-        let payload: BedrockAnthropicMessagesResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+        let payload: BedrockAnthropicMessagesResponse = utils::parse_json_response_logged(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "complete.native_anthropic",
+            response,
+        )
+        .await?;
         self.parse_anthropic_completion(payload, &model)
     }
 
@@ -855,19 +890,34 @@ impl AmazonBedrockProvider {
         );
         let response = self
             .send_sigv4_request(
+                "complete_stream.native_anthropic",
                 profile,
                 static_credentials,
                 reqwest::Method::POST,
                 self.native_anthropic_invoke_endpoint(model.as_str(), true)?,
                 Some(serde_json::to_vec(&body_json)?),
                 headers,
+                Some(&body_json),
             )
             .await?;
 
         if !response.status().is_success() {
-            return Err(utils::http_status_error_from_response(PROVIDER_ID, response).await);
+            return Err(utils::http_status_error_from_response_logged(
+                PROVIDER_ID,
+                ADAPTER_KIND,
+                "complete_stream.native_anthropic",
+                response,
+            )
+            .await);
         }
 
+        utils::adapter_log_http_response_open(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "complete_stream.native_anthropic",
+            response.status(),
+            response.headers(),
+        );
         let provider_id = ProviderId::new(PROVIDER_ID);
         let initial_model = model;
         let response_stream = response.bytes_stream().map_ok(Frame::data);
@@ -911,8 +961,17 @@ impl AmazonBedrockProvider {
                     }
                 };
 
-                let parsed: BedrockAnthropicStreamEvent =
-                    utils::parse_json_value(PROVIDER_ID, "bedrock anthropic stream event", event)?;
+                utils::adapter_log_stream_event(
+                    PROVIDER_ID,
+                    ADAPTER_KIND,
+                    "complete_stream.native_anthropic",
+                    &event,
+                );
+                let parsed: BedrockAnthropicStreamEvent = utils::parse_json_value(
+                    PROVIDER_ID,
+                    "bedrock anthropic stream event",
+                    event,
+                )?;
 
                 match parsed {
                     BedrockAnthropicStreamEvent::MessageStart { message } => {
@@ -1142,17 +1201,20 @@ impl AmazonBedrockProvider {
 
         let response = self
             .send_sigv4_request(
+                "complete.chat",
                 profile,
                 static_credentials,
                 reqwest::Method::POST,
                 self.completions_endpoint(),
                 Some(serde_json::to_vec(&body_json)?),
                 headers,
+                Some(&body_json),
             )
             .await?;
 
         let payload: ChatCompletionResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+            utils::parse_json_response_logged(PROVIDER_ID, ADAPTER_KIND, "complete.chat", response)
+                .await?;
         self.parse_completion(payload)
     }
 
@@ -1206,19 +1268,34 @@ impl AmazonBedrockProvider {
 
         let response = self
             .send_sigv4_request(
+                "complete_stream.chat",
                 profile,
                 static_credentials,
                 reqwest::Method::POST,
                 self.completions_endpoint(),
                 Some(serde_json::to_vec(&body_json)?),
                 headers,
+                Some(&body_json),
             )
             .await?;
 
         if !response.status().is_success() {
-            return Err(utils::http_status_error_from_response(PROVIDER_ID, response).await);
+            return Err(utils::http_status_error_from_response_logged(
+                PROVIDER_ID,
+                ADAPTER_KIND,
+                "complete_stream.chat",
+                response,
+            )
+            .await);
         }
 
+        utils::adapter_log_http_response_open(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "complete_stream.chat",
+            response.status(),
+            response.headers(),
+        );
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = ModelId::new(model);
@@ -1231,6 +1308,12 @@ impl AmazonBedrockProvider {
 
             while let Some(event) = events.next().await {
                 let event = event?;
+                utils::adapter_log_stream_event(
+                    PROVIDER_ID,
+                    ADAPTER_KIND,
+                    "complete_stream.chat",
+                    &event,
+                );
                 let chunk: utils::ChatStreamChunk =
                     utils::parse_json_value(PROVIDER_ID, "chat stream chunk", event)?;
                 let choice = chunk.choices.first();
@@ -1363,7 +1446,7 @@ impl AmazonBedrockProvider {
 }
 
 #[async_trait]
-impl ModelProvider for AmazonBedrockProvider {
+impl ModelRuntime for AmazonBedrockAdapter {
     fn id(&self) -> &str {
         PROVIDER_ID
     }
@@ -2030,7 +2113,7 @@ fn bedrock_anthropic_thinking_body(
             }
         }
         ThinkingRequest::Adaptive { effort, display }
-            if AmazonBedrockProvider::anthropic_model_uses_adaptive_thinking(model) =>
+            if AmazonBedrockAdapter::anthropic_model_uses_adaptive_thinking(model) =>
         {
             Some(BedrockAnthropicThinkingConfig::Adaptive {
                 effort: effort.map(crate::provider::ReasoningEffort::as_str),
@@ -2043,7 +2126,7 @@ fn bedrock_anthropic_thinking_body(
             ),
         }),
         ThinkingRequest::Effort { effort }
-            if AmazonBedrockProvider::anthropic_model_uses_adaptive_thinking(model) =>
+            if AmazonBedrockAdapter::anthropic_model_uses_adaptive_thinking(model) =>
         {
             Some(BedrockAnthropicThinkingConfig::Adaptive {
                 effort: Some(effort.as_str()),
@@ -2644,7 +2727,7 @@ mod tests {
             },
         ];
 
-        AmazonBedrockProvider::apply_anthropic_prompt_cache_hints(
+        AmazonBedrockAdapter::apply_anthropic_prompt_cache_hints(
             system.as_mut_slice(),
             tools.as_mut_slice(),
             messages.as_mut_slice(),
@@ -2687,7 +2770,7 @@ mod tests {
 
     #[test]
     fn native_anthropic_request_projects_assistant_tool_results_as_user_blocks() {
-        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+        let (_, body) = AmazonBedrockAdapter::build_anthropic_request(CompletionRequest {
             model: ModelId::new("anthropic.claude-3-5-sonnet-20241022-v2:0"),
             system: None,
             messages: vec![completed_operation_message()],
@@ -2727,7 +2810,7 @@ mod tests {
 
     #[test]
     fn native_anthropic_request_includes_budget_thinking_for_legacy_models() {
-        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+        let (_, body) = AmazonBedrockAdapter::build_anthropic_request(CompletionRequest {
             model: ModelId::new("anthropic.claude-sonnet-4-5-20250929-v1:0"),
             system: None,
             messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
@@ -2759,7 +2842,7 @@ mod tests {
 
     #[test]
     fn native_anthropic_request_includes_adaptive_thinking_for_supported_models() {
-        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+        let (_, body) = AmazonBedrockAdapter::build_anthropic_request(CompletionRequest {
             model: ModelId::new("anthropic.claude-opus-4-7"),
             system: None,
             messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
@@ -2794,7 +2877,7 @@ mod tests {
 
     #[test]
     fn native_anthropic_request_coerces_budget_thinking_to_adaptive_for_opus_47() {
-        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+        let (_, body) = AmazonBedrockAdapter::build_anthropic_request(CompletionRequest {
             model: ModelId::new("anthropic.claude-opus-4-7"),
             system: None,
             messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
@@ -2827,7 +2910,7 @@ mod tests {
 
     #[test]
     fn native_anthropic_request_keeps_temperature_for_legacy_models() {
-        let (_, body) = AmazonBedrockProvider::build_anthropic_request(CompletionRequest {
+        let (_, body) = AmazonBedrockAdapter::build_anthropic_request(CompletionRequest {
             model: ModelId::new("anthropic.claude-sonnet-4-5-20250929-v1:0"),
             system: None,
             messages: vec![crate::message::Message::prompt_text(Role::User, "hello")],
@@ -2903,7 +2986,7 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_changes_when_sigv4_profile_changes() {
-        let provider_a = AmazonBedrockProvider::new_sigv4(
+        let provider_a = AmazonBedrockAdapter::new_sigv4(
             reqwest::Client::new(),
             "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
             "amazon.nova-pro-v1:0",
@@ -2911,7 +2994,7 @@ mod tests {
             Some("profile-a".to_owned()),
             None,
         );
-        let provider_b = AmazonBedrockProvider::new_sigv4(
+        let provider_b = AmazonBedrockAdapter::new_sigv4(
             reqwest::Client::new(),
             "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
             "amazon.nova-pro-v1:0",
@@ -2932,7 +3015,7 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_changes_when_sigv4_static_access_key_changes() {
-        let provider_a = AmazonBedrockProvider::new_sigv4(
+        let provider_a = AmazonBedrockAdapter::new_sigv4(
             reqwest::Client::new(),
             "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
             "amazon.nova-pro-v1:0",
@@ -2946,7 +3029,7 @@ mod tests {
                 "test",
             )),
         );
-        let provider_b = AmazonBedrockProvider::new_sigv4(
+        let provider_b = AmazonBedrockAdapter::new_sigv4(
             reqwest::Client::new(),
             "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
             "amazon.nova-pro-v1:0",
@@ -2973,7 +3056,7 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_ignores_sigv4_session_token_changes() {
-        let provider_a = AmazonBedrockProvider::new_sigv4(
+        let provider_a = AmazonBedrockAdapter::new_sigv4(
             reqwest::Client::new(),
             "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
             "amazon.nova-pro-v1:0",
@@ -2987,7 +3070,7 @@ mod tests {
                 "test",
             )),
         );
-        let provider_b = AmazonBedrockProvider::new_sigv4(
+        let provider_b = AmazonBedrockAdapter::new_sigv4(
             reqwest::Client::new(),
             "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
             "amazon.nova-pro-v1:0",
@@ -3051,7 +3134,7 @@ mod tests {
 
     #[test]
     fn anthropic_tools_leave_eager_input_streaming_disabled() {
-        let tools = AmazonBedrockProvider::anthropic_tools(&[sample_tool_definition()]);
+        let tools = AmazonBedrockAdapter::anthropic_tools(&[sample_tool_definition()]);
 
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].eager_input_streaming, None);
@@ -3607,8 +3690,8 @@ data: [DONE]\n\n";
         buffer
     }
 
-    fn test_sigv4_provider(base_url: String, default_model: &str) -> AmazonBedrockProvider {
-        AmazonBedrockProvider {
+    fn test_sigv4_provider(base_url: String, default_model: &str) -> AmazonBedrockAdapter {
+        AmazonBedrockAdapter {
             client: reqwest::Client::new(),
             base_url,
             default_model: crate::model::ModelId::new(default_model),

@@ -305,7 +305,7 @@ impl AgenaRuntime {
                 tracing::warn!(
                     error = %err,
                     filter = tracing.filter,
-                    database_level = tracing.database_level,
+                    database = tracing.database,
                     "invalid tracing filter in runtime config"
                 );
             }

@@ -53,14 +53,14 @@ impl SessionManager {
             .store
             .load_session(request.session_id, state.cache_policy())
             .await?;
-        if let Some(expected) = request.expected_version {
-            if source.version != expected {
-                return Err(AppError::Conflict {
-                    session_id: request.session_id,
-                    expected,
-                    current: source.version,
-                });
-            }
+        if let Some(expected) = request.expected_version
+            && source.version != expected
+        {
+            return Err(AppError::Conflict {
+                session_id: request.session_id,
+                expected,
+                current: source.version,
+            });
         }
         let title = format!("Rewind of {}", source.title);
         self.store
@@ -82,14 +82,14 @@ impl SessionManager {
             .store
             .load_session(request.session_id, state.cache_policy())
             .await?;
-        if let Some(expected) = request.expected_version {
-            if session.version != expected {
-                return Err(AppError::Conflict {
-                    session_id: request.session_id,
-                    expected,
-                    current: session.version,
-                });
-            }
+        if let Some(expected) = request.expected_version
+            && session.version != expected
+        {
+            return Err(AppError::Conflict {
+                session_id: request.session_id,
+                expected,
+                current: session.version,
+            });
         }
         tracing::warn!(
             session_id = request.session_id,

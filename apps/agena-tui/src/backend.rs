@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, OnceLock},
@@ -10,10 +10,12 @@ use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 use agena::permission::PermissionScope;
 use agena::{
     config::{
-        ConfigSettingsEditResponse, ConfigSettingsPatchInput, ProcessEnvironment,
-        ProviderAuthConfig, draft_provider_adapter_models_target,
-        list_provider_adapter_models_for_target, patch_file_settings,
-        saved_provider_adapter_models_target,
+        ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
+        ConfigSettingsPatchInput, ConfigSettingsSetInput, ProcessEnvironment, ProviderAuthConfig,
+        delete_file_setting, draft_atomgit_provider_adapter_models_target,
+        draft_gitlab_provider_adapter_models_target, draft_provider_adapter_models_target,
+        list_provider_adapter_models_for_target, patch_file_settings, read_file_setting,
+        saved_provider_adapter_models_target, set_file_setting,
     },
     event::{DomainEvent, EventKind},
     memory::MemoryStore,
@@ -24,6 +26,12 @@ use agena::{
     model::{AdapterId, ModelRef, ModelSpeedModeRequestOverride},
     permission::PermissionReplyKind,
     provider::ProviderModel,
+    provider::auth::{
+        AuthData, CredentialIssuer, OAuthUserInfo, exchange_atomgit_oauth_state,
+        exchange_gitlab_oauth_code, exchange_openai_oauth_code, parse_oauth_callback_url,
+        poll_atomgit_oauth_state, poll_copilot_device_code, start_atomgit_oauth,
+        start_copilot_device_code, start_gitlab_oauth, start_openai_browser_oauth,
+    },
     runtime::AgenaRuntime,
     tool,
 };
@@ -103,21 +111,11 @@ pub struct SessionRefresh {
 
 #[derive(Debug, Clone)]
 struct GitStatusResource {
-    workspace_root: String,
     git_available: bool,
     repo: bool,
     gh_available: bool,
     branch: Option<String>,
-    upstream: Option<String>,
-    ahead: Option<u64>,
-    behind: Option<u64>,
     staged_files: u64,
-    unstaged_files: u64,
-    untracked_files: u64,
-    changed_files: u64,
-    clean: bool,
-    worktree_active_sessions: u64,
-    worktree_managed_dirs: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -128,21 +126,310 @@ pub struct InspectorRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderDraftAuthKind {
+    Unset,
+    None,
     Api,
-    Other(String),
+    Gitlab,
+    Credential(Option<CredentialIssuer>),
+    BedrockSigv4,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderDraftAdapterRule {
+    pub adapter_id: &'static str,
+    pub detail: &'static str,
+    pub requires_base_url: bool,
+    pub supports_draft_model_listing: bool,
+}
+
+const NONE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "ollama",
+    detail: "Ollama adapter; auth fields stay empty and the endpoint lives on the adapter.",
+    requires_base_url: false,
+    supports_draft_model_listing: false,
+}];
+
+const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
+    ProviderDraftAdapterRule {
+        adapter_id: "openai",
+        detail: "OpenAI-compatible HTTP adapter; uses provider auth base_url and supports draft model listing.",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "anthropic",
+        detail: "Anthropic HTTP adapter; uses provider auth base_url and supports draft model listing.",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "gemini",
+        detail: "Gemini HTTP adapter; uses provider auth base_url and supports draft model listing.",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
+];
+
+const GITLAB_AUTH_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
+    ProviderDraftAdapterRule {
+        adapter_id: "openai",
+        detail: "GitLab gateway routed through the openai adapter.",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "anthropic",
+        detail: "GitLab gateway routed through the anthropic adapter.",
+        requires_base_url: false,
+        supports_draft_model_listing: true,
+    },
+];
+
+const OPENAI_CHATGPT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "openai",
+    detail: "OpenAI adapter with chatgpt_codex backend; credentials come from the local OpenAI session.",
+    requires_base_url: false,
+    supports_draft_model_listing: false,
+}];
+
+const GITHUB_COPILOT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
+    ProviderDraftAdapterRule {
+        adapter_id: "openai",
+        detail: "Copilot token routed through the openai adapter.",
+        requires_base_url: false,
+        supports_draft_model_listing: false,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "anthropic",
+        detail: "Copilot token routed through the anthropic adapter.",
+        requires_base_url: false,
+        supports_draft_model_listing: false,
+    },
+];
+
+const GITLAB_CREDENTIAL_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
+    ProviderDraftAdapterRule {
+        adapter_id: "openai",
+        detail: "GitLab OAuth credential routed through the openai adapter.",
+        requires_base_url: false,
+        supports_draft_model_listing: false,
+    },
+    ProviderDraftAdapterRule {
+        adapter_id: "anthropic",
+        detail: "GitLab OAuth credential routed through the anthropic adapter.",
+        requires_base_url: false,
+        supports_draft_model_listing: false,
+    },
+];
+
+const GOOGLE_ADC_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "openai",
+    detail: "Vertex-style openai adapter with capability_family=gemini; requires provider auth base_url.",
+    requires_base_url: true,
+    supports_draft_model_listing: false,
+}];
+
+const SAP_AI_CORE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "openai",
+    detail: "SAP AI Core openai adapter; requires provider auth base_url and service_key_env.",
+    requires_base_url: true,
+    supports_draft_model_listing: false,
+}];
+
+const ATOMGIT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "openai",
+    detail: "AtomGit credential routed through the openai adapter.",
+    requires_base_url: false,
+    supports_draft_model_listing: true,
+}];
+
+const BEDROCK_SIGV4_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
+    adapter_id: "amazon_bedrock",
+    detail: "Amazon Bedrock adapter signed with AWS SigV4.",
+    requires_base_url: false,
+    supports_draft_model_listing: false,
+}];
+
+const DEFAULT_LOCAL_OAUTH_REDIRECT_URI: &str = "http://127.0.0.1:1455/callback";
+const DEFAULT_GITLAB_INSTANCE_URL: &str = "https://gitlab.com";
+
 impl ProviderDraftAuthKind {
-    pub fn label(&self) -> &str {
+    pub fn label(&self) -> String {
         match self {
-            Self::Api => "api",
-            Self::Other(label) => label.as_str(),
+            Self::Unset => "unset".to_owned(),
+            Self::None => "none".to_owned(),
+            Self::Api => "api".to_owned(),
+            Self::Gitlab => "gitlab_api".to_owned(),
+            Self::Credential(Some(issuer)) => {
+                format!("credential:{}", credential_issuer_label(*issuer))
+            }
+            Self::Credential(None) => "credential".to_owned(),
+            Self::BedrockSigv4 => "bedrock_sigv4".to_owned(),
         }
     }
 
-    pub fn is_api(&self) -> bool {
-        matches!(self, Self::Api)
+    pub fn supports_draft_model_listing(&self) -> bool {
+        matches!(
+            self,
+            Self::Api | Self::Gitlab | Self::Credential(Some(CredentialIssuer::AtomGit))
+        )
     }
+
+    pub fn mode_label(&self) -> &'static str {
+        match self {
+            Self::Unset => "",
+            Self::None => "none",
+            Self::Api => "api",
+            Self::Gitlab => "gitlab_api",
+            Self::Credential(_) => "credential",
+            Self::BedrockSigv4 => "bedrock_sigv4",
+        }
+    }
+
+    pub fn credential_issuer(&self) -> Option<CredentialIssuer> {
+        match self {
+            Self::Credential(Some(issuer)) => Some(*issuer),
+            _ => None,
+        }
+    }
+
+    pub fn adapter_rules(&self) -> &'static [ProviderDraftAdapterRule] {
+        match self {
+            Self::Unset => &[],
+            Self::None => NONE_ADAPTER_RULES,
+            Self::Api => API_ADAPTER_RULES,
+            Self::Gitlab => GITLAB_AUTH_ADAPTER_RULES,
+            Self::Credential(None) => &[],
+            Self::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => OPENAI_CHATGPT_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::GithubCopilot)) => GITHUB_COPILOT_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::Gitlab)) => GITLAB_CREDENTIAL_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::GoogleAdc)) => GOOGLE_ADC_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::SapAiCore)) => SAP_AI_CORE_ADAPTER_RULES,
+            Self::Credential(Some(CredentialIssuer::AtomGit)) => ATOMGIT_ADAPTER_RULES,
+            Self::BedrockSigv4 => BEDROCK_SIGV4_ADAPTER_RULES,
+        }
+    }
+
+    pub fn adapter_rule(&self, adapter_id: &str) -> Option<&'static ProviderDraftAdapterRule> {
+        let adapter_id = adapter_id.trim();
+        self.adapter_rules()
+            .iter()
+            .find(|rule| rule.adapter_id == adapter_id)
+    }
+
+    pub fn supports_adapter(&self, adapter_id: &str) -> bool {
+        self.adapter_rule(adapter_id).is_some()
+    }
+
+    pub fn parse_mode(value: &str, current_issuer: Option<CredentialIssuer>) -> Result<Self> {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "" => Ok(Self::Unset),
+            "none" => Ok(Self::None),
+            "api" => Ok(Self::Api),
+            "gitlab_api" => Ok(Self::Gitlab),
+            "credential" => Ok(Self::Credential(current_issuer)),
+            "bedrock_sigv4" => Ok(Self::BedrockSigv4),
+            "google_adc" => Ok(Self::Credential(Some(CredentialIssuer::GoogleAdc))),
+            "sap_ai_core" => Ok(Self::Credential(Some(CredentialIssuer::SapAiCore))),
+            _ if normalized.starts_with("credential:") => {
+                let issuer = parse_credential_issuer(
+                    normalized
+                        .split_once(':')
+                        .map(|(_, issuer)| issuer)
+                        .unwrap_or_default(),
+                )?;
+                Ok(Self::Credential(Some(issuer)))
+            }
+            _ => Err(anyhow!(
+                "unsupported auth_mode `{}`; expected none, api, gitlab_api, credential, or bedrock_sigv4",
+                value.trim()
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderOAuthTokensDraft {
+    pub refresh_token: String,
+    pub access_token: String,
+    pub expires_at_ms: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderBrowserAuthSessionDraft {
+    pub authorize_url: String,
+    pub state: String,
+    pub pkce_verifier: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderDeviceAuthSessionDraft {
+    pub verification_url: String,
+    pub user_code: String,
+    pub device_code: String,
+    pub interval_seconds: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OpenAiChatgptCredentialDraft {
+    pub redirect_uri: String,
+    pub callback_url: String,
+    pub tokens: ProviderOAuthTokensDraft,
+    pub account_id: String,
+    pub browser: Option<ProviderBrowserAuthSessionDraft>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GithubCopilotCredentialDraft {
+    pub enterprise_domain: String,
+    pub tokens: ProviderOAuthTokensDraft,
+    pub device: Option<ProviderDeviceAuthSessionDraft>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GitlabCredentialDraft {
+    pub redirect_uri: String,
+    pub callback_url: String,
+    pub tokens: ProviderOAuthTokensDraft,
+    pub browser: Option<ProviderBrowserAuthSessionDraft>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AtomGitCredentialDraft {
+    pub tokens: ProviderOAuthTokensDraft,
+    pub account_id: String,
+    pub username: String,
+    pub display_name: String,
+    pub email: String,
+    pub avatar_url: String,
+    pub browser: Option<ProviderBrowserAuthSessionDraft>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProviderCredentialDraftBundle {
+    pub openai_chatgpt: OpenAiChatgptCredentialDraft,
+    pub github_copilot: GithubCopilotCredentialDraft,
+    pub gitlab: GitlabCredentialDraft,
+    pub atomgit: AtomGitCredentialDraft,
+}
+
+impl ProviderCredentialDraftBundle {
+    fn normalize_shape(&mut self) {
+        if self.openai_chatgpt.redirect_uri.trim().is_empty() {
+            self.openai_chatgpt.redirect_uri = DEFAULT_LOCAL_OAUTH_REDIRECT_URI.to_owned();
+        }
+        if self.gitlab.redirect_uri.trim().is_empty() {
+            self.gitlab.redirect_uri = DEFAULT_LOCAL_OAUTH_REDIRECT_URI.to_owned();
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderDraftAuthActionResult {
+    pub draft: ProviderConfigDraft,
+    pub message: String,
+    pub clipboard_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,19 +438,149 @@ pub struct ProviderConfigDraft {
     pub provider_id: String,
     pub auth_kind: ProviderDraftAuthKind,
     pub base_url: String,
+    pub instance_url: String,
     pub api_key_env: String,
     pub api_key: String,
+    pub credential_issuer: String,
+    pub region: String,
+    pub profile: String,
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: String,
+    pub service_key_env: String,
+    pub credential_drafts: ProviderCredentialDraftBundle,
     pub default_adapter: String,
     pub default_model: String,
+}
+
+impl ProviderConfigDraft {
+    pub fn normalize_shape(&mut self) {
+        self.credential_drafts.normalize_shape();
+        self.credential_issuer = self
+            .auth_kind
+            .credential_issuer()
+            .map(credential_issuer_label)
+            .unwrap_or_default()
+            .to_owned();
+
+        match self.auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                self.base_url.clear();
+                self.api_key_env.clear();
+                self.api_key.clear();
+                self.region.clear();
+                self.profile.clear();
+                self.access_key_id.clear();
+                self.secret_access_key.clear();
+                self.session_token.clear();
+                self.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::None => {
+                self.base_url.clear();
+                self.api_key_env.clear();
+                self.api_key.clear();
+                self.region.clear();
+                self.profile.clear();
+                self.access_key_id.clear();
+                self.secret_access_key.clear();
+                self.session_token.clear();
+                self.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::Api => {
+                self.region.clear();
+                self.profile.clear();
+                self.access_key_id.clear();
+                self.secret_access_key.clear();
+                self.session_token.clear();
+                self.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::Gitlab => {
+                self.base_url.clear();
+                self.region.clear();
+                self.profile.clear();
+                self.access_key_id.clear();
+                self.secret_access_key.clear();
+                self.session_token.clear();
+                self.service_key_env.clear();
+                if self.instance_url.trim().is_empty() {
+                    self.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
+                }
+            }
+            ProviderDraftAuthKind::Credential(None) => {
+                self.base_url.clear();
+                self.api_key_env.clear();
+                self.api_key.clear();
+                self.region.clear();
+                self.profile.clear();
+                self.access_key_id.clear();
+                self.secret_access_key.clear();
+                self.session_token.clear();
+                self.service_key_env.clear();
+            }
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                self.api_key_env.clear();
+                self.api_key.clear();
+                self.region.clear();
+                self.profile.clear();
+                self.access_key_id.clear();
+                self.secret_access_key.clear();
+                self.session_token.clear();
+                if !issuer.uses_http_endpoint() {
+                    self.base_url.clear();
+                }
+                if issuer == CredentialIssuer::Gitlab && self.instance_url.trim().is_empty() {
+                    self.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
+                }
+                if issuer.requires_service_key_env() {
+                    if self.service_key_env.trim().is_empty() {
+                        self.service_key_env = "AICORE_SERVICE_KEY".to_owned();
+                    }
+                } else {
+                    self.service_key_env.clear();
+                }
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                self.api_key_env.clear();
+                self.api_key.clear();
+                self.service_key_env.clear();
+            }
+        }
+
+        if !self.default_adapter.trim().is_empty()
+            && !self
+                .auth_kind
+                .supports_adapter(self.default_adapter.as_str())
+        {
+            self.default_adapter.clear();
+        }
+        if self.default_adapter.trim().is_empty() {
+            self.default_model.clear();
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigJsonSources {
+    pub config_path: PathBuf,
+    pub config_found: bool,
+    pub file: JsonValue,
+    pub effective: JsonValue,
 }
 
 /// Push notification emitted by the unified bus for the active session.
 /// Indicates whether the change requires reloading messages.
 #[derive(Debug, Clone)]
 pub struct LiveEvent {
+    /// Concrete event payload when the subscriber kept up with the bus.
+    /// `None` means the receiver lagged and the UI should force-refresh
+    /// from persisted state instead of trying to apply an incremental patch.
+    pub event: Option<DomainEvent>,
     /// True for events that materially change session state — the UI should
     /// trigger a `refresh_session` after handling.
     pub triggers_refresh: bool,
+    /// True when the UI should ignore incremental assumptions and force a
+    /// replay from persisted state (for example after bus lag).
+    pub force_refresh: bool,
 }
 
 #[derive(Clone)]
@@ -275,6 +692,40 @@ impl Backend {
         providers
     }
 
+    pub fn list_agent_names(&self) -> Vec<String> {
+        let snapshot = self.runtime.current_snapshot();
+        let mut names = snapshot.agents().names();
+        names.sort();
+        names
+    }
+
+    pub fn list_aws_profile_names(&self) -> Vec<String> {
+        let credentials_path = env::var("AWS_SHARED_CREDENTIALS_FILE")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var("HOME")
+                    .ok()
+                    .map(|home| PathBuf::from(home).join(".aws/credentials"))
+            });
+        let config_path = env::var("AWS_CONFIG_FILE")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| {
+                env::var("HOME")
+                    .ok()
+                    .map(|home| PathBuf::from(home).join(".aws/config"))
+            });
+        let mut profiles = std::collections::BTreeSet::new();
+        for path in [credentials_path, config_path].into_iter().flatten() {
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            profiles.extend(parse_aws_profile_names(text.as_str()));
+        }
+        profiles.into_iter().collect()
+    }
+
     pub fn list_configured_providers(&self) -> Vec<ProviderSummaryResource> {
         let snapshot = self.runtime.current_snapshot();
         let mut providers = snapshot
@@ -310,18 +761,194 @@ impl Backend {
         providers
     }
 
+    pub fn default_adapter_options(&self) -> Vec<ProviderAdapterSummaryResource> {
+        let snapshot = self.runtime.current_snapshot();
+        let config = &snapshot.config_resolution().config;
+        let Some(provider_id) = config.default.provider.as_deref() else {
+            return Vec::new();
+        };
+        let Some(provider) = config.providers.get(provider_id) else {
+            return Vec::new();
+        };
+        if !provider.enabled {
+            return Vec::new();
+        }
+
+        let mut adapters = provider
+            .adapters
+            .iter()
+            .filter(|(_, adapter)| adapter.enabled)
+            .map(|(adapter_id, _)| ProviderAdapterSummaryResource {
+                adapter_id: adapter_id.clone(),
+                enabled: true,
+                configured_model_count: provider
+                    .models
+                    .iter()
+                    .filter(|(route, model)| {
+                        model.enabled
+                            && route
+                                .split_once('/')
+                                .map(|(route_adapter_id, _)| route_adapter_id == adapter_id)
+                                .unwrap_or(false)
+                    })
+                    .count(),
+            })
+            .collect::<Vec<_>>();
+        adapters.sort_by(|left, right| left.adapter_id.cmp(&right.adapter_id));
+        adapters
+    }
+
+    pub fn default_model_options(&self) -> Vec<ProviderModel> {
+        let snapshot = self.runtime.current_snapshot();
+        let config = &snapshot.config_resolution().config;
+        let Some(provider_id) = config.default.provider.as_deref() else {
+            return Vec::new();
+        };
+        let Some(provider) = config.providers.get(provider_id) else {
+            return Vec::new();
+        };
+        if !provider.enabled {
+            return Vec::new();
+        }
+        let adapter_id = config
+            .default
+            .adapter
+            .as_deref()
+            .unwrap_or(provider.default_adapter.as_str());
+        if !provider
+            .adapters
+            .get(adapter_id)
+            .is_some_and(|adapter| adapter.enabled)
+        {
+            return Vec::new();
+        }
+
+        let mut models = provider
+            .models
+            .iter()
+            .filter_map(|(route, configured)| {
+                if !configured.enabled {
+                    return None;
+                }
+                let (route_adapter_id, model_id) = route.split_once('/')?;
+                if route_adapter_id != adapter_id {
+                    return None;
+                }
+                let mut model =
+                    ProviderModel::new(provider_id, model_id).with_adapter_id(adapter_id);
+                if let Some(display_name) = configured
+                    .definition
+                    .display_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    model = model.with_display_name(display_name);
+                }
+                Some(model)
+            })
+            .collect::<Vec<_>>();
+        models.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+        models
+    }
+
+    pub fn config_path(&self) -> PathBuf {
+        self.runtime.config_resolution().meta.config_path.clone()
+    }
+
+    pub fn config_json_sources(&self) -> Result<ConfigJsonSources> {
+        let snapshot = self.runtime.current_snapshot();
+        let resolution = snapshot.config_resolution();
+        let config_path = resolution.meta.config_path.clone();
+        let file = read_file_setting(config_path.clone(), ConfigSettingsGetInput::default())
+            .map_err(|error| anyhow!(error.to_string()))
+            .context("failed to read config file settings")?
+            .value;
+        let effective = serde_json::to_value(&resolution.config)
+            .map_err(|error| anyhow!(error.to_string()))
+            .context("failed to serialize effective config")?;
+        Ok(ConfigJsonSources {
+            config_path,
+            config_found: resolution.meta.config_found,
+            file,
+            effective,
+        })
+    }
+
+    pub async fn set_config_setting(
+        &self,
+        path: &str,
+        value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self.runtime.config_resolution().meta.config_path.clone();
+        let response = set_file_setting(
+            config_path,
+            ConfigSettingsSetInput {
+                path: path.trim().to_owned(),
+                value,
+                dry_run: false,
+                validate: true,
+                reload: true,
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to set config setting")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after config change")?;
+        }
+        Ok(response)
+    }
+
+    pub async fn delete_config_setting(&self, path: &str) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self.runtime.config_resolution().meta.config_path.clone();
+        let response = delete_file_setting(
+            config_path,
+            ConfigSettingsDeleteInput {
+                path: path.trim().to_owned(),
+                dry_run: false,
+                validate: true,
+                reload: true,
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to delete config setting")?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after config change")?;
+        }
+        Ok(response)
+    }
+
     pub fn provider_config_draft(&self, provider_id: Option<&str>) -> Result<ProviderConfigDraft> {
         let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
-            return Ok(ProviderConfigDraft {
+            let mut draft = ProviderConfigDraft {
                 source_provider_id: None,
                 provider_id: String::new(),
-                auth_kind: ProviderDraftAuthKind::Api,
+                auth_kind: ProviderDraftAuthKind::Unset,
                 base_url: String::new(),
+                instance_url: String::new(),
                 api_key_env: String::new(),
                 api_key: String::new(),
-                default_adapter: "openai".to_owned(),
+                credential_issuer: String::new(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+                credential_drafts: ProviderCredentialDraftBundle::default(),
+                default_adapter: String::new(),
                 default_model: String::new(),
-            });
+            };
+            draft.normalize_shape();
+            return Ok(draft);
         };
 
         let snapshot = self.runtime.current_snapshot();
@@ -332,57 +959,259 @@ impl Backend {
             .get(provider_id)
             .ok_or_else(|| anyhow!("provider not found: {provider_id}"))?;
 
-        let (auth_kind, base_url, api_key_env, api_key) = match &provider.auth {
-            ProviderAuthConfig::Api(api) => (
-                ProviderDraftAuthKind::Api,
-                api.base_url.clone(),
-                api.api_key_env.clone().unwrap_or_default(),
-                api.api_key.clone().unwrap_or_default(),
+        let uses_legacy_gitlab_adapter = provider.adapters.contains_key("gitlab");
+        let mut credential_drafts = ProviderCredentialDraftBundle::default();
+        let (
+            auth_kind,
+            base_url,
+            instance_url,
+            api_key_env,
+            api_key,
+            credential_issuer,
+            region,
+            profile,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            service_key_env,
+        ) = match &provider.auth {
+            ProviderAuthConfig::Api(api) => {
+                let auth_kind = if uses_legacy_gitlab_adapter {
+                    ProviderDraftAuthKind::Gitlab
+                } else {
+                    ProviderDraftAuthKind::Api
+                };
+                (
+                    auth_kind,
+                    api.base_url.clone().unwrap_or_default(),
+                    String::new(),
+                    api.api_key_env.clone().unwrap_or_default(),
+                    api.api_key.clone().unwrap_or_default(),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
+            }
+            ProviderAuthConfig::Gitlab(config) => (
+                ProviderDraftAuthKind::Gitlab,
+                String::new(),
+                config.instance_url.clone().unwrap_or_default(),
+                config.api_key_env.clone().unwrap_or_default(),
+                config.api_key.clone().unwrap_or_default(),
+                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
             ),
             ProviderAuthConfig::None => (
-                ProviderDraftAuthKind::Other("none".to_owned()),
+                ProviderDraftAuthKind::None,
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
                 String::new(),
                 String::new(),
                 String::new(),
             ),
-            ProviderAuthConfig::Credential(config) => (
-                ProviderDraftAuthKind::Other(
-                    format!("credential:{:?}", config.issuer).to_lowercase(),
-                ),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
+            ProviderAuthConfig::Credential(config) => {
+                populate_provider_credential_drafts(
+                    &mut credential_drafts,
+                    config.issuer,
+                    config.credential.as_ref(),
+                );
+                (
+                    ProviderDraftAuthKind::Credential(Some(config.issuer)),
+                    config.base_url.clone().unwrap_or_default(),
+                    config.instance_url.clone().unwrap_or_default(),
+                    String::new(),
+                    String::new(),
+                    credential_issuer_label(config.issuer).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    config.service_key_env.clone().unwrap_or_default(),
+                )
+            }
             ProviderAuthConfig::BedrockSigv4(sigv4) => (
-                ProviderDraftAuthKind::Other("bedrock_sigv4".to_owned()),
+                ProviderDraftAuthKind::BedrockSigv4,
                 sigv4.base_url.clone(),
                 String::new(),
                 String::new(),
-            ),
-            ProviderAuthConfig::GoogleAdc(adc) => (
-                ProviderDraftAuthKind::Other("google_adc".to_owned()),
-                adc.base_url.clone(),
                 String::new(),
-                String::new(),
-            ),
-            ProviderAuthConfig::SapAiCore(config) => (
-                ProviderDraftAuthKind::Other("sap_ai_core".to_owned()),
-                config.api.base_url.clone(),
-                String::new(),
+                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                sigv4.region.clone(),
+                sigv4.profile.clone().unwrap_or_default(),
+                sigv4.access_key_id.clone().unwrap_or_default(),
+                sigv4.secret_access_key.clone().unwrap_or_default(),
+                sigv4.session_token.clone().unwrap_or_default(),
                 String::new(),
             ),
         };
 
-        Ok(ProviderConfigDraft {
+        let mut draft = ProviderConfigDraft {
             source_provider_id: Some(provider_id.to_owned()),
             provider_id: provider_id.to_owned(),
             auth_kind,
             base_url,
+            instance_url,
             api_key_env,
             api_key,
+            credential_issuer,
+            region,
+            profile,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            service_key_env,
+            credential_drafts,
             default_adapter: provider.default_adapter.clone(),
             default_model: provider.default_model.clone(),
-        })
+        };
+        draft.normalize_shape();
+        Ok(draft)
+    }
+
+    pub async fn start_provider_draft_auth(
+        &self,
+        draft: ProviderConfigDraft,
+    ) -> Result<ProviderDraftAuthActionResult> {
+        start_provider_draft_auth(draft).await
+    }
+
+    pub async fn continue_provider_draft_auth(
+        &self,
+        draft: ProviderConfigDraft,
+    ) -> Result<ProviderDraftAuthActionResult> {
+        continue_provider_draft_auth(draft).await
+    }
+
+    fn configured_provider_adapter_ids(
+        &self,
+        provider_id: Option<&str>,
+    ) -> std::collections::BTreeSet<String> {
+        let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return std::collections::BTreeSet::new();
+        };
+        let snapshot = self.runtime.current_snapshot();
+        snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+            .map(|provider| provider.adapters.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn configured_provider_model_routes(
+        &self,
+        provider_id: Option<&str>,
+    ) -> Vec<(String, String)> {
+        let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Vec::new();
+        };
+        let snapshot = self.runtime.current_snapshot();
+        let Some(provider) = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+        else {
+            return Vec::new();
+        };
+        provider
+            .models
+            .keys()
+            .filter_map(|route| {
+                route
+                    .split_once('/')
+                    .map(|(adapter_id, model_id)| (adapter_id.to_owned(), model_id.to_owned()))
+            })
+            .collect()
+    }
+
+    pub fn configured_provider_adapter_models(
+        &self,
+        provider_id: Option<&str>,
+    ) -> Vec<ProviderAdapterModelsResource> {
+        let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Vec::new();
+        };
+        let snapshot = self.runtime.current_snapshot();
+        let Some(provider) = snapshot
+            .config_resolution()
+            .config
+            .providers
+            .get(provider_id)
+        else {
+            return Vec::new();
+        };
+
+        let mut adapter_ids = provider.adapters.keys().cloned().collect::<Vec<_>>();
+        adapter_ids.sort();
+        adapter_ids
+            .into_iter()
+            .map(|adapter_id| {
+                let mut model_ids = provider
+                    .models
+                    .keys()
+                    .filter_map(|route| {
+                        route
+                            .split_once('/')
+                            .and_then(|(route_adapter_id, model_id)| {
+                                (route_adapter_id == adapter_id).then(|| model_id.to_owned())
+                            })
+                    })
+                    .collect::<Vec<_>>();
+                model_ids.sort();
+                ProviderAdapterModelsResource {
+                    adapter_id: adapter_id.clone(),
+                    enabled: provider
+                        .adapters
+                        .get(adapter_id.as_str())
+                        .map(|adapter| adapter.enabled)
+                        .unwrap_or(true),
+                    resolved_base_url: None,
+                    models: model_ids
+                        .into_iter()
+                        .map(|model_id| ProviderModel::new(adapter_id.as_str(), model_id))
+                        .collect(),
+                    error: None,
+                }
+            })
+            .collect()
+    }
+
+    fn effective_provider_draft_adapter_ids(
+        &self,
+        draft: &ProviderConfigDraft,
+        extra_adapter_ids: &[String],
+    ) -> std::collections::BTreeSet<String> {
+        let mut adapter_ids =
+            self.configured_provider_adapter_ids(draft.source_provider_id.as_deref());
+        adapter_ids.extend(
+            extra_adapter_ids
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+        );
+        if let Some(default_adapter) = optional_non_empty(draft.default_adapter.as_str()) {
+            adapter_ids.insert(default_adapter.to_owned());
+        }
+        adapter_ids
     }
 
     pub async fn list_provider_models(&self, provider_id: &str) -> Result<Vec<ProviderModel>> {
@@ -468,6 +1297,84 @@ impl Backend {
             .collect()
     }
 
+    pub fn resolved_model_for_run_options(&self, request: &RunOptions) -> Result<ModelRef> {
+        if let Some(model) = request.model.as_ref() {
+            return Ok(model.clone());
+        }
+
+        let snapshot = self.runtime.current_snapshot();
+        let registry = snapshot.provider_registry();
+        let default_config = &snapshot.config_resolution().config.default;
+        if let Some(provider_id) = default_config.provider.as_deref() {
+            return registry
+                .resolve_model_selection(
+                    provider_id,
+                    default_config.adapter.as_deref(),
+                    default_config.model.as_deref(),
+                )
+                .context("failed to resolve default model selection");
+        }
+
+        let mut providers = registry.provider_ids();
+        providers.sort();
+        let provider_id = providers
+            .first()
+            .ok_or_else(|| anyhow!("no providers configured"))?;
+        registry
+            .resolve_model_target(provider_id, None)
+            .context("failed to resolve default provider model")
+    }
+
+    pub fn runtime_thinking_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {
+        let snapshot = self.runtime.current_snapshot();
+        let registry = snapshot.provider_registry();
+        let model = self.resolved_model_for_run_options(request)?;
+        let mut rows = registry
+            .model_thinking_modes(&model)
+            .context("failed to resolve thinking modes for current model")?
+            .into_iter()
+            .map(|(name, mode)| InspectorRow {
+                label: name,
+                detail: summarize_named_mode(
+                    mode.display_name.as_deref(),
+                    mode.description.as_deref(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        Ok(rows)
+    }
+
+    pub fn runtime_speed_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {
+        let snapshot = self.runtime.current_snapshot();
+        let registry = snapshot.provider_registry();
+        let model = self.resolved_model_for_run_options(request)?;
+        let mut rows = registry
+            .model_speed_modes(&model)
+            .context("failed to resolve speed modes for current model")?
+            .into_iter()
+            .map(|(name, mode)| InspectorRow {
+                label: name,
+                detail: summarize_named_mode(
+                    mode.display_name.as_deref(),
+                    mode.description.as_deref(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.label.cmp(&right.label));
+        Ok(rows)
+    }
+
+    pub fn runtime_verbosity_values(&self, request: &RunOptions) -> Result<Vec<String>> {
+        let snapshot = self.runtime.current_snapshot();
+        let registry = snapshot.provider_registry();
+        let model = self.resolved_model_for_run_options(request)?;
+        let metadata = registry
+            .model_metadata(&model)
+            .context("failed to resolve verbosity metadata for current model")?;
+        Ok(metadata.supported_verbosity_levels_for_model(&model.model_id))
+    }
+
     pub async fn refresh_model_catalog(&self) -> Result<()> {
         let snapshot = self.runtime.current_snapshot();
         let source_providers = snapshot.catalog_source_provider_registry();
@@ -487,20 +1394,50 @@ impl Backend {
         draft: &ProviderConfigDraft,
         adapter_ids: &[String],
     ) -> Result<ProviderAdapterModelsResponse> {
-        if !draft.auth_kind.is_api() {
+        let mut draft = draft.clone();
+        draft.normalize_shape();
+        if !draft.auth_kind.supports_draft_model_listing() {
             return Err(anyhow!(
-                "draft adapter model listing requires api auth; current auth is {}",
+                "draft adapter model listing requires api, gitlab_api, or atomgit credential auth; current auth is {}",
                 draft.auth_kind.label()
             ));
         }
-        let target = draft_provider_adapter_models_target(
-            Some(draft.provider_id.as_str()),
-            draft.base_url.as_str(),
-            agena::config::ProviderProtocolPathsConfig::default(),
-            Some(draft.api_key.as_str()),
-            Some(draft.api_key_env.as_str()),
-            adapter_ids,
-        )
+        validate_provider_draft_listing_request(&draft, adapter_ids)?;
+        let target = match draft.auth_kind {
+            ProviderDraftAuthKind::Api => draft_provider_adapter_models_target(
+                Some(draft.provider_id.as_str()),
+                draft.base_url.as_str(),
+                agena::config::ProviderProtocolPathsConfig::default(),
+                Some(draft.api_key.as_str()),
+                Some(draft.api_key_env.as_str()),
+                adapter_ids,
+            ),
+            ProviderDraftAuthKind::Gitlab => draft_gitlab_provider_adapter_models_target(
+                Some(draft.provider_id.as_str()),
+                Some(draft.api_key.as_str()),
+                Some(draft.api_key_env.as_str()),
+                adapter_ids,
+            ),
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+                let credential = provider_draft_oauth_auth_data(&draft)?
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "draft atomgit model listing requires OAuth tokens; run AtomGit auth first or enter tokens manually"
+                        )
+                    })?;
+                if !auth_data_has_access_or_api_key(&credential) {
+                    return Err(anyhow!(
+                        "draft atomgit model listing requires a non-empty access token; run AtomGit auth first or enter access_token manually"
+                    ));
+                }
+                draft_atomgit_provider_adapter_models_target(
+                    Some(draft.provider_id.as_str()),
+                    credential,
+                    adapter_ids,
+                )
+            }
+            _ => unreachable!("listing guard ensures only supported draft auth kinds reach here"),
+        }
         .map_err(map_provider_adapter_models_config_error)?;
         self.list_provider_adapter_models_with_target(target).await
     }
@@ -528,10 +1465,18 @@ impl Backend {
         draft: ProviderConfigDraft,
         adapter_model_lists: &[ProviderAdapterModelsResource],
         selected_adapter_ids: &[String],
+        selected_model_keys: &std::collections::BTreeSet<String>,
     ) -> Result<String> {
+        let mut draft = draft;
+        draft.normalize_shape();
         let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
-        let default_adapter = required_trimmed(draft.default_adapter.as_str(), "default_adapter")?;
-        let default_model = required_trimmed(draft.default_model.as_str(), "default_model")?;
+        let requested_default_adapter =
+            optional_non_empty(draft.default_adapter.as_str()).map(str::to_owned);
+        let requested_default_model =
+            optional_non_empty(draft.default_model.as_str()).map(str::to_owned);
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, selected_adapter_ids);
+        validate_provider_draft_shape(&draft, &effective_adapter_ids)?;
 
         let catalog_entries = self.lookup_model_catalog_entries(
             &adapter_model_lists
@@ -542,7 +1487,7 @@ impl Backend {
                         .iter()
                         .map(catalog_lookup_id_for_provider_model)
                 })
-                .chain(std::iter::once(default_model.to_owned()))
+                .chain(requested_default_model.iter().cloned())
                 .collect::<Vec<_>>(),
         );
         let selected = selected_adapter_ids
@@ -550,27 +1495,40 @@ impl Backend {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .collect::<std::collections::BTreeSet<_>>();
-        let default_provider_model = adapter_model_lists
-            .iter()
-            .find(|adapter_models| adapter_models.adapter_id == default_adapter)
-            .and_then(|adapter_models| {
-                adapter_models
-                    .models
-                    .iter()
-                    .find(|model| model.id.as_str() == default_model)
-                    .cloned()
-            });
 
-        let mut adapters = JsonMap::new();
+        let mut provider_value = self
+            .read_file_provider_settings(provider_id)?
+            .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
+        let provider_object = provider_value
+            .as_object_mut()
+            .ok_or_else(|| anyhow!("existing provider settings must be a TOML table"))?;
+        let mut adapters = provider_object
+            .remove("adapters")
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+
         for adapter_models in adapter_model_lists {
-            if adapter_models.error.is_some()
-                || !selected.contains(adapter_models.adapter_id.as_str())
-            {
+            let adapter_id = adapter_models.adapter_id.as_str();
+            if adapter_models.error.is_some() || !selected.contains(adapter_id) {
                 continue;
             }
+
+            let mut adapter_value = adapters
+                .remove(adapter_id)
+                .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
+            let adapter_object = adapter_value
+                .as_object_mut()
+                .ok_or_else(|| anyhow!("provider adapter `{adapter_id}` must be a TOML table"))?;
             let configured_models = adapter_models
                 .models
                 .iter()
+                .filter(|model| {
+                    provider_model_selection_contains(
+                        selected_model_keys,
+                        adapter_id,
+                        model.id.as_str(),
+                    )
+                })
                 .map(|model| {
                     (
                         model.id.to_string(),
@@ -582,39 +1540,58 @@ impl Backend {
                     )
                 })
                 .collect::<JsonMap<_, _>>();
-            let mut adapter_value = JsonMap::new();
-            adapter_value.insert("enabled".to_owned(), JsonValue::Bool(true));
-            adapter_value.insert("models".to_owned(), JsonValue::Object(configured_models));
-            adapters.insert(
-                adapter_models.adapter_id.clone(),
-                JsonValue::Object(adapter_value),
-            );
+            adapter_object.insert("enabled".to_owned(), JsonValue::Bool(true));
+            adapter_object.insert("models".to_owned(), JsonValue::Object(configured_models));
+            adapters.insert(adapter_id.to_owned(), adapter_value);
         }
 
+        let (default_adapter, default_model) = resolve_provider_defaults_from_value(
+            &adapters,
+            requested_default_adapter.as_deref(),
+            requested_default_model.as_deref(),
+        )?;
+
+        let default_provider_model = adapter_model_lists
+            .iter()
+            .find(|adapter_models| adapter_models.adapter_id == default_adapter)
+            .and_then(|adapter_models| {
+                adapter_models
+                    .models
+                    .iter()
+                    .find(|model| model.id.as_str() == default_model)
+                    .cloned()
+            });
         let default_model_value = provider_model_json_for_model_id(
             &catalog_entries,
-            default_model,
+            default_model.as_str(),
             default_provider_model.as_ref(),
         );
         adapters
-            .entry(default_adapter.to_owned())
+            .entry(default_adapter.clone())
             .or_insert_with(|| json!({ "enabled": true }));
         ensure_provider_model_entry(
             adapters
-                .get_mut(default_adapter)
+                .get_mut(default_adapter.as_str())
                 .expect("default adapter must exist"),
-            default_model,
+            default_model.as_str(),
             default_model_value,
         )?;
 
-        let provider_patch = build_provider_patch_value(
-            &draft,
-            default_adapter,
-            default_model,
-            JsonValue::Object(adapters),
-            true,
-        )?;
-        self.patch_provider_settings(provider_id, provider_patch)
+        provider_object.insert("enabled".to_owned(), JsonValue::Bool(true));
+        provider_object.insert(
+            "default_adapter".to_owned(),
+            JsonValue::String(default_adapter.clone()),
+        );
+        provider_object.insert(
+            "default_model".to_owned(),
+            JsonValue::String(default_model.clone()),
+        );
+        provider_object.insert(
+            "auth".to_owned(),
+            JsonValue::Object(build_provider_auth_patch_value(&draft)?),
+        );
+        provider_object.insert("adapters".to_owned(), JsonValue::Object(adapters));
+        self.set_provider_settings(provider_id, provider_value)
             .await?;
         Ok(format!(
             "Saved provider {provider_id} with default {default_adapter}/{default_model}."
@@ -626,8 +1603,13 @@ impl Backend {
         draft: ProviderConfigDraft,
         adapter_models: ProviderAdapterModelsResource,
     ) -> Result<String> {
+        let mut draft = draft;
+        draft.normalize_shape();
         let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
         let adapter_id = required_trimmed(adapter_models.adapter_id.as_str(), "adapter_id")?;
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        validate_provider_draft_shape(&draft, &effective_adapter_ids)?;
         let catalog_entries = self.lookup_model_catalog_entries(
             &adapter_models
                 .models
@@ -684,9 +1666,14 @@ impl Backend {
         provider_model: Option<ProviderModel>,
         set_default: bool,
     ) -> Result<String> {
+        let mut draft = draft;
+        draft.normalize_shape();
         let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
         let adapter_id = required_trimmed(adapter_id, "adapter_id")?;
         let model_id = required_trimmed(model_id, "model_id")?;
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        validate_provider_draft_shape(&draft, &effective_adapter_ids)?;
         let catalog_entries =
             self.lookup_model_catalog_entries(&[catalog_lookup_id_for_model_id(model_id)]);
         let model_value =
@@ -718,6 +1705,113 @@ impl Backend {
         self.patch_provider_settings(provider_id, provider_patch)
             .await?;
         Ok(format!("Saved {provider_id}/{adapter_id}/{model_id}."))
+    }
+
+    pub fn provider_model_draft_value(
+        &self,
+        draft: &ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
+        provider_model: Option<&ProviderModel>,
+    ) -> Result<JsonValue> {
+        let adapter_id = required_trimmed(adapter_id, "adapter_id")?;
+        let model_id = required_trimmed(model_id, "model_id")?;
+        if let Some(provider_id) = draft.source_provider_id.as_deref() {
+            let path = provider_model_settings_path(provider_id, adapter_id, model_id);
+            let configured = read_file_setting(
+                self.runtime.config_resolution().meta.config_path.clone(),
+                ConfigSettingsGetInput {
+                    path: Some(path),
+                    source: agena::config::ConfigSettingsSource::File,
+                },
+            )
+            .map_err(|error| anyhow!(error.to_string()))
+            .context("failed to read configured provider model")?
+            .value;
+            if !configured.is_null() {
+                return Ok(configured);
+            }
+        }
+
+        let catalog_entries = self.lookup_model_catalog_entries(
+            &[model_id.to_owned()]
+                .into_iter()
+                .chain(provider_model.map(catalog_lookup_id_for_provider_model))
+                .collect::<Vec<_>>(),
+        );
+        Ok(provider_model_json_for_model_id(
+            &catalog_entries,
+            model_id,
+            provider_model,
+        ))
+    }
+
+    fn read_file_provider_settings(&self, provider_id: &str) -> Result<Option<JsonValue>> {
+        let configured = read_file_setting(
+            self.runtime.config_resolution().meta.config_path.clone(),
+            ConfigSettingsGetInput {
+                path: Some(provider_settings_path(provider_id)),
+                source: agena::config::ConfigSettingsSource::File,
+            },
+        )
+        .map_err(|error| anyhow!(error.to_string()))
+        .context("failed to read configured provider")?
+        .value;
+        if configured.is_null() {
+            Ok(None)
+        } else {
+            Ok(Some(configured))
+        }
+    }
+
+    pub async fn save_provider_model_value(
+        &self,
+        draft: ProviderConfigDraft,
+        adapter_id: &str,
+        model_id: &str,
+        model_value: JsonValue,
+        set_default: bool,
+    ) -> Result<String> {
+        let mut draft = draft;
+        draft.normalize_shape();
+        let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
+        let adapter_id = required_trimmed(adapter_id, "adapter_id")?;
+        let model_id = required_trimmed(model_id, "model_id")?;
+        let JsonValue::Object(_) = &model_value else {
+            return Err(anyhow!("provider model config must be a JSON object"));
+        };
+        let effective_adapter_ids =
+            self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        validate_provider_draft_shape(&draft, &effective_adapter_ids)?;
+        let default_adapter = if set_default {
+            adapter_id
+        } else {
+            optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id)
+        };
+        let default_model = if set_default {
+            model_id
+        } else {
+            optional_non_empty(draft.default_model.as_str()).unwrap_or(model_id)
+        };
+        let provider_patch = build_provider_patch_value(
+            &draft,
+            default_adapter,
+            default_model,
+            json!({
+                adapter_id: {
+                    "enabled": true,
+                    "models": {
+                        model_id: model_value,
+                    }
+                }
+            }),
+            set_default || draft.source_provider_id.is_none(),
+        )?;
+        self.patch_provider_settings(provider_id, provider_patch)
+            .await?;
+        Ok(format!(
+            "Saved configured model {provider_id}/{adapter_id}/{model_id}."
+        ))
     }
 
     async fn list_provider_adapter_models_with_target(
@@ -757,8 +1851,34 @@ impl Backend {
                 reload: true,
             },
         )
-        .map_err(|error| anyhow!(error.to_string()))
-        .context("failed to patch provider settings")?;
+        .map_err(|error| anyhow!("failed to patch provider settings: {error}"))?;
+
+        if response.reload_required {
+            self.runtime
+                .reload()
+                .await
+                .context("failed to reload runtime after provider settings change")?;
+        }
+        Ok(response)
+    }
+
+    async fn set_provider_settings(
+        &self,
+        provider_id: &str,
+        provider_value: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let config_path = self.runtime.config_resolution().meta.config_path.clone();
+        let response = set_file_setting(
+            config_path,
+            ConfigSettingsSetInput {
+                path: format!("providers.{}", quoted_settings_segment(provider_id)),
+                value: provider_value,
+                dry_run: false,
+                validate: true,
+                reload: true,
+            },
+        )
+        .map_err(|error| anyhow!("failed to save provider settings: {error}"))?;
 
         if response.reload_required {
             self.runtime
@@ -977,23 +2097,36 @@ impl Backend {
         let mut subscription = bus.subscribe(EventFilter::new(Scope::Session { session_id }));
         tokio::spawn(async move {
             while let Some(item) = subscription.recv().await {
-                let SubscriptionItem::Event(event) = item else {
-                    // `Lagged(n)` => UI should ask for a forced refresh; we
-                    // emit a stub LiveEvent with `triggers_refresh = true`
-                    // so the existing refresh handler runs.
-                    continue;
+                let event = match item {
+                    SubscriptionItem::Event(event) => Some((*event).clone()),
+                    SubscriptionItem::Lagged(_) => None,
                 };
+                if event.is_none() {
+                    let live = LiveEvent {
+                        event: None,
+                        triggers_refresh: true,
+                        force_refresh: true,
+                    };
+                    if tx.send(live).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                let event = event.expect("event should exist after lag handling");
                 let triggers_refresh = matches!(
                     event.kind,
-                    EventKind::AssistantMessageCompleted(_)
-                        | EventKind::ToolCallCompleted(_)
+                    EventKind::ToolCallCompleted(_)
                         | EventKind::TurnCompleted(_)
                         | EventKind::TurnAborted(_)
                         | EventKind::SystemNoticeAppended(_)
                         | EventKind::MessageRevised(_)
                         | EventKind::RunFailed(_)
                 );
-                let live = LiveEvent { triggers_refresh };
+                let live = LiveEvent {
+                    event: Some(event),
+                    triggers_refresh,
+                    force_refresh: false,
+                };
                 if tx.send(live).is_err() {
                     break;
                 }
@@ -1358,128 +2491,6 @@ impl Backend {
             .plugin_logs(plugin_id, after_seq, limit)
     }
 
-    pub fn runtime_inspector_rows(&self) -> Vec<InspectorRow> {
-        let snapshot = self.runtime.current_snapshot();
-        let resolution = snapshot.config_resolution();
-        let mut rows = vec![
-            InspectorRow {
-                label: "generation".to_string(),
-                detail: snapshot.generation().to_string(),
-            },
-            InspectorRow {
-                label: "workspace_root".to_string(),
-                detail: self.workspace_root.display().to_string(),
-            },
-            InspectorRow {
-                label: "config_path".to_string(),
-                detail: resolution.meta.config_path.display().to_string(),
-            },
-            InspectorRow {
-                label: "providers".to_string(),
-                detail: snapshot.provider_registry().provider_ids().join(", "),
-            },
-            InspectorRow {
-                label: "plugins".to_string(),
-                detail: snapshot.plugin_manager().plugins().len().to_string(),
-            },
-            InspectorRow {
-                label: "watch_paths".to_string(),
-                detail: snapshot
-                    .watch_paths()
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(" | "),
-            },
-        ];
-        if let Some(manager) = snapshot.session_manager() {
-            let stats = manager.cache_stats();
-            rows.push(InspectorRow {
-                label: "session_cache".to_string(),
-                detail: format!(
-                    "entries={} hits={} misses={} evictions={}",
-                    stats.entry_count, stats.hits, stats.misses, stats.evictions
-                ),
-            });
-        }
-        rows
-    }
-
-    pub fn mcp_inspector_rows(&self) -> Vec<InspectorRow> {
-        let snapshot = self.runtime.current_snapshot();
-        let mut rows = snapshot
-            .config_resolution()
-            .config
-            .mcp
-            .servers
-            .iter()
-            .map(|(name, config)| InspectorRow {
-                label: name.clone(),
-                detail: match config {
-                    agena::config::McpServerConfig::Stdio { command, args, .. } => {
-                        format!("stdio {} {}", command, args.join(" "))
-                    }
-                    agena::config::McpServerConfig::Http { url, mode, .. } => {
-                        format!("http {} {:?}", url, mode)
-                    }
-                },
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.label.cmp(&right.label));
-        rows
-    }
-
-    pub fn lsp_inspector_rows(&self) -> Vec<InspectorRow> {
-        let snapshot = self.runtime.current_snapshot();
-        let mut rows = snapshot
-            .config_resolution()
-            .config
-            .lsp
-            .servers
-            .iter()
-            .map(|(name, config)| InspectorRow {
-                label: name.clone(),
-                detail: format!(
-                    "{} | ext={} | roots={}",
-                    config.command,
-                    if config.file_extensions.is_empty() {
-                        "all".to_string()
-                    } else {
-                        config.file_extensions.join(",")
-                    },
-                    if config.root_markers.is_empty() {
-                        "workspace".to_string()
-                    } else {
-                        config.root_markers.join(",")
-                    }
-                ),
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.label.cmp(&right.label));
-        rows
-    }
-
-    pub fn skills_inspector_rows(&self) -> Vec<InspectorRow> {
-        let mut rows = self
-            .runtime
-            .current_snapshot()
-            .plugin_manager()
-            .entry_entries()
-            .into_iter()
-            .filter(|entry| entry.plugin_name == "agena.skills")
-            .map(|entry| InspectorRow {
-                label: entry.exposed_name,
-                detail: format!(
-                    "{} | {}",
-                    entry.plugin_name,
-                    entry.decl.description.unwrap_or_default()
-                ),
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by(|left, right| left.label.cmp(&right.label));
-        rows
-    }
-
     pub fn runtime_entry_rows(&self) -> Vec<InspectorRow> {
         let mut rows = self
             .runtime
@@ -1498,101 +2509,6 @@ impl Backend {
             .collect::<Vec<_>>();
         rows.sort_by(|left, right| left.label.cmp(&right.label));
         rows
-    }
-
-    pub async fn session_cost_inspector_rows(&self, session_id: i64) -> Result<Vec<InspectorRow>> {
-        let session = self.session_manager()?.get_session(session_id).await?;
-        let summary = agena::session::cost::summarize(&session.messages);
-        let mut rows = vec![
-            InspectorRow {
-                label: "summary".to_string(),
-                detail: summary.one_line(),
-            },
-            InspectorRow {
-                label: "turns".to_string(),
-                detail: summary.turns.to_string(),
-            },
-            InspectorRow {
-                label: "input_tokens".to_string(),
-                detail: summary.input_tokens.to_string(),
-            },
-            InspectorRow {
-                label: "output_tokens".to_string(),
-                detail: summary.output_tokens.to_string(),
-            },
-            InspectorRow {
-                label: "reasoning_tokens".to_string(),
-                detail: summary.reasoning_tokens.to_string(),
-            },
-            InspectorRow {
-                label: "cache_write_tokens".to_string(),
-                detail: summary.cache_write_tokens.to_string(),
-            },
-            InspectorRow {
-                label: "cache_read_tokens".to_string(),
-                detail: summary.cache_read_tokens.to_string(),
-            },
-            InspectorRow {
-                label: "total_cost_usd".to_string(),
-                detail: format!("{:.4}", summary.total_cost_usd),
-            },
-        ];
-        rows.extend(summary.by_model.into_iter().map(|entry| InspectorRow {
-            label: format!("{}/{}", entry.provider_id, entry.model_id),
-            detail: format!(
-                "turns={} in={} out={} reasoning={} cost=${:.4}",
-                entry.turns,
-                entry.input_tokens,
-                entry.output_tokens,
-                entry.reasoning_tokens,
-                entry.total_cost_usd
-            ),
-        }));
-        Ok(rows)
-    }
-
-    pub async fn usage_inspector_rows(&self, session_id: Option<i64>) -> Result<Vec<InspectorRow>> {
-        let manager = self.session_manager()?;
-        let now = chrono::Utc::now();
-        let periods = [
-            ("today", agena::session::UsagePeriod::Today),
-            ("last_7_days", agena::session::UsagePeriod::Last7Days),
-            ("last_30_days", agena::session::UsagePeriod::Last30Days),
-            ("all_time", agena::session::UsagePeriod::AllTime),
-        ];
-        let mut rows = Vec::new();
-        for (label, period) in periods {
-            let stats = manager
-                .usage_stats(agena::session::UsageStatsQuery::for_period(period, now))
-                .await?;
-            rows.push(InspectorRow {
-                label: label.to_string(),
-                detail: format_usage_totals(&stats.totals),
-            });
-        }
-
-        let stats = manager
-            .usage_stats(agena::session::UsageStatsQuery::for_period(
-                agena::session::UsagePeriod::Last30Days,
-                now,
-            ))
-            .await?;
-        for entry in stats.by_model.into_iter().take(8) {
-            rows.push(InspectorRow {
-                label: format!("model:{}/{}", entry.provider_id, entry.model_id),
-                detail: format_usage_totals(&entry.totals),
-            });
-        }
-
-        if let Some(session_id) = session_id {
-            rows.push(InspectorRow {
-                label: "selected_session".to_string(),
-                detail: format!("#{session_id}"),
-            });
-            rows.extend(self.session_cost_inspector_rows(session_id).await?);
-        }
-
-        Ok(rows)
     }
 
     pub async fn list_permission_rules(&self) -> Result<Vec<PermissionRuleResource>> {
@@ -1669,46 +2585,6 @@ impl Backend {
         .context("failed to revoke permission rule")
     }
 
-    pub fn config_inspector_rows(&self) -> Vec<InspectorRow> {
-        let snapshot = self.runtime.current_snapshot();
-        let resolution = snapshot.config_resolution();
-        let mut rows = vec![
-            InspectorRow {
-                label: "config_path".to_string(),
-                detail: resolution.meta.config_path.display().to_string(),
-            },
-            InspectorRow {
-                label: "config_found".to_string(),
-                detail: resolution.meta.config_found.to_string(),
-            },
-            InspectorRow {
-                label: "provider_count".to_string(),
-                detail: resolution.config.providers.len().to_string(),
-            },
-            InspectorRow {
-                label: "plugin_entries".to_string(),
-                detail: resolution
-                    .config
-                    .plugins
-                    .list
-                    .keys()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" | "),
-            },
-            InspectorRow {
-                label: "mcp_servers".to_string(),
-                detail: resolution.config.mcp.servers.len().to_string(),
-            },
-            InspectorRow {
-                label: "lsp_servers".to_string(),
-                detail: resolution.config.lsp.servers.len().to_string(),
-            },
-        ];
-        rows.retain(|row| !row.detail.is_empty());
-        rows
-    }
-
     pub fn worktree_inspector_rows(&self) -> Vec<InspectorRow> {
         let Some(manager) = self.runtime.session_manager() else {
             return vec![InspectorRow {
@@ -1763,14 +2639,6 @@ impl Backend {
             }
         }));
         rows
-    }
-
-    pub async fn git_inspector_rows(&self) -> Result<Vec<InspectorRow>> {
-        let status = self
-            .git_status()
-            .await
-            .context("failed to load git status")?;
-        Ok(git_status_inspector_rows(status))
     }
 
     pub fn enter_worktree(
@@ -1952,124 +2820,48 @@ impl Backend {
         let git_available = command_available("git");
         let gh_available = command_available("gh");
 
-        let Some(manager) = self.runtime.session_manager() else {
+        if self.runtime.session_manager().is_none() {
             return Ok(GitStatusResource {
-                workspace_root: workspace_root.display().to_string(),
                 git_available,
                 repo: false,
                 gh_available,
                 branch: None,
-                upstream: None,
-                ahead: None,
-                behind: None,
                 staged_files: 0,
-                unstaged_files: 0,
-                untracked_files: 0,
-                changed_files: 0,
-                clean: true,
-                worktree_active_sessions: 0,
-                worktree_managed_dirs: 0,
             });
-        };
-
-        let executor = manager.tool_executor();
-        let (worktree_active_sessions, worktree_managed_dirs) = match executor.worktree_registry() {
-            Some(registry) => (
-                tool::worktree_list_active(registry).len() as u64,
-                tool::worktree_list_managed(&workspace_root, registry).len() as u64,
-            ),
-            None => (0, 0),
-        };
+        }
 
         if !git_available {
             return Ok(GitStatusResource {
-                workspace_root: workspace_root.display().to_string(),
                 git_available,
                 repo: false,
                 gh_available,
                 branch: None,
-                upstream: None,
-                ahead: None,
-                behind: None,
                 staged_files: 0,
-                unstaged_files: 0,
-                untracked_files: 0,
-                changed_files: 0,
-                clean: true,
-                worktree_active_sessions,
-                worktree_managed_dirs,
             });
         }
 
         let repo = git_success(&workspace_root, ["rev-parse", "--is-inside-work-tree"]);
         if !repo {
             return Ok(GitStatusResource {
-                workspace_root: workspace_root.display().to_string(),
                 git_available,
                 repo,
                 gh_available,
                 branch: None,
-                upstream: None,
-                ahead: None,
-                behind: None,
                 staged_files: 0,
-                unstaged_files: 0,
-                untracked_files: 0,
-                changed_files: 0,
-                clean: true,
-                worktree_active_sessions,
-                worktree_managed_dirs,
             });
         }
 
         let branch = git_command_output(&workspace_root, ["branch", "--show-current"])?;
-        let upstream = git_command_output(
-            &workspace_root,
-            [
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                "@{upstream}",
-            ],
-        )
-        .ok()
-        .and_then(|value| non_empty(Some(value.as_str())).map(ToOwned::to_owned));
-        let ahead_behind = upstream.as_ref().and_then(|_| {
-            git_command_output(
-                &workspace_root,
-                ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-            )
-            .ok()
-        });
-        let (ahead, behind) = parse_ahead_behind(ahead_behind.as_deref());
         let status = git_command_output(&workspace_root, ["status", "--porcelain"])?;
-        let (staged_files, unstaged_files, untracked_files, changed_files) =
-            summarize_git_status(status.as_str());
+        let (staged_files, _, _, _) = summarize_git_status(status.as_str());
 
         Ok(GitStatusResource {
-            workspace_root: workspace_root.display().to_string(),
             git_available,
             repo,
             gh_available,
             branch: non_empty(Some(branch.as_str())).map(ToOwned::to_owned),
-            upstream,
-            ahead,
-            behind,
             staged_files,
-            unstaged_files,
-            untracked_files,
-            changed_files,
-            clean: changed_files == 0,
-            worktree_active_sessions,
-            worktree_managed_dirs,
         })
-    }
-
-    pub fn resolve_model_target(&self, target: &str, model: Option<&str>) -> Result<ModelRef> {
-        self.runtime
-            .current_snapshot()
-            .resolve_model_target(target, model)
-            .context("failed to resolve model target")
     }
 
     async fn current_workspace_id(&self) -> Result<i64> {
@@ -2376,6 +3168,302 @@ fn optional_non_empty(value: &str) -> Option<&str> {
 
 fn required_trimmed<'a>(value: &'a str, field: &str) -> Result<&'a str> {
     optional_non_empty(value).ok_or_else(|| anyhow!("{field} is required"))
+}
+
+fn populate_provider_credential_drafts(
+    drafts: &mut ProviderCredentialDraftBundle,
+    issuer: CredentialIssuer,
+    credential: Option<&AuthData>,
+) {
+    let Some(AuthData::OAuth {
+        refresh,
+        access,
+        expires_at_ms,
+        account_id,
+        enterprise_url,
+        user,
+        ..
+    }) = credential
+    else {
+        return;
+    };
+
+    let tokens = ProviderOAuthTokensDraft {
+        refresh_token: refresh.clone(),
+        access_token: access.clone(),
+        expires_at_ms: (*expires_at_ms).to_string(),
+    };
+    match issuer {
+        CredentialIssuer::OpenaiChatgpt => {
+            drafts.openai_chatgpt.tokens = tokens;
+            drafts.openai_chatgpt.account_id = account_id.clone().unwrap_or_default();
+        }
+        CredentialIssuer::GithubCopilot => {
+            drafts.github_copilot.tokens = tokens;
+            drafts.github_copilot.enterprise_domain = enterprise_url.clone().unwrap_or_default();
+        }
+        CredentialIssuer::Gitlab => {
+            drafts.gitlab.tokens = tokens;
+        }
+        CredentialIssuer::AtomGit => {
+            drafts.atomgit.tokens = tokens;
+            drafts.atomgit.account_id = account_id
+                .clone()
+                .or_else(|| user.as_ref().map(|user| user.id.clone()))
+                .unwrap_or_default();
+            if let Some(user) = user {
+                drafts.atomgit.username = user.username.clone();
+                drafts.atomgit.display_name = user.name.clone().unwrap_or_default();
+                drafts.atomgit.email = user.email.clone().unwrap_or_default();
+                drafts.atomgit.avatar_url = user.avatar_url.clone().unwrap_or_default();
+            }
+        }
+        CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore => {}
+    }
+}
+
+fn update_oauth_tokens_from_response(
+    tokens: &mut ProviderOAuthTokensDraft,
+    response: &agena::provider::auth::OAuthTokenResponse,
+) {
+    tokens.refresh_token = response.refresh.clone();
+    tokens.access_token = response.access.clone();
+    tokens.expires_at_ms = response.expires_at_ms.to_string();
+}
+
+async fn start_provider_draft_auth(
+    mut draft: ProviderConfigDraft,
+) -> Result<ProviderDraftAuthActionResult> {
+    draft.normalize_shape();
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
+            let redirect_uri = required_trimmed(
+                draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
+                "redirect_uri",
+            )?;
+            let start = start_openai_browser_oauth(redirect_uri)?;
+            draft.credential_drafts.openai_chatgpt.callback_url.clear();
+            draft.credential_drafts.openai_chatgpt.browser =
+                Some(ProviderBrowserAuthSessionDraft {
+                    authorize_url: start.authorize_url.clone(),
+                    state: start.state.clone(),
+                    pkce_verifier: start.pkce_verifier,
+                });
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: "OpenAI browser auth started. Open the copied authorize URL, then paste the redirected callback URL and press p.".to_owned(),
+                clipboard_text: Some(start.authorize_url),
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
+            let domain = optional_non_empty(
+                draft
+                    .credential_drafts
+                    .github_copilot
+                    .enterprise_domain
+                    .as_str(),
+            )
+            .unwrap_or("github.com");
+            let start = start_copilot_device_code(domain).await?;
+            draft.credential_drafts.github_copilot.device = Some(ProviderDeviceAuthSessionDraft {
+                verification_url: start.verification_url.clone(),
+                user_code: start.user_code.clone(),
+                device_code: start.device_code,
+                interval_seconds: start.interval_seconds,
+            });
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: format!(
+                    "Copilot device login started. Open the copied verification URL, enter code {}, then press p.",
+                    start.user_code
+                ),
+                clipboard_text: Some(start.verification_url),
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
+            let instance_url = required_trimmed(draft.instance_url.as_str(), "instance_url")?;
+            let redirect_uri = required_trimmed(
+                draft.credential_drafts.gitlab.redirect_uri.as_str(),
+                "redirect_uri",
+            )?;
+            let start = start_gitlab_oauth(instance_url, redirect_uri)?;
+            draft.credential_drafts.gitlab.callback_url.clear();
+            draft.credential_drafts.gitlab.browser = Some(ProviderBrowserAuthSessionDraft {
+                authorize_url: start.authorize_url.clone(),
+                state: start.state.clone(),
+                pkce_verifier: start.pkce_verifier,
+            });
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: "GitLab browser auth started. Open the copied authorize URL, then paste the redirected callback URL and press p.".to_owned(),
+                clipboard_text: Some(start.authorize_url),
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+            let start = start_atomgit_oauth().await?;
+            draft.credential_drafts.atomgit.browser = Some(ProviderBrowserAuthSessionDraft {
+                authorize_url: start.authorize_url.clone(),
+                state: start.state,
+                pkce_verifier: String::new(),
+            });
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: "AtomGit browser auth started. Open the copied authorize URL, complete the login, then press p to poll.".to_owned(),
+                clipboard_text: Some(start.authorize_url),
+            })
+        }
+        _ => Err(anyhow!(
+            "the current auth_mode does not support interactive OAuth login"
+        )),
+    }
+}
+
+async fn continue_provider_draft_auth(
+    mut draft: ProviderConfigDraft,
+) -> Result<ProviderDraftAuthActionResult> {
+    draft.normalize_shape();
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
+            let session = draft
+                .credential_drafts
+                .openai_chatgpt
+                .browser
+                .clone()
+                .ok_or_else(|| anyhow!("start browser auth first with o"))?;
+            let redirect_uri = required_trimmed(
+                draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
+                "redirect_uri",
+            )?;
+            let callback_url = required_trimmed(
+                draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
+                "callback_url",
+            )?;
+            let callback = parse_oauth_callback_url(callback_url, Some(session.state.as_str()))?;
+            let token = exchange_openai_oauth_code(
+                callback.code.as_str(),
+                session.pkce_verifier.as_str(),
+                redirect_uri,
+            )
+            .await?;
+            update_oauth_tokens_from_response(
+                &mut draft.credential_drafts.openai_chatgpt.tokens,
+                &token,
+            );
+            draft.credential_drafts.openai_chatgpt.account_id =
+                token.account_id.unwrap_or_default();
+            draft.credential_drafts.openai_chatgpt.callback_url.clear();
+            draft.credential_drafts.openai_chatgpt.browser = None;
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: "OpenAI OAuth credential captured into the draft.".to_owned(),
+                clipboard_text: None,
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
+            let session = draft
+                .credential_drafts
+                .github_copilot
+                .device
+                .clone()
+                .ok_or_else(|| anyhow!("start device auth first with o"))?;
+            let domain = optional_non_empty(
+                draft
+                    .credential_drafts
+                    .github_copilot
+                    .enterprise_domain
+                    .as_str(),
+            )
+            .unwrap_or("github.com");
+            let Some(token) =
+                poll_copilot_device_code(domain, session.device_code.as_str()).await?
+            else {
+                return Ok(ProviderDraftAuthActionResult {
+                    draft,
+                    message: "Copilot device login is still pending. Complete the browser approval, then press p again.".to_owned(),
+                    clipboard_text: None,
+                });
+            };
+            update_oauth_tokens_from_response(
+                &mut draft.credential_drafts.github_copilot.tokens,
+                &token,
+            );
+            draft.credential_drafts.github_copilot.device = None;
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: "Copilot OAuth credential captured into the draft.".to_owned(),
+                clipboard_text: None,
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
+            let session = draft
+                .credential_drafts
+                .gitlab
+                .browser
+                .clone()
+                .ok_or_else(|| anyhow!("start browser auth first with o"))?;
+            let instance_url = required_trimmed(draft.instance_url.as_str(), "instance_url")?;
+            let redirect_uri = required_trimmed(
+                draft.credential_drafts.gitlab.redirect_uri.as_str(),
+                "redirect_uri",
+            )?;
+            let callback_url = required_trimmed(
+                draft.credential_drafts.gitlab.callback_url.as_str(),
+                "callback_url",
+            )?;
+            let callback = parse_oauth_callback_url(callback_url, Some(session.state.as_str()))?;
+            let token = exchange_gitlab_oauth_code(
+                instance_url,
+                callback.code.as_str(),
+                session.pkce_verifier.as_str(),
+                redirect_uri,
+            )
+            .await?;
+            update_oauth_tokens_from_response(&mut draft.credential_drafts.gitlab.tokens, &token);
+            draft.credential_drafts.gitlab.callback_url.clear();
+            draft.credential_drafts.gitlab.browser = None;
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: "GitLab OAuth credential captured into the draft.".to_owned(),
+                clipboard_text: None,
+            })
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+            let session = draft
+                .credential_drafts
+                .atomgit
+                .browser
+                .clone()
+                .ok_or_else(|| anyhow!("start browser auth first with o"))?;
+            if !poll_atomgit_oauth_state(session.state.as_str()).await? {
+                return Ok(ProviderDraftAuthActionResult {
+                    draft,
+                    message: "AtomGit browser login is still pending. Finish the browser flow, then press p again.".to_owned(),
+                    clipboard_text: None,
+                });
+            }
+
+            let token = exchange_atomgit_oauth_state(session.state.as_str()).await?;
+            update_oauth_tokens_from_response(&mut draft.credential_drafts.atomgit.tokens, &token);
+            draft.credential_drafts.atomgit.account_id =
+                token.account_id.clone().unwrap_or_default();
+            if let Some(user) = token.user {
+                draft.credential_drafts.atomgit.account_id = user.id.clone();
+                draft.credential_drafts.atomgit.username = user.username;
+                draft.credential_drafts.atomgit.display_name = user.name.unwrap_or_default();
+                draft.credential_drafts.atomgit.email = user.email.unwrap_or_default();
+                draft.credential_drafts.atomgit.avatar_url = user.avatar_url.unwrap_or_default();
+            }
+            draft.credential_drafts.atomgit.browser = None;
+            Ok(ProviderDraftAuthActionResult {
+                draft,
+                message: "AtomGit OAuth credential captured into the draft.".to_owned(),
+                clipboard_text: None,
+            })
+        }
+        _ => Err(anyhow!(
+            "the current auth_mode does not support interactive OAuth login"
+        )),
+    }
 }
 
 fn local_model_catalog_summary(
@@ -2696,7 +3784,8 @@ fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> J
     if !entry.speed_modes.is_empty() {
         value.insert("speed_modes".to_owned(), json!(entry.speed_modes));
     }
-    if let Ok(JsonValue::Object(capabilities)) = serde_json::to_value(&entry.capabilities) {
+    let capabilities_patch = sanitized_catalog_capability_patch(&entry.capabilities);
+    if let Ok(JsonValue::Object(capabilities)) = serde_json::to_value(&capabilities_patch) {
         for (key, part) in capabilities {
             let is_empty_object = matches!(&part, JsonValue::Object(object) if object.is_empty());
             if !part.is_null() && !is_empty_object {
@@ -2705,6 +3794,73 @@ fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> J
         }
     }
     JsonValue::Object(value)
+}
+
+fn sanitized_catalog_capability_patch(
+    patch: &agena::provider::ModelCapabilityPatch,
+) -> agena::provider::ModelCapabilityPatch {
+    use agena::provider::{
+        FeatureCapabilityPatch, FeatureCapabilityPatchBody, InputCapabilityPatch,
+        InputCapabilityPatchBody,
+    };
+
+    let mut patch = patch.clone();
+
+    match patch.input.take() {
+        Some(InputCapabilityPatch::Supported(mut supported)) => {
+            dedupe_vec(&mut supported);
+            patch.input =
+                (!supported.is_empty()).then_some(InputCapabilityPatch::Supported(supported));
+        }
+        Some(InputCapabilityPatch::Patch(mut values)) => {
+            dedupe_vec(&mut values.supported);
+            dedupe_vec(&mut values.unsupported);
+            values
+                .unsupported
+                .retain(|value| !values.supported.contains(value));
+            patch.input = if values.unsupported.is_empty() {
+                (!values.supported.is_empty())
+                    .then_some(InputCapabilityPatch::Supported(values.supported))
+            } else if values.supported.is_empty() {
+                Some(InputCapabilityPatch::Patch(InputCapabilityPatchBody {
+                    supported: Vec::new(),
+                    unsupported: values.unsupported,
+                }))
+            } else {
+                Some(InputCapabilityPatch::Patch(values))
+            };
+        }
+        None => {}
+    }
+
+    match patch.features.take() {
+        Some(FeatureCapabilityPatch::Supported(mut supported)) => {
+            dedupe_vec(&mut supported);
+            patch.features =
+                (!supported.is_empty()).then_some(FeatureCapabilityPatch::Supported(supported));
+        }
+        Some(FeatureCapabilityPatch::Patch(mut values)) => {
+            dedupe_vec(&mut values.supported);
+            dedupe_vec(&mut values.unsupported);
+            values
+                .unsupported
+                .retain(|value| !values.supported.contains(value));
+            patch.features = if values.unsupported.is_empty() {
+                (!values.supported.is_empty())
+                    .then_some(FeatureCapabilityPatch::Supported(values.supported))
+            } else if values.supported.is_empty() {
+                Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+                    supported: Vec::new(),
+                    unsupported: values.unsupported,
+                }))
+            } else {
+                Some(FeatureCapabilityPatch::Patch(values))
+            };
+        }
+        None => {}
+    }
+
+    patch
 }
 
 fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
@@ -2895,6 +4051,21 @@ fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
     JsonValue::Object(value)
 }
 
+fn dedupe_vec<T: PartialEq>(values: &mut Vec<T>) {
+    let mut index = 0;
+    while index < values.len() {
+        let mut next = index + 1;
+        while next < values.len() {
+            if values[index] == values[next] {
+                values.remove(next);
+            } else {
+                next += 1;
+            }
+        }
+        index += 1;
+    }
+}
+
 fn ensure_provider_model_entry(
     adapter_value: &mut JsonValue,
     model_id: &str,
@@ -2923,6 +4094,283 @@ fn map_provider_adapter_models_config_error(error: agena::config::ConfigError) -
     }
 }
 
+fn validate_provider_draft_listing_request(
+    draft: &ProviderConfigDraft,
+    adapter_ids: &[String],
+) -> Result<()> {
+    let selected = adapter_ids
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if selected.is_empty() {
+        return Err(anyhow!(
+            "draft adapter model listing requires at least one explicit adapter"
+        ));
+    }
+    let unsupported = selected
+        .iter()
+        .filter(|adapter_id| {
+            draft
+                .auth_kind
+                .adapter_rule(adapter_id)
+                .map(|rule| !rule.supports_draft_model_listing)
+                .unwrap_or(true)
+        })
+        .copied()
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        return Err(anyhow!(
+            "draft adapter model listing only supports adapters with live model discovery for the current auth; unsupported: {}",
+            unsupported.join(", ")
+        ));
+    }
+    validate_provider_draft_shape(
+        draft,
+        &selected
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<std::collections::BTreeSet<_>>(),
+    )
+}
+
+fn validate_provider_draft_shape(
+    draft: &ProviderConfigDraft,
+    adapter_ids: &std::collections::BTreeSet<String>,
+) -> Result<()> {
+    let default_adapter = required_trimmed(draft.default_adapter.as_str(), "default_adapter")?;
+    if !draft.auth_kind.supports_adapter(default_adapter) {
+        return Err(anyhow!(
+            "auth {} does not support default_adapter `{default_adapter}`; expected one of {}",
+            draft.auth_kind.label(),
+            supported_provider_draft_adapter_list(&draft.auth_kind),
+        ));
+    }
+
+    let incompatible = adapter_ids
+        .iter()
+        .filter(|adapter_id| !draft.auth_kind.supports_adapter(adapter_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !incompatible.is_empty() {
+        return Err(anyhow!(
+            "auth {} does not support adapter(s): {}; expected one of {}",
+            draft.auth_kind.label(),
+            incompatible.join(", "),
+            supported_provider_draft_adapter_list(&draft.auth_kind),
+        ));
+    }
+
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Unset => {
+            return Err(anyhow!("provider auth_mode is required"));
+        }
+        ProviderDraftAuthKind::None => {}
+        ProviderDraftAuthKind::Api => {
+            let requires_base_url = adapter_ids.iter().any(|adapter_id| {
+                draft
+                    .auth_kind
+                    .adapter_rule(adapter_id.as_str())
+                    .map(|rule| rule.requires_base_url)
+                    .unwrap_or(false)
+            });
+            if requires_base_url && optional_non_empty(draft.base_url.as_str()).is_none() {
+                return Err(anyhow!(
+                    "api auth requires base_url when using openai, anthropic, or gemini adapters"
+                ));
+            }
+        }
+        ProviderDraftAuthKind::Gitlab => {
+            if optional_non_empty(draft.api_key.as_str()).is_none()
+                && optional_non_empty(draft.api_key_env.as_str()).is_none()
+            {
+                return Err(anyhow!("gitlab_api auth requires api_key or api_key_env"));
+            }
+        }
+        ProviderDraftAuthKind::Credential(None) => {
+            return Err(anyhow!("credential auth requires credential_issuer"));
+        }
+        ProviderDraftAuthKind::Credential(Some(issuer)) => {
+            if issuer.uses_http_endpoint() && optional_non_empty(draft.base_url.as_str()).is_none()
+            {
+                return Err(anyhow!(
+                    "credential issuer `{}` requires base_url",
+                    credential_issuer_label(issuer)
+                ));
+            }
+            if issuer.requires_service_key_env()
+                && optional_non_empty(draft.service_key_env.as_str()).is_none()
+            {
+                return Err(anyhow!(
+                    "credential issuer `{}` requires service_key_env",
+                    credential_issuer_label(issuer)
+                ));
+            }
+        }
+        ProviderDraftAuthKind::BedrockSigv4 => {
+            let has_access_key_id = optional_non_empty(draft.access_key_id.as_str()).is_some();
+            let has_secret_access_key =
+                optional_non_empty(draft.secret_access_key.as_str()).is_some();
+            if has_access_key_id ^ has_secret_access_key {
+                return Err(anyhow!(
+                    "bedrock_sigv4 requires access_key_id and secret_access_key together"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn supported_provider_draft_adapter_list(auth_kind: &ProviderDraftAuthKind) -> String {
+    let supported = auth_kind
+        .adapter_rules()
+        .iter()
+        .map(|rule| rule.adapter_id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if supported.is_empty() {
+        "no adapters until auth details are selected".to_owned()
+    } else {
+        supported
+    }
+}
+
+fn parse_oauth_expires_at_ms(value: &str) -> Result<i64> {
+    optional_non_empty(value)
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| anyhow!("expires_at_ms must be an integer"))
+        })
+        .transpose()
+        .map(|value| value.unwrap_or(0))
+}
+
+fn provider_draft_oauth_auth_data(draft: &ProviderConfigDraft) -> Result<Option<AuthData>> {
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
+            let tokens = &draft.credential_drafts.openai_chatgpt.tokens;
+            if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                && optional_non_empty(tokens.access_token.as_str()).is_none()
+            {
+                return Ok(None);
+            }
+            Ok(Some(AuthData::OAuth {
+                issuer: Some(CredentialIssuer::OpenaiChatgpt),
+                refresh: tokens.refresh_token.clone(),
+                access: tokens.access_token.clone(),
+                expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                account_id: optional_non_empty(
+                    draft.credential_drafts.openai_chatgpt.account_id.as_str(),
+                )
+                .map(ToOwned::to_owned),
+                enterprise_url: None,
+                user: None,
+            }))
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
+            let tokens = &draft.credential_drafts.github_copilot.tokens;
+            if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                && optional_non_empty(tokens.access_token.as_str()).is_none()
+            {
+                return Ok(None);
+            }
+            Ok(Some(AuthData::OAuth {
+                issuer: Some(CredentialIssuer::GithubCopilot),
+                refresh: tokens.refresh_token.clone(),
+                access: tokens.access_token.clone(),
+                expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                account_id: None,
+                enterprise_url: optional_non_empty(
+                    draft
+                        .credential_drafts
+                        .github_copilot
+                        .enterprise_domain
+                        .as_str(),
+                )
+                .map(ToOwned::to_owned),
+                user: None,
+            }))
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
+            let tokens = &draft.credential_drafts.gitlab.tokens;
+            if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                && optional_non_empty(tokens.access_token.as_str()).is_none()
+            {
+                return Ok(None);
+            }
+            Ok(Some(AuthData::OAuth {
+                issuer: Some(CredentialIssuer::Gitlab),
+                refresh: tokens.refresh_token.clone(),
+                access: tokens.access_token.clone(),
+                expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                account_id: None,
+                enterprise_url: None,
+                user: None,
+            }))
+        }
+        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+            let tokens = &draft.credential_drafts.atomgit.tokens;
+            if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                && optional_non_empty(tokens.access_token.as_str()).is_none()
+            {
+                return Ok(None);
+            }
+            let account_id =
+                optional_non_empty(draft.credential_drafts.atomgit.account_id.as_str())
+                    .map(ToOwned::to_owned);
+            let username = optional_non_empty(draft.credential_drafts.atomgit.username.as_str())
+                .map(ToOwned::to_owned);
+            let user = match (account_id.clone(), username.clone()) {
+                (Some(id), Some(username)) => Some(OAuthUserInfo {
+                    id,
+                    username,
+                    name: optional_non_empty(draft.credential_drafts.atomgit.display_name.as_str())
+                        .map(ToOwned::to_owned),
+                    email: optional_non_empty(draft.credential_drafts.atomgit.email.as_str())
+                        .map(ToOwned::to_owned),
+                    avatar_url: optional_non_empty(
+                        draft.credential_drafts.atomgit.avatar_url.as_str(),
+                    )
+                    .map(ToOwned::to_owned),
+                }),
+                (None, None) => None,
+                _ => {
+                    return Err(anyhow!(
+                        "atomgit manual credential requires both account_id and username when storing user metadata"
+                    ));
+                }
+            };
+            Ok(Some(AuthData::OAuth {
+                issuer: Some(CredentialIssuer::AtomGit),
+                refresh: tokens.refresh_token.clone(),
+                access: tokens.access_token.clone(),
+                expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                account_id,
+                enterprise_url: None,
+                user,
+            }))
+        }
+        ProviderDraftAuthKind::Credential(Some(
+            CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore,
+        ))
+        | ProviderDraftAuthKind::Unset
+        | ProviderDraftAuthKind::None
+        | ProviderDraftAuthKind::Api
+        | ProviderDraftAuthKind::Gitlab
+        | ProviderDraftAuthKind::Credential(None)
+        | ProviderDraftAuthKind::BedrockSigv4 => Ok(None),
+    }
+}
+
+fn auth_data_has_access_or_api_key(auth: &AuthData) -> bool {
+    match auth {
+        AuthData::Api { key } | AuthData::WellKnown { key, .. } => !key.trim().is_empty(),
+        AuthData::OAuth { access, .. } => !access.trim().is_empty(),
+    }
+}
+
 fn build_provider_patch_value(
     draft: &ProviderConfigDraft,
     default_adapter: &str,
@@ -2942,27 +4390,360 @@ fn build_provider_patch_value(
             JsonValue::String(default_model.to_owned()),
         );
     }
-    if draft.source_provider_id.is_none() || draft.auth_kind.is_api() {
-        let base_url = required_trimmed(draft.base_url.as_str(), "base_url")?;
-        let mut auth = JsonMap::new();
-        auth.insert("mode".to_owned(), JsonValue::String("api".to_owned()));
-        auth.insert(
-            "base_url".to_owned(),
-            JsonValue::String(base_url.to_owned()),
-        );
-        if let Some(api_key_env) = non_empty(Some(draft.api_key_env.as_str())) {
-            auth.insert(
-                "api_key_env".to_owned(),
-                JsonValue::String(api_key_env.to_owned()),
-            );
-        }
-        if let Some(api_key) = non_empty(Some(draft.api_key.as_str())) {
-            auth.insert("api_key".to_owned(), JsonValue::String(api_key.to_owned()));
-        }
-        value.insert("auth".to_owned(), JsonValue::Object(auth));
-    }
+    value.insert(
+        "auth".to_owned(),
+        JsonValue::Object(build_provider_auth_patch_value(draft)?),
+    );
     value.insert("adapters".to_owned(), adapters);
     Ok(JsonValue::Object(value))
+}
+
+fn build_provider_auth_patch_value(
+    draft: &ProviderConfigDraft,
+) -> Result<JsonMap<String, JsonValue>> {
+    let mut auth = JsonMap::new();
+    let inline_credential = provider_draft_oauth_auth_data(draft)?;
+    auth.insert(
+        "mode".to_owned(),
+        JsonValue::String(draft.auth_kind.mode_label().to_owned()),
+    );
+    match draft.auth_kind {
+        ProviderDraftAuthKind::Unset => {
+            return Err(anyhow!("provider auth_mode is required before saving"));
+        }
+        ProviderDraftAuthKind::None => {
+            auth.insert("base_url".to_owned(), JsonValue::Null);
+            auth.insert("instance_url".to_owned(), JsonValue::Null);
+            auth.insert("api_key_env".to_owned(), JsonValue::Null);
+            auth.insert("api_key".to_owned(), JsonValue::Null);
+            auth.insert("credential".to_owned(), JsonValue::Null);
+            auth.insert("issuer".to_owned(), JsonValue::Null);
+            auth.insert("region".to_owned(), JsonValue::Null);
+            auth.insert("profile".to_owned(), JsonValue::Null);
+            auth.insert("access_key_id".to_owned(), JsonValue::Null);
+            auth.insert("secret_access_key".to_owned(), JsonValue::Null);
+            auth.insert("session_token".to_owned(), JsonValue::Null);
+            auth.insert("service_key_env".to_owned(), JsonValue::Null);
+        }
+        ProviderDraftAuthKind::Api => {
+            auth.insert("instance_url".to_owned(), JsonValue::Null);
+            auth.insert("issuer".to_owned(), JsonValue::Null);
+            auth.insert("region".to_owned(), JsonValue::Null);
+            auth.insert("profile".to_owned(), JsonValue::Null);
+            auth.insert("access_key_id".to_owned(), JsonValue::Null);
+            auth.insert("secret_access_key".to_owned(), JsonValue::Null);
+            auth.insert("session_token".to_owned(), JsonValue::Null);
+            auth.insert("service_key_env".to_owned(), JsonValue::Null);
+            auth.insert("credential".to_owned(), JsonValue::Null);
+            if let Some(base_url) = non_empty(Some(draft.base_url.as_str())) {
+                auth.insert(
+                    "base_url".to_owned(),
+                    JsonValue::String(base_url.to_owned()),
+                );
+            } else {
+                auth.insert("base_url".to_owned(), JsonValue::Null);
+            }
+            if let Some(api_key_env) = non_empty(Some(draft.api_key_env.as_str())) {
+                auth.insert(
+                    "api_key_env".to_owned(),
+                    JsonValue::String(api_key_env.to_owned()),
+                );
+            } else {
+                auth.insert("api_key_env".to_owned(), JsonValue::Null);
+            }
+            if let Some(api_key) = non_empty(Some(draft.api_key.as_str())) {
+                auth.insert("api_key".to_owned(), JsonValue::String(api_key.to_owned()));
+            } else {
+                auth.insert("api_key".to_owned(), JsonValue::Null);
+            }
+        }
+        ProviderDraftAuthKind::Gitlab => {
+            auth.insert("base_url".to_owned(), JsonValue::Null);
+            if let Some(instance_url) = non_empty(Some(draft.instance_url.as_str())) {
+                auth.insert(
+                    "instance_url".to_owned(),
+                    JsonValue::String(instance_url.to_owned()),
+                );
+            } else {
+                auth.insert("instance_url".to_owned(), JsonValue::Null);
+            }
+            auth.insert("issuer".to_owned(), JsonValue::Null);
+            auth.insert("region".to_owned(), JsonValue::Null);
+            auth.insert("profile".to_owned(), JsonValue::Null);
+            auth.insert("access_key_id".to_owned(), JsonValue::Null);
+            auth.insert("secret_access_key".to_owned(), JsonValue::Null);
+            auth.insert("session_token".to_owned(), JsonValue::Null);
+            auth.insert("service_key_env".to_owned(), JsonValue::Null);
+            auth.insert("credential".to_owned(), JsonValue::Null);
+            if let Some(api_key_env) = non_empty(Some(draft.api_key_env.as_str())) {
+                auth.insert(
+                    "api_key_env".to_owned(),
+                    JsonValue::String(api_key_env.to_owned()),
+                );
+            } else {
+                auth.insert("api_key_env".to_owned(), JsonValue::Null);
+            }
+            if let Some(api_key) = non_empty(Some(draft.api_key.as_str())) {
+                auth.insert("api_key".to_owned(), JsonValue::String(api_key.to_owned()));
+            } else {
+                auth.insert("api_key".to_owned(), JsonValue::Null);
+            }
+        }
+        ProviderDraftAuthKind::Credential(None) => {
+            return Err(anyhow!("credential_issuer is required before saving"));
+        }
+        ProviderDraftAuthKind::Credential(Some(_)) => {
+            let issuer = parse_credential_issuer(draft.credential_issuer.as_str())?;
+            auth.insert("api_key_env".to_owned(), JsonValue::Null);
+            auth.insert("api_key".to_owned(), JsonValue::Null);
+            auth.insert("region".to_owned(), JsonValue::Null);
+            auth.insert("profile".to_owned(), JsonValue::Null);
+            auth.insert("access_key_id".to_owned(), JsonValue::Null);
+            auth.insert("secret_access_key".to_owned(), JsonValue::Null);
+            auth.insert("session_token".to_owned(), JsonValue::Null);
+            auth.insert(
+                "issuer".to_owned(),
+                JsonValue::String(credential_issuer_label(issuer).to_owned()),
+            );
+            if issuer == CredentialIssuer::Gitlab {
+                if let Some(instance_url) = non_empty(Some(draft.instance_url.as_str())) {
+                    auth.insert(
+                        "instance_url".to_owned(),
+                        JsonValue::String(instance_url.to_owned()),
+                    );
+                } else {
+                    auth.insert("instance_url".to_owned(), JsonValue::Null);
+                }
+            } else {
+                auth.insert("instance_url".to_owned(), JsonValue::Null);
+            }
+            if issuer.uses_http_endpoint() {
+                if let Some(base_url) = non_empty(Some(draft.base_url.as_str())) {
+                    auth.insert(
+                        "base_url".to_owned(),
+                        JsonValue::String(base_url.to_owned()),
+                    );
+                } else {
+                    auth.insert("base_url".to_owned(), JsonValue::Null);
+                }
+            } else {
+                auth.insert("base_url".to_owned(), JsonValue::Null);
+            }
+            if issuer.requires_service_key_env() {
+                if let Some(service_key_env) = non_empty(Some(draft.service_key_env.as_str())) {
+                    auth.insert(
+                        "service_key_env".to_owned(),
+                        JsonValue::String(service_key_env.to_owned()),
+                    );
+                } else {
+                    auth.insert("service_key_env".to_owned(), JsonValue::Null);
+                }
+            } else {
+                auth.insert("service_key_env".to_owned(), JsonValue::Null);
+            }
+            if let Some(credential) = inline_credential {
+                auth.insert(
+                    "credential".to_owned(),
+                    serde_json::to_value(credential).map_err(api_error)?,
+                );
+            } else {
+                auth.insert("credential".to_owned(), JsonValue::Null);
+            }
+        }
+        ProviderDraftAuthKind::BedrockSigv4 => {
+            auth.insert("api_key_env".to_owned(), JsonValue::Null);
+            auth.insert("api_key".to_owned(), JsonValue::Null);
+            auth.insert("instance_url".to_owned(), JsonValue::Null);
+            auth.insert("credential".to_owned(), JsonValue::Null);
+            auth.insert("issuer".to_owned(), JsonValue::Null);
+            auth.insert("service_key_env".to_owned(), JsonValue::Null);
+            if let Some(base_url) = non_empty(Some(draft.base_url.as_str())) {
+                auth.insert(
+                    "base_url".to_owned(),
+                    JsonValue::String(base_url.to_owned()),
+                );
+            } else {
+                auth.insert("base_url".to_owned(), JsonValue::Null);
+            }
+            if let Some(region) = non_empty(Some(draft.region.as_str())) {
+                auth.insert("region".to_owned(), JsonValue::String(region.to_owned()));
+            } else {
+                auth.insert("region".to_owned(), JsonValue::Null);
+            }
+            if let Some(profile) = non_empty(Some(draft.profile.as_str())) {
+                auth.insert("profile".to_owned(), JsonValue::String(profile.to_owned()));
+            } else {
+                auth.insert("profile".to_owned(), JsonValue::Null);
+            }
+            if let Some(access_key_id) = non_empty(Some(draft.access_key_id.as_str())) {
+                auth.insert(
+                    "access_key_id".to_owned(),
+                    JsonValue::String(access_key_id.to_owned()),
+                );
+            } else {
+                auth.insert("access_key_id".to_owned(), JsonValue::Null);
+            }
+            if let Some(secret_access_key) = non_empty(Some(draft.secret_access_key.as_str())) {
+                auth.insert(
+                    "secret_access_key".to_owned(),
+                    JsonValue::String(secret_access_key.to_owned()),
+                );
+            } else {
+                auth.insert("secret_access_key".to_owned(), JsonValue::Null);
+            }
+            if let Some(session_token) = non_empty(Some(draft.session_token.as_str())) {
+                auth.insert(
+                    "session_token".to_owned(),
+                    JsonValue::String(session_token.to_owned()),
+                );
+            } else {
+                auth.insert("session_token".to_owned(), JsonValue::Null);
+            }
+        }
+    }
+    Ok(auth)
+}
+
+fn provider_model_settings_path(provider_id: &str, adapter_id: &str, model_id: &str) -> String {
+    format!(
+        "providers.{}.adapters.{}.models.{}",
+        quoted_settings_segment(provider_id),
+        quoted_settings_segment(adapter_id),
+        quoted_settings_segment(model_id),
+    )
+}
+
+fn provider_settings_path(provider_id: &str) -> String {
+    format!("providers.{}", quoted_settings_segment(provider_id))
+}
+
+fn provider_model_selection_contains(
+    selected_model_keys: &std::collections::BTreeSet<String>,
+    adapter_id: &str,
+    model_id: &str,
+) -> bool {
+    selected_model_keys.contains(format!("{adapter_id}\u{1f}{model_id}").as_str())
+}
+
+fn resolve_provider_defaults_from_value(
+    adapters: &JsonMap<String, JsonValue>,
+    requested_default_adapter: Option<&str>,
+    requested_default_model: Option<&str>,
+) -> Result<(String, String)> {
+    if let (Some(default_adapter), Some(default_model)) =
+        (requested_default_adapter, requested_default_model)
+        && provider_value_contains_model(adapters, default_adapter, default_model)
+    {
+        return Ok((default_adapter.to_owned(), default_model.to_owned()));
+    }
+
+    let mut adapter_ids = adapters.keys().cloned().collect::<Vec<_>>();
+    adapter_ids.sort();
+    for adapter_id in adapter_ids {
+        let Some(adapter_value) = adapters.get(adapter_id.as_str()) else {
+            continue;
+        };
+        let Some(model_ids) = adapter_value
+            .get("models")
+            .and_then(JsonValue::as_object)
+            .map(|models| {
+                let mut ids = models.keys().cloned().collect::<Vec<_>>();
+                ids.sort();
+                ids
+            })
+        else {
+            continue;
+        };
+        if let Some(model_id) = model_ids.into_iter().next() {
+            return Ok((adapter_id, model_id));
+        }
+    }
+
+    Err(anyhow!(
+        "select at least one model before saving the provider"
+    ))
+}
+
+fn provider_value_contains_model(
+    adapters: &JsonMap<String, JsonValue>,
+    adapter_id: &str,
+    model_id: &str,
+) -> bool {
+    adapters
+        .get(adapter_id)
+        .and_then(|adapter| adapter.get("models"))
+        .and_then(JsonValue::as_object)
+        .is_some_and(|models| models.contains_key(model_id))
+}
+
+fn quoted_settings_segment(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+pub(crate) fn credential_issuer_label(issuer: CredentialIssuer) -> &'static str {
+    match issuer {
+        CredentialIssuer::OpenaiChatgpt => "openai_chatgpt",
+        CredentialIssuer::GithubCopilot => "github_copilot",
+        CredentialIssuer::Gitlab => "gitlab",
+        CredentialIssuer::GoogleAdc => "google_adc",
+        CredentialIssuer::SapAiCore => "sap_ai_core",
+        CredentialIssuer::AtomGit => "atomgit",
+    }
+}
+
+fn parse_credential_issuer(value: &str) -> Result<CredentialIssuer> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "openai_chatgpt" => Ok(CredentialIssuer::OpenaiChatgpt),
+        "github_copilot" => Ok(CredentialIssuer::GithubCopilot),
+        "gitlab" => Ok(CredentialIssuer::Gitlab),
+        "google_adc" => Ok(CredentialIssuer::GoogleAdc),
+        "sap_ai_core" => Ok(CredentialIssuer::SapAiCore),
+        "atomgit" | "atom_git" => Ok(CredentialIssuer::AtomGit),
+        _ => Err(anyhow!(
+            "unsupported credential issuer `{}`; expected openai_chatgpt, github_copilot, gitlab, google_adc, sap_ai_core, or atomgit",
+            value.trim()
+        )),
+    }
+}
+
+fn summarize_named_mode(display_name: Option<&str>, description: Option<&str>) -> String {
+    match (
+        display_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+        description.map(str::trim).filter(|value| !value.is_empty()),
+    ) {
+        (Some(display_name), Some(description)) => format!("{display_name} · {description}"),
+        (Some(display_name), None) => display_name.to_owned(),
+        (None, Some(description)) => description.to_owned(),
+        (None, None) => "configured mode".to_owned(),
+    }
+}
+
+fn parse_aws_profile_names(text: &str) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if !line.starts_with('[') || !line.ends_with(']') {
+            continue;
+        }
+        let section = line.trim_start_matches('[').trim_end_matches(']').trim();
+        if section.eq_ignore_ascii_case("default") {
+            names.insert("default".to_owned());
+            continue;
+        }
+        if let Some(profile) = section.strip_prefix("profile ") {
+            let profile = profile.trim();
+            if !profile.is_empty() {
+                names.insert(profile.to_owned());
+            }
+            continue;
+        }
+        if !section.contains(' ') && !section.contains('.') {
+            names.insert(section.to_owned());
+        }
+    }
+    names.into_iter().collect()
 }
 
 fn command_available(command: &str) -> bool {
@@ -2985,16 +4766,6 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     })
-}
-
-fn parse_ahead_behind(value: Option<&str>) -> (Option<u64>, Option<u64>) {
-    let Some(value) = value else {
-        return (None, None);
-    };
-    let mut parts = value.split_whitespace();
-    let behind = parts.next().and_then(|part| part.parse::<u64>().ok());
-    let ahead = parts.next().and_then(|part| part.parse::<u64>().ok());
-    (ahead, behind)
 }
 
 fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
@@ -3037,88 +4808,6 @@ fn git_command_output<const N: usize>(workspace_root: &Path, args: [&str; N]) ->
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn git_status_inspector_rows(status: GitStatusResource) -> Vec<InspectorRow> {
-    let mut rows = vec![
-        InspectorRow {
-            label: "workspace_root".to_string(),
-            detail: status.workspace_root,
-        },
-        InspectorRow {
-            label: "git_available".to_string(),
-            detail: status.git_available.to_string(),
-        },
-        InspectorRow {
-            label: "repo".to_string(),
-            detail: status.repo.to_string(),
-        },
-        InspectorRow {
-            label: "gh_available".to_string(),
-            detail: status.gh_available.to_string(),
-        },
-        InspectorRow {
-            label: "branch".to_string(),
-            detail: status.branch.unwrap_or_else(|| "unknown".to_string()),
-        },
-        InspectorRow {
-            label: "upstream".to_string(),
-            detail: status.upstream.unwrap_or_else(|| "none".to_string()),
-        },
-        InspectorRow {
-            label: "ahead".to_string(),
-            detail: status.ahead.unwrap_or_default().to_string(),
-        },
-        InspectorRow {
-            label: "behind".to_string(),
-            detail: status.behind.unwrap_or_default().to_string(),
-        },
-        InspectorRow {
-            label: "staged_files".to_string(),
-            detail: status.staged_files.to_string(),
-        },
-        InspectorRow {
-            label: "unstaged_files".to_string(),
-            detail: status.unstaged_files.to_string(),
-        },
-        InspectorRow {
-            label: "untracked_files".to_string(),
-            detail: status.untracked_files.to_string(),
-        },
-        InspectorRow {
-            label: "changed_files".to_string(),
-            detail: status.changed_files.to_string(),
-        },
-        InspectorRow {
-            label: "clean".to_string(),
-            detail: status.clean.to_string(),
-        },
-        InspectorRow {
-            label: "worktree_active_sessions".to_string(),
-            detail: status.worktree_active_sessions.to_string(),
-        },
-        InspectorRow {
-            label: "worktree_managed_dirs".to_string(),
-            detail: status.worktree_managed_dirs.to_string(),
-        },
-    ];
-    rows.retain(|row| !row.detail.is_empty());
-    rows
-}
-
-fn format_usage_totals(totals: &agena::session::UsageTotals) -> String {
-    format!(
-        "turns={} sessions={} in={} out={} reasoning={} cache_read={} cache_write={} cache_hit={:.1}% cost=${:.4}",
-        totals.turns,
-        totals.sessions,
-        totals.input_tokens,
-        totals.output_tokens,
-        totals.reasoning_tokens,
-        totals.cache_read_tokens,
-        totals.cache_write_tokens,
-        totals.cache_hit_rate * 100.0,
-        totals.total_cost_usd
-    )
 }
 
 fn detect_dimensions(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
@@ -3172,4 +4861,352 @@ fn detect_mime(path: &Path, bytes: &[u8]) -> String {
         .first_raw()
         .map(str::to_owned)
         .unwrap_or_else(|| "application/octet-stream".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn provider_studio_test_draft(
+        default_adapter: &str,
+        default_model: &str,
+        api_key: &str,
+    ) -> ProviderConfigDraft {
+        ProviderConfigDraft {
+            source_provider_id: None,
+            provider_id: "oc".to_string(),
+            auth_kind: ProviderDraftAuthKind::Api,
+            base_url: "https://opencode.ai/zen".to_string(),
+            instance_url: String::new(),
+            api_key_env: String::new(),
+            api_key: api_key.to_string(),
+            credential_issuer: "openai_chatgpt".to_string(),
+            region: String::new(),
+            profile: String::new(),
+            access_key_id: String::new(),
+            secret_access_key: String::new(),
+            session_token: String::new(),
+            service_key_env: String::new(),
+            credential_drafts: ProviderCredentialDraftBundle::default(),
+            default_adapter: default_adapter.to_string(),
+            default_model: default_model.to_string(),
+        }
+    }
+
+    fn provider_studio_test_adapter_models(
+        adapter_id: &str,
+        resolved_base_url: &str,
+        model_ids: &[&str],
+    ) -> ProviderAdapterModelsResource {
+        ProviderAdapterModelsResource {
+            adapter_id: adapter_id.to_string(),
+            enabled: true,
+            resolved_base_url: Some(resolved_base_url.to_string()),
+            models: model_ids
+                .iter()
+                .map(|model_id| ProviderModel::new(adapter_id, *model_id))
+                .collect(),
+            error: None,
+        }
+    }
+
+    fn provider_studio_test_catalog_entry(
+        model_id: &str,
+        capabilities: agena::provider::ModelCapabilityPatch,
+    ) -> ModelCatalogEntryResource {
+        ModelCatalogEntryResource {
+            model_id: model_id.to_string(),
+            kind: ModelCatalogEntryKind::Official,
+            source: ModelCatalogSourceKind::Generated,
+            source_label: None,
+            has_local_override: false,
+            display_name: None,
+            origin: None,
+            lifecycle: None,
+            context_window_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            description: None,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
+            thinking_modes: std::collections::BTreeMap::new(),
+            speed_modes: std::collections::BTreeMap::new(),
+            capabilities,
+        }
+    }
+
+    fn build_provider_save_patch(
+        draft: &ProviderConfigDraft,
+        adapter_model_lists: &[ProviderAdapterModelsResource],
+        selected: &std::collections::BTreeSet<String>,
+        catalog_entries: &[ModelCatalogEntryResource],
+    ) -> JsonValue {
+        let mut adapters = JsonMap::new();
+
+        for adapter_models in adapter_model_lists {
+            if adapter_models.error.is_some()
+                || !selected.contains(adapter_models.adapter_id.as_str())
+            {
+                continue;
+            }
+            let configured_models = adapter_models
+                .models
+                .iter()
+                .map(|model| {
+                    (
+                        model.id.to_string(),
+                        provider_model_json_for_model_id(
+                            &catalog_entries,
+                            model.id.as_str(),
+                            Some(model),
+                        ),
+                    )
+                })
+                .collect::<JsonMap<_, _>>();
+            adapters.insert(
+                adapter_models.adapter_id.clone(),
+                json!({
+                    "enabled": true,
+                    "models": configured_models,
+                }),
+            );
+        }
+
+        let default_model_value =
+            provider_model_json_for_model_id(catalog_entries, draft.default_model.as_str(), None);
+        adapters
+            .entry(draft.default_adapter.clone())
+            .or_insert_with(|| json!({ "enabled": true }));
+        ensure_provider_model_entry(
+            adapters
+                .get_mut(draft.default_adapter.as_str())
+                .expect("default adapter patch should exist"),
+            draft.default_model.as_str(),
+            default_model_value,
+        )
+        .expect("default model patch should be inserted");
+
+        build_provider_patch_value(
+            &draft,
+            draft.default_adapter.as_str(),
+            draft.default_model.as_str(),
+            JsonValue::Object(adapters),
+            true,
+        )
+        .expect("provider patch should build")
+    }
+
+    fn build_api_provider_save_patch() -> JsonValue {
+        let draft = provider_studio_test_draft("gemini", "deepseek-v4-flash-free", "test-token");
+        let adapter_model_lists = vec![
+            provider_studio_test_adapter_models(
+                "openai",
+                "https://opencode.ai/zen/v1",
+                &["deepseek-v4-flash-free"],
+            ),
+            provider_studio_test_adapter_models(
+                "anthropic",
+                "https://opencode.ai/zen/v1",
+                &["deepseek-v4-flash-free"],
+            ),
+            ProviderAdapterModelsResource {
+                adapter_id: "gemini".to_string(),
+                enabled: true,
+                resolved_base_url: Some("https://opencode.ai/zen/v1beta".to_string()),
+                models: Vec::new(),
+                error: Some("google api request failed".to_string()),
+            },
+        ];
+        let selected =
+            std::collections::BTreeSet::from(["openai".to_string(), "anthropic".to_string()]);
+        build_provider_save_patch(&draft, &adapter_model_lists, &selected, &[])
+    }
+
+    #[test]
+    fn provider_patch_accepts_api_provider_with_unselected_default_adapter() {
+        let provider_patch = build_api_provider_save_patch();
+        let config = NamedTempFile::new().expect("temp config should exist");
+        patch_file_settings(
+            config.path(),
+            ConfigSettingsPatchInput {
+                path: Some("providers".to_string()),
+                changes: json!({
+                    "oc": provider_patch,
+                }),
+                dry_run: false,
+                validate: true,
+                reload: false,
+            },
+        )
+        .expect("provider patch should validate and write");
+    }
+
+    #[test]
+    fn provider_set_save_replaces_existing_provider_table() {
+        let provider_patch = build_api_provider_save_patch();
+        let config = NamedTempFile::new().expect("temp config should exist");
+        fs::write(
+            config.path(),
+            r#"
+[providers.oc]
+default_adapter = "gitlab"
+default_model = "duo-chat-gpt-5-2"
+
+[providers.oc.auth]
+mode = "gitlab_api"
+api_key_env = "GITLAB_TOKEN"
+
+[providers.oc.adapters.gitlab]
+enabled = true
+"#,
+        )
+        .expect("seed config should write");
+
+        set_file_setting(
+            config.path(),
+            ConfigSettingsSetInput {
+                path: "providers.\"oc\"".to_string(),
+                value: provider_patch,
+                dry_run: false,
+                validate: true,
+                reload: false,
+            },
+        )
+        .expect("provider table replacement should validate and write");
+
+        let text = fs::read_to_string(config.path()).expect("config should be readable");
+        assert!(!text.contains("[providers.oc.adapters.gitlab]"));
+        assert!(text.contains("[providers.oc.adapters.openai]"));
+        assert!(text.contains("[providers.oc.adapters.anthropic]"));
+        assert!(text.contains("[providers.oc.adapters.gemini]"));
+    }
+
+    #[test]
+    fn build_provider_auth_patch_value_preserves_inline_gitlab_oauth_credential() {
+        let mut draft = provider_studio_test_draft("openai", "duo-chat-gpt-5-2", "");
+        draft.provider_id = "gitlab-oauth".to_string();
+        draft.auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab));
+        draft.credential_issuer = "gitlab".to_string();
+        draft.instance_url = "https://gitlab.example.com".to_string();
+        draft.credential_drafts.gitlab.tokens.refresh_token = "refresh-token".to_string();
+        draft.credential_drafts.gitlab.tokens.access_token = "access-token".to_string();
+        draft.credential_drafts.gitlab.tokens.expires_at_ms = "123".to_string();
+        draft.normalize_shape();
+
+        let auth = build_provider_auth_patch_value(&draft).expect("auth patch should build");
+        assert_eq!(auth.get("mode"), Some(&json!("credential")));
+        assert_eq!(auth.get("issuer"), Some(&json!("gitlab")));
+        assert_eq!(
+            auth.get("instance_url"),
+            Some(&json!("https://gitlab.example.com"))
+        );
+
+        let credential = auth
+            .get("credential")
+            .and_then(JsonValue::as_object)
+            .expect("inline credential should be present");
+        assert_eq!(credential.get("type"), Some(&json!("oauth")));
+        assert_eq!(credential.get("issuer"), Some(&json!("gitlab")));
+        assert_eq!(credential.get("refresh"), Some(&json!("refresh-token")));
+        assert_eq!(credential.get("access"), Some(&json!("access-token")));
+        assert_eq!(credential.get("expires_at_ms"), Some(&json!(123)));
+    }
+
+    #[test]
+    fn provider_patch_accepts_opencode_zen_public_with_all_openai_and_anthropic_models() {
+        use agena::provider::{
+            FeatureCapabilityPatch, FeatureCapabilityPatchBody, ModelCapabilityFeature,
+            ModelCapabilityPatch,
+        };
+
+        let draft = provider_studio_test_draft("openai", "glm-5", "public");
+        let model_ids = [
+            "gpt-5.5",
+            "glm-5",
+            "claude-opus-4-7",
+            "qwen3.6-plus",
+            "minimax-m2.5",
+        ];
+        let adapter_model_lists = vec![
+            provider_studio_test_adapter_models("openai", "https://opencode.ai/zen/v1", &model_ids),
+            provider_studio_test_adapter_models(
+                "anthropic",
+                "https://opencode.ai/zen/v1",
+                &model_ids,
+            ),
+        ];
+        let selected =
+            std::collections::BTreeSet::from(["openai".to_string(), "anthropic".to_string()]);
+        let catalog_entries = vec![
+            provider_studio_test_catalog_entry(
+                "glm-5",
+                ModelCapabilityPatch {
+                    features: Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+                        supported: vec![
+                            ModelCapabilityFeature::StructuredOutput,
+                            ModelCapabilityFeature::Reasoning,
+                        ],
+                        unsupported: vec![ModelCapabilityFeature::StructuredOutput],
+                    })),
+                    ..ModelCapabilityPatch::default()
+                },
+            ),
+            provider_studio_test_catalog_entry("gpt-5.5", ModelCapabilityPatch::default()),
+            provider_studio_test_catalog_entry("claude-opus-4-7", ModelCapabilityPatch::default()),
+            provider_studio_test_catalog_entry("qwen3.6-plus", ModelCapabilityPatch::default()),
+            provider_studio_test_catalog_entry("minimax-m2.5", ModelCapabilityPatch::default()),
+        ];
+        let provider_patch =
+            build_provider_save_patch(&draft, &adapter_model_lists, &selected, &catalog_entries);
+        let config = NamedTempFile::new().expect("temp config should exist");
+
+        set_file_setting(
+            config.path(),
+            ConfigSettingsSetInput {
+                path: "providers.\"oc\"".to_string(),
+                value: provider_patch,
+                dry_run: false,
+                validate: true,
+                reload: false,
+            },
+        )
+        .expect("opencode zen provider patch should validate and write");
+
+        let text = fs::read_to_string(config.path()).expect("config should be readable");
+        assert!(text.contains("base_url = \"https://opencode.ai/zen\""));
+        assert!(text.contains("api_key = \"public\""));
+        for path in [
+            "providers.\"oc\".adapters.openai.models.\"glm-5\"",
+            "providers.\"oc\".adapters.anthropic.models.\"glm-5\"",
+            "providers.\"oc\".adapters.openai.models.\"claude-opus-4-7\"",
+            "providers.\"oc\".adapters.anthropic.models.\"claude-opus-4-7\"",
+            "providers.\"oc\".adapters.openai.models.\"qwen3.6-plus\"",
+            "providers.\"oc\".adapters.anthropic.models.\"qwen3.6-plus\"",
+        ] {
+            let value = read_file_setting(
+                config.path(),
+                ConfigSettingsGetInput {
+                    path: Some(path.to_string()),
+                    source: agena::config::ConfigSettingsSource::File,
+                },
+            )
+            .expect("saved model entry should be readable")
+            .value;
+            assert!(value.is_object(), "{path} should exist as an object");
+        }
+    }
 }

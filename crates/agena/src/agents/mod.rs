@@ -3,7 +3,8 @@
 //! Discovers Markdown files under `.agena/agents/` (project-local, walked
 //! up from the workspace root) and `~/.agena/agents/` (user-global). Each
 //! file describes a named subagent the dispatcher can route to: a system
-//! prompt, optional tool whitelist, and optional preferred model. Mirrors
+//! prompt, optional tool whitelist, and optional default model selection.
+//! Mirrors
 //! the layout of `crates/agena/src/commands/` and the SKILL.md frontmatter
 //! convention `agena-skills` already exposes, so users who know one know
 //! the other.
@@ -14,7 +15,8 @@
 //! ---
 //! description: "Read-only repo explorer"
 //! allowed_entries: ["fs"]
-//! model: "claude-haiku-4-5"
+//! default:
+//!   model: "claude-haiku-4-5"
 //! aliases: ["scout"]
 //! ---
 //! You are a focused codebase explorer. Read files, grep for symbols, and
@@ -47,6 +49,23 @@ impl AgentScope {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentDefaultModelConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl AgentDefaultModelConfig {
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none() && self.adapter.is_none() && self.model.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentFrontmatter {
@@ -75,8 +94,12 @@ pub struct AgentFrontmatter {
         skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
     )]
     pub permission: crate::agent::AgentPermissionConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    #[serde(
+        default,
+        rename = "default",
+        skip_serializing_if = "AgentDefaultModelConfig::is_empty"
+    )]
+    pub default: AgentDefaultModelConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
 }
@@ -113,8 +136,12 @@ pub struct AgentDescriptor {
         skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
     )]
     pub permission: crate::agent::AgentPermissionConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    #[serde(
+        default,
+        rename = "default",
+        skip_serializing_if = "AgentDefaultModelConfig::is_empty"
+    )]
+    pub default: AgentDefaultModelConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     pub scope: AgentScope,
@@ -318,7 +345,7 @@ impl From<AgentProfile> for AgentDescriptor {
             steps: profile.frontmatter.steps,
             allowed_tools: profile.frontmatter.allowed_tools,
             permission: profile.frontmatter.permission,
-            model: profile.frontmatter.model,
+            default: profile.frontmatter.default,
             aliases: profile.frontmatter.aliases,
             scope: profile.scope,
             source_path: profile.source_path,
@@ -430,7 +457,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("workflow", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            Some("openai/openai/gpt-5.3-codex"),
             &["default", "main"],
             "You are the primary engineering agent. Own the task end to end, choose tools pragmatically, delegate when it helps, preserve surrounding behavior, and avoid reverting unrelated work.",
         ),
@@ -451,7 +477,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("shell", crate::permission::PermissionMode::Ask),
                 ],
             ),
-            None,
             &["delegate", "helper"],
             "You are a general-purpose delegated agent. Investigate broadly, combine code reading with focused web research when useful, and return evidence-backed conclusions without making workspace edits unless explicitly allowed.",
         ),
@@ -468,7 +493,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("web", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            None,
             &["read", "reader"],
             "You are a focused read-only engineering explorer. Gather evidence quickly, inspect code paths, summarize findings concisely, and do not make edits.",
         ),
@@ -485,7 +509,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("shell", crate::permission::PermissionMode::Ask),
                 ],
             ),
-            None,
             &["research", "docs"],
             "You are a read-only research agent for external documentation, APIs, and dependency behavior. Prefer direct evidence from docs, source, or fetched pages, separate verified facts from inference, and do not modify the user's workspace.",
         ),
@@ -498,7 +521,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                 crate::permission::PermissionMode::Ask,
                 &[],
             ),
-            Some("openai/openai/gpt-5.3-codex"),
             &["edit", "builder", "codex"],
             "You are a pragmatic implementation agent. Make the requested code changes, preserve surrounding behavior, adapt to concurrent edits, and avoid reverting unrelated work.",
         ),
@@ -514,7 +536,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("agent", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            None,
             &["review", "reviewer", "test"],
             "You are a verification agent. Run focused checks, inspect outputs critically, look for regressions, and report the remaining risks plainly.",
         ),
@@ -531,7 +552,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("todo", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            None,
             &["plan", "planning", "design"],
             "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable. Prefer read-only investigation unless the user explicitly asks to execute.",
         ),
@@ -547,7 +567,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("agent", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            None,
             &["audit", "critic"],
             "You are a strict code review agent. Prioritize correctness issues, behavioral regressions, and test gaps. Findings come first; summaries are secondary.",
         ),
@@ -559,7 +578,6 @@ fn default_profile(
     description: &str,
     allowed_tools: &[&str],
     permission: crate::agent::AgentPermissionConfig,
-    model: Option<&str>,
     aliases: &[&str],
     prompt: &str,
 ) -> AgentProfile {
@@ -578,7 +596,7 @@ fn default_profile(
                 .map(|tool| (*tool).to_string())
                 .collect(),
             permission,
-            model: model.map(ToOwned::to_owned),
+            default: AgentDefaultModelConfig::default(),
             aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
         },
         prompt: prompt.to_string(),
@@ -605,12 +623,20 @@ mod tests {
 
     #[test]
     fn parses_frontmatter_and_body() {
-        let raw = "---\ndescription: explorer\nallowed_entries:\n  - read\n  - grep\nmodel: gpt-5\n---\nYou explore the repo.";
+        let raw = "---\ndescription: explorer\nallowed_entries:\n  - read\n  - grep\ndefault:\n  provider: openai\n  adapter: openai\n  model: gpt-5\n---\nYou explore the repo.";
         let profile = AgentProfile::from_raw(raw, "explorer", AgentScope::Project).unwrap();
         assert_eq!(profile.name, "explorer");
         assert_eq!(profile.frontmatter.description, "explorer");
         assert_eq!(profile.frontmatter.allowed_tools, vec!["read", "grep"]);
-        assert_eq!(profile.frontmatter.model.as_deref(), Some("gpt-5"));
+        assert_eq!(
+            profile.frontmatter.default.provider.as_deref(),
+            Some("openai")
+        );
+        assert_eq!(
+            profile.frontmatter.default.adapter.as_deref(),
+            Some("openai")
+        );
+        assert_eq!(profile.frontmatter.default.model.as_deref(), Some("gpt-5"));
         assert_eq!(profile.prompt.trim(), "You explore the repo.");
     }
 
@@ -731,5 +757,29 @@ mod tests {
                 .any(|tool| tool == "fs")
         );
         assert!(registry.get("review").is_some(), "alias should resolve");
+    }
+
+    #[test]
+    fn default_profiles_do_not_pin_any_model_selection() {
+        let work = temp_dir("default-profile-models");
+        let registry = SubagentRegistry::discover(&work, None);
+        for name in [
+            "build",
+            "general",
+            "explore",
+            "scout",
+            "implement",
+            "verify",
+            "planner",
+            "reviewer",
+        ] {
+            let profile = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("missing default profile {name}"));
+            assert!(
+                profile.frontmatter.default.is_empty(),
+                "default profile {name} should inherit top-level defaults"
+            );
+        }
     }
 }

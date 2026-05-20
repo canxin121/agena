@@ -49,10 +49,10 @@ pub fn run() {
             let app_handle = app.handle().clone();
 
             // Ensure a user-editable runtime config file exists.
-            if let Ok(cfg) = config::load_or_create(&app_handle) {
-                if let Err(err) = apply_autostart_on_boot(&app_handle, cfg.autostart_on_boot) {
-                    eprintln!("desktop autostart apply failed: {err}");
-                }
+            if let Ok(cfg) = config::load_or_create(&app_handle)
+                && let Err(err) = apply_autostart_on_boot(&app_handle, cfg.autostart_on_boot)
+            {
+                eprintln!("desktop autostart apply failed: {err}");
             }
 
             // Backend manager is always present so tray actions and UI commands share
@@ -122,7 +122,7 @@ pub fn run() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        reveal_main_window(&app);
+                        reveal_main_window(app);
                     }
                 })
                 .build(app)?;
@@ -390,47 +390,6 @@ fn runtime_target_triple_for(os: &str, arch: &str) -> Option<&'static str> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn runtime_target_triple_for_maps_supported_targets() {
-        assert_eq!(
-            runtime_target_triple_for("linux", "x86_64"),
-            Some("x86_64-unknown-linux-gnu")
-        );
-        assert_eq!(
-            runtime_target_triple_for("linux", "aarch64"),
-            Some("aarch64-unknown-linux-gnu")
-        );
-        assert_eq!(
-            runtime_target_triple_for("macos", "x86_64"),
-            Some("x86_64-apple-darwin")
-        );
-        assert_eq!(
-            runtime_target_triple_for("macos", "aarch64"),
-            Some("aarch64-apple-darwin")
-        );
-        assert_eq!(
-            runtime_target_triple_for("windows", "x86_64"),
-            Some("x86_64-pc-windows-msvc")
-        );
-        assert_eq!(
-            runtime_target_triple_for("windows", "aarch64"),
-            Some("aarch64-pc-windows-msvc")
-        );
-    }
-
-    #[test]
-    fn runtime_target_triple_for_rejects_unknown_combinations() {
-        assert_eq!(runtime_target_triple_for("linux", "arm64"), None);
-        assert_eq!(runtime_target_triple_for("macos", "arm64"), None);
-        assert_eq!(runtime_target_triple_for("windows", "arm64"), None);
-        assert_eq!(runtime_target_triple_for("freebsd", "x86_64"), None);
-    }
-}
-
 async fn handle_tray_menu(app: &AppHandle, id: &str) {
     match id {
         "open" => {
@@ -506,4 +465,45 @@ fn apply_autostart_on_boot(app: &AppHandle, enabled: bool) -> Result<(), String>
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_target_triple_for_maps_supported_targets() {
+        assert_eq!(
+            runtime_target_triple_for("linux", "x86_64"),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            runtime_target_triple_for("linux", "aarch64"),
+            Some("aarch64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            runtime_target_triple_for("macos", "x86_64"),
+            Some("x86_64-apple-darwin")
+        );
+        assert_eq!(
+            runtime_target_triple_for("macos", "aarch64"),
+            Some("aarch64-apple-darwin")
+        );
+        assert_eq!(
+            runtime_target_triple_for("windows", "x86_64"),
+            Some("x86_64-pc-windows-msvc")
+        );
+        assert_eq!(
+            runtime_target_triple_for("windows", "aarch64"),
+            Some("aarch64-pc-windows-msvc")
+        );
+    }
+
+    #[test]
+    fn runtime_target_triple_for_rejects_unknown_combinations() {
+        assert_eq!(runtime_target_triple_for("linux", "arm64"), None);
+        assert_eq!(runtime_target_triple_for("macos", "arm64"), None);
+        assert_eq!(runtime_target_triple_for("windows", "arm64"), None);
+        assert_eq!(runtime_target_triple_for("freebsd", "x86_64"), None);
+    }
 }

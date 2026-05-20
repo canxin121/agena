@@ -875,31 +875,21 @@ pub struct HostEntryListResponse {
 
 // ---------------- plugin storage ----------------
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HostStorageScope {
     Session,
     Workspace,
+    #[default]
     Global,
 }
 
-impl Default for HostStorageScope {
-    fn default() -> Self {
-        Self::Global
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HostStorageVisibility {
+    #[default]
     Private,
     Shared,
-}
-
-impl Default for HostStorageVisibility {
-    fn default() -> Self {
-        Self::Private
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1318,6 +1308,32 @@ pub enum AgentToolPermissionRules {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostAgentDefaultModelConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl HostAgentDefaultModelConfig {
+    pub fn is_empty(&self) -> bool {
+        self.provider.is_none() && self.adapter.is_none() && self.model.is_none()
+    }
+}
+
+impl Default for HostAgentDefaultModelConfig {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            adapter: None,
+            model: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostAgentDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1338,8 +1354,12 @@ pub struct HostAgentDescriptor {
     pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
     pub permission: AgentPermissionConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    #[serde(
+        default,
+        rename = "default",
+        skip_serializing_if = "HostAgentDefaultModelConfig::is_empty"
+    )]
+    pub default: HostAgentDefaultModelConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     pub prompt: String,

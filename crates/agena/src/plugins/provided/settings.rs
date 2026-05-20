@@ -92,7 +92,7 @@ impl SettingsPlugin {
                 path: input.path,
             },
         };
-        Ok(output("Settings value", "Read settings value.", &response)?)
+        output("Settings value", "Read settings value.", &response)
     }
 
     async fn list(&self, input: ConfigSettingsListInput) -> SdkResult<ToolInvokeOutput> {
@@ -119,14 +119,14 @@ impl SettingsPlugin {
             }
         };
         let count = response.entries.len();
-        Ok(output(
+        output(
             "Settings entries",
             format!(
                 "Listed {count} settings entr{}.",
                 if count == 1 { "y" } else { "ies" }
             ),
             &response,
-        )?)
+        )
     }
 
     async fn set(&self, input: ConfigSettingsSetInput) -> SdkResult<ToolInvokeOutput> {
@@ -167,11 +167,7 @@ impl SettingsPlugin {
         let (config_path, _) = self.config_meta().await?;
         let response: ConfigSettingsValidateResponse =
             validate_file_settings(config_path).map_err(map_err)?;
-        Ok(output(
-            "Settings valid",
-            "Settings file is valid.",
-            &response,
-        )?)
+        output("Settings valid", "Settings file is valid.", &response)
     }
 
     async fn edit_output<T>(

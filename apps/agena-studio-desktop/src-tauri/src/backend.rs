@@ -291,10 +291,10 @@ async fn spawn_backend_service(
         cmd = cmd.env("HOME", home);
     }
 
-    if let Some(pw) = cfg.backend.ui_password.as_deref() {
-        if !pw.trim().is_empty() {
-            cmd = cmd.args(["--ui-password", pw]);
-        }
+    if let Some(pw) = cfg.backend.ui_password.as_deref()
+        && !pw.trim().is_empty()
+    {
+        cmd = cmd.args(["--ui-password", pw]);
     }
 
     if let Some(config_path) = cfg.backend.agena_config_path.as_deref() {

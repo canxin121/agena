@@ -19,7 +19,7 @@ use agena::{
     },
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, ModelProvider, OpenAiProvider, ProviderRegistry,
+        CompletionToolCall, ModelRuntime, OpenAiAdapter, ProviderRegistry,
     },
     role::Role,
     session::{ContextGovernor, ContextPolicy, SessionManager, SessionProcessor},
@@ -127,7 +127,7 @@ impl agena::plugin::sdk::host_api::HostClient for PermissionTestHostClient {
 }
 
 #[async_trait::async_trait]
-impl ModelProvider for PermissionTestProvider {
+impl ModelRuntime for PermissionTestProvider {
     fn id(&self) -> &str {
         "permission-test"
     }
@@ -238,9 +238,9 @@ impl ModelProvider for PermissionTestProvider {
                     arguments_delta: response
                         .tool_calls
                         .first()
-                        .and_then(|call| match call {
+                        .map(|call| match call {
                             CompletionToolCall::Function { arguments_json, .. } => {
-                                Some(arguments_json.clone())
+                                arguments_json.clone()
                             }
                         })
                         .unwrap_or_default(),
@@ -445,7 +445,7 @@ api_key = "test"
     agena::db::init_schema(&db).await.unwrap();
 
     let mut registry = ProviderRegistry::new();
-    registry.register(OpenAiProvider::new_with_id(
+    registry.register(OpenAiAdapter::new_with_id(
         "openai",
         reqwest::Client::new(),
         "test",
@@ -731,6 +731,8 @@ async fn rest_permission_rule_and_reply_flows_round_trip_via_sdk() {
                 )),
                 thinking_mode: None,
                 speed_mode: None,
+                verbosity: None,
+                parallel_tool_calls: None,
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(128),
@@ -760,6 +762,8 @@ async fn rest_permission_rule_and_reply_flows_round_trip_via_sdk() {
                 )),
                 thinking_mode: None,
                 speed_mode: None,
+                verbosity: None,
+                parallel_tool_calls: None,
                 system: None,
                 temperature: None,
                 max_output_tokens: Some(128),

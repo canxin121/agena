@@ -9,7 +9,7 @@ pub use atomgit::{
     exchange_atomgit_oauth_state, poll_atomgit_oauth_state, refresh_atomgit_token,
     start_atomgit_oauth,
 };
-pub use callback::{OAuthCallback, wait_for_oauth_callback};
+pub use callback::{OAuthCallback, parse_oauth_callback_url, wait_for_oauth_callback};
 pub use copilot::{poll_copilot_device_code, start_copilot_device_code};
 pub use gitlab::{exchange_gitlab_oauth_code, refresh_gitlab_token, start_gitlab_oauth};
 pub use openai::{

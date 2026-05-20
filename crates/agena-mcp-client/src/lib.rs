@@ -1,5 +1,5 @@
 //! `agena-mcp-client` — async MCP (Model Context Protocol) client used by
-//! the agena runtime.  Supports stdio and HTTP/SSE transports, exposes the
+//! the agena runtime.  Supports stdio, HTTP/SSE, and WebSocket transports, exposes the
 //! 2024-11-05 protocol surface, and routes server→client requests
 //! (`sampling/createMessage`, …) through a pluggable handler.
 //!
@@ -23,4 +23,4 @@ pub use protocol::{
     ReadResourceResult, ResourceContents, ResourceDescriptor, ServerCapabilities, ToolDescriptor,
 };
 pub use token_store::{FileTokenStore, TokenStoreError};
-pub use transport::{HttpTransport, HttpTransportMode, McpTransport, StdioTransport};
+pub use transport::{HttpTransport, HttpTransportMode, McpTransport, StdioTransport, WsTransport};

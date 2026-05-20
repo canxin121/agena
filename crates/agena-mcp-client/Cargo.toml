@@ -10,15 +10,18 @@ async-trait = { workspace = true }
 dashmap = { workspace = true }
 eventsource-stream = { workspace = true }
 futures-util = { workspace = true }
+http = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"] }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+axum = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 
 [lints]

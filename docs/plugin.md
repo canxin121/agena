@@ -725,6 +725,27 @@ command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 ```
 
+Remote HTTP:
+
+```toml
+[plugins.list."agena.mcp".options.servers.remote]
+transport = "http"
+url = "https://mcp.example.com"
+mode = "streamable_http"
+headers = { }
+auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
+```
+
+Remote WebSocket:
+
+```toml
+[plugins.list."agena.mcp".options.servers.browser]
+transport = "ws"
+url = "wss://mcp.example.com/socket"
+headers = { }
+auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
+```
+
 Runtime build 时：
 
 1. 从 `plugins.list["agena.mcp"].options` 读取 MCP server config。

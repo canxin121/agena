@@ -12,9 +12,9 @@
 //!
 //! Both modes are supported; the variant is chosen at construction.
 //!
-//! NOTE: this is intentionally a thin implementation — no auth, no
-//! resumable streams, no session id management.  Sufficient for typical
-//! "remote MCP server" deployments behind a reverse proxy.
+//! NOTE: this is intentionally a thin implementation — no resumable
+//! streams, no session id management.  Sufficient for typical "remote
+//! MCP server" deployments behind a reverse proxy.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use reqwest::Client;
+use reqwest::StatusCode;
 use serde_json::Value;
 use tokio::sync::{Mutex, OnceCell, mpsc};
 use url::Url;
@@ -37,8 +38,7 @@ pub enum HttpTransportMode {
     /// announced via `endpoint` event.
     Sse,
     /// Current spec — every POST may stream frames; a parallel GET SSE
-    /// can be opened for server-initiated traffic.  We only open the
-    /// parallel GET on demand.
+    /// can be opened for server-initiated traffic.
     StreamableHttp,
 }
 
@@ -83,11 +83,8 @@ impl HttpTransport {
                 Self::start_sse_reader(inner.clone()).await?;
             }
             HttpTransportMode::StreamableHttp => {
-                // Streamable HTTP: post URL == base URL, no GET reader
-                // needed for the request/response path; server-initiated
-                // notifications are uncommon in practice and would need a
-                // separate GET — left for a follow-up.
                 inner.post_url.set(base_url).ok();
+                Self::start_streamable_get_reader(inner.clone()).await?;
             }
         }
         Ok(Self { inner })
@@ -161,6 +158,81 @@ impl HttpTransport {
                 }
             }
             let _ = inner_for_task.inbox_tx.send(Err(McpError::TransportClosed));
+        });
+        Ok(())
+    }
+
+    async fn start_streamable_get_reader(inner: Arc<Inner>) -> McpResult<()> {
+        let mut req = inner
+            .client
+            .get(inner.base_url.clone())
+            .header("Accept", "text/event-stream");
+        for (k, v) in &inner.headers {
+            req = req.header(k, v);
+        }
+        let resp = req.send().await?;
+        match resp.status() {
+            status if status.is_success() => {}
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => {
+                tracing::debug!(
+                    target: "agena_mcp_client::http",
+                    status = %resp.status(),
+                    url = %inner.base_url,
+                    "streamable HTTP server does not expose optional GET event stream"
+                );
+                return Ok(());
+            }
+            status => {
+                return Err(McpError::Http(format!(
+                    "streamable HTTP GET status {status}"
+                )));
+            }
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("");
+        if !content_type.starts_with("text/event-stream") {
+            return Err(McpError::Http(format!(
+                "streamable HTTP GET returned unexpected content-type '{content_type}'"
+            )));
+        }
+
+        let mut stream = resp.bytes_stream().eventsource();
+        let inner_for_task = inner.clone();
+        tokio::spawn(async move {
+            while let Some(event) = stream.next().await {
+                match event {
+                    Ok(ev) if ev.data.is_empty() => continue,
+                    Ok(ev) => {
+                        let value: Value = match serde_json::from_str(&ev.data) {
+                            Ok(value) => value,
+                            Err(err) => {
+                                tracing::warn!(
+                                    target: "agena_mcp_client::http",
+                                    url = %inner_for_task.base_url,
+                                    "invalid streamable HTTP SSE frame: {err}"
+                                );
+                                continue;
+                            }
+                        };
+                        let frame = InboundMessage::from_value(value)
+                            .map_err(|err| McpError::Malformed(err.to_string()));
+                        if inner_for_task.inbox_tx.send(frame).is_err() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            target: "agena_mcp_client::http",
+                            url = %inner_for_task.base_url,
+                            "streamable HTTP GET reader ended: {err}"
+                        );
+                        break;
+                    }
+                }
+            }
         });
         Ok(())
     }
@@ -266,5 +338,108 @@ impl McpTransport for HttpTransport {
     async fn close(&self) -> McpResult<()> {
         // Drain inbox so any waiters wake.
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::convert::Infallible;
+
+    use axum::{
+        Json, Router,
+        http::StatusCode as AxumStatusCode,
+        response::sse::{Event, Sse},
+        routing::get,
+    };
+    use futures_util::stream;
+    use serde_json::json;
+    use tokio::net::TcpListener;
+
+    async fn spawn_app(app: Router) -> Url {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind http test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve http app");
+        });
+        Url::parse(format!("http://{addr}/").as_str()).expect("parse app url")
+    }
+
+    #[tokio::test]
+    async fn streamable_http_works_without_optional_get_support() {
+        let app = Router::new().route(
+            "/",
+            get(|| async { AxumStatusCode::METHOD_NOT_ALLOWED }).post(|| async {
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": { "ok": true }
+                }))
+            }),
+        );
+        let url = spawn_app(app).await;
+        let transport =
+            HttpTransport::connect(url, HttpTransportMode::StreamableHttp, HashMap::new())
+                .await
+                .expect("connect streamable http transport");
+
+        transport
+            .send(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "ping",
+                "params": {}
+            }))
+            .await
+            .expect("send streamable http request");
+        let frame = transport.recv().await.expect("recv http response");
+        let InboundMessage::Response(response) = frame else {
+            panic!("expected response frame");
+        };
+        assert!(matches!(response.id, crate::protocol::RequestId::Number(1)));
+        assert_eq!(response.result.expect("response result")["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn streamable_http_receives_optional_get_events() {
+        let notification = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed",
+            "params": {}
+        })
+        .to_string();
+        let app = Router::new().route(
+            "/",
+            get({
+                let notification = notification.clone();
+                move || async move {
+                    let stream = stream::once(async move {
+                        Ok::<Event, Infallible>(Event::default().data(notification))
+                    });
+                    Sse::new(stream)
+                }
+            })
+            .post(|| async {
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {}
+                }))
+            }),
+        );
+        let url = spawn_app(app).await;
+        let transport =
+            HttpTransport::connect(url, HttpTransportMode::StreamableHttp, HashMap::new())
+                .await
+                .expect("connect streamable http transport");
+
+        let frame = transport.recv().await.expect("recv optional get event");
+        let InboundMessage::Notification(notification) = frame else {
+            panic!("expected notification frame");
+        };
+        assert_eq!(notification.method, "notifications/tools/list_changed");
     }
 }

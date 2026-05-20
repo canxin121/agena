@@ -3,11 +3,11 @@ use std::collections::BTreeMap;
 use crate::error::AppError;
 
 use super::{
-    AnthropicProviderOptions, ConfigEnvironment, ConfigError, HttpProviderAdapterConfig,
-    OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCredentialAuthConfig,
-    ProviderGitlabAuthConfig, ProviderProtocolPathsConfig, ResolvedProviderAdapterConfig,
-    ResolvedProviderConfig, SimpleHttpProviderOptions, StreamTransportMode,
+    AnthropicProviderOptions, ConfigEnvironment, ConfigError, GeminiProviderOptions,
+    HttpProviderAdapterConfig, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
+    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
+    ProviderCredentialAuthConfig, ProviderGitlabAuthConfig, ProviderProtocolPathsConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, StreamTransportMode,
     list_provider_adapter_models,
 };
 use crate::provider::auth::{AuthData, CredentialIssuer};
@@ -202,9 +202,11 @@ fn default_http_adapter_model_list_adapters(
                 model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
                     extra_headers: BTreeMap::new(),
-                    options: SimpleHttpProviderOptions {
+                    options: GeminiProviderOptions {
                         auth_header: None,
                         auth_scheme: None,
+                        stream_mode: StreamTransportMode::Sse,
+                        realtime_ws_url: None,
                     },
                 }),
             },
@@ -432,6 +434,18 @@ mod tests {
 
         assert!(target.adapters.contains_key("anthropic"));
         assert!(target.adapters.contains_key("gemini"));
+        match &target
+            .adapters
+            .get("gemini")
+            .expect("gemini adapter should exist")
+            .definition
+        {
+            ProviderAdapterDefinition::Gemini(config) => {
+                assert_eq!(config.options.stream_mode, StreamTransportMode::Sse);
+                assert_eq!(config.options.realtime_ws_url, None);
+            }
+            other => panic!("expected gemini adapter, got {other:?}"),
+        }
     }
 
     #[test]

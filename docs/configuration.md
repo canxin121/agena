@@ -415,9 +415,15 @@ adapter 常见额外字段：
 - 通用：`model_discovery`，默认 `live`；设为 `configured_only` 时不调用远程模型列表，只展示该 adapter 下显式配置的 models。
 - `openai`：`backend`、`api_mode`、`stream_mode`、`models_url`、`realtime_ws_url`、`auth_header`、`auth_scheme`、`capability_family`、`extra_headers`
 - `anthropic`：`models_url`、`messages_url`、`auth_header`、`auth_scheme`、`extra_beta_header`、`eager_input_streaming`、`extra_headers`
-- `gemini`：`auth_header`、`auth_scheme`、`extra_headers`
+- `gemini`：`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url`、`extra_headers`
 - `gitlab`：`instance_url`、`ai_gateway_url`、`ai_gateway_headers`、`feature_flags`
 - `ollama`：`base_url`
+
+关于 Anthropic 适配器的认证约束：
+
+- `auth.mode = "api"` 是 Agena 面向 Anthropic 官方一方接口的标准方式，使用 Claude Console API Key。
+- `auth.mode = "credential"` 目前只用于 `issuer = "github_copilot"` 的兼容路径。
+- Agena 不提供 Claude.ai / Claude Code 订阅 OAuth 登录。对第三方工具场景，官方当前文档要求使用 Claude Console API Key 或受支持的云提供商认证。
 
 常见示例：
 
@@ -1185,11 +1191,22 @@ headers = { }
 auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
 ```
 
+WebSocket:
+
+```toml
+[plugins.list."agena.mcp".options.servers.browser]
+transport = "ws"
+url = "wss://mcp.example.com/socket"
+headers = { }
+auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
+```
+
 MCP server transport：
 
 ```text
 stdio
 http
+ws
 ```
 
 `stdio` 字段：
@@ -1210,12 +1227,20 @@ headers
 auth
 ```
 
+`ws` 字段：
+
+```text
+url
+headers
+auth
+```
+
 HTTP mode:
 
 - `streamable_http`
 - `sse`
 
-`mode` 省略时使用 `streamable_http`。`headers` 是普通 header map，`auth` 可以省略。
+`mode` 省略时使用 `streamable_http`。`headers` 是普通 header map，`auth` 可以省略。`streamable_http` 会自动尝试打开可选的 GET/SSE server-events 通道；如果服务端返回 `404` 或 `405`，runtime 会回退到仅使用 POST/response 路径。
 
 HTTP auth:
 

@@ -43,7 +43,7 @@ pub use credential::{
     AuthRefreshStrategy, AuthSecretSelector, ManagedCredential, SapAiCoreServiceKey,
     parse_sap_ai_core_service_key, should_retry_credential,
 };
-pub use gemini::GeminiAdapter;
+pub use gemini::{GeminiAdapter, GeminiStreamMode};
 pub use gitlab::{GitlabProvider, GitlabProviderConfig};
 pub use model_metadata::{ModelMetadataRegistry, default_model_metadata_registry};
 pub use model_modes::{ModelModeRegistry, default_model_mode_registry};

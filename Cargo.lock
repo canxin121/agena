@@ -330,14 +330,17 @@ version = "0.1.0"
 dependencies = [
  "arc-swap",
  "async-trait",
+ "axum",
  "dashmap",
  "eventsource-stream",
  "futures-util",
+ "http 1.4.0",
  "reqwest 0.13.3",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "url",
 ]

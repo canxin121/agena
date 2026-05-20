@@ -762,6 +762,7 @@ fn build_adapter_provider(
                     adapter.options.auth_scheme.clone(),
                 )
                 .with_beta_header(adapter.options.extra_beta_header.clone())
+                .with_eager_input_streaming_override(adapter.options.eager_input_streaming)
                 .with_extra_headers(to_hash_map(&adapter.extra_headers));
 
                 if let Some(auth_data) = credential.auth_data {
@@ -794,6 +795,7 @@ fn build_adapter_provider(
                     adapter.options.auth_scheme.clone(),
                 )
                 .with_beta_header(adapter.options.extra_beta_header.clone())
+                .with_eager_input_streaming_override(adapter.options.eager_input_streaming)
                 .with_extra_headers(to_hash_map(&adapter.extra_headers)),
             ),
         },
@@ -813,7 +815,9 @@ fn build_adapter_provider(
                 resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Gemini)?,
                 adapter_default_model.to_owned(),
             )
-            .with_extra_headers(to_hash_map(&adapter.extra_headers));
+            .with_extra_headers(to_hash_map(&adapter.extra_headers))
+            .with_stream_mode(adapter.options.stream_mode.into())
+            .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
             if let Some(header) = adapter.options.auth_header.clone() {
                 provider = provider.with_auth_header(header, adapter.options.auth_scheme.clone());
             }
@@ -2513,6 +2517,282 @@ auth_scheme = "Bearer"
         assert_eq!(
             super::atomgit_openai_api_mode(crate::config::OpenAiApiModeConfig::Responses, true),
             crate::provider::OpenAiApiMode::Responses
+        );
+    }
+
+    #[tokio::test]
+    async fn build_adapter_provider_wires_anthropic_eager_input_streaming_override() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/messages")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"eager_input_streaming\\\":true".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "claude-sonnet-4",
+                    "stop_reason": "end_turn",
+                    "content": [{
+                        "type": "text",
+                        "text": "ok"
+                    }],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 2
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let adapter = crate::config::ResolvedProviderAdapterConfig {
+            enabled: true,
+            model_discovery: Default::default(),
+            definition: crate::config::ProviderAdapterDefinition::Anthropic(
+                crate::config::HttpProviderAdapterConfig {
+                    extra_headers: BTreeMap::new(),
+                    options: crate::config::AnthropicProviderOptions {
+                        models_url: None,
+                        messages_url: None,
+                        auth_header: "x-api-key".to_owned(),
+                        auth_scheme: None,
+                        extra_beta_header: None,
+                        eager_input_streaming: Some(true),
+                    },
+                },
+            ),
+        };
+        let auth = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+            base_url: Some(server.url()),
+            protocol_paths: ProviderProtocolPathsConfig {
+                openai: String::new(),
+                anthropic: String::new(),
+                gemini: String::new(),
+            },
+            api_key: Some("sk-test".to_owned()),
+            api_key_env: None,
+        });
+        let provider = super::build_adapter_provider(
+            "anthropic",
+            "anthropic",
+            &adapter,
+            "claude-sonnet-4",
+            &auth,
+            reqwest::Client::new(),
+            &TestEnvironment::default(),
+        )
+        .expect("provider should build");
+
+        let tool = crate::plugin::registry::PluginEntry::new(
+            "fixture",
+            crate::plugin::PluginToolDecl::new(
+                "lookup",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    }
+                }),
+            )
+            .description("Look up something")
+            .tag(crate::plugin::sdk::ToolTag::ReadOnly)
+            .concurrency_safe(true),
+        );
+
+        let response = provider
+            .complete(crate::provider::CompletionRequest {
+                model: crate::model::ModelId::new("claude-sonnet-4"),
+                system: None,
+                messages: vec![crate::message::Message::prompt_text(
+                    crate::role::Role::User,
+                    "hello",
+                )],
+                tools: vec![tool],
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+    }
+
+    #[tokio::test]
+    async fn build_adapter_provider_wires_gemini_realtime_stream_mode() {
+        use futures_util::{SinkExt as _, StreamExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+
+        let request_uri = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let request_uri_server = request_uri.clone();
+
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener
+                .accept()
+                .await
+                .expect("connection should be accepted");
+
+            let ws_stream = tokio_tungstenite::accept_hdr_async(
+                tcp,
+                move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                      response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    *request_uri_server
+                        .lock()
+                        .expect("request uri lock should succeed") =
+                        Some(request.uri().to_string());
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("websocket upgrade should succeed");
+
+            let (mut writer, mut reader) = ws_stream.split();
+
+            reader
+                .next()
+                .await
+                .expect("setup should exist")
+                .expect("setup should parse");
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({ "setupComplete": {} })
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .expect("setupComplete should send");
+            reader
+                .next()
+                .await
+                .expect("clientContent should exist")
+                .expect("clientContent should parse");
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "serverContent": {
+                            "modelTurn": {
+                                "parts": [{ "text": "Hello" }]
+                            },
+                            "turnComplete": true
+                        },
+                        "usageMetadata": {
+                            "promptTokenCount": 4,
+                            "candidatesTokenCount": 1
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("completion should send");
+        });
+
+        let adapter = crate::config::ResolvedProviderAdapterConfig {
+            enabled: true,
+            model_discovery: Default::default(),
+            definition: crate::config::ProviderAdapterDefinition::Gemini(
+                crate::config::HttpProviderAdapterConfig {
+                    extra_headers: BTreeMap::new(),
+                    options: crate::config::GeminiProviderOptions {
+                        auth_header: None,
+                        auth_scheme: None,
+                        stream_mode: crate::config::StreamTransportMode::RealtimeWebSocket,
+                        realtime_ws_url: Some(format!("ws://{addr}/realtime")),
+                    },
+                },
+            ),
+        };
+        let auth = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+            base_url: Some(format!("http://{addr}")),
+            protocol_paths: ProviderProtocolPathsConfig::default(),
+            api_key: Some("test-key".to_owned()),
+            api_key_env: None,
+        });
+        let provider = super::build_adapter_provider(
+            "google",
+            "gemini",
+            &adapter,
+            "gemini-2.5-flash",
+            &auth,
+            reqwest::Client::new(),
+            &TestEnvironment::default(),
+        )
+        .expect("provider should build");
+
+        let mut stream = provider
+            .complete_stream(crate::provider::CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![crate::message::Message::prompt_text(
+                    crate::role::Role::User,
+                    "hello",
+                )],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut text = String::new();
+        let mut completed = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should parse") {
+                crate::provider::CompletionStreamEvent::TextDelta { delta, .. } => {
+                    text.push_str(delta.as_str())
+                }
+                crate::provider::CompletionStreamEvent::Completed { finish_reason, .. } => {
+                    assert!(matches!(
+                        finish_reason,
+                        Some(crate::provider::CompletionFinishReason::Stop)
+                    ));
+                    completed = true;
+                }
+                crate::provider::CompletionStreamEvent::ThinkingDelta { .. } => {}
+                crate::provider::CompletionStreamEvent::ToolCallDelta { .. } => {}
+            }
+        }
+
+        server.await.expect("server task should complete");
+
+        assert_eq!(text, "Hello");
+        assert!(completed);
+        assert_eq!(
+            request_uri
+                .lock()
+                .expect("request uri lock should succeed")
+                .as_deref(),
+            Some("/realtime?key=test-key")
         );
     }
 

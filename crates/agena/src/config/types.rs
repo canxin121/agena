@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
 use crate::provider::{
-    CapabilityFamily, ConfiguredModelDefinition, OpenAiApiMode, OpenAiBackend, OpenAiStreamMode,
-    ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
+    CapabilityFamily, ConfiguredModelDefinition, GeminiStreamMode, OpenAiApiMode, OpenAiBackend,
+    OpenAiStreamMode, ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
     ProviderStreamReplayConfig,
     auth::{AuthData, CredentialIssuer},
 };
@@ -521,7 +521,7 @@ pub enum ProviderAdapterDefinition {
     Ollama(OllamaProviderOptions),
     OpenAi(HttpProviderAdapterConfig<OpenAiProviderOptions>),
     Anthropic(HttpProviderAdapterConfig<AnthropicProviderOptions>),
-    Gemini(HttpProviderAdapterConfig<SimpleHttpProviderOptions>),
+    Gemini(HttpProviderAdapterConfig<GeminiProviderOptions>),
     Gitlab(GitlabProviderOptions),
     AmazonBedrock(AmazonBedrockProviderOptions),
 }
@@ -601,6 +601,14 @@ pub struct AnthropicProviderOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GeminiProviderOptions {
+    pub auth_header: Option<String>,
+    pub auth_scheme: Option<String>,
+    pub stream_mode: StreamTransportMode,
+    pub realtime_ws_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SimpleHttpProviderOptions {
     pub auth_header: Option<String>,
     pub auth_scheme: Option<String>,
@@ -663,6 +671,7 @@ pub enum ConfigOutputFormat {
 #[serde(rename_all = "snake_case")]
 pub enum StreamTransportMode {
     Sse,
+    #[serde(rename = "realtime_websocket", alias = "realtime_web_socket")]
     RealtimeWebSocket,
 }
 
@@ -681,6 +690,15 @@ impl FromStr for StreamTransportMode {
 }
 
 impl From<StreamTransportMode> for OpenAiStreamMode {
+    fn from(value: StreamTransportMode) -> Self {
+        match value {
+            StreamTransportMode::Sse => Self::Sse,
+            StreamTransportMode::RealtimeWebSocket => Self::RealtimeWebSocket,
+        }
+    }
+}
+
+impl From<StreamTransportMode> for GeminiStreamMode {
     fn from(value: StreamTransportMode) -> Self {
         match value {
             StreamTransportMode::Sse => Self::Sse,
@@ -811,6 +829,16 @@ pub enum McpServerConfig {
         url: String,
         #[serde(default = "default_http_mode")]
         mode: McpHttpMode,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<McpHttpAuthConfig>,
+    },
+    /// Connect to a WebSocket-based MCP server and exchange JSON-RPC
+    /// messages over text frames.
+    #[serde(alias = "websocket")]
+    Ws {
+        url: String,
         #[serde(default)]
         headers: BTreeMap<String, String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

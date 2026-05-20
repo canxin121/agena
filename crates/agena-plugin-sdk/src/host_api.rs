@@ -1470,6 +1470,17 @@ pub struct HostMcpListServersResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostMcpHttpMode {
+    Sse,
+    StreamableHttp,
+}
+
+fn default_host_mcp_http_mode() -> HostMcpHttpMode {
+    HostMcpHttpMode::StreamableHttp
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HostMcpServerSpec {
     Stdio {
@@ -1482,6 +1493,16 @@ pub enum HostMcpServerSpec {
         cwd: Option<String>,
     },
     Http {
+        url: String,
+        #[serde(default = "default_host_mcp_http_mode")]
+        mode: HostMcpHttpMode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer: Option<String>,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+    },
+    #[serde(alias = "websocket")]
+    Ws {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bearer: Option<String>,

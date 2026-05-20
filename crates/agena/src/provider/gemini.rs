@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use futures_core::Stream;
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -27,6 +27,8 @@ pub struct GeminiAdapter {
     default_model: ModelId,
     auth_mode: GeminiAuthMode,
     extra_headers: HashMap<String, String>,
+    stream_mode: GeminiStreamMode,
+    realtime_ws_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +40,12 @@ enum GeminiAuthMode {
         name: String,
         scheme: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeminiStreamMode {
+    Sse,
+    RealtimeWebSocket,
 }
 
 impl GeminiAdapter {
@@ -70,6 +78,8 @@ impl GeminiAdapter {
                 name: "key".to_owned(),
             },
             extra_headers: HashMap::new(),
+            stream_mode: GeminiStreamMode::Sse,
+            realtime_ws_url: None,
         }
     }
 
@@ -87,6 +97,16 @@ impl GeminiAdapter {
 
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.extra_headers = headers;
+        self
+    }
+
+    pub fn with_stream_mode(mut self, mode: GeminiStreamMode) -> Self {
+        self.stream_mode = mode;
+        self
+    }
+
+    pub fn with_realtime_ws_url(mut self, ws_url: Option<String>) -> Self {
+        self.realtime_ws_url = ws_url.and_then(|value| utils::normalize_optional_text(Some(value)));
         self
     }
 
@@ -150,6 +170,185 @@ impl GeminiAdapter {
             GeminiAuthMode::QueryParameter { .. } => "query_parameter",
             GeminiAuthMode::Header { .. } => "header",
         }
+    }
+
+    fn stream_mode_key(&self) -> &'static str {
+        match self.stream_mode {
+            GeminiStreamMode::Sse => "sse",
+            GeminiStreamMode::RealtimeWebSocket => "realtime_websocket",
+        }
+    }
+
+    fn request_system_and_contents(
+        request: &CompletionRequest,
+    ) -> (Vec<String>, Vec<GeminiContent>) {
+        let mut system_chunks = Vec::new();
+        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
+            system_chunks.push(system.clone());
+        }
+
+        let mut contents = Vec::new();
+        for msg in &request.messages {
+            match msg.role {
+                Role::System => system_chunks.push(msg.as_text_lossy()),
+                Role::Assistant => contents.extend(Self::assistant_contents(msg)),
+                Role::User => contents.push(GeminiContent {
+                    role: Some("user".to_owned()),
+                    parts: Self::message_parts(msg),
+                }),
+            }
+        }
+
+        (system_chunks, contents)
+    }
+
+    fn generation_config(
+        model: &str,
+        request: &CompletionRequest,
+        response_modalities: Option<Vec<String>>,
+    ) -> GeminiGenerationConfig {
+        let (response_mime_type, response_schema) =
+            Self::map_response_format(request.response_format.as_ref());
+        GeminiGenerationConfig {
+            temperature: request.temperature,
+            max_output_tokens: request.max_output_tokens,
+            top_p: request.top_p,
+            top_k: request.top_k,
+            stop_sequences: request.stop_sequences.clone(),
+            response_mime_type,
+            response_schema,
+            thinking_config: gemini_thinking_config(model, request.thinking.as_ref()),
+            response_modalities,
+        }
+    }
+
+    fn generate_request(
+        &self,
+        request: &CompletionRequest,
+        stream: Option<bool>,
+    ) -> GeminiGenerateRequest {
+        let (system_chunks, contents) = Self::request_system_and_contents(request);
+        GeminiGenerateRequest {
+            system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
+                parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
+            }),
+            contents,
+            generation_config: Self::generation_config(request.model.as_str(), request, None),
+            stream,
+            tools: build_gemini_tools(request.tools.as_slice()),
+            tool_config: None,
+        }
+    }
+
+    fn request_contains_tool_results(request: &CompletionRequest) -> bool {
+        request.messages.iter().any(|message| {
+            wire_message::project(message)
+                .iter()
+                .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
+        })
+    }
+
+    fn realtime_ws_endpoint(&self) -> Result<url::Url, AppError> {
+        let mut endpoint = if let Some(ws_url) = self.realtime_ws_url.as_ref() {
+            url::Url::parse(ws_url).map_err(|err| {
+                AppError::Config(format!("gemini realtime websocket url is invalid: {err}"))
+            })?
+        } else {
+            let mut url = url::Url::parse(self.base_url.as_str())
+                .map_err(|err| AppError::Config(format!("gemini base url is invalid: {err}")))?;
+            let path = url.path().trim_end_matches('/').trim();
+            let segments = path
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>();
+            let Some(version) = segments
+                .last()
+                .copied()
+                .filter(|segment| segment.starts_with('v'))
+            else {
+                return Err(AppError::Config(
+                    "gemini realtime websocket endpoint could not be derived from base_url; configure `realtime_ws_url` explicitly".to_owned(),
+                ));
+            };
+            let prefix = if segments.len() > 1 {
+                format!("/{}", segments[..segments.len() - 1].join("/"))
+            } else {
+                String::new()
+            };
+            let realtime_path = format!(
+                "{}/ws/google.ai.generativelanguage.{}.GenerativeService.BidiGenerateContent",
+                prefix, version
+            );
+            url.set_path(realtime_path.as_str());
+            url
+        };
+
+        match endpoint.scheme() {
+            "http" => endpoint.set_scheme("ws").map_err(|_| {
+                AppError::Config("gemini realtime websocket url is invalid".to_owned())
+            })?,
+            "https" => endpoint.set_scheme("wss").map_err(|_| {
+                AppError::Config("gemini realtime websocket url is invalid".to_owned())
+            })?,
+            "ws" | "wss" => {}
+            other => {
+                return Err(AppError::Config(format!(
+                    "gemini realtime websocket url has unsupported scheme `{other}`"
+                )));
+            }
+        }
+
+        Ok(endpoint)
+    }
+
+    fn realtime_handshake_request(
+        &self,
+        endpoint: &url::Url,
+        api_key: &str,
+        request_headers: &HashMap<String, String>,
+    ) -> Result<http::Request<()>, AppError> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let endpoint = self.endpoint_with_auth(endpoint.to_string(), api_key);
+        let mut request = endpoint.into_client_request().map_err(|err| {
+            AppError::Config(format!(
+                "gemini realtime websocket handshake invalid: {err}"
+            ))
+        })?;
+
+        if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
+            let auth_header_name =
+                http::header::HeaderName::from_bytes(name.as_bytes()).map_err(|err| {
+                    AppError::Config(format!("gemini auth header name is invalid: {err}"))
+                })?;
+            let auth_header_value = http::header::HeaderValue::from_str(
+                utils::auth_header_value(scheme.as_deref(), api_key).as_str(),
+            )
+            .map_err(|err| {
+                AppError::Config(format!("gemini auth header value is invalid: {err}"))
+            })?;
+            request
+                .headers_mut()
+                .insert(auth_header_name, auth_header_value);
+        }
+
+        for (key, value) in utils::resolved_request_headers(PROVIDER_ID, request_headers) {
+            let header_name =
+                http::header::HeaderName::from_bytes(key.as_bytes()).map_err(|err| {
+                    AppError::Config(format!(
+                        "gemini extra header name `{key}` is invalid: {err}"
+                    ))
+                })?;
+            let header_value =
+                http::header::HeaderValue::from_str(value.as_str()).map_err(|err| {
+                    AppError::Config(format!(
+                        "gemini extra header `{key}` value is invalid: {err}"
+                    ))
+                })?;
+            request.headers_mut().insert(header_name, header_value);
+        }
+
+        Ok(request)
     }
 
     fn message_parts(message: &Message) -> Vec<GeminiPart> {
@@ -282,6 +481,312 @@ impl GeminiAdapter {
         }
     }
 
+    async fn complete_stream_with_realtime_ws(
+        &self,
+        request: &CompletionRequest,
+        model: ModelId,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+        AppError,
+    > {
+        let ws_endpoint = self.realtime_ws_endpoint()?;
+        let api_key = self.api_key.resolve().await?;
+        let request_headers =
+            utils::merged_request_headers(&self.extra_headers, &request.request_override.headers);
+        let handshake =
+            self.realtime_handshake_request(&ws_endpoint, api_key.as_str(), &request_headers)?;
+        let (ws_stream, _) = tokio_tungstenite::connect_async(handshake)
+            .await
+            .map_err(|err| {
+                AppError::Provider(format!("gemini realtime websocket connect failed: {err}"))
+            })?;
+
+        let (system_chunks, contents) = Self::request_system_and_contents(request);
+        let live_request = GeminiLiveConversationRequest {
+            setup: GeminiLiveSetup {
+                model: if model.as_str().starts_with("models/") {
+                    model.to_string()
+                } else {
+                    format!("models/{model}")
+                },
+                generation_config: Self::generation_config(
+                    model.as_str(),
+                    request,
+                    Some(vec!["TEXT".to_owned()]),
+                ),
+                system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
+                    parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
+                }),
+                tools: build_gemini_tools(request.tools.as_slice()),
+            },
+            client_content: GeminiLiveClientContent {
+                turns: contents,
+                turn_complete: Some(true),
+            },
+        };
+        let live_json = utils::serialize_request_body_with_patch(
+            &live_request,
+            &request.request_override.body_patch,
+        )?;
+        let setup = live_json.get("setup").cloned().ok_or_else(|| {
+            AppError::Config(
+                "gemini realtime request patch removed `setup`; restore it or disable the patch"
+                    .to_owned(),
+            )
+        })?;
+        let client_content = live_json.get("clientContent").cloned().ok_or_else(|| {
+            AppError::Config(
+                "gemini realtime request patch removed `clientContent`; restore it or disable the patch"
+                    .to_owned(),
+            )
+        })?;
+
+        let provider_id = ProviderId::new(PROVIDER_ID);
+        let model_name = model;
+
+        let stream = async_stream::try_stream! {
+            let (mut ws_writer, mut ws_reader) = ws_stream.split();
+
+            ws_writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({ "setup": setup }).to_string().into(),
+                ))
+                .await
+                .map_err(|err| {
+                    AppError::Provider(format!(
+                        "gemini realtime websocket send setup failed: {err}"
+                    ))
+                })?;
+
+            let mut setup_complete = false;
+            while let Some(message) = ws_reader.next().await {
+                let message = message.map_err(|err| {
+                    AppError::Provider(format!(
+                        "gemini realtime websocket receive failed before setup complete: {err}"
+                    ))
+                })?;
+                let text = match message {
+                    tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
+                    tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                        String::from_utf8(bytes.to_vec()).map_err(|err| {
+                            AppError::Provider(format!(
+                                "gemini realtime websocket setup message was not utf-8: {err}"
+                            ))
+                        })?
+                    }
+                    tokio_tungstenite::tungstenite::Message::Close(_) => break,
+                    tokio_tungstenite::tungstenite::Message::Ping(_) => continue,
+                    tokio_tungstenite::tungstenite::Message::Pong(_) => continue,
+                    tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
+                };
+
+                let payload: GeminiLiveServerMessage = utils::parse_json_value(
+                    PROVIDER_ID,
+                    "realtime setup message",
+                    serde_json::from_str::<serde_json::Value>(text.as_str()).map_err(|err| {
+                        AppError::Provider(format!(
+                            "gemini realtime websocket returned invalid setup json: {err}"
+                        ))
+                    })?,
+                )?;
+                if payload.setup_complete.is_some() {
+                    setup_complete = true;
+                    break;
+                }
+            }
+
+            if !setup_complete {
+                Err(AppError::Provider(
+                    "gemini realtime websocket closed before setup completed".to_owned(),
+                ))?;
+            }
+
+            ws_writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({ "clientContent": client_content })
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .map_err(|err| {
+                    AppError::Provider(format!(
+                        "gemini realtime websocket send clientContent failed: {err}"
+                    ))
+                })?;
+
+            let mut emitted = String::new();
+            let mut emitted_reasoning = String::new();
+            let mut emitted_tool_calls = std::collections::BTreeSet::new();
+            let mut saw_content = false;
+            let mut tool_call_seen = false;
+            let mut completed_emitted = false;
+            let mut fallback_usage: Option<crate::provider::CompletionUsage> = None;
+            let mut fallback_provider_metadata: Option<serde_json::Value> = None;
+
+            while let Some(message) = ws_reader.next().await {
+                let message = message.map_err(|err| {
+                    AppError::Provider(format!(
+                        "gemini realtime websocket receive failed: {err}"
+                    ))
+                })?;
+
+                let text = match message {
+                    tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
+                    tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                        String::from_utf8(bytes.to_vec()).map_err(|err| {
+                            AppError::Provider(format!(
+                                "gemini realtime websocket message was not utf-8: {err}"
+                            ))
+                        })?
+                    }
+                    tokio_tungstenite::tungstenite::Message::Close(_) => break,
+                    tokio_tungstenite::tungstenite::Message::Ping(_) => continue,
+                    tokio_tungstenite::tungstenite::Message::Pong(_) => continue,
+                    tokio_tungstenite::tungstenite::Message::Frame(_) => continue,
+                };
+
+                let payload: GeminiLiveServerMessage = utils::parse_json_value(
+                    PROVIDER_ID,
+                    "realtime stream message",
+                    serde_json::from_str::<serde_json::Value>(text.as_str()).map_err(|err| {
+                        AppError::Provider(format!(
+                            "gemini realtime websocket returned invalid json: {err}"
+                        ))
+                    })?,
+                )?;
+
+                if let Some(usage) = payload.usage_metadata.clone().map(map_gemini_usage) {
+                    fallback_usage = Some(usage);
+                }
+
+                if let Some(server_content) = payload.server_content {
+                    if let Some(metadata) = server_content.provider_metadata() {
+                        fallback_provider_metadata = Some(metadata);
+                    }
+
+                    if let Some(model_turn) = server_content.model_turn {
+                        let full_reasoning =
+                            gemini_reasoning_text_from_content(&model_turn).unwrap_or_default();
+                        if full_reasoning.starts_with(emitted_reasoning.as_str()) {
+                            let delta = full_reasoning[emitted_reasoning.len()..].to_owned();
+                            if !delta.is_empty() {
+                                emitted_reasoning = full_reasoning;
+                                saw_content = true;
+                                yield CompletionStreamEvent::ThinkingDelta {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    delta,
+                                };
+                            }
+                        } else if !full_reasoning.is_empty() {
+                            emitted_reasoning = full_reasoning.clone();
+                            saw_content = true;
+                            yield CompletionStreamEvent::ThinkingDelta {
+                                provider_id: provider_id.clone(),
+                                model: model_name.clone(),
+                                delta: full_reasoning,
+                            };
+                        }
+
+                        let full_text = gemini_text_from_content(&model_turn);
+                        if full_text.starts_with(emitted.as_str()) {
+                            let delta = full_text[emitted.len()..].to_owned();
+                            if !delta.is_empty() {
+                                emitted = full_text;
+                                saw_content = true;
+                                yield CompletionStreamEvent::TextDelta {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    delta,
+                                };
+                            }
+                        } else if !full_text.is_empty() {
+                            emitted = full_text.clone();
+                            saw_content = true;
+                            yield CompletionStreamEvent::TextDelta {
+                                provider_id: provider_id.clone(),
+                                model: model_name.clone(),
+                                delta: full_text,
+                            };
+                        }
+                    }
+
+                    if server_content.turn_complete.unwrap_or(false) {
+                        completed_emitted = true;
+                        yield CompletionStreamEvent::Completed {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            finish_reason: Some(if tool_call_seen {
+                                CompletionFinishReason::ToolCalls
+                            } else {
+                                CompletionFinishReason::Stop
+                            }),
+                            usage: fallback_usage.clone(),
+                            provider_metadata: fallback_provider_metadata.clone(),
+                        };
+                        break;
+                    }
+                }
+
+                if let Some(tool_call) = payload.tool_call {
+                    for call in tool_call.function_calls {
+                        let dedupe_key = call
+                            .id
+                            .clone()
+                            .unwrap_or_else(|| utils::request_shape_fingerprint(&call));
+                        if !emitted_tool_calls.insert(dedupe_key.clone()) {
+                            continue;
+                        }
+
+                        tool_call_seen = true;
+                        saw_content = true;
+                        let arguments_json = if call.args.is_null() {
+                            "{}".to_owned()
+                        } else {
+                            serde_json::to_string(&call.args)
+                                .unwrap_or_else(|_| "{}".to_owned())
+                        };
+                        let id = call.id.unwrap_or(dedupe_key);
+                        yield CompletionStreamEvent::ToolCallDelta {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            stream_key: id.clone(),
+                            id: Some(id),
+                            name: Some(call.name),
+                            arguments_delta: arguments_json,
+                        };
+                    }
+                }
+            }
+
+            let _ = ws_writer
+                .send(tokio_tungstenite::tungstenite::Message::Close(None))
+                .await;
+
+            if !completed_emitted {
+                if saw_content || fallback_usage.is_some() || fallback_provider_metadata.is_some() {
+                    yield CompletionStreamEvent::Completed {
+                        provider_id: provider_id.clone(),
+                        model: model_name.clone(),
+                        finish_reason: Some(if tool_call_seen {
+                            CompletionFinishReason::ToolCalls
+                        } else {
+                            CompletionFinishReason::Stop
+                        }),
+                        usage: fallback_usage,
+                        provider_metadata: fallback_provider_metadata,
+                    };
+                } else {
+                    Err(AppError::Provider(
+                        "gemini realtime websocket closed before returning any content".to_owned(),
+                    ))?;
+                }
+            }
+        };
+
+        Ok(Box::pin(stream))
+    }
+
     async fn complete_by_aggregating_stream(
         &self,
         request: CompletionRequest,
@@ -313,6 +818,7 @@ impl ModelRuntime for GeminiAdapter {
                 .with_string("base_url", self.base_url.as_str())
                 .with_string("default_model", self.default_model.as_str())
                 .with_string("auth_transport", self.auth_transport_key())
+                .with_string("stream_mode", self.stream_mode_key())
                 .with_optional_string(
                     "auth_query_param",
                     match &self.auth_mode {
@@ -334,6 +840,7 @@ impl ModelRuntime for GeminiAdapter {
                         GeminiAuthMode::QueryParameter { .. } => None,
                     },
                 )
+                .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
                 .with_json(
                     "extra_headers",
                     &utils::prompt_cache_header_entries(&self.extra_headers),
@@ -387,50 +894,7 @@ impl ModelRuntime for GeminiAdapter {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
-
-        let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(system.clone());
-        }
-
-        let mut contents = Vec::new();
-        for msg in request.messages {
-            match msg.role {
-                Role::System => system_chunks.push(msg.as_text_lossy()),
-                Role::Assistant => contents.extend(Self::assistant_contents(&msg)),
-                Role::User => contents.push(GeminiContent {
-                    role: Some("user".to_owned()),
-                    parts: Self::message_parts(&msg),
-                }),
-            }
-        }
-
-        let body = GeminiGenerateRequest {
-            system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
-                parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
-            }),
-            contents,
-            generation_config: {
-                let (response_mime_type, response_schema) =
-                    Self::map_response_format(request.response_format.as_ref());
-                GeminiGenerationConfig {
-                    temperature: request.temperature,
-                    max_output_tokens: request.max_output_tokens,
-                    top_p: request.top_p,
-                    top_k: request.top_k,
-                    stop_sequences: request.stop_sequences.clone(),
-                    response_mime_type,
-                    response_schema,
-                    thinking_config: gemini_thinking_config(
-                        model.as_str(),
-                        request.thinking.as_ref(),
-                    ),
-                }
-            },
-            stream: None,
-            tools: build_gemini_tools(request.tools.as_slice()),
-            tool_config: None,
-        };
+        let body = self.generate_request(&request, None);
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
         let request_headers =
@@ -513,49 +977,15 @@ impl ModelRuntime for GeminiAdapter {
     > {
         let model = request.model.clone();
 
-        let mut system_chunks = Vec::new();
-        if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
-            system_chunks.push(system.clone());
+        if matches!(self.stream_mode, GeminiStreamMode::RealtimeWebSocket)
+            && !Self::request_contains_tool_results(&request)
+        {
+            return self
+                .complete_stream_with_realtime_ws(&request, model.clone())
+                .await;
         }
 
-        let mut contents = Vec::new();
-        for msg in request.messages {
-            match msg.role {
-                Role::System => system_chunks.push(msg.as_text_lossy()),
-                Role::Assistant => contents.extend(Self::assistant_contents(&msg)),
-                Role::User => contents.push(GeminiContent {
-                    role: Some("user".to_owned()),
-                    parts: Self::message_parts(&msg),
-                }),
-            }
-        }
-
-        let body = GeminiGenerateRequest {
-            system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
-                parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
-            }),
-            contents,
-            generation_config: {
-                let (response_mime_type, response_schema) =
-                    Self::map_response_format(request.response_format.as_ref());
-                GeminiGenerationConfig {
-                    temperature: request.temperature,
-                    max_output_tokens: request.max_output_tokens,
-                    top_p: request.top_p,
-                    top_k: request.top_k,
-                    stop_sequences: request.stop_sequences.clone(),
-                    response_mime_type,
-                    response_schema,
-                    thinking_config: gemini_thinking_config(
-                        model.as_str(),
-                        request.thinking.as_ref(),
-                    ),
-                }
-            },
-            stream: Some(true),
-            tools: build_gemini_tools(request.tools.as_slice()),
-            tool_config: None,
-        };
+        let body = self.generate_request(&request, Some(true));
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
         let request_headers =
@@ -894,6 +1324,7 @@ impl GeminiPart {
     fn function_call(name: impl Into<String>, args: serde_json::Value) -> Self {
         Self {
             function_call: Some(GeminiFunctionCall {
+                id: None,
                 name: name.into(),
                 args,
             }),
@@ -914,6 +1345,8 @@ impl GeminiPart {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct GeminiFunctionCall {
+    #[serde(default)]
+    id: Option<String>,
     name: String,
     #[serde(default)]
     args: serde_json::Value,
@@ -980,6 +1413,8 @@ struct GeminiGenerationConfig {
     response_schema: Option<serde_json::Value>,
     #[serde(rename = "thinkingConfig", skip_serializing_if = "Option::is_none")]
     thinking_config: Option<GeminiThinkingConfig>,
+    #[serde(rename = "responseModalities", skip_serializing_if = "Option::is_none")]
+    response_modalities: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -990,6 +1425,31 @@ struct GeminiThinkingConfig {
     thinking_level: Option<&'static str>,
     #[serde(rename = "includeThoughts", skip_serializing_if = "Option::is_none")]
     include_thoughts: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiLiveConversationRequest {
+    setup: GeminiLiveSetup,
+    #[serde(rename = "clientContent")]
+    client_content: GeminiLiveClientContent,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiLiveSetup {
+    model: String,
+    #[serde(rename = "generationConfig")]
+    generation_config: GeminiGenerationConfig,
+    #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<GeminiInstruction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<GeminiTool>>,
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiLiveClientContent {
+    turns: Vec<GeminiContent>,
+    #[serde(rename = "turnComplete", skip_serializing_if = "Option::is_none")]
+    turn_complete: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1029,58 +1489,20 @@ impl GeminiCandidate {
     fn text(&self) -> String {
         self.content
             .as_ref()
-            .map(|content| {
-                content
-                    .parts
-                    .iter()
-                    .filter(|part| !part.thought.unwrap_or(false))
-                    .filter_map(|part| part.text.clone())
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
+            .map(gemini_text_from_content)
             .unwrap_or_default()
     }
 
     fn reasoning_text(&self) -> Option<String> {
-        let text = self
-            .content
+        self.content
             .as_ref()
-            .map(|content| {
-                content
-                    .parts
-                    .iter()
-                    .filter(|part| part.thought.unwrap_or(false))
-                    .filter_map(|part| part.text.clone())
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .unwrap_or_default();
-        (!text.is_empty()).then_some(text)
+            .and_then(gemini_reasoning_text_from_content)
     }
 
     fn function_calls(&self) -> Vec<crate::provider::CompletionToolCall> {
         self.content
             .as_ref()
-            .map(|content| {
-                content
-                    .parts
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, part)| {
-                        let call = part.function_call.as_ref()?;
-                        let arguments_json = if call.args.is_null() {
-                            "{}".to_owned()
-                        } else {
-                            serde_json::to_string(&call.args).unwrap_or_else(|_| "{}".to_owned())
-                        };
-                        Some(crate::provider::CompletionToolCall::Function {
-                            id: format!("{}-{idx}", call.name),
-                            name: call.name.clone(),
-                            arguments_json,
-                        })
-                    })
-                    .collect()
-            })
+            .map(gemini_function_calls_from_content)
             .unwrap_or_default()
     }
 
@@ -1094,6 +1516,53 @@ impl GeminiCandidate {
         }
         (!map.is_empty()).then_some(serde_json::Value::Object(map))
     }
+}
+
+fn gemini_text_from_content(content: &GeminiContent) -> String {
+    content
+        .parts
+        .iter()
+        .filter(|part| !part.thought.unwrap_or(false))
+        .filter_map(|part| part.text.clone())
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn gemini_reasoning_text_from_content(content: &GeminiContent) -> Option<String> {
+    let text = content
+        .parts
+        .iter()
+        .filter(|part| part.thought.unwrap_or(false))
+        .filter_map(|part| part.text.clone())
+        .collect::<Vec<_>>()
+        .join("");
+    (!text.is_empty()).then_some(text)
+}
+
+fn gemini_function_calls_from_content(
+    content: &GeminiContent,
+) -> Vec<crate::provider::CompletionToolCall> {
+    content
+        .parts
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, part)| {
+            let call = part.function_call.as_ref()?;
+            let arguments_json = if call.args.is_null() {
+                "{}".to_owned()
+            } else {
+                serde_json::to_string(&call.args).unwrap_or_else(|_| "{}".to_owned())
+            };
+            Some(crate::provider::CompletionToolCall::Function {
+                id: call
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| format!("{}-{idx}", call.name)),
+                name: call.name.clone(),
+                arguments_json,
+            })
+        })
+        .collect()
 }
 
 fn parse_json_or_object(raw: &str) -> serde_json::Value {
@@ -1296,6 +1765,42 @@ struct GeminiUsageMetadata {
     cached_content_token_count: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct GeminiLiveServerMessage {
+    #[serde(default, rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
+    #[serde(default, rename = "setupComplete")]
+    setup_complete: Option<serde_json::Value>,
+    #[serde(default, rename = "serverContent")]
+    server_content: Option<GeminiLiveServerContent>,
+    #[serde(default, rename = "toolCall")]
+    tool_call: Option<GeminiLiveToolCall>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiLiveServerContent {
+    #[serde(default, rename = "turnComplete")]
+    turn_complete: Option<bool>,
+    #[serde(default, rename = "groundingMetadata")]
+    grounding_metadata: Option<serde_json::Value>,
+    #[serde(default, rename = "modelTurn")]
+    model_turn: Option<GeminiContent>,
+}
+
+impl GeminiLiveServerContent {
+    fn provider_metadata(&self) -> Option<serde_json::Value> {
+        self.grounding_metadata
+            .clone()
+            .map(|metadata| serde_json::json!({ "grounding_metadata": metadata }))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiLiveToolCall {
+    #[serde(default, rename = "functionCalls")]
+    function_calls: Vec<GeminiFunctionCall>,
+}
+
 #[cfg(test)]
 mod tests {
     use futures_util::StreamExt;
@@ -1391,6 +1896,27 @@ mod tests {
             .expect("shape should exist");
 
         assert_ne!(query_shape.fingerprint(), header_shape.fingerprint());
+    }
+
+    #[test]
+    fn realtime_ws_endpoint_derives_from_protocol_base_url() {
+        let provider = GeminiAdapter::new(
+            reqwest::Client::new(),
+            "test-key",
+            "https://gateway.example.com/api/provider/google/v1beta",
+            "gemini-2.5-flash",
+        )
+        .with_stream_mode(GeminiStreamMode::RealtimeWebSocket);
+
+        let endpoint = provider
+            .realtime_ws_endpoint()
+            .expect("endpoint should derive");
+
+        assert_eq!(endpoint.scheme(), "wss");
+        assert_eq!(
+            endpoint.path(),
+            "/api/provider/google/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
+        );
     }
 
     #[tokio::test]
@@ -2016,6 +2542,312 @@ mod tests {
         assert_eq!(usage.input_tokens, 2);
         assert_eq!(usage.output_tokens, 1);
         assert_eq!(usage.cache_read_tokens, 2);
+    }
+
+    #[tokio::test]
+    async fn complete_stream_realtime_ws_emits_text_tool_and_completed() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+
+        let request_uri = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let request_uri_server = request_uri.clone();
+
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener
+                .accept()
+                .await
+                .expect("connection should be accepted");
+
+            let ws_stream = tokio_tungstenite::accept_hdr_async(
+                tcp,
+                move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                      response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    *request_uri_server
+                        .lock()
+                        .expect("request uri lock should succeed") =
+                        Some(request.uri().to_string());
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("websocket upgrade should succeed");
+
+            let (mut writer, mut reader) = ws_stream.split();
+
+            let message = reader
+                .next()
+                .await
+                .expect("setup message should exist")
+                .expect("setup message should parse");
+            let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+                panic!("expected setup text message");
+            };
+            let setup: serde_json::Value =
+                serde_json::from_str(text.as_str()).expect("setup should be json");
+            assert_eq!(setup["setup"]["model"], "models/gemini-2.5-flash");
+            assert_eq!(
+                setup["setup"]["generationConfig"]["responseModalities"][0],
+                "TEXT"
+            );
+            assert_eq!(
+                setup["setup"]["tools"][0]["functionDeclarations"][0]["name"],
+                "lookup"
+            );
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({ "setupComplete": {} })
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .expect("setupComplete should send");
+
+            let message = reader
+                .next()
+                .await
+                .expect("clientContent message should exist")
+                .expect("clientContent message should parse");
+            let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+                panic!("expected clientContent text message");
+            };
+            let client_content: serde_json::Value =
+                serde_json::from_str(text.as_str()).expect("clientContent should be json");
+            assert_eq!(client_content["clientContent"]["turnComplete"], true);
+            assert_eq!(
+                client_content["clientContent"]["turns"][0]["parts"][0]["text"],
+                "hello"
+            );
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "serverContent": {
+                            "modelTurn": {
+                                "parts": [{ "text": "Hel" }]
+                            }
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("text delta should send");
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "toolCall": {
+                            "functionCalls": [{
+                                "id": "call_1",
+                                "name": "lookup",
+                                "args": { "q": "rust" }
+                            }]
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("tool call should send");
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "serverContent": {
+                            "modelTurn": {
+                                "parts": [{ "text": "Hello" }]
+                            },
+                            "turnComplete": true
+                        },
+                        "usageMetadata": {
+                            "promptTokenCount": 4,
+                            "candidatesTokenCount": 2,
+                            "cachedContentTokenCount": 1
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("completion should send");
+        });
+
+        let provider = GeminiAdapter::new(
+            reqwest::Client::new(),
+            "test-key",
+            format!("http://{addr}/v1beta"),
+            "gemini-2.5-flash",
+        )
+        .with_stream_mode(GeminiStreamMode::RealtimeWebSocket)
+        .with_realtime_ws_url(Some(format!("ws://{addr}/realtime")));
+
+        let tool = crate::plugin::registry::PluginEntry::new(
+            "fixture",
+            crate::plugin::PluginToolDecl::new(
+                "lookup",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string" }
+                    }
+                }),
+            )
+            .description("Look up something")
+            .tag(crate::plugin::sdk::ToolTag::ReadOnly)
+            .concurrency_safe(true),
+        );
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: Some("you are helpful".to_owned()),
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: vec![tool],
+                temperature: Some(0.2),
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut saw_text = false;
+        let mut saw_tool = false;
+        let mut saw_completed = false;
+
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should parse") {
+                CompletionStreamEvent::TextDelta { delta, .. } => {
+                    if delta == "Hel" || delta == "lo" {
+                        saw_text = true;
+                    }
+                }
+                CompletionStreamEvent::ToolCallDelta {
+                    id,
+                    name,
+                    arguments_delta,
+                    ..
+                } => {
+                    if id.as_deref() == Some("call_1")
+                        && name.as_deref() == Some("lookup")
+                        && arguments_delta.contains("rust")
+                    {
+                        saw_tool = true;
+                    }
+                }
+                CompletionStreamEvent::Completed {
+                    finish_reason,
+                    usage,
+                    ..
+                } => {
+                    assert!(matches!(
+                        finish_reason,
+                        Some(CompletionFinishReason::ToolCalls)
+                    ));
+                    let usage = usage.expect("usage should be present");
+                    assert_eq!(usage.input_tokens, 3);
+                    assert_eq!(usage.output_tokens, 2);
+                    assert_eq!(usage.cache_read_tokens, 1);
+                    saw_completed = true;
+                }
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
+            }
+        }
+
+        server.await.expect("server task should complete");
+
+        assert_eq!(
+            request_uri
+                .lock()
+                .expect("request uri lock should succeed")
+                .as_deref(),
+            Some("/realtime?key=test-key")
+        );
+        assert!(saw_text);
+        assert!(saw_tool);
+        assert!(saw_completed);
+    }
+
+    #[tokio::test]
+    async fn complete_stream_realtime_ws_falls_back_to_sse_for_tool_result_turns() {
+        let mut server = mockito::Server::new_async().await;
+        let _stream = server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::UrlEncoded("alt".to_owned(), "sse".to_owned()),
+                mockito::Matcher::UrlEncoded("key".to_owned(), "test-key".to_owned()),
+            ]))
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(concat!(
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"fallback\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":1}}\n\n",
+                "data: [DONE]\n\n"
+            ))
+            .create_async()
+            .await;
+
+        let provider = GeminiAdapter::new(
+            reqwest::Client::new(),
+            "test-key",
+            server.url(),
+            "gemini-2.5-flash",
+        )
+        .with_stream_mode(GeminiStreamMode::RealtimeWebSocket)
+        .with_realtime_ws_url(Some("ws://127.0.0.1:1/unused".to_owned()));
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: crate::model::ModelId::new("gemini-2.5-flash"),
+                system: None,
+                messages: vec![Message::prompt_tool_result("call_1", "{\"ok\":true}")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should fall back to sse");
+
+        let mut text = String::new();
+        let mut completed = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("stream item should parse") {
+                CompletionStreamEvent::TextDelta { delta, .. } => text.push_str(delta.as_str()),
+                CompletionStreamEvent::Completed { finish_reason, .. } => {
+                    assert!(matches!(finish_reason, Some(CompletionFinishReason::Stop)));
+                    completed = true;
+                }
+                CompletionStreamEvent::ThinkingDelta { .. } => {}
+                CompletionStreamEvent::ToolCallDelta { .. } => {}
+            }
+        }
+
+        assert_eq!(text, "fallback");
+        assert!(completed);
     }
 
     #[test]

@@ -47,6 +47,13 @@ pub struct ComposerKeyBindings {
     pub queue: Vec<KeyChord>,
     pub newline: Vec<KeyChord>,
     pub edit_queue: Vec<KeyChord>,
+    pub history_search: Vec<KeyChord>,
+    pub focus_items: Vec<KeyChord>,
+    pub attach_file: Vec<KeyChord>,
+    pub external_editor: Vec<KeyChord>,
+    pub attach_clipboard_image: Vec<KeyChord>,
+    pub open_pending_user_input: Vec<KeyChord>,
+    pub open_pending_permission: Vec<KeyChord>,
 }
 
 impl Default for ComposerKeyBindings {
@@ -62,6 +69,23 @@ impl Default for ComposerKeyBindings {
                 KeyChord::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
             ],
             edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::empty())],
+            history_search: vec![KeyChord::new(KeyCode::Char('r'), KeyModifiers::CONTROL)],
+            focus_items: vec![KeyChord::new(KeyCode::Tab, KeyModifiers::empty())],
+            attach_file: vec![
+                KeyChord::new(KeyCode::F(3), KeyModifiers::empty()),
+                KeyChord::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+                KeyChord::new(KeyCode::Char('o'), KeyModifiers::ALT),
+            ],
+            external_editor: vec![
+                KeyChord::new(KeyCode::F(4), KeyModifiers::empty()),
+                KeyChord::new(KeyCode::Char('e'), KeyModifiers::ALT),
+            ],
+            attach_clipboard_image: vec![
+                KeyChord::new(KeyCode::F(6), KeyModifiers::empty()),
+                KeyChord::new(KeyCode::Char('i'), KeyModifiers::ALT),
+            ],
+            open_pending_user_input: vec![KeyChord::new(KeyCode::Char('u'), KeyModifiers::ALT)],
+            open_pending_permission: vec![KeyChord::new(KeyCode::Char('p'), KeyModifiers::ALT)],
         }
     }
 }
@@ -74,6 +98,22 @@ impl ComposerKeyBindings {
             queue: parse_list(&raw.queue, &defaults.queue)?,
             newline: parse_list(&raw.newline, &defaults.newline)?,
             edit_queue: parse_list(&raw.edit_queue, &defaults.edit_queue)?,
+            history_search: parse_list(&raw.history_search, &defaults.history_search)?,
+            focus_items: parse_list(&raw.focus_items, &defaults.focus_items)?,
+            attach_file: parse_list(&raw.attach_file, &defaults.attach_file)?,
+            external_editor: parse_list(&raw.external_editor, &defaults.external_editor)?,
+            attach_clipboard_image: parse_list(
+                &raw.attach_clipboard_image,
+                &defaults.attach_clipboard_image,
+            )?,
+            open_pending_user_input: parse_list(
+                &raw.open_pending_user_input,
+                &defaults.open_pending_user_input,
+            )?,
+            open_pending_permission: parse_list(
+                &raw.open_pending_permission,
+                &defaults.open_pending_permission,
+            )?,
         })
     }
 
@@ -85,6 +125,35 @@ impl ComposerKeyBindings {
         }
         if self.newline.iter().any(|c| c.matches(event)) {
             return Some(ComposerAction::Newline);
+        }
+        if self.history_search.iter().any(|c| c.matches(event)) {
+            return Some(ComposerAction::HistorySearch);
+        }
+        if self
+            .open_pending_user_input
+            .iter()
+            .any(|c| c.matches(event))
+        {
+            return Some(ComposerAction::OpenPendingUserInput);
+        }
+        if self
+            .open_pending_permission
+            .iter()
+            .any(|c| c.matches(event))
+        {
+            return Some(ComposerAction::OpenPendingPermission);
+        }
+        if self.attach_file.iter().any(|c| c.matches(event)) {
+            return Some(ComposerAction::AttachFile);
+        }
+        if self.external_editor.iter().any(|c| c.matches(event)) {
+            return Some(ComposerAction::ExternalEditor);
+        }
+        if self.attach_clipboard_image.iter().any(|c| c.matches(event)) {
+            return Some(ComposerAction::AttachClipboardImage);
+        }
+        if self.focus_items.iter().any(|c| c.matches(event)) {
+            return Some(ComposerAction::FocusItems);
         }
         if self.queue.iter().any(|c| c.matches(event)) {
             return Some(ComposerAction::Queue);
@@ -102,6 +171,13 @@ pub enum ComposerAction {
     Queue,
     Newline,
     EditQueue,
+    HistorySearch,
+    FocusItems,
+    AttachFile,
+    ExternalEditor,
+    AttachClipboardImage,
+    OpenPendingUserInput,
+    OpenPendingPermission,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -111,6 +187,13 @@ pub struct RawComposerKeyBindings {
     pub queue: Vec<String>,
     pub newline: Vec<String>,
     pub edit_queue: Vec<String>,
+    pub history_search: Vec<String>,
+    pub focus_items: Vec<String>,
+    pub attach_file: Vec<String>,
+    pub external_editor: Vec<String>,
+    pub attach_clipboard_image: Vec<String>,
+    pub open_pending_user_input: Vec<String>,
+    pub open_pending_permission: Vec<String>,
 }
 
 fn parse_list(raw: &[String], default: &[KeyChord]) -> Result<Vec<KeyChord>, String> {
@@ -216,5 +299,26 @@ mod tests {
         let kb = ComposerKeyBindings::from_raw(&raw).unwrap();
         let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
         assert_eq!(kb.match_action(&enter), Some(ComposerAction::Submit));
+    }
+
+    #[test]
+    fn defaults_include_editor_workflow_actions() {
+        let kb = ComposerKeyBindings::default();
+        assert_eq!(
+            kb.match_action(&KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL,)),
+            Some(ComposerAction::HistorySearch)
+        );
+        assert_eq!(
+            kb.match_action(&KeyEvent::new(KeyCode::Tab, KeyModifiers::empty())),
+            Some(ComposerAction::FocusItems)
+        );
+        assert_eq!(
+            kb.match_action(&KeyEvent::new(KeyCode::F(3), KeyModifiers::empty())),
+            Some(ComposerAction::AttachFile)
+        );
+        assert_eq!(
+            kb.match_action(&KeyEvent::new(KeyCode::Char('u'), KeyModifiers::ALT,)),
+            Some(ComposerAction::OpenPendingUserInput)
+        );
     }
 }

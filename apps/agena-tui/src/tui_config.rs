@@ -22,6 +22,14 @@ pub struct TuiConfig {
     pub double_esc_window_ms: u64,
     pub status_line: TuiStatusLineConfig,
     pub theme: Option<String>,
+    pub composer_mode: TuiComposerMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TuiComposerMode {
+    #[default]
+    Emacs,
+    Vim,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -37,6 +45,7 @@ struct RawTuiConfig {
     double_esc_window_ms: Option<u64>,
     status_line: RawStatusLineConfig,
     theme: Option<String>,
+    composer_mode: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -110,6 +119,7 @@ impl TuiConfig {
             double_esc_window_ms: 600,
             status_line: TuiStatusLineConfig::default(),
             theme: None,
+            composer_mode: TuiComposerMode::Emacs,
         }
     }
 
@@ -123,6 +133,16 @@ impl TuiConfig {
             .theme
             .map(|theme| theme.trim().to_string())
             .filter(|theme| !theme.is_empty());
+        let composer_mode = raw
+            .composer_mode
+            .as_deref()
+            .map(parse_composer_mode)
+            .transpose()
+            .unwrap_or_else(|err| {
+                eprintln!("[agena-tui] invalid composer_mode: {err}");
+                None
+            })
+            .unwrap_or(TuiComposerMode::Emacs);
         Self {
             keybindings,
             double_esc_window_ms: raw.double_esc_window_ms.unwrap_or(600),
@@ -135,7 +155,16 @@ impl TuiConfig {
                     .max(250),
             },
             theme,
+            composer_mode,
         }
+    }
+}
+
+fn parse_composer_mode(raw: &str) -> Result<TuiComposerMode, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "emacs" | "default" => Ok(TuiComposerMode::Emacs),
+        "vim" => Ok(TuiComposerMode::Vim),
+        other => Err(format!("expected `emacs` or `vim`, got `{other}`")),
     }
 }
 
@@ -148,6 +177,7 @@ mod tests {
         let raw: RawTuiConfig = toml::from_str(
             r#"
 theme = "solarized"
+composer_mode = "vim"
 
 [status_line]
 command = "printf ready"
@@ -161,6 +191,7 @@ refresh_interval_ms = 500
         assert_eq!(config.status_line.command.as_deref(), Some("printf ready"));
         assert_eq!(config.status_line.refresh_interval_ms, 500);
         assert_eq!(config.theme.as_deref(), Some("solarized"));
+        assert_eq!(config.composer_mode, TuiComposerMode::Vim);
     }
 
     #[test]
@@ -192,5 +223,14 @@ theme = "   "
         let config = TuiConfig::from_raw(raw, ComposerKeyBindings::default());
 
         assert!(config.theme.is_none());
+    }
+
+    #[test]
+    fn parse_composer_mode_accepts_emacs_and_vim() {
+        assert_eq!(
+            parse_composer_mode("emacs").unwrap(),
+            TuiComposerMode::Emacs
+        );
+        assert_eq!(parse_composer_mode("vim").unwrap(), TuiComposerMode::Vim);
     }
 }

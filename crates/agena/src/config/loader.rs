@@ -6,7 +6,7 @@ use super::{
 };
 
 const DEFAULT_CONFIG_DIR_NAME: &str = ".agena";
-const DEFAULT_CONFIG_FILE_NAME: &str = "config.toml";
+const DEFAULT_CONFIG_FILE_NAME: &str = "config.json";
 
 #[derive(Debug, Clone, Default)]
 pub struct LoadConfigRequest {

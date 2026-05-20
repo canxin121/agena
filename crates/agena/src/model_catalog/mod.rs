@@ -26,6 +26,7 @@ pub(crate) use decorate::{
     merge_catalog_baseline_thinking_modes,
 };
 pub use decorate::{catalog_definition_to_provider_definition, decorate_provider_models};
+pub use merge::catalog_definition_from_model;
 pub use service::ModelCatalogService;
 pub use store::ModelCatalogStore;
 pub use types::{
@@ -126,7 +127,7 @@ pub fn canonical_model_catalog_id(model_id: &str) -> String {
     curate::normalized_catalog_model_id(model_id)
 }
 use merge::{
-    catalog_definition_from_model, merge_catalog_definition, merge_live_provider_catalog_document,
+    merge_catalog_definition, merge_live_provider_catalog_document,
     merge_public_source_catalog_document, provider_priority,
 };
 

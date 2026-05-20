@@ -453,8 +453,7 @@ fn settings_error(error: ConfigError) -> ServerError {
     match error {
         ConfigError::ReadFile { .. }
         | ConfigError::WriteFile { .. }
-        | ConfigError::SerializeJson(_)
-        | ConfigError::SerializeToml(_) => ServerError::Internal(message),
+        | ConfigError::SerializeJson(_) => ServerError::Internal(message),
         ConfigError::App(error) => ServerError::Core(error),
         _ => ServerError::BadRequest(message),
     }

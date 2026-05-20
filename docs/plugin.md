@@ -16,7 +16,7 @@ Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、M
 Runtime build 会构建一个 `PluginHost`。这个 host 加载 runtime 注册的 static plugin，以及用户在 `[plugins.list.<id>]` 中声明的 plugin。
 
 ```text
-config.toml
+config.json
   |
   +-- [plugins] -------------------+
   |                                |
@@ -137,7 +137,7 @@ Runtime build 注册：
 | `agena.memory` | memory 配置和项目记忆相关能力 |
 | `agena.hooks` | 用户配置的 shell/HTTP hooks |
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
-| `agena.settings` | 读取、列出、校验和编辑当前 `config.toml` 的 settings tools |
+| `agena.settings` | 读取、列出、校验和编辑当前 `config.json` 的 settings tools |
 
 内置 static plugin 使用少量领域级入口承载子命令，避免把每个动作都展开成独立 tool。常见入口：
 
@@ -912,7 +912,7 @@ Studio/backend API：
 3. 在 `manifest()` 中声明 hooks、entries、capabilities 和 options schema。
 4. 在 `tool_invoke` 或相关 hook 方法中实现行为。
 5. 按 transport 导出 plugin。
-6. 在 `config.toml` 的 `[plugins.list.<id>]` 中配置。
+6. 在 `config.json` 的 `[plugins.list.<id>]` 中配置。
 7. 用 `agena config validate` 验证配置。
 8. 用 `agena plugin status` 和 `agena plugin inspect <id>` 验证加载结果。
 

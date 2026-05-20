@@ -1,8 +1,7 @@
 use std::{
     cmp::{max, min},
-    collections::{BTreeMap, BTreeSet, HashSet, hash_map::DefaultHasher},
+    collections::{BTreeMap, BTreeSet, HashSet},
     env, fs,
-    hash::{Hash, Hasher},
     ops::Range,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -73,8 +72,11 @@ use agena_api_server::local_api::{
     ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse,
 };
 
+mod provider_studio;
 mod transcript_view;
 mod view;
+
+use self::provider_studio::*;
 
 #[cfg(test)]
 use self::transcript_view::tool_output_preview;
@@ -5119,9 +5121,9 @@ impl App {
             SettingsStudioSection {
                 id: SettingsStudioSectionId::General,
                 label: "General".to_string(),
-                summary: format!("{} agena.toml fields", general_items.len()),
+                summary: format!("{} agena.json fields", general_items.len()),
                 description:
-                    "Persistent agena.toml settings. Enter edits the selected field and writes the file override."
+                    "Persistent agena.json settings. Enter edits the selected field and writes the file override."
                         .to_string(),
                 items: general_items,
             },
@@ -6192,17 +6194,7 @@ impl App {
                         source_provider_id: None,
                         provider_id: String::new(),
                         auth_kind: ProviderDraftAuthKind::Unset,
-                        base_url: String::new(),
-                        instance_url: String::new(),
-                        api_key_env: String::new(),
-                        api_key: String::new(),
-                        credential_issuer: String::new(),
-                        region: String::new(),
-                        profile: String::new(),
-                        access_key_id: String::new(),
-                        secret_access_key: String::new(),
-                        session_token: String::new(),
-                        service_key_env: String::new(),
+                        auth: Default::default(),
                         credential_drafts: Default::default(),
                         default_adapter: String::new(),
                         default_model: String::new(),
@@ -6733,15 +6725,11 @@ impl App {
                 dialog.detail_page = None;
                 false
             }
-            KeyCode::Char('o') | KeyCode::Char('O')
-                if provider_studio_supports_interactive_auth(&dialog.draft) =>
-            {
+            KeyCode::Char('o') | KeyCode::Char('O') if dialog.draft.supports_interactive_auth() => {
                 self.request_provider_studio_start_auth(dialog);
                 false
             }
-            KeyCode::Char('p') | KeyCode::Char('P')
-                if provider_studio_supports_interactive_auth(&dialog.draft) =>
-            {
+            KeyCode::Char('p') | KeyCode::Char('P') if dialog.draft.supports_interactive_auth() => {
                 self.request_provider_studio_continue_auth(dialog);
                 false
             }
@@ -6885,7 +6873,7 @@ impl App {
                 ) {
                     Ok(auth_kind) => {
                         dialog.draft.auth_kind = auth_kind;
-                        dialog.draft.credential_issuer = value.trim().to_owned();
+                        dialog.draft.auth.credential_issuer = value.trim().to_owned();
                         dialog.draft.normalize_shape();
                         self.refresh_provider_studio_adapter_state(dialog);
                     }
@@ -6893,34 +6881,34 @@ impl App {
                 }
             }
             ProviderStudioField::BaseUrl => {
-                dialog.draft.base_url = value;
+                dialog.draft.auth.base_url = value;
             }
             ProviderStudioField::InstanceUrl => {
-                dialog.draft.instance_url = value;
+                dialog.draft.auth.instance_url = value;
             }
             ProviderStudioField::ApiKeyEnv => {
-                dialog.draft.api_key_env = value;
+                dialog.draft.auth.api_key_env = value;
             }
             ProviderStudioField::ApiKey => {
-                dialog.draft.api_key = value;
+                dialog.draft.auth.api_key = value;
             }
             ProviderStudioField::RedirectUri => {
-                provider_studio_set_redirect_uri(&mut dialog.draft, value);
+                dialog.draft.set_redirect_uri(value);
             }
             ProviderStudioField::CallbackUrl => {
-                provider_studio_set_callback_url(&mut dialog.draft, value);
+                dialog.draft.set_callback_url(value);
             }
             ProviderStudioField::RefreshToken => {
-                provider_studio_set_refresh_token(&mut dialog.draft, value);
+                dialog.draft.set_refresh_token(value);
             }
             ProviderStudioField::AccessToken => {
-                provider_studio_set_access_token(&mut dialog.draft, value);
+                dialog.draft.set_access_token(value);
             }
             ProviderStudioField::ExpiresAtMs => {
-                provider_studio_set_expires_at_ms(&mut dialog.draft, value);
+                dialog.draft.set_expires_at_ms(value);
             }
             ProviderStudioField::AccountId => {
-                provider_studio_set_account_id(&mut dialog.draft, value);
+                dialog.draft.set_account_id(value);
             }
             ProviderStudioField::EnterpriseDomain => {
                 dialog
@@ -6942,22 +6930,22 @@ impl App {
                 dialog.draft.credential_drafts.atomgit.avatar_url = value;
             }
             ProviderStudioField::Region => {
-                dialog.draft.region = value;
+                dialog.draft.auth.region = value;
             }
             ProviderStudioField::Profile => {
-                dialog.draft.profile = value;
+                dialog.draft.auth.profile = value;
             }
             ProviderStudioField::AccessKeyId => {
-                dialog.draft.access_key_id = value;
+                dialog.draft.auth.access_key_id = value;
             }
             ProviderStudioField::SecretAccessKey => {
-                dialog.draft.secret_access_key = value;
+                dialog.draft.auth.secret_access_key = value;
             }
             ProviderStudioField::SessionToken => {
-                dialog.draft.session_token = value;
+                dialog.draft.auth.session_token = value;
             }
             ProviderStudioField::ServiceKeyEnv => {
-                dialog.draft.service_key_env = value;
+                dialog.draft.auth.service_key_env = value;
             }
             ProviderStudioField::DefaultAdapter => {
                 dialog.draft.default_adapter = value;
@@ -9406,7 +9394,7 @@ fn settings_studio_model_catalog_items(
 
 fn settings_studio_file_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
     vec![SettingsStudioItem {
-        label: "Open agena.toml".to_string(),
+        label: "Open agena.json".to_string(),
         value: if sources.config_found {
             "present".to_string()
         } else {
@@ -9762,1362 +9750,6 @@ fn provider_studio_provider_rows(
         ),
     }));
     rows
-}
-
-fn provider_studio_request_key(draft: &ProviderConfigDraft, adapter_ids: &[String]) -> String {
-    let mut hasher = DefaultHasher::new();
-    draft
-        .source_provider_id
-        .as_deref()
-        .unwrap_or("<new>")
-        .trim()
-        .hash(&mut hasher);
-    draft.provider_id.trim().hash(&mut hasher);
-    draft.auth_kind.label().hash(&mut hasher);
-    draft.base_url.trim().hash(&mut hasher);
-    draft.instance_url.trim().hash(&mut hasher);
-    draft.api_key_env.trim().hash(&mut hasher);
-    draft.api_key.trim().hash(&mut hasher);
-    draft.credential_issuer.trim().hash(&mut hasher);
-    draft
-        .credential_drafts
-        .openai_chatgpt
-        .redirect_uri
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .openai_chatgpt
-        .callback_url
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .openai_chatgpt
-        .tokens
-        .refresh_token
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .openai_chatgpt
-        .tokens
-        .access_token
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .openai_chatgpt
-        .tokens
-        .expires_at_ms
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .openai_chatgpt
-        .account_id
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .github_copilot
-        .enterprise_domain
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .github_copilot
-        .tokens
-        .refresh_token
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .github_copilot
-        .tokens
-        .access_token
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .github_copilot
-        .tokens
-        .expires_at_ms
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .gitlab
-        .redirect_uri
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .gitlab
-        .callback_url
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .gitlab
-        .tokens
-        .refresh_token
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .gitlab
-        .tokens
-        .access_token
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .gitlab
-        .tokens
-        .expires_at_ms
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .atomgit
-        .tokens
-        .refresh_token
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .atomgit
-        .tokens
-        .access_token
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .atomgit
-        .tokens
-        .expires_at_ms
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .atomgit
-        .account_id
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .atomgit
-        .username
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .atomgit
-        .display_name
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .atomgit
-        .email
-        .trim()
-        .hash(&mut hasher);
-    draft
-        .credential_drafts
-        .atomgit
-        .avatar_url
-        .trim()
-        .hash(&mut hasher);
-    draft.region.trim().hash(&mut hasher);
-    draft.profile.trim().hash(&mut hasher);
-    draft.access_key_id.trim().hash(&mut hasher);
-    draft.secret_access_key.trim().hash(&mut hasher);
-    draft.session_token.trim().hash(&mut hasher);
-    draft.service_key_env.trim().hash(&mut hasher);
-    draft.default_adapter.trim().hash(&mut hasher);
-    draft.default_model.trim().hash(&mut hasher);
-    let mut normalized_adapter_ids = adapter_ids
-        .iter()
-        .map(|adapter_id| adapter_id.trim())
-        .filter(|adapter_id| !adapter_id.is_empty())
-        .collect::<Vec<_>>();
-    normalized_adapter_ids.sort_unstable();
-    normalized_adapter_ids.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
-}
-
-fn provider_studio_auth_request_key(draft: &ProviderConfigDraft, action: &str) -> String {
-    format!("{action}:{}", provider_studio_request_key(draft, &[]))
-}
-
-fn provider_studio_candidate_adapter_ids(
-    draft: &ProviderConfigDraft,
-    configured_adapter_ids: BTreeSet<String>,
-) -> Vec<String> {
-    let mut adapter_ids = draft
-        .auth_kind
-        .adapter_rules()
-        .iter()
-        .map(|rule| rule.adapter_id.to_owned())
-        .collect::<Vec<_>>();
-    let mut configured_extras = configured_adapter_ids.into_iter().collect::<Vec<_>>();
-    configured_extras.sort();
-    for adapter_id in configured_extras {
-        if !adapter_ids.iter().any(|candidate| candidate == &adapter_id) {
-            adapter_ids.push(adapter_id);
-        }
-    }
-    let default_adapter = draft.default_adapter.trim();
-    if !default_adapter.is_empty()
-        && !adapter_ids
-            .iter()
-            .any(|candidate| candidate.as_str() == default_adapter)
-    {
-        adapter_ids.push(default_adapter.to_owned());
-    }
-    adapter_ids
-}
-
-fn provider_studio_effective_adapter_ids(dialog: &ProviderStudioOverlay) -> BTreeSet<String> {
-    let mut adapter_ids = dialog.configured_adapter_ids.clone();
-    adapter_ids.extend(dialog.selected_adapter_ids.iter().cloned());
-    let default_adapter = dialog.draft.default_adapter.trim();
-    if !default_adapter.is_empty() {
-        adapter_ids.insert(default_adapter.to_owned());
-    }
-    adapter_ids
-}
-
-fn provider_studio_adapter_selectable(dialog: &ProviderStudioOverlay, adapter_id: &str) -> bool {
-    provider_studio_adapter_rule(dialog, adapter_id).is_some()
-}
-
-fn provider_studio_request_adapter_ids(dialog: &ProviderStudioOverlay) -> Vec<String> {
-    dialog
-        .selected_adapter_ids
-        .iter()
-        .filter(|adapter_id| provider_studio_adapter_selectable(dialog, adapter_id.as_str()))
-        .cloned()
-        .collect()
-}
-
-fn restore_provider_studio_adapter_selection(
-    dialog: &mut ProviderStudioOverlay,
-    selected_adapter_ids: &BTreeSet<String>,
-    selected_adapter_id: Option<&str>,
-) {
-    dialog.selected_adapter_ids = selected_adapter_ids
-        .iter()
-        .filter(|adapter_id| {
-            dialog
-                .adapter_candidate_ids
-                .iter()
-                .any(|candidate| candidate == *adapter_id)
-                && provider_studio_adapter_selectable(dialog, adapter_id.as_str())
-        })
-        .cloned()
-        .collect();
-    if let Some(adapter_id) = selected_adapter_id
-        && let Some(index) = dialog
-            .adapter_candidate_ids
-            .iter()
-            .position(|candidate| candidate == adapter_id)
-    {
-        dialog.selected_adapter = index;
-    }
-}
-
-fn provider_studio_adapter_rule(
-    dialog: &ProviderStudioOverlay,
-    adapter_id: &str,
-) -> Option<&'static ProviderDraftAdapterRule> {
-    dialog.draft.auth_kind.adapter_rule(adapter_id)
-}
-
-fn provider_studio_base_url_visible(dialog: &ProviderStudioOverlay) -> bool {
-    if !dialog.draft.base_url.trim().is_empty() {
-        return true;
-    }
-    match dialog.draft.auth_kind {
-        ProviderDraftAuthKind::Unset => false,
-        ProviderDraftAuthKind::Api => {
-            let effective = provider_studio_effective_adapter_ids(dialog);
-            if effective.is_empty() {
-                dialog
-                    .draft
-                    .auth_kind
-                    .adapter_rules()
-                    .iter()
-                    .any(|rule| rule.requires_base_url)
-            } else {
-                effective
-                    .iter()
-                    .filter_map(|adapter_id| {
-                        provider_studio_adapter_rule(dialog, adapter_id.as_str())
-                    })
-                    .any(|rule| rule.requires_base_url)
-            }
-        }
-        ProviderDraftAuthKind::Gitlab => false,
-        ProviderDraftAuthKind::Credential(Some(issuer)) => issuer.uses_http_endpoint(),
-        ProviderDraftAuthKind::Credential(None) => false,
-        ProviderDraftAuthKind::BedrockSigv4 => true,
-        ProviderDraftAuthKind::None => false,
-    }
-}
-
-fn provider_studio_selected_adapter_id(dialog: &ProviderStudioOverlay) -> Option<String> {
-    dialog
-        .adapter_candidate_ids
-        .get(dialog.selected_adapter)
-        .cloned()
-}
-
-fn provider_studio_selected_adapter_models(
-    dialog: &ProviderStudioOverlay,
-) -> Option<&ProviderAdapterModelsResource> {
-    let adapter_id = dialog.adapter_candidate_ids.get(dialog.selected_adapter)?;
-    dialog
-        .adapter_models
-        .iter()
-        .find(|adapter_models| adapter_models.adapter_id == *adapter_id)
-}
-
-fn provider_studio_selected_model_target(
-    dialog: &ProviderStudioOverlay,
-) -> Option<(String, String, Option<ProviderModel>)> {
-    let adapter_models = provider_studio_selected_adapter_models(dialog)?;
-    let model = adapter_models.models.get(dialog.selected_model)?.clone();
-    Some((
-        adapter_models.adapter_id.clone(),
-        model.id.to_string(),
-        Some(model),
-    ))
-}
-
-fn provider_studio_selected_adapter_models_for_save(
-    dialog: &ProviderStudioOverlay,
-) -> Option<ProviderAdapterModelsResource> {
-    let adapter_models = provider_studio_selected_adapter_models(dialog)?.clone();
-    let ProviderAdapterModelsResource {
-        adapter_id,
-        enabled,
-        resolved_base_url,
-        models,
-        error,
-    } = adapter_models;
-    let selected_models = models
-        .into_iter()
-        .filter(|model| {
-            provider_studio_model_selected(dialog, adapter_id.as_str(), model.id.as_str())
-        })
-        .collect::<Vec<_>>();
-    Some(ProviderAdapterModelsResource {
-        adapter_id,
-        enabled,
-        resolved_base_url,
-        models: selected_models,
-        error,
-    })
-}
-
-fn provider_studio_model_selected(
-    dialog: &ProviderStudioOverlay,
-    adapter_id: &str,
-    model_id: &str,
-) -> bool {
-    dialog
-        .selected_model_keys
-        .contains(provider_studio_model_key(adapter_id, model_id).as_str())
-}
-
-fn provider_studio_selected_models_for_adapter<'a>(
-    dialog: &'a ProviderStudioOverlay,
-    adapter_models: &'a ProviderAdapterModelsResource,
-) -> Vec<&'a ProviderModel> {
-    adapter_models
-        .models
-        .iter()
-        .filter(|model| {
-            provider_studio_model_selected(
-                dialog,
-                adapter_models.adapter_id.as_str(),
-                model.id.as_str(),
-            )
-        })
-        .collect()
-}
-
-fn provider_studio_restore_model_selection(dialog: &mut ProviderStudioOverlay) {
-    let available = dialog
-        .adapter_models
-        .iter()
-        .flat_map(|adapter_models| {
-            adapter_models.models.iter().map(|model| {
-                provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_str())
-            })
-        })
-        .collect::<BTreeSet<_>>();
-    dialog
-        .selected_model_keys
-        .retain(|model_key| available.contains(model_key));
-    for adapter_models in &dialog.adapter_models {
-        let adapter_selected = dialog
-            .selected_adapter_ids
-            .contains(adapter_models.adapter_id.as_str());
-        if !adapter_selected || adapter_models.error.is_some() {
-            continue;
-        }
-        let has_any = adapter_models.models.iter().any(|model| {
-            provider_studio_model_selected(
-                dialog,
-                adapter_models.adapter_id.as_str(),
-                model.id.as_str(),
-            )
-        });
-        if !has_any {
-            for model in &adapter_models.models {
-                dialog.selected_model_keys.insert(provider_studio_model_key(
-                    adapter_models.adapter_id.as_str(),
-                    model.id.as_str(),
-                ));
-            }
-        }
-    }
-}
-
-fn provider_studio_first_selected_model<'a>(
-    dialog: &'a ProviderStudioOverlay,
-    adapter_id: &str,
-) -> Option<&'a ProviderModel> {
-    dialog
-        .adapter_models
-        .iter()
-        .find(|adapter_models| adapter_models.adapter_id == adapter_id)
-        .and_then(|adapter_models| {
-            adapter_models
-                .models
-                .iter()
-                .find(|model| provider_studio_model_selected(dialog, adapter_id, model.id.as_str()))
-        })
-}
-
-fn provider_studio_ensure_default_selection(dialog: &mut ProviderStudioOverlay) {
-    let default_adapter_valid = dialog.adapter_models.iter().any(|adapter_models| {
-        adapter_models.error.is_none()
-            && dialog
-                .selected_adapter_ids
-                .contains(adapter_models.adapter_id.as_str())
-            && adapter_models.adapter_id == dialog.draft.default_adapter
-            && adapter_models.models.iter().any(|model| {
-                provider_studio_model_selected(
-                    dialog,
-                    adapter_models.adapter_id.as_str(),
-                    model.id.as_str(),
-                )
-            })
-    });
-    if !default_adapter_valid {
-        if let Some(adapter_models) = dialog.adapter_models.iter().find(|adapter_models| {
-            adapter_models.error.is_none()
-                && dialog
-                    .selected_adapter_ids
-                    .contains(adapter_models.adapter_id.as_str())
-                && !provider_studio_selected_models_for_adapter(dialog, adapter_models).is_empty()
-        }) {
-            dialog.draft.default_adapter = adapter_models.adapter_id.clone();
-        }
-    }
-
-    let default_model_valid =
-        provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str())
-            .is_some_and(|model| model.id.as_str() == dialog.draft.default_model.as_str());
-    if !default_model_valid {
-        if let Some(model) =
-            provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str())
-        {
-            dialog.draft.default_model = model.id.to_string();
-        } else {
-            dialog.draft.default_model.clear();
-        }
-    }
-}
-
-fn provider_studio_active_tokens(
-    draft: &ProviderConfigDraft,
-) -> Option<&crate::backend::ProviderOAuthTokensDraft> {
-    match draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => {
-            Some(&draft.credential_drafts.openai_chatgpt.tokens)
-        }
-        Some(CredentialIssuer::GithubCopilot) => {
-            Some(&draft.credential_drafts.github_copilot.tokens)
-        }
-        Some(CredentialIssuer::Gitlab) => Some(&draft.credential_drafts.gitlab.tokens),
-        Some(CredentialIssuer::AtomGit) => Some(&draft.credential_drafts.atomgit.tokens),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
-    }
-}
-
-fn provider_studio_active_tokens_mut(
-    draft: &mut ProviderConfigDraft,
-) -> Option<&mut crate::backend::ProviderOAuthTokensDraft> {
-    match draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => {
-            Some(&mut draft.credential_drafts.openai_chatgpt.tokens)
-        }
-        Some(CredentialIssuer::GithubCopilot) => {
-            Some(&mut draft.credential_drafts.github_copilot.tokens)
-        }
-        Some(CredentialIssuer::Gitlab) => Some(&mut draft.credential_drafts.gitlab.tokens),
-        Some(CredentialIssuer::AtomGit) => Some(&mut draft.credential_drafts.atomgit.tokens),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
-    }
-}
-
-fn provider_studio_set_redirect_uri(draft: &mut ProviderConfigDraft, value: String) {
-    match draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => {
-            draft.credential_drafts.openai_chatgpt.redirect_uri = value
-        }
-        Some(CredentialIssuer::Gitlab) => draft.credential_drafts.gitlab.redirect_uri = value,
-        _ => {}
-    }
-}
-
-fn provider_studio_set_callback_url(draft: &mut ProviderConfigDraft, value: String) {
-    match draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => {
-            draft.credential_drafts.openai_chatgpt.callback_url = value
-        }
-        Some(CredentialIssuer::Gitlab) => draft.credential_drafts.gitlab.callback_url = value,
-        _ => {}
-    }
-}
-
-fn provider_studio_set_refresh_token(draft: &mut ProviderConfigDraft, value: String) {
-    if let Some(tokens) = provider_studio_active_tokens_mut(draft) {
-        tokens.refresh_token = value;
-    }
-}
-
-fn provider_studio_set_access_token(draft: &mut ProviderConfigDraft, value: String) {
-    if let Some(tokens) = provider_studio_active_tokens_mut(draft) {
-        tokens.access_token = value;
-    }
-}
-
-fn provider_studio_set_expires_at_ms(draft: &mut ProviderConfigDraft, value: String) {
-    if let Some(tokens) = provider_studio_active_tokens_mut(draft) {
-        tokens.expires_at_ms = value;
-    }
-}
-
-fn provider_studio_set_account_id(draft: &mut ProviderConfigDraft, value: String) {
-    match draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => {
-            draft.credential_drafts.openai_chatgpt.account_id = value
-        }
-        Some(CredentialIssuer::AtomGit) => draft.credential_drafts.atomgit.account_id = value,
-        _ => {}
-    }
-}
-
-fn provider_studio_supports_interactive_auth(draft: &ProviderConfigDraft) -> bool {
-    matches!(
-        draft.auth_kind,
-        ProviderDraftAuthKind::Credential(Some(
-            CredentialIssuer::OpenaiChatgpt
-                | CredentialIssuer::GithubCopilot
-                | CredentialIssuer::Gitlab
-                | CredentialIssuer::AtomGit
-        ))
-    )
-}
-
-fn provider_studio_supports_saved_model_listing(draft: &ProviderConfigDraft) -> bool {
-    match draft.auth_kind {
-        ProviderDraftAuthKind::Api | ProviderDraftAuthKind::Gitlab => true,
-        ProviderDraftAuthKind::Credential(Some(issuer)) => issuer.supports_saved_model_listing(),
-        ProviderDraftAuthKind::Unset
-        | ProviderDraftAuthKind::None
-        | ProviderDraftAuthKind::Credential(None)
-        | ProviderDraftAuthKind::BedrockSigv4 => false,
-    }
-}
-
-fn provider_studio_can_request_adapter_models(dialog: &ProviderStudioOverlay) -> bool {
-    if dialog.draft.auth_kind.supports_draft_model_listing() {
-        return true;
-    }
-    dialog.draft.source_provider_id.is_some()
-        && provider_studio_supports_saved_model_listing(&dialog.draft)
-}
-
-fn provider_studio_summary_value(value: &str, max_width: usize) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| truncate_display_width(value, max_width))
-}
-
-fn provider_studio_labeled_summary(label: &str, value: &str, max_width: usize) -> Option<String> {
-    provider_studio_summary_value(value, max_width).map(|value| format!("{label} {value}"))
-}
-
-fn provider_studio_tokens_present(draft: &ProviderConfigDraft) -> bool {
-    provider_studio_active_tokens(draft).is_some_and(|tokens| {
-        !tokens.refresh_token.trim().is_empty() || !tokens.access_token.trim().is_empty()
-    })
-}
-
-fn provider_studio_status_with_summary(status: &str, summary: Option<String>) -> String {
-    summary
-        .map(|summary| format!("{status}  ·  {summary}"))
-        .unwrap_or_else(|| status.to_owned())
-}
-
-fn provider_studio_browser_continue_summary(prefix: &str, state: &str) -> String {
-    provider_studio_summary_value(state, 20)
-        .map(|state| format!("{prefix}  ·  state {state}"))
-        .unwrap_or_else(|| prefix.to_owned())
-}
-
-fn provider_studio_start_auth_summary(dialog: &ProviderStudioOverlay) -> String {
-    let status = provider_studio_auth_status_summary(dialog);
-    match dialog.draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => dialog
-            .draft
-            .credential_drafts
-            .openai_chatgpt
-            .browser
-            .as_ref()
-            .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::GithubCopilot) => dialog
-            .draft
-            .credential_drafts
-            .github_copilot
-            .device
-            .as_ref()
-            .and_then(|device| {
-                let mut parts = Vec::new();
-                if let Some(url) =
-                    provider_studio_summary_value(device.verification_url.as_str(), 40)
-                {
-                    parts.push(url);
-                }
-                if let Some(code) = provider_studio_summary_value(device.user_code.as_str(), 18) {
-                    parts.push(format!("code {code}"));
-                }
-                (!parts.is_empty()).then(|| parts.join("  ·  "))
-            })
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::Gitlab) => dialog
-            .draft
-            .credential_drafts
-            .gitlab
-            .browser
-            .as_ref()
-            .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::AtomGit) => dialog
-            .draft
-            .credential_drafts
-            .atomgit
-            .browser
-            .as_ref()
-            .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status.to_owned(),
-    }
-}
-
-fn provider_studio_continue_auth_summary(dialog: &ProviderStudioOverlay) -> String {
-    let status = provider_studio_auth_status_summary(dialog);
-    match dialog.draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => provider_studio_labeled_summary(
-            "callback",
-            dialog
-                .draft
-                .credential_drafts
-                .openai_chatgpt
-                .callback_url
-                .as_str(),
-            44,
-        )
-        .or_else(|| {
-            dialog
-                .draft
-                .credential_drafts
-                .openai_chatgpt
-                .browser
-                .as_ref()
-                .map(|session| {
-                    provider_studio_browser_continue_summary(
-                        "paste callback_url",
-                        session.state.as_str(),
-                    )
-                })
-        })
-        .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::GithubCopilot) => dialog
-            .draft
-            .credential_drafts
-            .github_copilot
-            .device
-            .as_ref()
-            .map(|device| {
-                let mut parts = vec![format!("poll every {}s", device.interval_seconds.max(1))];
-                if let Some(code) = provider_studio_summary_value(device.user_code.as_str(), 18) {
-                    parts.push(format!("code {code}"));
-                }
-                parts.join("  ·  ")
-            })
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::Gitlab) => provider_studio_labeled_summary(
-            "callback",
-            dialog.draft.credential_drafts.gitlab.callback_url.as_str(),
-            44,
-        )
-        .or_else(|| {
-            dialog
-                .draft
-                .credential_drafts
-                .gitlab
-                .browser
-                .as_ref()
-                .map(|session| {
-                    provider_studio_browser_continue_summary(
-                        "paste callback_url",
-                        session.state.as_str(),
-                    )
-                })
-        })
-        .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::AtomGit) => dialog
-            .draft
-            .credential_drafts
-            .atomgit
-            .browser
-            .as_ref()
-            .map(|session| {
-                provider_studio_browser_continue_summary(
-                    "poll browser result",
-                    session.state.as_str(),
-                )
-            })
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status.to_owned(),
-    }
-}
-
-fn provider_studio_auth_details_hint(draft: &ProviderConfigDraft) -> Option<String> {
-    match draft.auth_kind {
-        ProviderDraftAuthKind::Unset
-        | ProviderDraftAuthKind::None
-        | ProviderDraftAuthKind::Credential(None) => None,
-        ProviderDraftAuthKind::Api => {
-            provider_studio_labeled_summary("env", draft.api_key_env.as_str(), 28)
-                .or_else(|| provider_studio_summary_value(draft.base_url.as_str(), 48))
-        }
-        ProviderDraftAuthKind::Gitlab => {
-            provider_studio_summary_value(draft.instance_url.as_str(), 48)
-                .or_else(|| provider_studio_labeled_summary("env", draft.api_key_env.as_str(), 28))
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
-            provider_studio_labeled_summary(
-                "account",
-                draft.credential_drafts.openai_chatgpt.account_id.as_str(),
-                24,
-            )
-            .or_else(|| {
-                provider_studio_labeled_summary(
-                    "callback",
-                    draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
-                    36,
-                )
-            })
-            .or_else(|| {
-                provider_studio_labeled_summary(
-                    "redirect",
-                    draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
-                    36,
-                )
-            })
-            .or_else(|| provider_studio_tokens_present(draft).then(|| "tokens set".to_owned()))
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
-            provider_studio_summary_value(
-                draft
-                    .credential_drafts
-                    .github_copilot
-                    .enterprise_domain
-                    .as_str(),
-                32,
-            )
-            .or_else(|| provider_studio_tokens_present(draft).then(|| "tokens set".to_owned()))
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
-            provider_studio_summary_value(draft.instance_url.as_str(), 48)
-                .or_else(|| {
-                    provider_studio_labeled_summary(
-                        "callback",
-                        draft.credential_drafts.gitlab.callback_url.as_str(),
-                        36,
-                    )
-                })
-                .or_else(|| {
-                    provider_studio_labeled_summary(
-                        "redirect",
-                        draft.credential_drafts.gitlab.redirect_uri.as_str(),
-                        36,
-                    )
-                })
-                .or_else(|| provider_studio_tokens_present(draft).then(|| "tokens set".to_owned()))
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc)) => {
-            provider_studio_summary_value(draft.base_url.as_str(), 48)
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::SapAiCore)) => {
-            provider_studio_labeled_summary("env", draft.service_key_env.as_str(), 28)
-                .or_else(|| provider_studio_summary_value(draft.base_url.as_str(), 48))
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-            provider_studio_labeled_summary(
-                "name",
-                draft.credential_drafts.atomgit.display_name.as_str(),
-                28,
-            )
-            .or_else(|| {
-                provider_studio_labeled_summary(
-                    "user",
-                    draft.credential_drafts.atomgit.username.as_str(),
-                    28,
-                )
-            })
-            .or_else(|| {
-                provider_studio_labeled_summary(
-                    "email",
-                    draft.credential_drafts.atomgit.email.as_str(),
-                    32,
-                )
-            })
-            .or_else(|| {
-                provider_studio_labeled_summary(
-                    "account",
-                    draft.credential_drafts.atomgit.account_id.as_str(),
-                    24,
-                )
-            })
-            .or_else(|| provider_studio_tokens_present(draft).then(|| "tokens set".to_owned()))
-        }
-        ProviderDraftAuthKind::BedrockSigv4 => {
-            provider_studio_labeled_summary("profile", draft.profile.as_str(), 24)
-                .or_else(|| provider_studio_labeled_summary("region", draft.region.as_str(), 24))
-                .or_else(|| provider_studio_summary_value(draft.base_url.as_str(), 48))
-                .or_else(|| {
-                    (!draft.access_key_id.trim().is_empty()
-                        && !draft.secret_access_key.trim().is_empty())
-                    .then(|| "keys set".to_owned())
-                })
-        }
-    }
-}
-
-fn provider_studio_auth_details_summary(dialog: &ProviderStudioOverlay) -> String {
-    provider_studio_status_with_summary(
-        provider_studio_auth_status_summary(dialog),
-        provider_studio_auth_details_hint(&dialog.draft),
-    )
-}
-
-fn provider_studio_main_field_value(
-    dialog: &ProviderStudioOverlay,
-    field: ProviderStudioField,
-) -> String {
-    match field {
-        ProviderStudioField::AuthStatus => provider_studio_auth_status_summary(dialog).to_owned(),
-        ProviderStudioField::StartAuthAction => provider_studio_start_auth_summary(dialog),
-        ProviderStudioField::ContinueAuthAction => provider_studio_continue_auth_summary(dialog),
-        ProviderStudioField::EditAuthDetailsAction => provider_studio_auth_details_summary(dialog),
-        _ => provider_studio_field_value(&dialog.draft, field),
-    }
-}
-
-fn provider_studio_auth_state_lines(dialog: &ProviderStudioOverlay) -> Vec<String> {
-    match dialog.draft.auth_kind.credential_issuer() {
-        Some(CredentialIssuer::OpenaiChatgpt) => dialog
-            .draft
-            .credential_drafts
-            .openai_chatgpt
-            .browser
-            .as_ref()
-            .map(|session| {
-                vec![
-                    "oauth browser session ready · open the copied authorize URL".to_owned(),
-                    format!(
-                        "authorize {}",
-                        truncate_display_width(session.authorize_url.as_str(), 56)
-                    ),
-                    format!(
-                        "paste the final callback URL, then press p  ·  state {}",
-                        truncate_display_width(session.state.as_str(), 24)
-                    ),
-                ]
-            })
-            .unwrap_or_default(),
-        Some(CredentialIssuer::GithubCopilot) => dialog
-            .draft
-            .credential_drafts
-            .github_copilot
-            .device
-            .as_ref()
-            .map(|device| {
-                vec![
-                    format!(
-                        "device login ready · open the copied verification URL and enter {}",
-                        device.user_code
-                    ),
-                    format!(
-                        "verify {}",
-                        truncate_display_width(device.verification_url.as_str(), 56)
-                    ),
-                    format!("press p to poll  ·  interval {}s", device.interval_seconds),
-                ]
-            })
-            .unwrap_or_default(),
-        Some(CredentialIssuer::Gitlab) => dialog
-            .draft
-            .credential_drafts
-            .gitlab
-            .browser
-            .as_ref()
-            .map(|session| {
-                vec![
-                    "gitlab browser session ready · open the copied authorize URL".to_owned(),
-                    format!(
-                        "authorize {}",
-                        truncate_display_width(session.authorize_url.as_str(), 56)
-                    ),
-                    format!(
-                        "paste the final callback URL, then press p  ·  state {}",
-                        truncate_display_width(session.state.as_str(), 24)
-                    ),
-                ]
-            })
-            .unwrap_or_default(),
-        Some(CredentialIssuer::AtomGit) => dialog
-            .draft
-            .credential_drafts
-            .atomgit
-            .browser
-            .as_ref()
-            .map(|session| {
-                vec![
-                    "atomgit browser session ready · open the copied authorize URL".to_owned(),
-                    format!(
-                        "authorize {}",
-                        truncate_display_width(session.authorize_url.as_str(), 56)
-                    ),
-                    format!(
-                        "finish the browser flow, then press p  ·  state {}",
-                        truncate_display_width(session.state.as_str(), 24)
-                    ),
-                ]
-            })
-            .unwrap_or_default(),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => Vec::new(),
-    }
-}
-
-fn provider_studio_detail_fields(dialog: &ProviderStudioOverlay) -> Vec<ProviderStudioField> {
-    match dialog.draft.auth_kind {
-        ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::None => Vec::new(),
-        ProviderDraftAuthKind::Api => {
-            let mut fields = Vec::new();
-            if provider_studio_base_url_visible(dialog) {
-                fields.push(ProviderStudioField::BaseUrl);
-            }
-            fields.extend([ProviderStudioField::ApiKeyEnv, ProviderStudioField::ApiKey]);
-            fields
-        }
-        ProviderDraftAuthKind::Gitlab => vec![
-            ProviderStudioField::InstanceUrl,
-            ProviderStudioField::ApiKeyEnv,
-            ProviderStudioField::ApiKey,
-        ],
-        ProviderDraftAuthKind::Credential(issuer) => match issuer {
-            Some(CredentialIssuer::OpenaiChatgpt) => vec![
-                ProviderStudioField::RedirectUri,
-                ProviderStudioField::CallbackUrl,
-                ProviderStudioField::RefreshToken,
-                ProviderStudioField::AccessToken,
-                ProviderStudioField::ExpiresAtMs,
-                ProviderStudioField::AccountId,
-            ],
-            Some(CredentialIssuer::GithubCopilot) => vec![
-                ProviderStudioField::EnterpriseDomain,
-                ProviderStudioField::RefreshToken,
-                ProviderStudioField::AccessToken,
-                ProviderStudioField::ExpiresAtMs,
-            ],
-            Some(CredentialIssuer::Gitlab) => vec![
-                ProviderStudioField::InstanceUrl,
-                ProviderStudioField::RedirectUri,
-                ProviderStudioField::CallbackUrl,
-                ProviderStudioField::RefreshToken,
-                ProviderStudioField::AccessToken,
-                ProviderStudioField::ExpiresAtMs,
-            ],
-            Some(CredentialIssuer::GoogleAdc) => {
-                if provider_studio_base_url_visible(dialog) {
-                    vec![ProviderStudioField::BaseUrl]
-                } else {
-                    Vec::new()
-                }
-            }
-            Some(CredentialIssuer::SapAiCore) => {
-                let mut fields = Vec::new();
-                if provider_studio_base_url_visible(dialog) {
-                    fields.push(ProviderStudioField::BaseUrl);
-                }
-                fields.push(ProviderStudioField::ServiceKeyEnv);
-                fields
-            }
-            Some(CredentialIssuer::AtomGit) => vec![
-                ProviderStudioField::RefreshToken,
-                ProviderStudioField::AccessToken,
-                ProviderStudioField::ExpiresAtMs,
-                ProviderStudioField::AccountId,
-                ProviderStudioField::Username,
-                ProviderStudioField::DisplayName,
-                ProviderStudioField::Email,
-                ProviderStudioField::AvatarUrl,
-            ],
-            None => Vec::new(),
-        },
-        ProviderDraftAuthKind::BedrockSigv4 => vec![
-            ProviderStudioField::BaseUrl,
-            ProviderStudioField::Region,
-            ProviderStudioField::Profile,
-            ProviderStudioField::AccessKeyId,
-            ProviderStudioField::SecretAccessKey,
-            ProviderStudioField::SessionToken,
-        ],
-    }
-}
-
-fn provider_studio_has_any_auth_detail_value(
-    draft: &ProviderConfigDraft,
-    fields: &[ProviderStudioField],
-) -> bool {
-    fields
-        .iter()
-        .any(|field| !provider_studio_field_value(draft, *field).trim().is_empty())
-}
-
-fn provider_studio_auth_is_configured(dialog: &ProviderStudioOverlay) -> bool {
-    match dialog.draft.auth_kind {
-        ProviderDraftAuthKind::Unset => false,
-        ProviderDraftAuthKind::None => true,
-        ProviderDraftAuthKind::Api => {
-            !dialog.draft.base_url.trim().is_empty()
-                && (!dialog.draft.api_key.trim().is_empty()
-                    || !dialog.draft.api_key_env.trim().is_empty())
-        }
-        ProviderDraftAuthKind::Gitlab => {
-            !dialog.draft.instance_url.trim().is_empty()
-                && (!dialog.draft.api_key.trim().is_empty()
-                    || !dialog.draft.api_key_env.trim().is_empty())
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt))
-        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot))
-        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab))
-        | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-            provider_studio_active_tokens(&dialog.draft).is_some_and(|tokens| {
-                !tokens.refresh_token.trim().is_empty() || !tokens.access_token.trim().is_empty()
-            })
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc)) => {
-            !dialog.draft.base_url.trim().is_empty()
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::SapAiCore)) => {
-            !dialog.draft.base_url.trim().is_empty()
-                && !dialog.draft.service_key_env.trim().is_empty()
-        }
-        ProviderDraftAuthKind::Credential(None) => false,
-        ProviderDraftAuthKind::BedrockSigv4 => {
-            !dialog.draft.base_url.trim().is_empty()
-                && !dialog.draft.region.trim().is_empty()
-                && ((!dialog.draft.profile.trim().is_empty())
-                    || (!dialog.draft.access_key_id.trim().is_empty()
-                        && !dialog.draft.secret_access_key.trim().is_empty()))
-        }
-    }
-}
-
-fn provider_studio_auth_status_summary(dialog: &ProviderStudioOverlay) -> &'static str {
-    if !provider_studio_auth_state_lines(dialog).is_empty() {
-        return "pending";
-    }
-    let detail_fields = provider_studio_detail_fields(dialog);
-    if detail_fields.is_empty() {
-        return match dialog.draft.auth_kind {
-            ProviderDraftAuthKind::Unset => "unset",
-            ProviderDraftAuthKind::None => "none",
-            ProviderDraftAuthKind::Credential(None) => "select issuer",
-            ProviderDraftAuthKind::Api
-            | ProviderDraftAuthKind::Gitlab
-            | ProviderDraftAuthKind::Credential(Some(_))
-            | ProviderDraftAuthKind::BedrockSigv4 => "unset",
-        };
-    }
-    if provider_studio_auth_is_configured(dialog) {
-        "configured"
-    } else if provider_studio_has_any_auth_detail_value(&dialog.draft, &detail_fields) {
-        "partial"
-    } else {
-        "unset"
-    }
-}
-
-fn provider_studio_visible_fields(dialog: &ProviderStudioOverlay) -> Vec<ProviderStudioField> {
-    let mut fields = vec![
-        ProviderStudioField::ProviderId,
-        ProviderStudioField::AuthMode,
-    ];
-    if matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::Credential(_)) {
-        fields.push(ProviderStudioField::CredentialIssuer);
-    }
-    if !provider_studio_detail_fields(dialog).is_empty() {
-        if provider_studio_supports_interactive_auth(&dialog.draft) {
-            fields.push(ProviderStudioField::StartAuthAction);
-            fields.push(ProviderStudioField::ContinueAuthAction);
-        }
-        fields.push(ProviderStudioField::EditAuthDetailsAction);
-    }
-    if !matches!(
-        dialog.draft.auth_kind,
-        ProviderDraftAuthKind::Unset | ProviderDraftAuthKind::Credential(None)
-    ) {
-        fields.extend([
-            ProviderStudioField::DefaultAdapter,
-            ProviderStudioField::DefaultModel,
-        ]);
-    }
-    fields
-}
-
-fn provider_studio_field_label(field: ProviderStudioField) -> &'static str {
-    match field {
-        ProviderStudioField::ProviderId => "provider_id",
-        ProviderStudioField::AuthMode => "auth_mode",
-        ProviderStudioField::CredentialIssuer => "credential_issuer",
-        ProviderStudioField::AuthStatus => "auth_status",
-        ProviderStudioField::StartAuthAction => "start_auth",
-        ProviderStudioField::ContinueAuthAction => "continue_auth",
-        ProviderStudioField::EditAuthDetailsAction => "auth_details",
-        ProviderStudioField::BaseUrl => "base_url",
-        ProviderStudioField::InstanceUrl => "instance_url",
-        ProviderStudioField::ApiKeyEnv => "api_key_env",
-        ProviderStudioField::ApiKey => "api_key",
-        ProviderStudioField::RedirectUri => "redirect_uri",
-        ProviderStudioField::CallbackUrl => "callback_url",
-        ProviderStudioField::RefreshToken => "refresh_token",
-        ProviderStudioField::AccessToken => "access_token",
-        ProviderStudioField::ExpiresAtMs => "expires_at_ms",
-        ProviderStudioField::AccountId => "account_id",
-        ProviderStudioField::EnterpriseDomain => "enterprise_domain",
-        ProviderStudioField::Username => "username",
-        ProviderStudioField::DisplayName => "display_name",
-        ProviderStudioField::Email => "email",
-        ProviderStudioField::AvatarUrl => "avatar_url",
-        ProviderStudioField::Region => "region",
-        ProviderStudioField::Profile => "profile",
-        ProviderStudioField::AccessKeyId => "access_key_id",
-        ProviderStudioField::SecretAccessKey => "secret_access_key",
-        ProviderStudioField::SessionToken => "session_token",
-        ProviderStudioField::ServiceKeyEnv => "service_key_env",
-        ProviderStudioField::DefaultAdapter => "default_adapter",
-        ProviderStudioField::DefaultModel => "default_model",
-    }
-}
-
-fn provider_studio_field_prompt(i18n: &I18n, field: ProviderStudioField) -> String {
-    match field {
-        ProviderStudioField::AuthMode => {
-            "Update auth_mode (none | api | gitlab_api | credential | bedrock_sigv4)".to_string()
-        }
-        ProviderStudioField::CredentialIssuer => {
-            "Update credential_issuer (openai_chatgpt | github_copilot | gitlab | google_adc | sap_ai_core | atomgit)".to_string()
-        }
-        ProviderStudioField::AuthStatus
-        | ProviderStudioField::StartAuthAction
-        | ProviderStudioField::ContinueAuthAction
-        | ProviderStudioField::EditAuthDetailsAction => String::new(),
-        _ => i18n.text_args(
-            "overlay-provider-studio-edit-prompt",
-            &crate::fl_args!("field" => provider_studio_field_label(field)),
-        ),
-    }
-}
-
-fn provider_studio_field_value(draft: &ProviderConfigDraft, field: ProviderStudioField) -> String {
-    match field {
-        ProviderStudioField::ProviderId => draft.provider_id.clone(),
-        ProviderStudioField::AuthMode => draft.auth_kind.mode_label().to_owned(),
-        ProviderStudioField::CredentialIssuer => draft.credential_issuer.clone(),
-        ProviderStudioField::AuthStatus => String::new(),
-        ProviderStudioField::StartAuthAction
-        | ProviderStudioField::ContinueAuthAction
-        | ProviderStudioField::EditAuthDetailsAction => String::new(),
-        ProviderStudioField::BaseUrl => draft.base_url.clone(),
-        ProviderStudioField::InstanceUrl => draft.instance_url.clone(),
-        ProviderStudioField::ApiKeyEnv => draft.api_key_env.clone(),
-        ProviderStudioField::ApiKey => draft.api_key.clone(),
-        ProviderStudioField::RedirectUri => match draft.auth_kind.credential_issuer() {
-            Some(CredentialIssuer::OpenaiChatgpt) => {
-                draft.credential_drafts.openai_chatgpt.redirect_uri.clone()
-            }
-            Some(CredentialIssuer::Gitlab) => draft.credential_drafts.gitlab.redirect_uri.clone(),
-            _ => String::new(),
-        },
-        ProviderStudioField::CallbackUrl => match draft.auth_kind.credential_issuer() {
-            Some(CredentialIssuer::OpenaiChatgpt) => {
-                draft.credential_drafts.openai_chatgpt.callback_url.clone()
-            }
-            Some(CredentialIssuer::Gitlab) => draft.credential_drafts.gitlab.callback_url.clone(),
-            _ => String::new(),
-        },
-        ProviderStudioField::RefreshToken => provider_studio_active_tokens(draft)
-            .map(|tokens| tokens.refresh_token.clone())
-            .unwrap_or_default(),
-        ProviderStudioField::AccessToken => provider_studio_active_tokens(draft)
-            .map(|tokens| tokens.access_token.clone())
-            .unwrap_or_default(),
-        ProviderStudioField::ExpiresAtMs => provider_studio_active_tokens(draft)
-            .map(|tokens| tokens.expires_at_ms.clone())
-            .unwrap_or_default(),
-        ProviderStudioField::AccountId => match draft.auth_kind.credential_issuer() {
-            Some(CredentialIssuer::OpenaiChatgpt) => {
-                draft.credential_drafts.openai_chatgpt.account_id.clone()
-            }
-            Some(CredentialIssuer::AtomGit) => draft.credential_drafts.atomgit.account_id.clone(),
-            _ => String::new(),
-        },
-        ProviderStudioField::EnterpriseDomain => draft
-            .credential_drafts
-            .github_copilot
-            .enterprise_domain
-            .clone(),
-        ProviderStudioField::Username => draft.credential_drafts.atomgit.username.clone(),
-        ProviderStudioField::DisplayName => draft.credential_drafts.atomgit.display_name.clone(),
-        ProviderStudioField::Email => draft.credential_drafts.atomgit.email.clone(),
-        ProviderStudioField::AvatarUrl => draft.credential_drafts.atomgit.avatar_url.clone(),
-        ProviderStudioField::Region => draft.region.clone(),
-        ProviderStudioField::Profile => draft.profile.clone(),
-        ProviderStudioField::AccessKeyId => draft.access_key_id.clone(),
-        ProviderStudioField::SecretAccessKey => draft.secret_access_key.clone(),
-        ProviderStudioField::SessionToken => draft.session_token.clone(),
-        ProviderStudioField::ServiceKeyEnv => draft.service_key_env.clone(),
-        ProviderStudioField::DefaultAdapter => draft.default_adapter.clone(),
-        ProviderStudioField::DefaultModel => draft.default_model.clone(),
-    }
-}
-
-fn provider_studio_field_editable(
-    dialog: &ProviderStudioOverlay,
-    field: ProviderStudioField,
-) -> bool {
-    match field {
-        ProviderStudioField::ProviderId => dialog.draft.source_provider_id.is_none(),
-        ProviderStudioField::AuthMode => true,
-        ProviderStudioField::CredentialIssuer => {
-            matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::Credential(_))
-        }
-        ProviderStudioField::AuthStatus => false,
-        ProviderStudioField::StartAuthAction | ProviderStudioField::ContinueAuthAction => {
-            provider_studio_supports_interactive_auth(&dialog.draft)
-        }
-        ProviderStudioField::EditAuthDetailsAction => {
-            !provider_studio_detail_fields(dialog).is_empty()
-        }
-        ProviderStudioField::BaseUrl => match dialog.draft.auth_kind {
-            ProviderDraftAuthKind::Unset => false,
-            ProviderDraftAuthKind::Api | ProviderDraftAuthKind::BedrockSigv4 => {
-                provider_studio_base_url_visible(dialog)
-            }
-            ProviderDraftAuthKind::Credential(_) => provider_studio_base_url_visible(dialog),
-            ProviderDraftAuthKind::Gitlab | ProviderDraftAuthKind::None => false,
-        },
-        ProviderStudioField::InstanceUrl => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Gitlab
-                | ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab))
-        ),
-        ProviderStudioField::ApiKeyEnv | ProviderStudioField::ApiKey => {
-            matches!(
-                dialog.draft.auth_kind,
-                ProviderDraftAuthKind::Api | ProviderDraftAuthKind::Gitlab
-            )
-        }
-        ProviderStudioField::RedirectUri => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(
-                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::Gitlab
-            ))
-        ),
-        ProviderStudioField::CallbackUrl => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(
-                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::Gitlab
-            ))
-        ),
-        ProviderStudioField::RefreshToken
-        | ProviderStudioField::AccessToken
-        | ProviderStudioField::ExpiresAtMs => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(
-                CredentialIssuer::OpenaiChatgpt
-                    | CredentialIssuer::GithubCopilot
-                    | CredentialIssuer::Gitlab
-                    | CredentialIssuer::AtomGit
-            ))
-        ),
-        ProviderStudioField::AccountId => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(
-                CredentialIssuer::OpenaiChatgpt | CredentialIssuer::AtomGit
-            ))
-        ),
-        ProviderStudioField::EnterpriseDomain => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot))
-        ),
-        ProviderStudioField::Username
-        | ProviderStudioField::DisplayName
-        | ProviderStudioField::Email
-        | ProviderStudioField::AvatarUrl => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit))
-        ),
-        ProviderStudioField::Region
-        | ProviderStudioField::Profile
-        | ProviderStudioField::AccessKeyId
-        | ProviderStudioField::SecretAccessKey
-        | ProviderStudioField::SessionToken => {
-            matches!(dialog.draft.auth_kind, ProviderDraftAuthKind::BedrockSigv4)
-        }
-        ProviderStudioField::ServiceKeyEnv => matches!(
-            dialog.draft.auth_kind,
-            ProviderDraftAuthKind::Credential(Some(issuer)) if issuer.requires_service_key_env()
-        ),
-        ProviderStudioField::DefaultAdapter | ProviderStudioField::DefaultModel => true,
-    }
-}
-
-fn provider_studio_model_key(adapter_id: &str, model_id: &str) -> String {
-    format!("{adapter_id}\u{1f}{model_id}")
 }
 
 fn session_model_choice_item(
@@ -15455,10 +14087,9 @@ mod tests {
     use super::*;
     use crate::backend::{
         ProviderBrowserAuthSessionDraft, ProviderCredentialDraftBundle,
-        ProviderDeviceAuthSessionDraft,
+        ProviderDeviceAuthSessionDraft, ProviderDraftAuthDetails,
     };
     use agena::{
-        config::LoadConfigRequest,
         event::{
             CommandContext, CommandEndEvent, MessagePartDeltaEvent, MessagePartUpdatedEvent,
             PartDeltaField,
@@ -15468,30 +14099,28 @@ mod tests {
             UserInputOption, UserInputQuestion,
         },
         provider::auth::CredentialIssuer,
-        runtime::AgenaRuntime,
     };
     use chrono::Utc;
-    use ratatui::{Terminal, backend::TestBackend};
-    use sea_orm::Database;
     use serde_json::json;
-    use std::{fs, sync::Arc};
 
     fn provider_studio_test_draft() -> ProviderConfigDraft {
         ProviderConfigDraft {
             source_provider_id: None,
             provider_id: "test".to_string(),
             auth_kind: ProviderDraftAuthKind::Unset,
-            base_url: String::new(),
-            instance_url: String::new(),
-            api_key_env: String::new(),
-            api_key: String::new(),
-            credential_issuer: String::new(),
-            region: String::new(),
-            profile: String::new(),
-            access_key_id: String::new(),
-            secret_access_key: String::new(),
-            session_token: String::new(),
-            service_key_env: String::new(),
+            auth: ProviderDraftAuthDetails {
+                base_url: String::new(),
+                instance_url: String::new(),
+                api_key_env: String::new(),
+                api_key: String::new(),
+                credential_issuer: String::new(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+            },
             credential_drafts: ProviderCredentialDraftBundle::default(),
             default_adapter: String::new(),
             default_model: String::new(),
@@ -15524,22 +14153,6 @@ mod tests {
             detail_page: None,
             editor: None,
         }
-    }
-
-    fn terminal_buffer_lines(terminal: &Terminal<TestBackend>) -> Vec<String> {
-        let buffer = terminal.backend().buffer();
-        let width = buffer.area.width as usize;
-        buffer
-            .content()
-            .chunks(width.max(1))
-            .map(|row| {
-                row.iter()
-                    .map(|cell| cell.symbol())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect()
     }
 
     #[test]
@@ -15737,17 +14350,19 @@ mod tests {
                 source_provider_id: Some("openai".to_string()),
                 provider_id: "openai".to_string(),
                 auth_kind: ProviderDraftAuthKind::Api,
-                base_url: String::new(),
-                instance_url: String::new(),
-                api_key_env: String::new(),
-                api_key: String::new(),
-                credential_issuer: "openai_chatgpt".to_string(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: String::new(),
+                    instance_url: String::new(),
+                    api_key_env: String::new(),
+                    api_key: String::new(),
+                    credential_issuer: "openai_chatgpt".to_string(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: "openai".to_string(),
                 default_model: String::new(),
@@ -15857,17 +14472,19 @@ mod tests {
                 source_provider_id: None,
                 provider_id: "test".to_string(),
                 auth_kind: ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc)),
-                base_url: String::new(),
-                instance_url: String::new(),
-                api_key_env: String::new(),
-                api_key: String::new(),
-                credential_issuer: "google_adc".to_string(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: String::new(),
+                    instance_url: String::new(),
+                    api_key_env: String::new(),
+                    api_key: String::new(),
+                    credential_issuer: "google_adc".to_string(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: "openai".to_string(),
                 default_model: String::new(),
@@ -15900,7 +14517,7 @@ mod tests {
         let mut sap_dialog = base_dialog();
         sap_dialog.draft.auth_kind =
             ProviderDraftAuthKind::Credential(Some(CredentialIssuer::SapAiCore));
-        sap_dialog.draft.credential_issuer = "sap_ai_core".to_string();
+        sap_dialog.draft.auth.credential_issuer = "sap_ai_core".to_string();
         let sap_fields = provider_studio_visible_fields(&sap_dialog);
         let sap_detail_fields = provider_studio_detail_fields(&sap_dialog);
         assert!(sap_fields.contains(&ProviderStudioField::EditAuthDetailsAction));
@@ -15917,7 +14534,7 @@ mod tests {
             let mut draft = provider_studio_test_draft();
             draft.provider_id = "oauth".to_string();
             draft.auth_kind = ProviderDraftAuthKind::Credential(Some(issuer));
-            draft.credential_issuer = issuer_label.to_string();
+            draft.auth.credential_issuer = issuer_label.to_string();
             draft.normalize_shape();
             provider_studio_test_dialog(draft)
         };
@@ -15980,7 +14597,7 @@ mod tests {
         openai_draft.provider_id = "oauth".to_string();
         openai_draft.auth_kind =
             ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt));
-        openai_draft.credential_issuer = "openai_chatgpt".to_string();
+        openai_draft.auth.credential_issuer = "openai_chatgpt".to_string();
         openai_draft.normalize_shape();
 
         let empty_dialog = provider_studio_test_dialog(openai_draft.clone());
@@ -16037,7 +14654,7 @@ mod tests {
         copilot_draft.provider_id = "copilot".to_string();
         copilot_draft.auth_kind =
             ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot));
-        copilot_draft.credential_issuer = "github_copilot".to_string();
+        copilot_draft.auth.credential_issuer = "github_copilot".to_string();
         copilot_draft.normalize_shape();
         copilot_draft.credential_drafts.github_copilot.device =
             Some(ProviderDeviceAuthSessionDraft {
@@ -16073,17 +14690,19 @@ mod tests {
                 source_provider_id: None,
                 provider_id: "shared_gateway".to_string(),
                 auth_kind: ProviderDraftAuthKind::Api,
-                base_url: String::new(),
-                instance_url: String::new(),
-                api_key_env: "OPENAI_API_KEY".to_string(),
-                api_key: String::new(),
-                credential_issuer: "openai_chatgpt".to_string(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: String::new(),
+                    instance_url: String::new(),
+                    api_key_env: "OPENAI_API_KEY".to_string(),
+                    api_key: String::new(),
+                    credential_issuer: "openai_chatgpt".to_string(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: String::new(),
                 default_model: String::new(),
@@ -16130,17 +14749,19 @@ mod tests {
                 source_provider_id: None,
                 provider_id: "gitlab_token".to_string(),
                 auth_kind: ProviderDraftAuthKind::Gitlab,
-                base_url: String::new(),
-                instance_url: String::new(),
-                api_key_env: "GITLAB_TOKEN".to_string(),
-                api_key: String::new(),
-                credential_issuer: "openai_chatgpt".to_string(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: String::new(),
+                    instance_url: String::new(),
+                    api_key_env: "GITLAB_TOKEN".to_string(),
+                    api_key: String::new(),
+                    credential_issuer: "openai_chatgpt".to_string(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: "openai".to_string(),
                 default_model: "duo-chat-gpt-5-2".to_string(),
@@ -16186,17 +14807,19 @@ mod tests {
                 source_provider_id: None,
                 provider_id: "shared_gateway".to_string(),
                 auth_kind: ProviderDraftAuthKind::Api,
-                base_url: "https://opencode.ai/zen".to_string(),
-                instance_url: String::new(),
-                api_key_env: "OPENCODE_API_KEY".to_string(),
-                api_key: String::new(),
-                credential_issuer: String::new(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: "https://opencode.ai/zen".to_string(),
+                    instance_url: String::new(),
+                    api_key_env: "OPENCODE_API_KEY".to_string(),
+                    api_key: String::new(),
+                    credential_issuer: String::new(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: "anthropic".to_string(),
                 default_model: "claude-sonnet-4-5".to_string(),
@@ -16252,17 +14875,19 @@ mod tests {
                 source_provider_id: None,
                 provider_id: "shared_gateway".to_string(),
                 auth_kind: ProviderDraftAuthKind::Api,
-                base_url: "https://opencode.ai/zen".to_string(),
-                instance_url: String::new(),
-                api_key_env: String::new(),
-                api_key: String::new(),
-                credential_issuer: String::new(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: "https://opencode.ai/zen".to_string(),
+                    instance_url: String::new(),
+                    api_key_env: String::new(),
+                    api_key: String::new(),
+                    credential_issuer: String::new(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: "openai".to_string(),
                 default_model: "gpt-5.5".to_string(),
@@ -16316,17 +14941,19 @@ mod tests {
                 source_provider_id: None,
                 provider_id: "shared_gateway".to_string(),
                 auth_kind: ProviderDraftAuthKind::Api,
-                base_url: "https://opencode.ai/zen".to_string(),
-                instance_url: String::new(),
-                api_key_env: String::new(),
-                api_key: String::new(),
-                credential_issuer: String::new(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: "https://opencode.ai/zen".to_string(),
+                    instance_url: String::new(),
+                    api_key_env: String::new(),
+                    api_key: String::new(),
+                    credential_issuer: String::new(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: String::new(),
                 default_model: String::new(),
@@ -16385,17 +15012,19 @@ mod tests {
                 source_provider_id: None,
                 provider_id: "shared_gateway".to_string(),
                 auth_kind: ProviderDraftAuthKind::Api,
-                base_url: "https://opencode.ai/zen".to_string(),
-                instance_url: String::new(),
-                api_key_env: String::new(),
-                api_key: String::new(),
-                credential_issuer: String::new(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: "https://opencode.ai/zen".to_string(),
+                    instance_url: String::new(),
+                    api_key_env: String::new(),
+                    api_key: String::new(),
+                    credential_issuer: String::new(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: "openai".to_string(),
                 default_model: "gpt-5.5".to_string(),
@@ -16456,17 +15085,19 @@ mod tests {
                 source_provider_id: Some("legacy".to_string()),
                 provider_id: "legacy".to_string(),
                 auth_kind: ProviderDraftAuthKind::Api,
-                base_url: "https://opencode.ai/zen".to_string(),
-                instance_url: String::new(),
-                api_key_env: String::new(),
-                api_key: String::new(),
-                credential_issuer: String::new(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: "https://opencode.ai/zen".to_string(),
+                    instance_url: String::new(),
+                    api_key_env: String::new(),
+                    api_key: String::new(),
+                    credential_issuer: String::new(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: "openai".to_string(),
                 default_model: "gpt-5.5".to_string(),
@@ -16518,17 +15149,19 @@ mod tests {
                 source_provider_id: Some("oc".to_string()),
                 provider_id: "oc".to_string(),
                 auth_kind: ProviderDraftAuthKind::Api,
-                base_url: "https://opencode.ai/zen".to_string(),
-                instance_url: String::new(),
-                api_key_env: "OPENCODE_API_KEY".to_string(),
-                api_key: String::new(),
-                credential_issuer: String::new(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
+                auth: ProviderDraftAuthDetails {
+                    base_url: "https://opencode.ai/zen".to_string(),
+                    instance_url: String::new(),
+                    api_key_env: "OPENCODE_API_KEY".to_string(),
+                    api_key: String::new(),
+                    credential_issuer: String::new(),
+                    region: String::new(),
+                    profile: String::new(),
+                    access_key_id: String::new(),
+                    secret_access_key: String::new(),
+                    session_token: String::new(),
+                    service_key_env: String::new(),
+                },
                 credential_drafts: ProviderCredentialDraftBundle::default(),
                 default_adapter: "openai".to_string(),
                 default_model: "gpt-5.5".to_string(),
@@ -16576,7 +15209,7 @@ mod tests {
         let mut draft = provider_studio_test_draft();
         draft.provider_id = "oc".to_string();
         draft.auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt));
-        draft.credential_issuer = "openai_chatgpt".to_string();
+        draft.auth.credential_issuer = "openai_chatgpt".to_string();
         draft.default_adapter = "openai".to_string();
         draft.default_model = "gpt-5.5".to_string();
         draft.credential_drafts.openai_chatgpt.callback_url =
@@ -16602,7 +15235,7 @@ mod tests {
         let mut draft = provider_studio_test_draft();
         draft.provider_id = "vertex".to_string();
         draft.auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc));
-        draft.credential_issuer = "google_adc".to_string();
+        draft.auth.credential_issuer = "google_adc".to_string();
         draft.default_adapter = "openai".to_string();
         draft.normalize_shape();
 
@@ -16622,7 +15255,7 @@ mod tests {
         atomgit_draft.provider_id = "atomgit".to_string();
         atomgit_draft.auth_kind =
             ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit));
-        atomgit_draft.credential_issuer = "atomgit".to_string();
+        atomgit_draft.auth.credential_issuer = "atomgit".to_string();
         atomgit_draft.default_adapter = "openai".to_string();
         atomgit_draft.normalize_shape();
 
@@ -16638,8 +15271,8 @@ mod tests {
         vertex_draft.provider_id = "vertex".to_string();
         vertex_draft.auth_kind =
             ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc));
-        vertex_draft.credential_issuer = "google_adc".to_string();
-        vertex_draft.base_url = "https://example.com".to_string();
+        vertex_draft.auth.credential_issuer = "google_adc".to_string();
+        vertex_draft.auth.base_url = "https://example.com".to_string();
         vertex_draft.default_adapter = "openai".to_string();
         vertex_draft.normalize_shape();
 
@@ -16862,363 +15495,6 @@ mod tests {
             Some("first answer\n\nsecond answer")
         );
     }
-
-    #[tokio::test]
-    async fn draw_sanitizes_shell_chrome_and_renders_workspace_label() {
-        let path = write_test_runtime_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com"
-api_key = "test"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-
-        let mut app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root.clone()),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        let now = Utc::now();
-        app.sessions.initialized = true;
-        app.sessions.items = vec![test_session(
-            7,
-            None,
-            "bad\u{1b}[31mtitle\u{7}\u{2068}rtl\u{2069}",
-            now,
-        )];
-        app.sessions.selected = 0;
-        app.transcript.session_id = Some(7);
-        app.transcript.session_title = "bad\u{1b}[31mtitle\u{7}\u{2068}rtl\u{2069}".to_string();
-
-        let backend = TestBackend::new(80, 20);
-        let mut terminal = Terminal::new(backend).expect("test terminal should build");
-        terminal
-            .draw(|frame| app.draw(frame))
-            .expect("draw should succeed");
-
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("bad"));
-        assert!(rendered.contains("title"));
-        assert!(rendered.contains("rtl"));
-        assert!(!rendered.contains("\u{1b}"));
-        assert!(!rendered.contains("\u{7}"));
-        assert!(!rendered.contains("\u{2068}"));
-        assert!(!rendered.contains("\u{2069}"));
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn draw_conversation_first_layout_hides_session_sidebar() {
-        let path = write_test_runtime_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com"
-api_key = "test"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-
-        let mut app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root.clone()),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        app.run_options.model = Some(ModelRef::new_with_adapter(
-            "openai",
-            "openai",
-            "gpt-4.1-mini",
-        ));
-        app.run_options.thinking_mode = Some("deep".to_string());
-        let now = Utc::now();
-        app.sessions.initialized = true;
-        app.sessions.items = vec![
-            test_session(1, None, "Root Session", now),
-            test_session(2, Some(1), "Child Session", now),
-        ];
-        app.sessions.selected = 1;
-        app.transcript.session_id = Some(2);
-        app.transcript.session_title = "Child Session".to_string();
-
-        let backend = TestBackend::new(72, 14);
-        let mut terminal = Terminal::new(backend).expect("test terminal should build");
-        terminal
-            .draw(|frame| app.draw(frame))
-            .expect("draw should succeed");
-
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(!rendered.contains("Sessions"));
-        assert!(!rendered.contains("Root Session"));
-        assert!(rendered.contains("Child Session"));
-        assert!(rendered.contains("openai/openai/gpt-4.1-mini"));
-        assert!(rendered.contains("thinking deep"));
-        assert!(!rendered.contains("model openai/openai/gpt-4.1-mini"));
-        assert!(!rendered.contains("Alt+S sessions"));
-        assert!(!rendered.contains("ws "));
-
-        app.focus = Focus::Composer;
-        app.clear_composer_state();
-        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
-        assert_eq!(app.focus, Focus::Transcript);
-        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()));
-        assert_eq!(app.focus, Focus::Composer);
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT));
-        assert!(matches!(
-            app.overlay,
-            Some(Overlay::Picker(PickerOverlay {
-                kind: PickerKind::WorkspaceSessions,
-                ..
-            }))
-        ));
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn draw_places_model_status_below_composer_border() {
-        let path = write_test_runtime_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com"
-api_key = "test"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-
-        let mut app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        app.run_options.model = Some(ModelRef::new_with_adapter(
-            "oc",
-            "openai",
-            "deepseek-v4-flash-free",
-        ));
-        app.composer.set_text("hi".to_string());
-
-        let backend = TestBackend::new(80, 14);
-        let mut terminal = Terminal::new(backend).expect("test terminal should build");
-        terminal
-            .draw(|frame| app.draw(frame))
-            .expect("draw should succeed");
-
-        let lines = terminal_buffer_lines(&terminal);
-        let model_line_index = lines
-            .iter()
-            .position(|line| line.contains("oc/openai/deepseek-v4-flash-free"))
-            .expect("model status line should render");
-        assert!(
-            model_line_index > 0,
-            "model status line should not be first"
-        );
-        assert!(
-            !lines[model_line_index].contains('│'),
-            "model status should render outside the composer border: {}",
-            lines[model_line_index]
-        );
-        assert!(
-            lines[model_line_index - 1].contains('└'),
-            "composer bottom border should sit above the model status: {}",
-            lines[model_line_index - 1]
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("hi") && line.contains('│')),
-            "composer text should remain inside the bordered composer"
-        );
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn draw_permission_overlay_sanitizes_localized_request_fields() {
-        let path = write_test_runtime_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com"
-api_key = "test"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-
-        let mut app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root.clone()),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        app.overlay = Some(Overlay::Permission(PermissionOverlay {
-            session_id: 7,
-            request: PermissionRequest {
-                request_id: "req\u{2068}-7\u{2069}\u{7}".to_string(),
-                session_id: Some(7),
-                action: PermissionAction::Tool {
-                    tool_name: "exec\u{2068}".to_string(),
-                    qualifier: Some("rg\u{2069}".to_string()),
-                },
-                reason: "Need \u{1b}[31mworkspace\u{1b}[0m access\u{2068}".to_string(),
-                explanation: "Check \u{2068}repo\u{2069}\u{7}".to_string(),
-                source: Some("policy\u{2068}".to_string()),
-                scope: Some(PermissionScope::Session),
-                operator: Some("agent\u{2069}".to_string()),
-                risk: PermissionRiskLevel::High,
-                trace: vec![DecisionTraceStep {
-                    source_kind: PolicySourceKind::ManagedPolicy,
-                    summary: "managed\u{2068} summary".to_string(),
-                    source: Some("trace\u{2069}".to_string()),
-                    scope: Some(PermissionScope::Workspace),
-                    operator: Some("reviewer\u{2068}".to_string()),
-                }],
-                created_at: Utc::now(),
-            },
-            selected: 0,
-        }));
-
-        let backend = TestBackend::new(100, 24);
-        let mut terminal = Terminal::new(backend).expect("test terminal should build");
-        terminal
-            .draw(|frame| app.draw(frame))
-            .expect("draw should succeed");
-
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("Permission Request"));
-        assert!(rendered.contains("req"));
-        assert!(rendered.contains("workspace"));
-        assert!(rendered.contains("repo"));
-        assert!(rendered.contains("policy"));
-        assert!(rendered.contains("agent"));
-        assert!(!rendered.contains("\u{1b}"));
-        assert!(!rendered.contains("\u{7}"));
-        assert!(!rendered.contains("\u{2068}"));
-        assert!(!rendered.contains("\u{2069}"));
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
     #[test]
     fn rewind_message_preview_prefers_first_text_line() {
         let now = Utc::now();
@@ -17347,7 +15623,7 @@ enabled = true
     #[test]
     fn settings_studio_general_items_show_configured_and_effective_values() {
         let sources = ConfigJsonSources {
-            config_path: PathBuf::from("/tmp/agena.toml"),
+            config_path: PathBuf::from("/tmp/agena.json"),
             config_found: true,
             file: serde_json::json!({
                 "default": {
@@ -17401,111 +15677,6 @@ enabled = true
         assert!(thinking.detail.contains("thinking mode"));
         assert_eq!(parallel.value, "override on");
     }
-
-    #[tokio::test]
-    async fn settings_default_adapter_and_model_choices_use_default_provider_config() {
-        let path = write_test_runtime_config(
-            r#"
-[default]
-provider = "gateway"
-adapter = "openai"
-model = "gpt-5"
-
-[providers.gateway]
-default_adapter = "openai"
-default_model = "gpt-5"
-
-[providers.gateway.auth]
-mode = "api"
-base_url = "https://example.com"
-api_key = "test"
-
-[providers.gateway.adapters.openai]
-enabled = true
-
-[providers.gateway.adapters.openai.models."gpt-5"]
-display_name = "GPT 5"
-
-[providers.gateway.adapters.openai.models."gpt-disabled"]
-enabled = false
-
-[providers.gateway.adapters.anthropic]
-enabled = false
-
-[providers.gateway.adapters.anthropic.models."claude-sonnet-4-5"]
-enabled = true
-
-[providers.gateway.adapters.gemini]
-enabled = true
-
-[providers.gateway.adapters.gemini.models."gemini-2.5-pro"]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-        let app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-
-        let adapter_field = SETTINGS_FIELDS
-            .iter()
-            .find(|field| field.path == "default.adapter")
-            .copied()
-            .expect("default.adapter field should exist");
-        let adapter_values = app
-            .settings_field_choice_items(adapter_field)
-            .expect("default adapter choices should exist")
-            .into_iter()
-            .map(|item| item.value)
-            .collect::<Vec<_>>();
-        assert_eq!(adapter_values, vec!["gemini", "openai"]);
-
-        let model_field = SETTINGS_FIELDS
-            .iter()
-            .find(|field| field.path == "default.model")
-            .copied()
-            .expect("default.model field should exist");
-        let model_items = app
-            .settings_field_choice_items(model_field)
-            .expect("default model choices should exist");
-        assert_eq!(
-            model_items
-                .iter()
-                .map(|item| item.value.as_str())
-                .collect::<Vec<_>>(),
-            vec!["gpt-5"]
-        );
-        assert!(
-            model_items[0]
-                .detail
-                .contains("configured on gateway/openai")
-        );
-        assert!(model_items[0].detail.contains("GPT 5"));
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
     #[test]
     fn settings_value_edit_prompt_breaks_context_into_multiple_lines() {
         let field = SETTINGS_FIELDS
@@ -17756,327 +15927,6 @@ enabled = true
         assert_eq!(capped.len(), MAX_PROMPT_HISTORY_ENTRIES);
         assert_eq!(capped.get(0), Some("prompt 3"));
     }
-
-    #[tokio::test]
-    async fn composer_alt_arrows_recall_prompt_history_and_restore_draft() {
-        let path = write_test_runtime_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-api_key = "test"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-
-        let mut app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        app.prompt_history = PromptHistory::default();
-        app.prompt_history.push("first prompt".to_string());
-        app.prompt_history.push("second prompt".to_string());
-        app.composer.set_text("/".to_string());
-        app.sync_slash_command_suggestions();
-        assert!(app.slash_command_suggestions.is_some());
-
-        app.handle_composer_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-        assert_eq!(app.composer.text(), "second prompt");
-        app.handle_composer_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
-        assert_eq!(app.composer.text(), "first prompt");
-        app.handle_composer_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
-        assert_eq!(app.composer.text(), "second prompt");
-        app.handle_composer_key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT));
-        assert_eq!(app.composer.text(), "/");
-        assert!(app.prompt_history_recall_index.is_none());
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn slash_command_suggestions_filter_runtime_entries_that_shadow_local_commands() {
-        let path = write_test_runtime_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-api_key = "test"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-
-        let app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        let runtime_rows = app.runtime_entry_command_rows();
-        assert!(
-            runtime_rows.iter().all(|entry| entry.label != "review"),
-            "runtime entry named review should be filtered when a local /review exists"
-        );
-
-        let labels = app
-            .slash_command_suggestion_items("review")
-            .into_iter()
-            .map(|item| item.label)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            labels
-                .iter()
-                .filter(|label| label.as_str() == "/review")
-                .count(),
-            1
-        );
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn sync_provider_studio_shape_selects_all_adapters_for_untouched_new_draft() {
-        let path = write_test_runtime_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-api_key = "test"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-
-        let mut app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        let mut dialog = provider_studio_test_dialog(
-            app.backend
-                .provider_config_draft(None)
-                .expect("blank provider draft"),
-        );
-        dialog.draft.provider_id = "shared_gateway".to_string();
-        dialog.draft.auth_kind = ProviderDraftAuthKind::Api;
-        dialog.draft.base_url = "https://opencode.ai/zen".to_string();
-        dialog.draft.api_key = "public".to_string();
-
-        app.sync_provider_studio_shape(&mut dialog);
-
-        assert_eq!(
-            dialog.selected_adapter_ids,
-            BTreeSet::from([
-                "anthropic".to_string(),
-                "gemini".to_string(),
-                "openai".to_string(),
-            ])
-        );
-        assert!(!dialog.adapter_selection_touched);
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn load_provider_studio_draft_prefills_saved_adapter_and_model_selection() {
-        let path = write_test_runtime_config(
-            r#"
-[providers.oc]
-default_adapter = "openai"
-default_model = "gpt-5.5"
-
-[providers.oc.auth]
-mode = "api"
-base_url = "https://opencode.ai/zen"
-api_key = "public"
-
-[providers.oc.adapters.openai]
-enabled = true
-
-[providers.oc.adapters.openai.models."gpt-5.5"]
-enabled = true
-
-[providers.oc.adapters.anthropic]
-enabled = true
-
-[providers.oc.adapters.anthropic.models."claude-sonnet-4-5"]
-enabled = true
-"#,
-        );
-        let workspace_root = path
-            .parent()
-            .expect("config should have parent")
-            .to_path_buf();
-        let db = Arc::new(
-            Database::connect("sqlite::memory:")
-                .await
-                .expect("sqlite memory db should connect"),
-        );
-        let runtime = AgenaRuntime::builder()
-            .with_load_request(LoadConfigRequest {
-                config_path: Some(path.clone()),
-                ..LoadConfigRequest::default()
-            })
-            .with_workspace_root(workspace_root.clone())
-            .with_database_connection(db.as_ref().clone())
-            .build()
-            .await
-            .expect("runtime should build");
-
-        let mut app = App::new(
-            Backend::new(runtime.clone(), db, workspace_root),
-            LaunchOptions::default(),
-            I18n::english(),
-        );
-        let mut dialog = provider_studio_test_dialog(
-            app.backend
-                .provider_config_draft(None)
-                .expect("blank provider draft"),
-        );
-
-        app.load_provider_studio_draft(&mut dialog, Some("oc"), None);
-
-        assert!(dialog.adapter_selection_touched);
-        assert_eq!(
-            dialog.selected_adapter_ids,
-            BTreeSet::from(["anthropic".to_string(), "openai".to_string()])
-        );
-        assert_eq!(
-            dialog
-                .adapter_models
-                .iter()
-                .map(|adapter| adapter.adapter_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["anthropic", "openai"]
-        );
-        assert_eq!(
-            dialog.selected_model_keys,
-            BTreeSet::from([
-                provider_studio_model_key("anthropic", "claude-sonnet-4-5"),
-                provider_studio_model_key("openai", "gpt-5.5"),
-            ])
-        );
-        assert_eq!(
-            dialog
-                .adapter_candidate_ids
-                .get(dialog.selected_adapter)
-                .map(String::as_str),
-            Some("openai")
-        );
-
-        dialog.adapter_models = vec![
-            ProviderAdapterModelsResource {
-                adapter_id: "openai".to_string(),
-                enabled: true,
-                resolved_base_url: Some("https://opencode.ai/zen/v1".to_string()),
-                models: vec![
-                    ProviderModel::new("openai", "gpt-5.5"),
-                    ProviderModel::new("openai", "gpt-5.4-mini"),
-                ],
-                error: None,
-            },
-            ProviderAdapterModelsResource {
-                adapter_id: "anthropic".to_string(),
-                enabled: true,
-                resolved_base_url: Some("https://opencode.ai/zen/v1".to_string()),
-                models: vec![
-                    ProviderModel::new("anthropic", "claude-sonnet-4-5"),
-                    ProviderModel::new("anthropic", "claude-opus-4-7"),
-                ],
-                error: None,
-            },
-        ];
-
-        provider_studio_restore_model_selection(&mut dialog);
-        provider_studio_ensure_default_selection(&mut dialog);
-
-        assert_eq!(
-            dialog.selected_model_keys,
-            BTreeSet::from([
-                provider_studio_model_key("anthropic", "claude-sonnet-4-5"),
-                provider_studio_model_key("openai", "gpt-5.5"),
-            ])
-        );
-        assert_eq!(dialog.draft.default_adapter, "openai");
-        assert_eq!(dialog.draft.default_model, "gpt-5.5");
-
-        runtime.shutdown();
-        let _ = fs::remove_file(path);
-    }
-
     #[test]
     fn ctrl_a_and_ctrl_e_cross_line_boundaries_like_shell_editors() {
         let mut editor = Editor::from_text("alpha\nbeta".to_string());
@@ -18739,12 +16589,5 @@ enabled = true
             last_message_at: None,
             goal: None,
         }
-    }
-
-    fn write_test_runtime_config(content: &str) -> PathBuf {
-        let dir = tempfile::tempdir().expect("tempdir should exist");
-        let path = dir.keep().join("agena-tui-test.toml");
-        fs::write(&path, content).expect("config should be written");
-        path
     }
 }

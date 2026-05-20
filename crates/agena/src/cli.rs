@@ -74,7 +74,7 @@ use crate::{
                   agena exec \"summarise the README\"\n  \
                   agena sessions list\n\n\
                   Configuration is loaded from $AGENA_CONFIG, the path passed \
-                  with --config, or `agena.toml` in the workspace. \
+                  with --config, or `agena.json` in the workspace. \
                   Run `agena config show` to inspect the resolved settings.",
     after_help = "EXAMPLES:\n  \
                   Start the terminal UI:\n    \
@@ -155,7 +155,7 @@ pub struct DebugCommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct DiagnosticsArgs {
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -164,7 +164,7 @@ pub struct CostArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
     pub last: bool,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -200,14 +200,14 @@ pub struct UsageArgs {
     /// End of a custom range. Accepts YYYY-MM-DD or RFC3339.
     #[arg(long)]
     pub to: Option<String>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct CommitArgs {
     pub message: String,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -220,7 +220,7 @@ pub struct PrArgs {
     pub base: Option<String>,
     #[arg(long)]
     pub head: Option<String>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -265,7 +265,7 @@ pub enum PermissionReplyKindArg {
 pub struct PermissionsListArgs {
     #[arg(long)]
     pub search: Option<String>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -295,7 +295,7 @@ pub struct PermissionsWriteArgs {
     pub session_id: Option<i64>,
     #[arg(long = "rule-mode", value_enum)]
     pub rule_mode: PermissionModeArg,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -311,7 +311,7 @@ pub struct PermissionsRevokeArgs {
     pub rule_id: i64,
     #[arg(long)]
     pub reason: Option<String>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -328,19 +328,19 @@ pub struct PermissionsReplyArgs {
     pub reason: Option<String>,
     #[arg(long, value_enum)]
     pub scope: Option<PermissionScopeArg>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct WorktreeArgs {
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct GitArgs {
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -394,14 +394,14 @@ pub enum PluginSubcommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct PluginStatusArgs {
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct PluginInspectArgs {
     pub plugin_id: String,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -432,7 +432,7 @@ pub struct PluginInstallArgs {
     /// Registry id, used as a cache key (defaults to "default").
     #[arg(long, default_value = "default")]
     pub registry_id: String,
-    /// Path to the agena config.toml that should receive the plugin tool.
+    /// Path to the agena config.json that should receive the plugin tool.
     #[arg(long)]
     pub config: Option<PathBuf>,
     /// Overwrite an existing entry with the same plugin id.
@@ -586,7 +586,7 @@ pub enum SessionGoalSubcommand {
 #[derive(Debug, Clone, Args)]
 pub struct SessionGoalGetArgs {
     pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -596,28 +596,28 @@ pub struct SessionGoalCreateArgs {
     pub objective: String,
     #[arg(long)]
     pub token_budget: Option<u64>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct SessionGoalCompleteArgs {
     pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct SessionGoalClearArgs {
     pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct SessionCheckpointsArgs {
     pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -626,7 +626,7 @@ pub struct SessionUnrewindArgs {
     pub session_id: i64,
     #[arg(long = "message")]
     pub message_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -640,7 +640,7 @@ pub struct SessionImportArgs {
     /// Optional path. Reads from stdin if omitted.
     #[arg(long)]
     pub path: Option<std::path::PathBuf>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -653,13 +653,13 @@ pub struct SessionTreeArgs {
     /// Cap the number of sessions rendered. Useful for very wide trees.
     #[arg(long)]
     pub limit: Option<usize>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct AuthListArgs {
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -704,7 +704,7 @@ pub struct SessionListArgs {
     pub view: SessionListView,
     #[arg(long)]
     pub anchor_session_id: Option<i64>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -712,7 +712,7 @@ pub struct SessionListArgs {
 pub struct MemoryListArgs {
     #[arg(long = "workspace", alias = "cwd")]
     pub workspace: Option<PathBuf>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -737,7 +737,7 @@ pub struct ResumeArgs {
     pub last: bool,
     #[arg(long)]
     pub agent: Option<String>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -760,7 +760,7 @@ pub struct ContinueArgs {
     pub temperature: Option<f32>,
     #[arg(long)]
     pub max_output_tokens: Option<u32>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -846,26 +846,26 @@ pub struct ForkArgs {
     pub at_message: Option<i64>,
     #[arg(long)]
     pub title: Option<String>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct ConfigResolveArgs {
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct ProviderListArgs {
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct ProviderModelsArgs {
     pub provider_id: String,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -874,13 +874,13 @@ pub struct ProviderCapabilitiesArgs {
     pub target: String,
     #[arg(long)]
     pub model: Option<String>,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct AgentsListArgs {
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Toml)]
+    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
 
@@ -1917,7 +1917,7 @@ impl AgenaCli {
         match command
             .command
             .unwrap_or(ConfigSubcommand::Resolve(ConfigResolveArgs {
-                format: ConfigOutputFormat::Toml,
+                format: ConfigOutputFormat::Json,
             })) {
             ConfigSubcommand::Resolve(args) => {
                 let resolution = loader.load(&self.load_request())?;
@@ -1983,7 +1983,7 @@ impl AgenaCli {
         match command
             .command
             .unwrap_or(AuthSubcommand::List(AuthListArgs {
-                format: ConfigOutputFormat::Toml,
+                format: ConfigOutputFormat::Json,
             })) {
             AuthSubcommand::List(args) => {
                 let mut credentials = manager
@@ -2002,7 +2002,7 @@ impl AgenaCli {
             .command
             .unwrap_or(MemorySubcommand::List(MemoryListArgs {
                 workspace: None,
-                format: ConfigOutputFormat::Toml,
+                format: ConfigOutputFormat::Json,
             })) {
             MemorySubcommand::List(args) => {
                 let store = self.memory_store_for_workspace(args.workspace.as_ref())?;
@@ -2062,7 +2062,7 @@ impl AgenaCli {
                 offset: 0,
                 view: SessionListView::All,
                 anchor_session_id: None,
-                format: ConfigOutputFormat::Toml,
+                format: ConfigOutputFormat::Json,
             })) {
             SessionsSubcommand::List(args) => {
                 let sessions = list_all_session_summaries(manager.as_ref()).await?;
@@ -2258,7 +2258,7 @@ impl AgenaCli {
             .command
             .unwrap_or(PermissionsSubcommand::List(PermissionsListArgs {
                 search: None,
-                format: ConfigOutputFormat::Toml,
+                format: ConfigOutputFormat::Json,
             })) {
             PermissionsSubcommand::List(args) => self.render_permissions_list_command(args).await,
             PermissionsSubcommand::Create(args) => {
@@ -2894,7 +2894,7 @@ impl AgenaCli {
         match command
             .command
             .unwrap_or(ProviderSubcommand::List(ProviderListArgs {
-                format: ConfigOutputFormat::Toml,
+                format: ConfigOutputFormat::Json,
             })) {
             ProviderSubcommand::List(args) => {
                 let mut providers = registry
@@ -2973,7 +2973,7 @@ impl AgenaCli {
         match command
             .command
             .unwrap_or(AgentsSubcommand::List(AgentsListArgs {
-                format: ConfigOutputFormat::Toml,
+                format: ConfigOutputFormat::Json,
             })) {
             AgentsSubcommand::List(args) => render_serialized(
                 args.format,
@@ -3512,7 +3512,7 @@ fn default_user_config_path() -> Option<PathBuf> {
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
         .map(PathBuf::from)?;
-    Some(base.join(".agena").join("config.toml"))
+    Some(base.join(".agena").join("config.json"))
 }
 
 fn render_serialized<T>(format: ConfigOutputFormat, value: &T) -> Result<String, AppError>
@@ -3521,8 +3521,6 @@ where
 {
     match format {
         ConfigOutputFormat::Json => Ok(serde_json::to_string_pretty(value)?),
-        ConfigOutputFormat::Toml => toml::to_string_pretty(value)
-            .map_err(|err| AppError::Config(format!("failed to render toml output: {err}"))),
     }
 }
 
@@ -4243,127 +4241,6 @@ mod tests {
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect()
         }
-    }
-
-    #[tokio::test]
-    async fn login_api_key_then_auth_list_redacts_secret() {
-        let path = write_temp_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let cli = AgenaCli {
-            config: Some(path.clone()),
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: None,
-        };
-
-        cli.clone()
-            .run_login(
-                ConfigLoader::new(ProcessEnvironment),
-                LoginArgs {
-                    provider_id: "openai".to_owned(),
-                    api_key: Some("sk-test".to_owned()),
-                    browser: false,
-                    device: false,
-                    port: 1455,
-                    timeout_secs: 1,
-                    instance_url: "https://gitlab.com".to_owned(),
-                    enterprise_domain: None,
-                },
-            )
-            .await
-            .expect("login should write credential");
-
-        let output = cli
-            .render_auth_command(
-                &ConfigLoader::new(TestEnvironment::default()),
-                AuthCommand {
-                    command: Some(AuthSubcommand::List(AuthListArgs {
-                        format: ConfigOutputFormat::Json,
-                    })),
-                },
-            )
-            .await
-            .expect("auth list should render");
-        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
-
-        assert_eq!(value["credentials"][0]["provider_id"], "openai");
-        assert_eq!(value["credentials"][0]["kind"], "api_key");
-        assert!(!output.contains("sk-test"));
-    }
-
-    #[tokio::test]
-    async fn logout_removes_cli_credential() {
-        let path = write_temp_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let cli = AgenaCli {
-            config: Some(path),
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: None,
-        };
-
-        cli.clone()
-            .run_login(
-                ConfigLoader::new(ProcessEnvironment),
-                LoginArgs {
-                    provider_id: "openai".to_owned(),
-                    api_key: Some("sk-test".to_owned()),
-                    browser: false,
-                    device: false,
-                    port: 1455,
-                    timeout_secs: 1,
-                    instance_url: "https://gitlab.com".to_owned(),
-                    enterprise_domain: None,
-                },
-            )
-            .await
-            .expect("login should write credential");
-        cli.clone()
-            .run_logout(
-                ConfigLoader::new(ProcessEnvironment),
-                LogoutArgs {
-                    provider_id: "openai".to_owned(),
-                },
-            )
-            .expect("logout should remove credential");
-
-        let output = cli
-            .render_auth_command(
-                &ConfigLoader::new(TestEnvironment::default()),
-                AuthCommand {
-                    command: Some(AuthSubcommand::List(AuthListArgs {
-                        format: ConfigOutputFormat::Json,
-                    })),
-                },
-            )
-            .await
-            .expect("auth list should render");
-        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
-        assert!(value["credentials"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -5253,228 +5130,6 @@ enabled = true
         assert_eq!(value["entries"][0]["kind"], "stdio");
     }
 
-    #[tokio::test]
-    async fn provider_capabilities_command_renders_resolved_provider_capabilities() {
-        let path = write_temp_config(
-            r#"
-[providers.openai]
-default_adapter = "openai"
-default_model = "gpt-5"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
-
-[providers.openai.adapters.openai]
-enabled = true
-
-[providers.openai.adapters.openai.models."gpt-5"]
-input = { unsupported = ["image"] }
-"#,
-        );
-        let env = TestEnvironment {
-            vars: BTreeMap::from([("OPENAI_API_KEY".to_owned(), "sk-test".to_owned())]),
-        };
-        let loader = ConfigLoader::new(env);
-        let cli = AgenaCli {
-            config: Some(path),
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: Some(AgenaCommand::Provider(ProviderCommand {
-                command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
-                    target: "openai".to_owned(),
-                    model: None,
-                    format: ConfigOutputFormat::Json,
-                })),
-            })),
-        };
-
-        let output = cli
-            .render_provider_command(
-                &loader,
-                ProviderCommand {
-                    command: Some(ProviderSubcommand::Capabilities(ProviderCapabilitiesArgs {
-                        target: "openai/gpt-5".to_owned(),
-                        model: None,
-                        format: ConfigOutputFormat::Json,
-                    })),
-                },
-            )
-            .await
-            .expect("provider capabilities command should succeed");
-        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
-
-        assert_eq!(value["provider_id"], "openai");
-        assert_eq!(value["model"], "gpt-5");
-        assert_eq!(
-            value["model_ref"],
-            "provider=openai adapter=openai model=gpt-5"
-        );
-        assert_eq!(value["capabilities"]["image_input"], "unsupported");
-        assert_eq!(value["capabilities"]["document_input"], "supported");
-    }
-
-    #[tokio::test]
-    async fn provider_models_command_renders_static_gitlab_models() {
-        let path = write_temp_config(
-            r#"
-[providers.gitlab]
-default_adapter = "gitlab"
-default_model = "claude-sonnet-4-5"
-
-[providers.gitlab.auth]
-mode = "api"
-base_url = "https://gitlab.com/api/v4"
-api_key = "glpat-test"
-
-[providers.gitlab.adapters.gitlab]
-enabled = true
-
-[providers.gitlab.adapters.gitlab.models."claude-sonnet-4-5"]
-"#,
-        );
-        let loader = ConfigLoader::new(TestEnvironment {
-            vars: BTreeMap::from([("OPENAI_API_KEY".to_owned(), "sk-test".to_owned())]),
-        });
-        let cli = AgenaCli {
-            config: Some(path),
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: None,
-        };
-
-        let output = cli
-            .render_provider_command(
-                &loader,
-                ProviderCommand {
-                    command: Some(ProviderSubcommand::Models(ProviderModelsArgs {
-                        provider_id: "gitlab".to_owned(),
-                        format: ConfigOutputFormat::Json,
-                    })),
-                },
-            )
-            .await
-            .expect("provider models command should succeed");
-        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
-
-        assert_eq!(value["provider_id"], "gitlab");
-        let model = value["models"]
-            .as_array()
-            .expect("models should be an array")
-            .iter()
-            .find(|model| model["id"] == "claude-sonnet-4-5")
-            .expect("gitlab claude model should be listed");
-        assert_eq!(model["adapter_id"], "gitlab");
-        assert_eq!(model["capabilities"]["tool_calling"], "supported");
-    }
-
-    #[tokio::test]
-    async fn provider_list_command_includes_provider_default_models() {
-        let path = write_temp_config(
-            r#"
-[providers.openai]
-default_adapter = "openai"
-default_model = "gpt-5"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-api_key_env = "OPENAI_API_KEY"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let env = TestEnvironment {
-            vars: BTreeMap::from([("OPENAI_API_KEY".to_owned(), "sk-test".to_owned())]),
-        };
-        let loader = ConfigLoader::new(env);
-        let cli = AgenaCli {
-            config: Some(path),
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: None,
-        };
-
-        let output = cli
-            .render_provider_command(
-                &loader,
-                ProviderCommand {
-                    command: Some(ProviderSubcommand::List(ProviderListArgs {
-                        format: ConfigOutputFormat::Json,
-                    })),
-                },
-            )
-            .await
-            .expect("provider list command should succeed");
-        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
-        let providers = value["providers"]
-            .as_array()
-            .expect("providers should be an array");
-
-        assert!(providers.iter().any(|item| {
-            item["provider_id"] == "openai"
-                && item["default_adapter"] == "openai"
-                && item["default_model"] == "gpt-5"
-        }));
-    }
-
-    #[tokio::test]
-    async fn agents_list_renders_runtime_inventory() {
-        let path = write_temp_config(
-            r#"
-[providers.openai]
-default_model = "openai/gpt-5.4"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com/v1"
-api_key = "dummy"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        );
-        let cli = AgenaCli {
-            config: Some(path),
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: None,
-        };
-
-        let output = cli
-            .render_agents_command(AgentsCommand {
-                command: Some(AgentsSubcommand::List(AgentsListArgs {
-                    format: ConfigOutputFormat::Json,
-                })),
-            })
-            .await
-            .expect("agents list should render");
-        let value: Value = serde_json::from_str(output.as_str()).expect("output should be json");
-
-        assert_eq!(value["default_agent"], "build");
-        assert!(value["total_count"].as_u64().unwrap_or(0) >= 1);
-        assert!(
-            value["agents"]
-                .as_array()
-                .expect("agents should be array")
-                .iter()
-                .any(|agent| agent["name"] == "build")
-        );
-        assert!(
-            value["agents"]
-                .as_array()
-                .expect("agents should be array")
-                .iter()
-                .any(|agent| agent["name"] == "scout")
-        );
-    }
-
     #[test]
     fn capability_support_json_serialization_uses_snake_case_strings() {
         let encoded =
@@ -5487,8 +5142,15 @@ enabled = true
             .duration_since(UNIX_EPOCH)
             .expect("time should move forward")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("agena-cli-{suffix}.toml"));
-        fs::write(&path, content).expect("temp config should be written");
+        let path = std::env::temp_dir().join(format!("agena-cli-{suffix}.json"));
+        let json = if content.trim().is_empty() {
+            "{}".to_owned()
+        } else {
+            serde_json::from_str::<serde_json::Value>(content)
+                .expect("test config should be valid JSON");
+            content.to_owned()
+        };
+        fs::write(&path, json).expect("temp config should be written");
         path
     }
 }

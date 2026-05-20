@@ -153,7 +153,7 @@ mod tests {
                 session_id: Some(7),
                 last: false,
                 agent: None,
-                format: agena::config::ConfigOutputFormat::Toml,
+                format: agena::config::ConfigOutputFormat::Json,
             })),
         };
 

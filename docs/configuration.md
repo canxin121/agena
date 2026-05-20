@@ -1,20 +1,20 @@
 # 配置说明
 
-本文说明 Agena 的运行时配置、环境变量、CLI 覆盖、provider、权限、插件和相关服务参数。配置实现主要在 `crates/agena/src/config/`，示例文件为仓库根目录的 `config.example.toml` 和 `config.full.toml`。
+本文说明 Agena 的运行时配置、环境变量、CLI 覆盖、provider、权限、插件和相关服务参数。配置实现主要在 `crates/agena/src/config/`，示例文件为仓库根目录的 `config.example.json` 和 `config.full.json`。
 
 ## 配置文件
 
-Agena 使用 TOML 配置文件。最小可用配置见仓库根目录的 `config.example.toml`，完整功能示例见 `config.full.toml`。
+Agena 使用 JSON 配置文件。最小可用配置见仓库根目录的 `config.example.json`，完整功能示例见 `config.full.json`。
 
 建议从最小配置开始：
 
 ```bash
 mkdir -p ~/.agena
-cp config.example.toml ~/.agena/config.toml
+cp config.example.json ~/.agena/config.json
 agena config validate
 ```
 
-`config.example.toml` 展示了最小启动面：
+`config.example.json` 展示了最小启动面：
 
 - `[tracing]`: 日志过滤。
 - `[default]`: 默认 provider、adapter、model 和 agent。
@@ -23,7 +23,7 @@ agena config validate
 - `[agents.<name>]`: 自定义 agent。
 - `[permission]`: 路径、网络、tool 权限。
 
-`config.full.toml` 展示了更完整的功能面：
+`config.full.json` 展示了更完整的功能面：
 
 - telemetry。
 - provider HTTP timeout、retry、stream replay。
@@ -42,14 +42,14 @@ agena config validate
 
 1. 如果显式传入 `--config <path>`，使用该路径。
 2. 否则如果设置 `AGENA_CONFIG`，使用该路径。
-3. 否则使用 `~/.agena/config.toml`。
+3. 否则使用 `~/.agena/config.json`。
 
 缺失配置文件不是错误。没有文件时，Agena 仍会使用内置默认值、环境变量和 CLI 覆盖解析出配置。
 
 合并优先级从低到高：
 
 1. 内置默认值。
-2. TOML 配置文件。
+2. JSON 配置文件。
 3. 环境变量 overlay。
 4. CLI 全局 `--set key=value` 覆盖。
 
@@ -650,7 +650,7 @@ headers = { openai-beta = "fast-mode-2026-02-01" }
 
 ## Agents
 
-Agent 可通过 TOML 配置，也可通过 `.agena/agents/*.md` 和 `~/.agena/agents/*.md` 发现。
+Agent 可通过 JSON 配置，也可通过 `.agena/agents/*.md` 和 `~/.agena/agents/*.md` 发现。
 
 TOML 示例：
 
@@ -1106,7 +1106,7 @@ options = { }
 timeouts = { init = "20s" }
 ```
 
-`options` 是传给 plugin 的自由 JSON/TOML 配置；runtime-provided static plugin 也通过 `options` 接收自己的配置。
+`options` 是传给 plugin 的自由 JSON 配置；runtime-provided static plugin 也通过 `options` 接收自己的配置。
 
 Timeout 字段：
 
@@ -1338,7 +1338,7 @@ agena-studio \
   --host 127.0.0.1 \
   --port 3210 \
   --workspace-root "$PWD" \
-  --config ~/.agena/config.toml
+  --config ~/.agena/config.json
 ```
 
 服务参数：

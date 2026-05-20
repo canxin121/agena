@@ -119,7 +119,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             &mut plan,
         )?;
 
-        // Snapshot installed.json + the user's config.toml before mutating
+        // Snapshot installed.json + the user's config.json before mutating
         // anything so we can roll back if any step in the plan fails.
         let txn = InstallTransaction::begin(&self.cache, &req.config_path)?;
 
@@ -1039,7 +1039,7 @@ mod tests {
         fetcher.insert("https://registry.test/index.json", index_bytes);
 
         let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
-        let config_path = root.join("config.toml");
+        let config_path = root.join("config.json");
 
         let req = InstallRequest {
             registry: RegistrySpec {
@@ -1126,7 +1126,7 @@ mod tests {
                 },
                 plugin_id: "demo".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,
@@ -1181,7 +1181,7 @@ mod tests {
             },
             plugin_id: "demo".into(),
             version: None,
-            config_path: root.join("config.toml"),
+            config_path: root.join("config.json"),
             force: false,
             dry_run: false,
             allow_unverified: false,
@@ -1271,7 +1271,7 @@ mod tests {
                 },
                 plugin_id: "bundle".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,
@@ -1348,7 +1348,7 @@ mod tests {
                 registry: registry.clone(),
                 plugin_id: "p".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,
@@ -1452,7 +1452,7 @@ mod tests {
                 registry: registry.clone(),
                 plugin_id: "app".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,
@@ -1521,7 +1521,7 @@ mod tests {
                 },
                 plugin_id: "app".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,
@@ -1535,7 +1535,7 @@ mod tests {
                 if dep == "missing-lib" && requested_by == "app"
         ));
         assert!(client.list_installed().unwrap().is_empty());
-        assert!(!root.join("config.toml").exists());
+        assert!(!root.join("config.json").exists());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1594,7 +1594,7 @@ mod tests {
                 },
                 plugin_id: "app".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,
@@ -1604,14 +1604,14 @@ mod tests {
 
         assert!(matches!(err, MarketplaceError::CircularDependency(plugin) if plugin == "app"));
         assert!(client.list_installed().unwrap().is_empty());
-        assert!(!root.join("config.toml").exists());
+        assert!(!root.join("config.json").exists());
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn install_rolls_back_when_a_step_fails() {
         // Plan: app depends on lib. lib's artifact URL has no fixture so
-        // the lib install fails partway through; the user-facing config.toml
+        // the lib install fails partway through; the user-facing config.json
         // and installed.json must remain untouched.
         use crate::manifest::DependencySpec;
         let root = temp_root("rollback");
@@ -1672,7 +1672,7 @@ mod tests {
         );
 
         let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
-        let config_path = root.join("config.toml");
+        let config_path = root.join("config.json");
         // Pre-existing config we expect the rollback to restore byte-for-byte.
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(&config_path, b"# preexisting\n").unwrap();
@@ -1743,7 +1743,7 @@ mod tests {
         );
 
         let client = MarketplaceClient::new(cache.clone(), Arc::clone(&fetcher), BTreeMap::new());
-        let config_path = root.join("config.toml");
+        let config_path = root.join("config.json");
         let outcome = client
             .install(InstallRequest {
                 registry: RegistrySpec {
@@ -1824,7 +1824,7 @@ mod tests {
                 },
                 plugin_id: "bundle".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: true,
                 allow_unverified: false,
@@ -1884,7 +1884,7 @@ mod tests {
                 },
                 plugin_id: "sigless".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,
@@ -1934,7 +1934,7 @@ mod tests {
         );
 
         let client = MarketplaceClient::new(cache, Arc::clone(&fetcher), BTreeMap::new());
-        let config_path = root.join("config.toml");
+        let config_path = root.join("config.json");
         let base_request = InstallRequest {
             registry: RegistrySpec {
                 id: "test".into(),
@@ -2041,7 +2041,7 @@ mod tests {
                 },
                 plugin_id: "demo".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,
@@ -2057,7 +2057,7 @@ mod tests {
                 },
                 plugin_id: "broken".into(),
                 version: None,
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 force: false,
                 dry_run: false,
                 allow_unverified: false,

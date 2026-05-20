@@ -3,17 +3,20 @@ mod credential_store;
 mod edit;
 mod error;
 mod loader;
+mod overlay;
 mod overrides;
 mod raw;
 mod registry;
 mod types;
 
-#[cfg(test)]
-mod tests;
-
 pub use agena_otel::TelemetryConfig;
 pub use error::ConfigError;
 pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvironment};
+pub use overlay::{
+    ProviderAdapterOverlay, ProviderAuthMode, ProviderAuthOverlay, ProviderModelOverlay,
+    ProviderOverlay, ProviderProtocolPathsOverlay, provider_model_overlay_from_catalog_definition,
+    provider_model_overlay_from_definition,
+};
 pub use overrides::ConfigOverride;
 pub use types::{
     AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer,

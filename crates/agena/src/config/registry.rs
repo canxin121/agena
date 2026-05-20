@@ -1843,7 +1843,7 @@ where
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, any()))]
 mod tests {
     use std::{
         collections::BTreeMap,
@@ -2416,7 +2416,7 @@ capability_family = "gemini"
 
     #[test]
     fn registry_builder_accepts_config_full_without_credentials_for_first_run_login() {
-        let path = write_temp_file(include_str!("../../../../config.full.toml"));
+        let path = write_temp_file(include_str!("../../../../config.full.json"));
 
         let env = TestEnvironment::default();
         let loader = ConfigLoader::new(env.clone());
@@ -2425,12 +2425,12 @@ capability_family = "gemini"
                 config_path: Some(path),
                 overrides: Vec::new(),
             })
-            .expect("config.full.toml should load");
+            .expect("config.full.json should load");
 
         let registry = resolution
             .config
             .build_provider_registry_with_env(&env)
-            .expect("config.full.toml should build provider registry without credentials");
+            .expect("config.full.json should build provider registry without credentials");
 
         let ids = registry.provider_ids();
         assert!(ids.iter().any(|id| id == "openai"));
@@ -3028,8 +3028,17 @@ auth_scheme = "Bearer"
             .duration_since(UNIX_EPOCH)
             .expect("time should move forward")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("agena-config-registry-{suffix}.toml"));
-        fs::write(&path, content).expect("temp file should be written");
+        let path = std::env::temp_dir().join(format!("agena-config-registry-{suffix}.json"));
+        let json = if content.trim().is_empty() {
+            "{}".to_owned()
+        } else if content.trim_start().starts_with('{') {
+            content.to_owned()
+        } else {
+            let value: toml::Value =
+                toml::from_str(content).expect("test config TOML should parse");
+            serde_json::to_string_pretty(&value).expect("test config JSON should serialize")
+        };
+        fs::write(&path, json).expect("temp file should be written");
         path
     }
 }

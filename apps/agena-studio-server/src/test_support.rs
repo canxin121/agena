@@ -16,9 +16,9 @@ pub(crate) async fn build_test_app_state(
 ) -> Arc<crate::AppState> {
     std::fs::create_dir_all(workspace_root).expect("test workspace should exist");
 
-    let config_path = workspace_root.join("empty-agena-test.toml");
+    let config_path = workspace_root.join("empty-agena-test.json");
     if !config_path.exists() {
-        std::fs::write(&config_path, "").expect("test config should be written");
+        std::fs::write(&config_path, "{}").expect("test config should be written");
     }
 
     let compat_db = Arc::new(

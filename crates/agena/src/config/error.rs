@@ -19,7 +19,7 @@ pub enum ConfigError {
     #[error("failed to parse config file {path}: {source}")]
     ParseFile {
         path: PathBuf,
-        source: toml::de::Error,
+        source: serde_json::Error,
     },
     #[error("config modes are no longer supported; remove `{field}` and use a single config file")]
     UnsupportedModeConfig { field: &'static str },
@@ -57,8 +57,6 @@ pub enum ConfigError {
     App(#[from] AppError),
     #[error("failed to encode config as json: {0}")]
     SerializeJson(#[from] serde_json::Error),
-    #[error("failed to encode config as toml: {0}")]
-    SerializeToml(#[from] toml::ser::Error),
 }
 
 pub(crate) fn parse_numeric<T>(value: &str, key: &str) -> Result<T, ConfigError>

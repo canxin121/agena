@@ -222,7 +222,7 @@ mod tests {
                 kind: PluginKind::Wasm,
                 platform: "any".to_string(),
                 binary_path: root.join("plugins/demo/0.1.0/binary.wasm"),
-                config_path: root.join("config.toml"),
+                config_path: root.join("config.json"),
                 sha256: Some("abc".to_string()),
                 installed_at: Utc::now(),
                 registry_id: "default".to_string(),

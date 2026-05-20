@@ -110,7 +110,7 @@ const panels = {
       host: '127.0.0.1',
       port: '3210',
       workspace_root: '/workspace',
-      agena_config_path: '/workspace/.agena/config.toml',
+      agena_config_path: '/workspace/.agena/config.json',
       agena_mode: 'default',
       database_path: '/workspace/agena.db',
       database_url: 'sqlite:///workspace/agena.db',

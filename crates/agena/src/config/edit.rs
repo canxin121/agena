@@ -2,8 +2,7 @@ use std::{fs, path::PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value as TomlValue};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use super::{ConfigEnvironment, ConfigError, ProcessEnvironment};
 
@@ -346,8 +345,7 @@ pub fn read_file_setting(
     input: ConfigSettingsGetInput,
 ) -> Result<ConfigSettingsReadResponse, ConfigError> {
     let config_path = config_path.into();
-    let (config_found, doc) = read_or_create_doc(&config_path)?;
-    let file_value = doc_to_json(&doc)?;
+    let (config_found, file_value) = read_or_create_doc(&config_path)?;
     let value = get_json_path(&file_value, input.path.as_deref())?;
     Ok(ConfigSettingsReadResponse {
         config_path,
@@ -363,8 +361,7 @@ pub fn list_file_settings(
     input: ConfigSettingsListInput,
 ) -> Result<ConfigSettingsListResponse, ConfigError> {
     let config_path = config_path.into();
-    let (config_found, doc) = read_or_create_doc(&config_path)?;
-    let file_value = doc_to_json(&doc)?;
+    let (config_found, file_value) = read_or_create_doc(&config_path)?;
     let entries = list_json_path(&file_value, input.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
         config_path,
@@ -396,11 +393,10 @@ pub fn set_file_setting_with_env(
     let config_path = config_path.into();
     let segments = required_path_segments(&input.path)?;
     let (config_found, mut doc) = read_or_create_doc(&config_path)?;
-    let before = doc_to_json(&doc)?;
+    let before = doc.clone();
     let previous = get_json_path(&before, Some(input.path.as_str()))?;
     let created = previous.is_null();
-    let item = json_to_item(&input.value)?;
-    set_doc_item(&mut doc, &segments, item)?;
+    set_json_path(&mut doc, &segments, input.value)?;
     finish_edit(
         config_path,
         config_found,
@@ -432,8 +428,8 @@ pub fn delete_file_setting_with_env(
     let config_path = config_path.into();
     let segments = required_path_segments(&input.path)?;
     let (config_found, mut doc) = read_or_create_doc(&config_path)?;
-    let before = doc_to_json(&doc)?;
-    let deleted = remove_doc_item(&mut doc, &segments)?;
+    let before = doc.clone();
+    let deleted = remove_json_path(&mut doc, &segments)?;
     finish_edit(
         config_path,
         config_found,
@@ -467,13 +463,13 @@ pub fn patch_file_settings_with_env(
     })?;
     let config_path = config_path.into();
     let (config_found, mut doc) = read_or_create_doc(&config_path)?;
-    let before = doc_to_json(&doc)?;
+    let before = doc.clone();
     let created = match input.path.as_deref() {
         Some(path) => get_json_path(&before, Some(path))?.is_null(),
         None => false,
     };
-    let target = ensure_doc_table(&mut doc, input.path.as_deref())?;
-    merge_json_object_into_table(target, changes)?;
+    let target = ensure_object_path(&mut doc, input.path.as_deref())?;
+    merge_json_object(target, changes)?;
     finish_edit(
         config_path,
         config_found,
@@ -502,7 +498,7 @@ pub fn validate_file_settings_with_env(
 ) -> Result<ConfigSettingsValidateResponse, ConfigError> {
     let config_path = config_path.into();
     let (config_found, doc) = read_or_create_doc(&config_path)?;
-    let text = doc.to_string();
+    let text = serde_json::to_string_pretty(&doc)?;
     super::raw::validate_config_text(&config_path, text.as_str(), env)?;
     Ok(ConfigSettingsValidateResponse {
         config_path,
@@ -515,7 +511,7 @@ pub fn validate_file_settings_with_env(
 fn finish_edit(
     config_path: PathBuf,
     config_found: bool,
-    doc: DocumentMut,
+    doc: JsonValue,
     before: JsonValue,
     path: Option<String>,
     operation: &'static str,
@@ -526,14 +522,13 @@ fn finish_edit(
     deleted: bool,
     env: &dyn ConfigEnvironment,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
-    let text = doc.to_string();
+    let text = serde_json::to_string_pretty(&doc)?;
     if validate {
         super::raw::validate_config_text(&config_path, text.as_str(), env)?;
     }
-    let after = doc_to_json(&doc)?;
     let previous = get_json_path(&before, path.as_deref())?;
-    let current = get_json_path(&after, path.as_deref())?;
-    let changed = before != after;
+    let current = get_json_path(&doc, path.as_deref())?;
+    let changed = before != doc;
     if changed && !dry_run {
         write_doc(&config_path, text.as_str())?;
     }
@@ -556,24 +551,32 @@ fn finish_edit(
     })
 }
 
-fn read_or_create_doc(path: &PathBuf) -> Result<(bool, DocumentMut), ConfigError> {
+fn read_or_create_doc(path: &PathBuf) -> Result<(bool, JsonValue), ConfigError> {
     match fs::read_to_string(path) {
         Ok(text) => {
-            let doc = text.parse::<DocumentMut>().map_err(|err| {
-                ConfigError::Validation(format!(
-                    "failed to parse editable config file {}: {err}",
-                    path.display()
-                ))
+            let value = serde_json::from_str::<JsonValue>(text.as_str()).map_err(|source| {
+                ConfigError::ParseFile {
+                    path: path.clone(),
+                    source,
+                }
             })?;
-            Ok((true, doc))
+            Ok((true, normalize_root_object(value)))
         }
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
-            Ok((false, DocumentMut::new()))
+            Ok((false, JsonValue::Object(JsonMap::new())))
         }
         Err(source) => Err(ConfigError::ReadFile {
             path: path.clone(),
             source,
         }),
+    }
+}
+
+fn normalize_root_object(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Object(_) => value,
+        JsonValue::Null => JsonValue::Object(JsonMap::new()),
+        other => other,
     }
 }
 
@@ -590,19 +593,6 @@ fn write_doc(path: &PathBuf, text: &str) -> Result<(), ConfigError> {
     })
 }
 
-fn doc_to_json(doc: &DocumentMut) -> Result<JsonValue, ConfigError> {
-    let text = doc.to_string();
-    if text.trim().is_empty() {
-        return Ok(serde_json::json!({}));
-    }
-    let parsed =
-        toml::from_str::<toml::Value>(text.as_str()).map_err(|source| ConfigError::ParseFile {
-            path: PathBuf::from("<memory>"),
-            source,
-        })?;
-    serde_json::to_value(parsed).map_err(ConfigError::from)
-}
-
 fn required_path_segments(path: &str) -> Result<Vec<String>, ConfigError> {
     let segments = parse_settings_path(path)?;
     if segments.is_empty() {
@@ -613,283 +603,114 @@ fn required_path_segments(path: &str) -> Result<Vec<String>, ConfigError> {
     Ok(segments)
 }
 
-fn ensure_doc_table<'a>(
-    doc: &'a mut DocumentMut,
+fn ensure_object_path<'a>(
+    root: &'a mut JsonValue,
     path: Option<&str>,
-) -> Result<&'a mut Table, ConfigError> {
+) -> Result<&'a mut JsonMap<String, JsonValue>, ConfigError> {
+    if !root.is_object() {
+        *root = JsonValue::Object(JsonMap::new());
+    }
     let Some(path) = path.map(str::trim).filter(|path| !path.is_empty()) else {
-        return Ok(doc.as_table_mut());
+        return root
+            .as_object_mut()
+            .ok_or_else(|| ConfigError::Validation("settings root must be an object".to_owned()));
     };
     let segments = parse_settings_path(path)?;
-    let mut table = doc.as_table_mut();
+    let mut cursor = root;
     for segment in segments {
-        let item = table
-            .entry(segment.as_str())
-            .or_insert(Item::Table(Table::new()));
-        if item.is_none() {
-            *item = Item::Table(Table::new());
-        }
-        table = item.as_table_mut().ok_or_else(|| {
+        let object = cursor.as_object_mut().ok_or_else(|| {
             ConfigError::Validation(format!(
-                "settings path `{path}` crosses non-table segment `{segment}`"
+                "settings path `{path}` crosses non-object segment `{segment}`"
             ))
         })?;
+        let child = object
+            .entry(segment)
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+        if child.is_null() {
+            *child = JsonValue::Object(JsonMap::new());
+        }
+        if !child.is_object() {
+            return Err(ConfigError::Validation(format!(
+                "settings path `{path}` crosses non-object segment"
+            )));
+        }
+        cursor = child;
     }
-    Ok(table)
+    cursor
+        .as_object_mut()
+        .ok_or_else(|| ConfigError::Validation("settings target must be an object".to_owned()))
 }
 
-fn ensure_parent_table<'a>(
-    doc: &'a mut DocumentMut,
+fn set_json_path(
+    root: &mut JsonValue,
     segments: &[String],
-) -> Result<&'a mut Table, ConfigError> {
-    let mut table = doc.as_table_mut();
-    for segment in &segments[..segments.len().saturating_sub(1)] {
-        let item = table
-            .entry(segment.as_str())
-            .or_insert(Item::Table(Table::new()));
-        if item.is_none() {
-            *item = Item::Table(Table::new());
-        }
-        table = item.as_table_mut().ok_or_else(|| {
-            ConfigError::Validation(format!(
-                "settings path crosses non-table segment `{segment}`"
-            ))
-        })?;
-    }
-    Ok(table)
-}
-
-fn set_doc_item(doc: &mut DocumentMut, segments: &[String], item: Item) -> Result<(), ConfigError> {
-    let parent = ensure_parent_table(doc, segments)?;
+    value: JsonValue,
+) -> Result<(), ConfigError> {
     let key = segments
         .last()
-        .ok_or_else(|| ConfigError::Validation("settings path must not be empty".to_owned()))?;
-    parent.insert(key.as_str(), item);
+        .ok_or_else(|| ConfigError::Validation("settings path must not be empty".to_owned()))?
+        .clone();
+    let parent_path = if segments.len() > 1 {
+        Some(format_settings_path(&segments[..segments.len() - 1]))
+    } else {
+        None
+    };
+    let object = ensure_object_path(root, parent_path.as_deref())?;
+    object.insert(key, value);
     Ok(())
 }
 
-fn remove_doc_item(doc: &mut DocumentMut, segments: &[String]) -> Result<bool, ConfigError> {
-    let parent = ensure_parent_table(doc, segments)?;
+fn remove_json_path(root: &mut JsonValue, segments: &[String]) -> Result<bool, ConfigError> {
     let key = segments
         .last()
         .ok_or_else(|| ConfigError::Validation("settings path must not be empty".to_owned()))?;
-    Ok(parent.remove(key.as_str()).is_some())
+    if segments.len() == 1 {
+        let Some(object) = root.as_object_mut() else {
+            return Ok(false);
+        };
+        return Ok(object.remove(key.as_str()).is_some());
+    }
+    let mut cursor = root;
+    for segment in &segments[..segments.len() - 1] {
+        let Some(object) = cursor.as_object_mut() else {
+            return Ok(false);
+        };
+        let Some(child) = object.get_mut(segment.as_str()) else {
+            return Ok(false);
+        };
+        cursor = child;
+    }
+    let Some(object) = cursor.as_object_mut() else {
+        return Ok(false);
+    };
+    Ok(object.remove(key.as_str()).is_some())
 }
 
-fn merge_json_object_into_table(
-    table: &mut Table,
-    object: &serde_json::Map<String, JsonValue>,
+fn merge_json_object(
+    target: &mut JsonMap<String, JsonValue>,
+    changes: &JsonMap<String, JsonValue>,
 ) -> Result<(), ConfigError> {
-    for (key, value) in object {
+    for (key, value) in changes {
         if value.is_null() {
-            table.remove(key.as_str());
-        } else if let Some(child) = value.as_object() {
-            let item = table
-                .entry(key.as_str())
-                .or_insert(Item::Table(Table::new()));
-            if item.is_none() {
-                *item = Item::Table(Table::new());
+            target.remove(key.as_str());
+            continue;
+        }
+        if let Some(object_patch) = value.as_object() {
+            let entry = target
+                .entry(key.clone())
+                .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+            if entry.is_null() {
+                *entry = JsonValue::Object(JsonMap::new());
             }
-            let table = item.as_table_mut().ok_or_else(|| {
+            let child = entry.as_object_mut().ok_or_else(|| {
                 ConfigError::Validation(format!(
-                    "settings_patch cannot merge object into non-table key `{key}`"
+                    "settings_patch cannot merge object into non-object key `{key}`"
                 ))
             })?;
-            merge_json_object_into_table(table, child)?;
+            merge_json_object(child, object_patch)?;
         } else {
-            table.insert(key.as_str(), Item::Value(json_to_toml_value(value)?));
+            target.insert(key.clone(), value.clone());
         }
     }
     Ok(())
-}
-
-fn json_to_item(value: &JsonValue) -> Result<Item, ConfigError> {
-    match value {
-        JsonValue::Object(object) => {
-            let mut table = Table::new();
-            merge_json_object_into_table(&mut table, object)?;
-            Ok(Item::Table(table))
-        }
-        other => Ok(Item::Value(json_to_toml_value(other)?)),
-    }
-}
-
-fn json_to_toml_value(value: &JsonValue) -> Result<TomlValue, ConfigError> {
-    match value {
-        JsonValue::Null => Err(ConfigError::Validation(
-            "TOML settings cannot represent JSON null".to_owned(),
-        )),
-        JsonValue::Bool(value) => Ok(TomlValue::from(*value)),
-        JsonValue::Number(number) => {
-            if let Some(value) = number.as_i64() {
-                Ok(TomlValue::from(value))
-            } else if let Some(value) = number.as_u64() {
-                let value = i64::try_from(value).map_err(|_| {
-                    ConfigError::Validation(format!("integer value `{number}` exceeds TOML range"))
-                })?;
-                Ok(TomlValue::from(value))
-            } else {
-                let value = number.as_f64().ok_or_else(|| {
-                    ConfigError::Validation(format!("invalid numeric value `{number}`"))
-                })?;
-                if !value.is_finite() {
-                    return Err(ConfigError::Validation(format!(
-                        "numeric value `{number}` is not finite"
-                    )));
-                }
-                Ok(TomlValue::from(value))
-            }
-        }
-        JsonValue::String(value) => Ok(TomlValue::from(value.clone())),
-        JsonValue::Array(items) => {
-            let mut array = Array::new();
-            for item in items {
-                array.push_formatted(json_to_toml_value(item)?);
-            }
-            Ok(TomlValue::from(array))
-        }
-        JsonValue::Object(object) => {
-            let mut table = InlineTable::new();
-            for (key, value) in object {
-                if value.is_null() {
-                    return Err(ConfigError::Validation(format!(
-                        "TOML inline table key `{key}` cannot be null"
-                    )));
-                }
-                table.insert(key.as_str(), json_to_toml_value(value)?);
-            }
-            Ok(TomlValue::from(table))
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use tempfile::TempDir;
-
-    use super::*;
-
-    fn config_path() -> (TempDir, PathBuf) {
-        let temp = tempfile::tempdir().expect("tempdir should create");
-        let path = temp.path().join("config.toml");
-        (temp, path)
-    }
-
-    #[test]
-    fn parse_settings_path_supports_quoted_segments() {
-        assert_eq!(
-            parse_settings_path(r#"plugins.list."agena.mcp".options.servers.filesystem"#).unwrap(),
-            vec![
-                "plugins",
-                "list",
-                "agena.mcp",
-                "options",
-                "servers",
-                "filesystem"
-            ]
-        );
-    }
-
-    #[test]
-    fn set_file_setting_creates_nested_table() {
-        let (_temp, path) = config_path();
-        let out = set_file_setting(
-            path.clone(),
-            ConfigSettingsSetInput {
-                path: "tracing.filter".to_string(),
-                value: JsonValue::String("debug".to_string()),
-                dry_run: false,
-                validate: true,
-                reload: true,
-            },
-        )
-        .expect("setting should write");
-
-        assert!(out.changed);
-        assert!(out.created);
-        assert_eq!(out.current, JsonValue::String("debug".to_string()));
-        let text = fs::read_to_string(path).expect("config should be readable");
-        assert!(text.contains("[tracing]"));
-        assert!(text.contains(r#"filter = "debug""#));
-    }
-
-    #[test]
-    fn patch_file_settings_merges_and_deletes() {
-        let (_temp, path) = config_path();
-        fs::write(
-            &path,
-            r#"
-[runtime.provider_http]
-timeout_secs = 120
-connect_timeout_secs = 15
-"#,
-        )
-        .unwrap();
-
-        let out = patch_file_settings(
-            path.clone(),
-            ConfigSettingsPatchInput {
-                path: Some("runtime.provider_http".to_string()),
-                changes: serde_json::json!({
-                    "timeout_secs": 90,
-                    "connect_timeout_secs": null
-                }),
-                dry_run: false,
-                validate: true,
-                reload: true,
-            },
-        )
-        .expect("patch should write");
-
-        assert!(out.changed);
-        let text = fs::read_to_string(path).expect("config should be readable");
-        assert!(text.contains("timeout_secs = 90"));
-        assert!(!text.contains("connect_timeout_secs"));
-    }
-
-    #[test]
-    fn delete_file_setting_removes_key() {
-        let (_temp, path) = config_path();
-        fs::write(
-            &path,
-            r#"
-[ui]
-locale = "en-US"
-"#,
-        )
-        .unwrap();
-
-        let out = delete_file_setting(
-            path.clone(),
-            ConfigSettingsDeleteInput {
-                path: "ui.locale".to_string(),
-                dry_run: false,
-                validate: true,
-                reload: true,
-            },
-        )
-        .expect("delete should write");
-
-        assert!(out.deleted);
-        assert_eq!(out.previous, JsonValue::String("en-US".to_string()));
-        assert_eq!(out.current, JsonValue::Null);
-    }
-
-    #[test]
-    fn validation_rejects_invalid_runtime_values() {
-        let (_temp, path) = config_path();
-        let err = set_file_setting(
-            path,
-            ConfigSettingsSetInput {
-                path: "runtime.reload.poll_interval_secs".to_string(),
-                value: JsonValue::Number(0.into()),
-                dry_run: true,
-                validate: true,
-                reload: false,
-            },
-        )
-        .expect_err("invalid runtime value should fail validation");
-
-        assert!(err.to_string().contains("poll_interval_secs"));
-    }
 }

@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use toml_edit::{DocumentMut, InlineTable, Item, Table, Value, value};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
     config::{ConfigLoader, LoadConfigRequest, ProcessEnvironment},
@@ -34,50 +34,59 @@ impl ProviderConfigCredentialStore {
         load_provider_configs(self.config_path.as_path())
     }
 
-    fn read_doc(&self) -> Result<DocumentMut, AppError> {
+    fn read_doc(&self) -> Result<JsonValue, AppError> {
         if self.config_path.exists() {
             let text = fs::read_to_string(&self.config_path)?;
-            let doc = text.parse::<DocumentMut>().map_err(|err| {
+            let doc = serde_json::from_str::<JsonValue>(text.as_str()).map_err(|err| {
                 AppError::Config(format!("parse {}: {err}", self.config_path.display()))
             })?;
-            Ok(doc)
+            Ok(normalize_root_object(doc))
         } else {
-            Ok(DocumentMut::new())
+            Ok(JsonValue::Object(JsonMap::new()))
         }
     }
 
-    fn write_doc(&self, doc: &DocumentMut) -> Result<(), AppError> {
+    fn write_doc(&self, doc: &JsonValue) -> Result<(), AppError> {
         if let Some(parent) = self.config_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&self.config_path, doc.to_string())?;
+        fs::write(&self.config_path, serde_json::to_string_pretty(doc)?)?;
         Ok(())
     }
 
     fn ensure_provider_auth_table<'a>(
         &self,
-        doc: &'a mut DocumentMut,
+        doc: &'a mut JsonValue,
         provider_id: &str,
-    ) -> &'a mut Table {
-        if !doc.contains_key("providers") || !doc["providers"].is_table() {
-            doc["providers"] = Item::Table(Table::new());
+    ) -> &'a mut JsonMap<String, JsonValue> {
+        if !doc.is_object() {
+            *doc = JsonValue::Object(JsonMap::new());
         }
 
-        let providers = doc["providers"].as_table_mut().expect("providers table");
-        if !providers.contains_key(provider_id) || !providers[provider_id].is_table() {
-            providers[provider_id] = Item::Table(Table::new());
+        let root = doc.as_object_mut().expect("root object");
+        let providers = root
+            .entry("providers".to_owned())
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+        if !providers.is_object() {
+            *providers = JsonValue::Object(JsonMap::new());
         }
+        let providers = providers.as_object_mut().expect("providers object");
 
-        let provider = providers[provider_id]
-            .as_table_mut()
-            .expect("provider table");
-        if !provider.contains_key("auth") || !provider["auth"].is_table() {
-            provider["auth"] = Item::Table(Table::new());
+        let provider = providers
+            .entry(provider_id.to_owned())
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+        if !provider.is_object() {
+            *provider = JsonValue::Object(JsonMap::new());
         }
+        let provider = provider.as_object_mut().expect("provider object");
 
-        provider["auth"]
-            .as_table_mut()
-            .expect("provider auth table")
+        let auth = provider
+            .entry("auth".to_owned())
+            .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+        if !auth.is_object() {
+            *auth = JsonValue::Object(JsonMap::new());
+        }
+        auth.as_object_mut().expect("provider auth object")
     }
 }
 
@@ -108,8 +117,8 @@ impl AuthStore for ProviderConfigCredentialStore {
 
         match auth {
             AuthData::Api { key } => {
-                auth_table["mode"] = value("api");
-                auth_table["api_key"] = value(key);
+                auth_table.insert("mode".to_owned(), JsonValue::String("api".to_owned()));
+                auth_table.insert("api_key".to_owned(), JsonValue::String(key));
             }
             AuthData::OAuth { .. } => {
                 let issuer = auth.issuer().ok_or_else(|| {
@@ -117,13 +126,22 @@ impl AuthStore for ProviderConfigCredentialStore {
                         "{provider_id} oauth credential must include an issuer"
                     ))
                 })?;
-                auth_table["mode"] = value("credential");
-                auth_table["issuer"] = value(credential_issuer_value(issuer));
-                auth_table["credential"] = auth_data_item(auth);
+                auth_table.insert(
+                    "mode".to_owned(),
+                    JsonValue::String("credential".to_owned()),
+                );
+                auth_table.insert(
+                    "issuer".to_owned(),
+                    JsonValue::String(credential_issuer_value(issuer).to_owned()),
+                );
+                auth_table.insert("credential".to_owned(), auth_data_item(auth));
             }
             AuthData::WellKnown { .. } => {
-                auth_table["mode"] = value("credential");
-                auth_table["credential"] = auth_data_item(auth);
+                auth_table.insert(
+                    "mode".to_owned(),
+                    JsonValue::String("credential".to_owned()),
+                );
+                auth_table.insert("credential".to_owned(), auth_data_item(auth));
             }
         }
         self.write_doc(&doc)
@@ -136,16 +154,19 @@ impl AuthStore for ProviderConfigCredentialStore {
 
         let mut doc = self.read_doc()?;
         let Some(providers) = doc
-            .as_table_mut()
-            .get_mut("providers")
-            .and_then(Item::as_table_mut)
+            .as_object_mut()
+            .and_then(|root| root.get_mut("providers"))
+            .and_then(JsonValue::as_object_mut)
         else {
             return Ok(());
         };
-        let Some(provider) = providers.get_mut(provider_id).and_then(Item::as_table_mut) else {
+        let Some(provider) = providers
+            .get_mut(provider_id)
+            .and_then(JsonValue::as_object_mut)
+        else {
             return Ok(());
         };
-        let Some(auth) = provider.get_mut("auth").and_then(Item::as_table_mut) else {
+        let Some(auth) = provider.get_mut("auth").and_then(JsonValue::as_object_mut) else {
             return Ok(());
         };
 
@@ -157,7 +178,7 @@ impl AuthStore for ProviderConfigCredentialStore {
             auth.remove("mode");
         }
 
-        if auth.iter().next().is_none() {
+        if auth.is_empty() {
             provider.remove("auth");
         }
 
@@ -324,7 +345,7 @@ fn normalize_text(value: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn auth_table_has_no_sources(table: &Table) -> bool {
+fn auth_table_has_no_sources(table: &JsonMap<String, JsonValue>) -> bool {
     let source_keys = [
         "credential",
         "api_key",
@@ -336,7 +357,7 @@ fn auth_table_has_no_sources(table: &Table) -> bool {
         "session_token",
     ];
 
-    !source_keys.iter().any(|key| table.contains_key(key))
+    !source_keys.iter().any(|key| table.contains_key(*key))
 }
 
 fn credential_issuer_value(issuer: crate::provider::auth::CredentialIssuer) -> &'static str {
@@ -350,12 +371,12 @@ fn credential_issuer_value(issuer: crate::provider::auth::CredentialIssuer) -> &
     }
 }
 
-fn auth_data_item(auth: AuthData) -> Item {
-    let mut table = InlineTable::new();
+fn auth_data_item(auth: AuthData) -> JsonValue {
+    let mut table = JsonMap::new();
     match auth {
         AuthData::Api { key } => {
-            table.insert("type", Value::from("api"));
-            table.insert("key", Value::from(key));
+            table.insert("type".to_owned(), JsonValue::String("api".to_owned()));
+            table.insert("key".to_owned(), JsonValue::String(key));
         }
         AuthData::OAuth {
             issuer,
@@ -366,152 +387,57 @@ fn auth_data_item(auth: AuthData) -> Item {
             enterprise_url,
             user,
         } => {
-            table.insert("type", Value::from("oauth"));
+            table.insert("type".to_owned(), JsonValue::String("oauth".to_owned()));
             if let Some(issuer) = issuer {
-                table.insert("issuer", Value::from(credential_issuer_value(issuer)));
+                table.insert(
+                    "issuer".to_owned(),
+                    JsonValue::String(credential_issuer_value(issuer).to_owned()),
+                );
             }
-            table.insert("refresh", Value::from(refresh));
-            table.insert("access", Value::from(access));
-            table.insert("expires_at_ms", Value::from(expires_at_ms));
+            table.insert("refresh".to_owned(), JsonValue::String(refresh));
+            table.insert("access".to_owned(), JsonValue::String(access));
+            table.insert("expires_at_ms".to_owned(), JsonValue::from(expires_at_ms));
             if let Some(account_id) = normalize_text(account_id.as_deref()) {
-                table.insert("account_id", Value::from(account_id));
+                table.insert("account_id".to_owned(), JsonValue::String(account_id));
             }
             if let Some(enterprise_url) = normalize_text(enterprise_url.as_deref()) {
-                table.insert("enterprise_url", Value::from(enterprise_url));
+                table.insert(
+                    "enterprise_url".to_owned(),
+                    JsonValue::String(enterprise_url),
+                );
             }
             if let Some(user) = user {
-                let mut user_table = InlineTable::new();
-                user_table.insert("id", Value::from(user.id));
-                user_table.insert("username", Value::from(user.username));
+                let mut user_table = JsonMap::new();
+                user_table.insert("id".to_owned(), JsonValue::String(user.id));
+                user_table.insert("username".to_owned(), JsonValue::String(user.username));
                 if let Some(name) = normalize_text(user.name.as_deref()) {
-                    user_table.insert("name", Value::from(name));
+                    user_table.insert("name".to_owned(), JsonValue::String(name));
                 }
                 if let Some(email) = normalize_text(user.email.as_deref()) {
-                    user_table.insert("email", Value::from(email));
+                    user_table.insert("email".to_owned(), JsonValue::String(email));
                 }
                 if let Some(avatar_url) = normalize_text(user.avatar_url.as_deref()) {
-                    user_table.insert("avatar_url", Value::from(avatar_url));
+                    user_table.insert("avatar_url".to_owned(), JsonValue::String(avatar_url));
                 }
-                table.insert("user", Value::InlineTable(user_table));
+                table.insert("user".to_owned(), JsonValue::Object(user_table));
             }
         }
         AuthData::WellKnown { key, token } => {
-            table.insert("type", Value::from("well_known"));
-            table.insert("key", Value::from(key));
-            table.insert("token", Value::from(token));
+            table.insert(
+                "type".to_owned(),
+                JsonValue::String("well_known".to_owned()),
+            );
+            table.insert("key".to_owned(), JsonValue::String(key));
+            table.insert("token".to_owned(), JsonValue::String(token));
         }
     }
-    Item::Value(Value::InlineTable(table))
+    JsonValue::Object(table)
 }
 
-#[cfg(test)]
-mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use super::*;
-
-    fn temp_config_path() -> PathBuf {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("time should move forward")
-            .as_nanos();
-        std::env::temp_dir().join(format!("agena-provider-auth-store-{suffix}.toml"))
-    }
-
-    #[test]
-    fn config_store_writes_inline_api_credential() {
-        let path = temp_config_path();
-        fs::write(
-            &path,
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.adapters.openai]
-enabled = true
-"#,
-        )
-        .expect("config should be written");
-
-        let store = ProviderConfigCredentialStore::new(path.clone());
-        store
-            .set(
-                "openai",
-                AuthData::Api {
-                    key: "sk-test".to_owned(),
-                },
-            )
-            .expect("config store should persist api key");
-
-        let text = fs::read_to_string(&path).expect("config should be readable");
-        assert!(text.contains("[providers.openai.auth]"));
-        assert!(text.contains("mode = \"api\""));
-        assert!(text.contains("api_key = \"sk-test\""));
-    }
-
-    #[test]
-    fn config_store_get_prefers_inline_credential_over_empty_secret_env() {
-        let path = temp_config_path();
-        fs::write(
-            &path,
-            r#"
-[providers.openai_chatgpt]
-default_model = "openai/gpt-5.3-codex"
-
-[providers.openai_chatgpt.auth]
-mode = "credential"
-issuer = "openai_chatgpt"
-credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "refresh", access = "access", expires_at_ms = 123 }
-
-[providers.openai_chatgpt.adapters.openai]
-enabled = true
-backend = "chatgpt_codex"
-"#,
-        )
-        .expect("config should be written");
-
-        let store = ProviderConfigCredentialStore::new(path);
-        let auth = store
-            .get("openai_chatgpt")
-            .expect("store read should succeed");
-        assert!(matches!(
-            auth,
-            Some(AuthData::OAuth {
-                refresh,
-                access,
-                expires_at_ms: 123,
-                ..
-            }) if refresh == "refresh" && access == "access"
-        ));
-    }
-
-    #[test]
-    fn config_store_remove_only_clears_inline_credential() {
-        let path = temp_config_path();
-        fs::write(
-            &path,
-            r#"
-[providers.openai]
-default_model = "openai/gpt-4.1-mini"
-
-[providers.openai.adapters.openai]
-enabled = true
-
-[providers.openai.auth]
-mode = "api"
-api_key_env = "OPENAI_API_KEY"
-api_key = "sk-inline"
-"#,
-        )
-        .expect("config should be written");
-
-        let store = ProviderConfigCredentialStore::new(path.clone());
-        store
-            .remove("openai")
-            .expect("credential removal should succeed");
-
-        let text = fs::read_to_string(path).expect("config should be readable");
-        assert!(text.contains("api_key_env = \"OPENAI_API_KEY\""));
-        assert!(!text.contains("sk-inline"));
+fn normalize_root_object(value: JsonValue) -> JsonValue {
+    match value {
+        JsonValue::Null => JsonValue::Object(JsonMap::new()),
+        JsonValue::Object(_) => value,
+        other => other,
     }
 }

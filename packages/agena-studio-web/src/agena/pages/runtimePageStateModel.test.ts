@@ -83,7 +83,7 @@ function sampleInstalled(): MarketplaceInstalledPluginResource[] {
       kind: 'python',
       platform: 'any',
       binary_path: '/tmp/beta',
-      config_path: '/tmp/config.toml',
+      config_path: '/tmp/config.json',
       sha256: null,
       installed_at: 'x',
       registry_id: 'default',

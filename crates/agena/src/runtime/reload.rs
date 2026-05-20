@@ -120,7 +120,7 @@ mod tests {
     fn diff_changed_paths_reports_modified_and_removed_entries() {
         let mut previous = HashMap::new();
         previous.insert(
-            PathBuf::from("config.toml"),
+            PathBuf::from("config.json"),
             PathStamp {
                 exists: true,
                 modified: None,
@@ -136,7 +136,7 @@ mod tests {
 
         let mut current = HashMap::new();
         current.insert(
-            PathBuf::from("config.toml"),
+            PathBuf::from("config.json"),
             PathStamp {
                 exists: false,
                 modified: None,
@@ -146,7 +146,7 @@ mod tests {
         let changed = diff_changed_paths(&previous, &current);
         assert_eq!(
             changed,
-            vec![PathBuf::from("config.toml"), PathBuf::from("plugins")]
+            vec![PathBuf::from("config.json"), PathBuf::from("plugins")]
         );
     }
 }

@@ -1,6 +1,6 @@
 //! Config-driven shell hook plugin.
 //!
-//! Lets users wire shell commands to plugin hook events via `agena.toml`
+//! Lets users wire shell commands to plugin hook events via `agena.json`
 //! without authoring a Rust plugin. Each `agena.hooks` plugin option entry
 //! pairs an `event` name with a `command` to run; an optional `match.tool`
 //! glob narrows the scope for tool hooks.

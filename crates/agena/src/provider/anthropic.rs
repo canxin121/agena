@@ -94,6 +94,10 @@ impl AnthropicAdapter {
                 DEFAULT_ANTHROPIC_BETA_HEADER.to_owned(),
             );
         }
+        extra_headers.insert(
+            reqwest::header::USER_AGENT.as_str().to_owned(),
+            crate::provider::CLAUDE_CODE_API_USER_AGENT.to_owned(),
+        );
 
         Self {
             id,
@@ -128,6 +132,13 @@ impl AnthropicAdapter {
     }
 
     pub fn with_extra_headers(mut self, headers: HashMap<String, String>) -> Self {
+        if headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
+        {
+            self.extra_headers
+                .retain(|key, _| !key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()));
+        }
         self.extra_headers.extend(headers);
         self
     }
@@ -535,7 +546,7 @@ impl AnthropicAdapter {
         if matches!(self.profile, AnthropicProfile::GithubCopilot) {
             headers
                 .entry(reqwest::header::USER_AGENT.as_str().to_owned())
-                .or_insert_with(|| "agena/0.1.0".to_owned());
+                .or_insert_with(|| crate::provider::CLAUDE_CODE_API_USER_AGENT.to_owned());
             headers
                 .entry("openai-intent".to_owned())
                 .or_insert_with(|| "conversation-edits".to_owned());

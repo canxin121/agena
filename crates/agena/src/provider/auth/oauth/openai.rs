@@ -35,7 +35,7 @@ pub fn start_openai_browser_oauth(redirect_uri: &str) -> Result<OAuthAuthorizeSt
 
     request = request.add_extra_param("id_token_add_organizations", "true");
     request = request.add_extra_param("codex_cli_simplified_flow", "true");
-    request = request.add_extra_param("originator", "agena");
+    request = request.add_extra_param("originator", crate::provider::CODEX_ORIGINATOR);
 
     let (url, state) = request.url();
     Ok(OAuthAuthorizeStart {
@@ -125,7 +125,10 @@ pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, AppE
     let response = reqwest::Client::new()
         .post(format!("{OPENAI_ISSUER}/api/accounts/deviceauth/usercode"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::USER_AGENT, "agena/0.1.0")
+        .header(
+            reqwest::header::USER_AGENT,
+            crate::provider::CODEX_USER_AGENT,
+        )
         .json(&serde_json::json!({
             "client_id": OPENAI_CLIENT_ID,
         }))
@@ -178,7 +181,10 @@ pub async fn poll_openai_headless_device_code(
     let poll_response = reqwest::Client::new()
         .post(format!("{OPENAI_ISSUER}/api/accounts/deviceauth/token"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::USER_AGENT, "agena/0.1.0")
+        .header(
+            reqwest::header::USER_AGENT,
+            crate::provider::CODEX_USER_AGENT,
+        )
         .json(&serde_json::json!({
             "device_auth_id": device_auth_id,
             "user_code": user_code,
@@ -227,6 +233,10 @@ pub async fn poll_openai_headless_device_code(
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
+        )
+        .header(
+            reqwest::header::USER_AGENT,
+            crate::provider::CODEX_USER_AGENT,
         )
         .body(encoded_form)
         .send()
@@ -292,7 +302,31 @@ fn oauth_http_client() -> &'static oauth2::reqwest::Client {
     CLIENT.get_or_init(|| {
         oauth2::reqwest::ClientBuilder::new()
             .redirect(oauth2::reqwest::redirect::Policy::none())
+            .user_agent(crate::provider::CODEX_USER_AGENT)
             .build()
             .expect("oauth reqwest client should build")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    #[test]
+    fn browser_oauth_uses_codex_originator() {
+        let start = start_openai_browser_oauth("http://127.0.0.1:1455/callback")
+            .expect("oauth start should build");
+        let url = url::Url::parse(start.authorize_url.as_str()).expect("authorize url");
+        let params = url
+            .query_pairs()
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            params.get("originator").map(String::as_str),
+            Some(crate::provider::CODEX_ORIGINATOR)
+        );
+    }
 }

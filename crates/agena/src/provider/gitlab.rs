@@ -42,7 +42,10 @@ impl Default for GitlabProviderConfig {
             ai_gateway_url: DEFAULT_AI_GATEWAY_URL.to_owned(),
             default_model: DEFAULT_MODEL.to_owned(),
             ai_gateway_headers: HashMap::from([
-                ("User-Agent".to_owned(), "agena/0.1.0".to_owned()),
+                (
+                    "User-Agent".to_owned(),
+                    crate::provider::CLAUDE_CODE_API_USER_AGENT.to_owned(),
+                ),
                 (
                     "anthropic-beta".to_owned(),
                     "context-1m-2025-08-07".to_owned(),
@@ -1006,7 +1009,7 @@ mod tests {
         let completions = server
             .mock("POST", "/ai/v1/proxy/openai/v1/chat/completions")
             .match_header("authorization", "Bearer direct-token")
-            .match_header("user-agent", "agena/0.1.0")
+            .match_header("user-agent", crate::provider::CLAUDE_CODE_API_USER_AGENT)
             .match_header("anthropic-beta", "context-1m-2025-08-07")
             .match_header("x-request-id", "req-1")
             .with_status(200)

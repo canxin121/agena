@@ -413,11 +413,18 @@ sap_ai_core
 adapter 常见额外字段：
 
 - 通用：`model_discovery`，默认 `live`；设为 `configured_only` 时不调用远程模型列表，只展示该 adapter 下显式配置的 models。
-- `openai`：`backend`、`api_mode`、`stream_mode`、`models_url`、`realtime_ws_url`、`auth_header`、`auth_scheme`、`capability_family`、`extra_headers`
-- `anthropic`：`models_url`、`messages_url`、`auth_header`、`auth_scheme`、`extra_beta_header`、`eager_input_streaming`、`extra_headers`
-- `gemini`：`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url`、`extra_headers`
+- `openai`：`backend`、`api_mode`、`stream_mode`、`models_url`、`realtime_ws_url`、`auth_header`、`auth_scheme`、`capability_family`、`user_agent`、`extra_headers`
+- `anthropic`：`models_url`、`messages_url`、`auth_header`、`auth_scheme`、`extra_beta_header`、`eager_input_streaming`、`user_agent`、`extra_headers`
+- `gemini`：`auth_header`、`auth_scheme`、`stream_mode`、`realtime_ws_url`、`user_agent`、`extra_headers`
 - `gitlab`：`instance_url`、`ai_gateway_url`、`ai_gateway_headers`、`feature_flags`
 - `ollama`：`base_url`
+
+HTTP adapter 的 `user_agent` 会覆盖该 adapter 根据 auth credential 优先、
+adapter 协议兜底推导出的默认 User-Agent；其他自定义 header 继续通过
+`extra_headers` 配置。当前内置 credential 默认包括 AtomGit -> AtomCode、
+OpenAI ChatGPT -> Codex、Google ADC -> Gemini CLI；没有专属身份的 auth
+再按 adapter 使用 Codex / Claude Code API / Gemini CLI 风格的默认值。内置
+默认值使用固定的官方产品版本字符串，不使用当前 agena 二进制名称或版本。
 
 关于 Anthropic 适配器的认证约束：
 

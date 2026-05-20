@@ -279,7 +279,7 @@ async fn brave_search(
 async fn duckduckgo_html_search(query: &str, max: u32) -> Result<Vec<WebSearchHit>, ToolError> {
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
-        .user_agent("Mozilla/5.0 (compatible; agena-web-search/0.1)")
+        .user_agent(crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT)
         .build()
         .map_err(|e| ToolError::Plugin(e.to_string()))?;
     let body = format!("q={}", urlencoding::encode(query));

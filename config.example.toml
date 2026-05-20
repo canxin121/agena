@@ -83,6 +83,7 @@ enabled = true
 #
 # [providers.atomgit.adapters.openai]
 # enabled = true
+# user_agent = "atomcode/custom" # optional override; AtomGit defaults to AtomCode identity
 #
 # [providers.atomgit.adapters.openai.models."Kimi-K2-Instruct"]
 # auth_header = "authorization"

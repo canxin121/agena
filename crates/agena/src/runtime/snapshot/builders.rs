@@ -113,8 +113,8 @@ pub(super) fn build_lsp_registry(
 
     let registry = Arc::new(LspRegistry::new(
         workspace_root.to_path_buf(),
-        env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION"),
+        crate::provider::CODEX_ORIGINATOR,
+        crate::provider::CODEX_PACKAGE_VERSION,
     ));
 
     let registry_for_register = registry.clone();
@@ -158,7 +158,10 @@ pub(super) async fn build_mcp_manager(
         FileTokenStore, HttpTransportMode, McpConnectionManager, ServerSpec, TokenStore,
     };
 
-    let mut manager = McpConnectionManager::new(env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    let mut manager = McpConnectionManager::new(
+        crate::provider::CODEX_MCP_CLIENT_NAME,
+        crate::provider::CODEX_PACKAGE_VERSION,
+    );
 
     // Best-effort: open the on-disk token store so HttpAuth::BearerFromStore
     // can resolve. A missing file is fine; a corrupt one is logged and the

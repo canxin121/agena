@@ -10,7 +10,7 @@ const PLATFORM_LOGIN_URL: &str = "https://acs.atomgit.com/auth/login";
 const PLATFORM_CHECK_URL: &str = "https://acs.atomgit.com/auth/check";
 const PLATFORM_TOKEN_URL: &str = "https://acs.atomgit.com/auth/token";
 const PLATFORM_REFRESH_URL: &str = "https://acs.atomgit.com/oauth/refresh";
-const ATOMGIT_USER_AGENT: &str = concat!("agena/", env!("CARGO_PKG_VERSION"));
+const ATOMGIT_USER_AGENT: &str = crate::provider::ATOMCODE_USER_AGENT;
 
 #[derive(Debug, Deserialize)]
 struct PlatformLoginResponse {

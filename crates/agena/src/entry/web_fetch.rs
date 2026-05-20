@@ -124,7 +124,7 @@ fn fetch_async(
     async move {
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
-            .user_agent("agena-web-fetch/0.1 (+https://github.com/canxin121/agena)")
+            .user_agent(crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT)
             .build()
             .map_err(|e| ToolError::Plugin(format!("web_fetch: client build failed: {e}")))?;
 

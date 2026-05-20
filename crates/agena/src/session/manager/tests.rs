@@ -699,6 +699,188 @@ impl ModelRuntime for ScriptedProvider {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ToolErrorRecoveryScenario {
+    BadTodo,
+    ParallelBadTools,
+}
+
+struct ToolErrorRecoveryProvider {
+    scenario: ToolErrorRecoveryScenario,
+}
+
+impl ToolErrorRecoveryProvider {
+    fn bad_todo() -> Self {
+        Self {
+            scenario: ToolErrorRecoveryScenario::BadTodo,
+        }
+    }
+
+    fn parallel_bad_tools() -> Self {
+        Self {
+            scenario: ToolErrorRecoveryScenario::ParallelBadTools,
+        }
+    }
+}
+
+#[async_trait]
+impl ModelRuntime for ToolErrorRecoveryProvider {
+    fn id(&self) -> &str {
+        "scripted"
+    }
+
+    fn default_model(&self) -> &ModelId {
+        static DEFAULT_MODEL: std::sync::LazyLock<ModelId> =
+            std::sync::LazyLock::new(|| ModelId::new("scripted-model"));
+        &DEFAULT_MODEL
+    }
+
+    async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
+        Ok(vec![
+            ProviderModel::new("scripted", "scripted-model").with_display_name("Scripted"),
+        ])
+    }
+
+    async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        Ok(CompletionResponse {
+            provider_id: scripted_provider_id(),
+            model: scripted_model_id(),
+            text: String::new(),
+            reasoning_text: None,
+            finish_reason: Some(CompletionFinishReason::Stop),
+            tool_calls: Vec::new(),
+            usage: None,
+            provider_metadata: None,
+        })
+    }
+
+    async fn complete_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
+        AppError,
+    > {
+        let events = match self.scenario {
+            ToolErrorRecoveryScenario::BadTodo => {
+                if completed_or_failed_operation_count(&request, &["call_todo_1"]) == 0 {
+                    scripted_tool_call_events(vec![(
+                        "call_todo_1",
+                        "todo",
+                        serde_json::json!({
+                            "command": "write",
+                        })
+                        .to_string(),
+                    )])
+                } else {
+                    scripted_text_events("permission todo failed")
+                }
+            }
+            ToolErrorRecoveryScenario::ParallelBadTools => {
+                if completed_or_failed_operation_count(
+                    &request,
+                    &["call_bad_tools_1", "call_bad_tools_2"],
+                ) == 0
+                {
+                    scripted_tool_call_events(vec![
+                        (
+                            "call_bad_tools_1",
+                            "tools",
+                            serde_json::json!({
+                                "command": "search",
+                            })
+                            .to_string(),
+                        ),
+                        (
+                            "call_bad_tools_2",
+                            "tools",
+                            serde_json::json!({
+                                "command": "search",
+                                "args": ToolSearchToolInput {
+                                    query: "todo".to_string(),
+                                    load: Vec::new(),
+                                    limit: Some(1),
+                                },
+                            })
+                            .to_string(),
+                        ),
+                    ])
+                } else {
+                    scripted_text_events("parallel tool failures returned")
+                }
+            }
+        };
+
+        Ok(Box::pin(stream::iter(events)))
+    }
+}
+
+fn completed_or_failed_operation_count(
+    request: &CompletionRequest,
+    operation_ids: &[&str],
+) -> usize {
+    request
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter(|part| {
+            part.operation_id
+                .as_deref()
+                .is_some_and(|operation_id| operation_ids.contains(&operation_id))
+        })
+        .filter(|part| {
+            matches!(
+                part.status,
+                ExecutionStatus::Completed | ExecutionStatus::Failed
+            )
+        })
+        .count()
+}
+
+fn scripted_tool_call_events(
+    calls: Vec<(&'static str, &'static str, String)>,
+) -> Vec<Result<CompletionStreamEvent, AppError>> {
+    let mut events = calls
+        .into_iter()
+        .map(|(id, name, arguments_delta)| {
+            Ok(CompletionStreamEvent::ToolCallDelta {
+                provider_id: scripted_provider_id(),
+                model: scripted_model_id(),
+                stream_key: id.to_string(),
+                id: Some(id.to_string()),
+                name: Some(name.to_string()),
+                arguments_delta,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    events.push(Ok(CompletionStreamEvent::Completed {
+        provider_id: scripted_provider_id(),
+        model: scripted_model_id(),
+        finish_reason: Some(CompletionFinishReason::ToolCalls),
+        usage: None,
+        provider_metadata: None,
+    }));
+    events
+}
+
+fn scripted_text_events(delta: &str) -> Vec<Result<CompletionStreamEvent, AppError>> {
+    vec![
+        Ok(CompletionStreamEvent::TextDelta {
+            provider_id: scripted_provider_id(),
+            model: scripted_model_id(),
+            delta: delta.to_string(),
+        }),
+        Ok(CompletionStreamEvent::Completed {
+            provider_id: scripted_provider_id(),
+            model: scripted_model_id(),
+            finish_reason: Some(CompletionFinishReason::Stop),
+            usage: None,
+            provider_metadata: None,
+        }),
+    ]
+}
+
 async fn build_manager(
     root: &std::path::Path,
     permission_policy: PermissionPolicy,
@@ -1790,6 +1972,126 @@ async fn streaming_tool_execution_persists_in_progress_output_impl() {
         })
         .expect("completed streamed tool output should exist");
     assert_eq!(final_output, "partial done");
+}
+
+fn operation_snapshot(
+    session: &Session,
+    operation_id: &str,
+) -> (ExecutionStatus, Option<String>, String) {
+    session
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .find_map(|part| {
+            if part.operation_id.as_deref() != Some(operation_id) {
+                return None;
+            }
+            match part.content.as_ref() {
+                Some(PartContent::Operation(operation)) => Some((
+                    part.status,
+                    operation.error_message().map(ToString::to_string),
+                    operation.model_output.text.clone(),
+                )),
+                _ => None,
+            }
+        })
+        .unwrap_or_else(|| panic!("operation {operation_id} should exist"))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tool_execution_error_is_returned_to_model_as_failed_tool_result() {
+    let workspace = TempWorkspace::new();
+    let manager = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+        ContextPolicy::default(),
+        ToolErrorRecoveryProvider::bad_todo(),
+    )
+    .await;
+    let created = manager
+        .create_session(SessionCreateRequest {
+            title: "tool error recovery".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let session = manager
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: run_options(),
+            parts: vec![PartContent::text("bad todo")],
+        })
+        .await
+        .expect("tool execution errors should not abort the session run");
+
+    let (status, error, output_text) = operation_snapshot(&session, "call_todo_1");
+    assert_eq!(status, ExecutionStatus::Failed);
+    let failure = error.as_deref().unwrap_or(output_text.as_str()).to_string();
+    assert!(
+        failure.contains("missing field `args`"),
+        "unexpected failure text: {failure}"
+    );
+    assert!(session.messages.iter().rev().any(|message| {
+        message.role == Role::Assistant
+            && message.as_text_lossy().contains("permission todo failed")
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_tool_execution_error_is_returned_without_dropping_other_results() {
+    let workspace = TempWorkspace::new();
+    let manager = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+        ContextPolicy::default(),
+        ToolErrorRecoveryProvider::parallel_bad_tools(),
+    )
+    .await;
+    let created = manager
+        .create_session(SessionCreateRequest {
+            title: "parallel tool error recovery".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("session should be created");
+
+    let session = manager
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: run_options(),
+            parts: vec![PartContent::text("parallel bad tools")],
+        })
+        .await
+        .expect("parallel tool execution errors should not abort the session run");
+
+    let (failed_status, failed_error, failed_output) =
+        operation_snapshot(&session, "call_bad_tools_1");
+    assert_eq!(failed_status, ExecutionStatus::Failed);
+    let failure = failed_error
+        .as_deref()
+        .unwrap_or(failed_output.as_str())
+        .to_string();
+    assert!(
+        failure.contains("missing field `args`"),
+        "unexpected failure text: {failure}"
+    );
+
+    let (success_status, _success_error, success_output) =
+        operation_snapshot(&session, "call_bad_tools_2");
+    assert_eq!(success_status, ExecutionStatus::Completed);
+    assert!(
+        success_output.contains("Found"),
+        "unexpected success output: {success_output}"
+    );
+    assert!(session.messages.iter().rev().any(|message| {
+        message.role == Role::Assistant
+            && message
+                .as_text_lossy()
+                .contains("parallel tool failures returned")
+    }));
 }
 
 #[allow(dead_code)]

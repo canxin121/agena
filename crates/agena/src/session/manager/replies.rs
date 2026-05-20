@@ -77,18 +77,39 @@ impl SessionManager {
         match request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
-                let execution = self
-                    .execute_pending_tool_after_approval(state.as_ref(), session.id, &resolved_tool)
-                    .map_err(tool_error_to_app_error)?;
-                session = self
-                    .apply_tool_success(
-                        session,
-                        &pending.tool,
-                        execution,
-                        persisted_rule.clone(),
-                        state.clone(),
-                    )
-                    .await?;
+                match self.execute_pending_tool_after_approval(
+                    state.as_ref(),
+                    session.id,
+                    &resolved_tool,
+                ) {
+                    Ok(execution) => {
+                        session = self
+                            .apply_tool_success(
+                                session,
+                                &pending.tool,
+                                execution,
+                                persisted_rule.clone(),
+                                state.clone(),
+                            )
+                            .await?;
+                    }
+                    Err(ToolError::UserInputRequired(input)) => {
+                        session = self
+                            .apply_user_input_request(session, &pending.tool, input, state.clone())
+                            .await?;
+                    }
+                    Err(err) => {
+                        session = self
+                            .apply_tool_failure(
+                                session,
+                                &pending.tool,
+                                err.to_string(),
+                                persisted_rule.clone(),
+                                state.clone(),
+                            )
+                            .await?;
+                    }
+                }
             }
             PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
                 session = self
@@ -1003,7 +1024,17 @@ impl SessionManager {
                         .apply_user_input_request(session, &resolved.pending, input, state)
                         .await;
                 }
-                Err(err) => return Err(tool_error_to_app_error(err)),
+                Err(err) => {
+                    session = self
+                        .apply_tool_failure(
+                            session,
+                            &resolved.pending,
+                            err.to_string(),
+                            None,
+                            state.clone(),
+                        )
+                        .await?;
+                }
             }
         }
 
@@ -1021,12 +1052,40 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let prepared = scoped_executor
-            .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
-            .map_err(tool_error_to_app_error)?;
-        let (prepared_invocation, prepared_shell_command) = scoped_executor
+        let prepared = match scoped_executor.prepare_invocation(
+            &resolved.invocation,
+            session.id,
+            resolved.call_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                tracing::debug!(
+                    target: "agena::session::tools",
+                    session_id = session.id,
+                    call_id = resolved.call_id,
+                    error = %err,
+                    "deferring tool preparation error to sequential failure handling"
+                );
+                *session = before_prepare;
+                return Ok(None);
+            }
+        };
+        let (prepared_invocation, prepared_shell_command) = match scoped_executor
             .prepare_bash_invocation(&prepared.invocation, session.id, resolved.call_id)
-            .map_err(tool_error_to_app_error)?;
+        {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                tracing::debug!(
+                    target: "agena::session::tools",
+                    session_id = session.id,
+                    call_id = resolved.call_id,
+                    error = %err,
+                    "deferring shell preparation error to sequential failure handling"
+                );
+                *session = before_prepare;
+                return Ok(None);
+            }
+        };
         resolved.prepared_shell_command = prepared_shell_command;
         resolved.invocation = prepared_invocation;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
@@ -1053,19 +1112,40 @@ impl SessionManager {
             )));
         }
 
-        scoped_executor
-            .enforce_plan_mode_for(&resolved.invocation, session.id)
-            .map_err(tool_error_to_app_error)?;
+        if let Err(err) = scoped_executor.enforce_plan_mode_for(&resolved.invocation, session.id) {
+            tracing::debug!(
+                target: "agena::session::tools",
+                session_id = session.id,
+                call_id = resolved.call_id,
+                error = %err,
+                "deferring plan-mode tool refusal to sequential failure handling"
+            );
+            *session = before_prepare;
+            return Ok(None);
+        }
 
         if !scoped_executor.is_concurrency_safe_invocation(&resolved.invocation) {
             *session = before_prepare;
             return Ok(None);
         }
 
-        for check in scoped_executor
-            .collect_permission_checks_for_invocation(&resolved.invocation)
-            .map_err(tool_error_to_app_error)?
-        {
+        let permission_checks =
+            match scoped_executor.collect_permission_checks_for_invocation(&resolved.invocation) {
+                Ok(checks) => checks,
+                Err(err) => {
+                    tracing::debug!(
+                        target: "agena::session::tools",
+                        session_id = session.id,
+                        call_id = resolved.call_id,
+                        error = %err,
+                        "deferring permission-check error to sequential failure handling"
+                    );
+                    *session = before_prepare;
+                    return Ok(None);
+                }
+            };
+
+        for check in permission_checks {
             if !matches!(
                 self.resolve_permission_decision(Some(session.id), &check)
                     .await?
@@ -1134,12 +1214,38 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let prepared = scoped_executor
-            .prepare_invocation(&resolved.invocation, session.id, resolved.call_id)
-            .map_err(tool_error_to_app_error)?;
-        let (prepared_invocation, prepared_shell_command) = scoped_executor
+        let prepared = match scoped_executor.prepare_invocation(
+            &resolved.invocation,
+            session.id,
+            resolved.call_id,
+        ) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                return Box::pin(self.apply_tool_failure(
+                    session,
+                    &resolved.pending,
+                    err.to_string(),
+                    None,
+                    state,
+                ))
+                .await;
+            }
+        };
+        let (prepared_invocation, prepared_shell_command) = match scoped_executor
             .prepare_bash_invocation(&prepared.invocation, session.id, resolved.call_id)
-            .map_err(tool_error_to_app_error)?;
+        {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                return Box::pin(self.apply_tool_failure(
+                    session,
+                    &resolved.pending,
+                    err.to_string(),
+                    None,
+                    state,
+                ))
+                .await;
+            }
+        };
         resolved.prepared_shell_command = prepared_shell_command;
         resolved.invocation = prepared_invocation;
         let mut session_changed = false;
@@ -1170,14 +1276,33 @@ impl SessionManager {
 
         // Plan-mode guardrail: refuse mutating tools while the session
         // is in plan mode.
-        scoped_executor
-            .enforce_plan_mode_for(&resolved.invocation, session.id)
-            .map_err(tool_error_to_app_error)?;
+        if let Err(err) = scoped_executor.enforce_plan_mode_for(&resolved.invocation, session.id) {
+            return Box::pin(self.apply_tool_failure(
+                session,
+                &resolved.pending,
+                err.to_string(),
+                None,
+                state,
+            ))
+            .await;
+        }
 
-        for check in scoped_executor
-            .collect_permission_checks_for_invocation(&resolved.invocation)
-            .map_err(tool_error_to_app_error)?
-        {
+        let permission_checks =
+            match scoped_executor.collect_permission_checks_for_invocation(&resolved.invocation) {
+                Ok(checks) => checks,
+                Err(err) => {
+                    return Box::pin(self.apply_tool_failure(
+                        session,
+                        &resolved.pending,
+                        err.to_string(),
+                        None,
+                        state,
+                    ))
+                    .await;
+                }
+            };
+
+        for check in permission_checks {
             let resolution = self
                 .resolve_permission_decision(Some(session.id), &check)
                 .await?;
@@ -1212,9 +1337,14 @@ impl SessionManager {
                         .await;
                 }
                 PermissionDecision::Deny { reason } => {
-                    return self
-                        .apply_tool_failure(session, &resolved.pending, reason, None, state)
-                        .await;
+                    return Box::pin(self.apply_tool_failure(
+                        session,
+                        &resolved.pending,
+                        reason,
+                        None,
+                        state,
+                    ))
+                    .await;
                 }
             }
         }
@@ -1232,12 +1362,25 @@ impl SessionManager {
                 .await?;
         }
 
-        if let Some(stream) = state
+        let streaming_tool = match state
             .tool_executor
             .execute_invocation_streaming(&resolved.invocation, session.id, resolved.call_id)
             .await
-            .map_err(tool_error_to_app_error)?
         {
+            Ok(stream) => stream,
+            Err(err) => {
+                return Box::pin(self.apply_tool_failure(
+                    session,
+                    &resolved.pending,
+                    err.to_string(),
+                    None,
+                    state,
+                ))
+                .await;
+            }
+        };
+
+        if let Some(stream) = streaming_tool {
             return self
                 .apply_streaming_tool_execution(session, &resolved.pending, stream, state)
                 .await;
@@ -1260,7 +1403,20 @@ impl SessionManager {
                 self.apply_user_input_request(session, &resolved.pending, input, state)
                     .await
             }
-            Err(err) => Err(tool_error_to_app_error(err)),
+            Err(err) => {
+                let session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                Box::pin(self.apply_tool_failure(
+                    session,
+                    &resolved.pending,
+                    err.to_string(),
+                    None,
+                    state,
+                ))
+                .await
+            }
         }
     }
 

@@ -515,6 +515,7 @@ async fn refresh_from_registry_merges_public_sources_and_keeps_custom_appendable
                             "tool_call": true,
                             "structured_output": true,
                             "temperature": false,
+                            "attachment": true,
                             "modalities": {
                                 "input": ["text", "image"],
                                 "output": ["text", "image"]
@@ -599,6 +600,17 @@ async fn refresh_from_registry_merges_public_sources_and_keeps_custom_appendable
                         "description": "Priority route"
                     }],
                     "additional_speed_tiers": ["fast"]
+                }, {
+                    "slug": "gpt-5-codex",
+                    "display_name": "GPT-5 Codex",
+                    "description": "Codex only model",
+                    "supports_parallel_tool_calls": true,
+                    "support_verbosity": true,
+                    "default_verbosity": "medium",
+                    "supported_reasoning_levels": [{
+                        "effort": "high",
+                        "description": "Codex reasoning"
+                    }]
                 }]
             })
             .to_string(),
@@ -634,6 +646,12 @@ async fn refresh_from_registry_merges_public_sources_and_keeps_custom_appendable
                         "max": 32768,
                         "dynamic_allowed": true
                     }
+                }, {
+                    "id": "router-tool-model",
+                    "display_name": "Router Tool Model",
+                    "owned_by": "openai",
+                    "description": "Router parameter support",
+                    "supported_parameters": ["tools", "temperature", "response_format"]
                 }]
             })
             .to_string(),
@@ -738,6 +756,11 @@ async fn refresh_from_registry_merges_public_sources_and_keeps_custom_appendable
             .feature_support(ModelCapabilityFeature::StructuredOutput),
         Some(CapabilitySupport::Supported)
     );
+    assert_eq!(
+        gpt5.capabilities
+            .input_support(crate::model::ModelInputModality::File),
+        Some(CapabilitySupport::Supported)
+    );
 
     let claude_sonnet = snapshot
         .official
@@ -787,6 +810,19 @@ async fn refresh_from_registry_merges_public_sources_and_keeps_custom_appendable
             effort: crate::provider::ReasoningEffort::Xhigh,
         })
     );
+
+    let gpt5_codex = snapshot
+        .official
+        .models
+        .get("gpt-5-codex")
+        .expect("gpt-5-codex should exist");
+    assert_eq!(
+        gpt5_codex
+            .capabilities
+            .feature_support(ModelCapabilityFeature::ToolCalling),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(gpt5_codex.default_verbosity.as_deref(), Some("medium"));
 
     let claude = snapshot
         .official
@@ -843,10 +879,961 @@ async fn refresh_from_registry_merges_public_sources_and_keeps_custom_appendable
         })
     );
 
+    let router_tool_model = snapshot
+        .official
+        .models
+        .get("router-tool-model")
+        .expect("router-tool-model should exist");
+    assert_eq!(router_tool_model.origin.as_deref(), Some("OpenAI"));
+    assert_eq!(
+        router_tool_model
+            .capabilities
+            .feature_support(ModelCapabilityFeature::ToolCalling),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(
+        router_tool_model
+            .capabilities
+            .feature_support(ModelCapabilityFeature::Temperature),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(
+        router_tool_model
+            .capabilities
+            .feature_support(ModelCapabilityFeature::StructuredOutput),
+        Some(CapabilitySupport::Supported)
+    );
+
     let merged = snapshot.merged_models();
     assert!(
         merged.appendable_model_ids.is_empty(),
         "official public sources should not append every catalog model into provider /models"
+    );
+}
+
+#[tokio::test]
+async fn refresh_from_registry_merges_official_hugging_face_family_queries() {
+    let mut server = mockito::Server::new_async().await;
+    let _google = server
+        .mock("GET", "/hf/google.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "google/gemma-2b",
+                    "createdAt": "2024-02-21T00:00:00.000Z"
+                },
+                {
+                    "id": "google/codegemma-1.1-7b-it",
+                    "createdAt": "2024-04-09T00:00:00.000Z"
+                },
+                {
+                    "id": "google/recurrentgemma-2b",
+                    "createdAt": "2024-09-01T00:00:00.000Z"
+                },
+                {
+                    "id": "google/recurrentgemma-2b-flax",
+                    "createdAt": "2024-09-01T00:00:00.000Z"
+                },
+                {
+                    "id": "google/deplot",
+                    "createdAt": "2023-08-15T00:00:00.000Z"
+                },
+                {
+                    "id": "google/deplot-sfp-cpp",
+                    "createdAt": "2023-08-15T00:00:00.000Z"
+                },
+                {
+                    "id": "google/gemma-2b-it-tflite",
+                    "createdAt": "2024-02-21T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _mistral = server
+        .mock("GET", "/hf/mistral.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "mistralai/Mixtral-8x22B-v0.1",
+                    "createdAt": "2024-04-16T18:58:08.000Z"
+                },
+                {
+                    "id": "mistralai/Codestral-22B-v0.1",
+                    "createdAt": "2024-05-29T00:00:00.000Z"
+                },
+                {
+                    "id": "mistralai/Mistral-Large-Instruct-2407",
+                    "createdAt": "2024-07-24T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _meta = server
+        .mock("GET", "/hf/meta.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "meta-llama/Llama-2-70b",
+                    "createdAt": "2023-07-18T00:00:00.000Z"
+                },
+                {
+                    "id": "codellama/CodeLlama-70b-hf",
+                    "createdAt": "2023-08-24T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _ibm = server
+        .mock("GET", "/hf/ibm.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "ibm-granite/granite-3.0-8b-instruct",
+                    "createdAt": "2024-10-02T21:16:23.000Z"
+                },
+                {
+                    "id": "ibm-granite/granite-34b-code-instruct-8k",
+                    "createdAt": "2024-06-10T00:00:00.000Z"
+                },
+                {
+                    "id": "ibm-granite/granite-8b-code-instruct-4k",
+                    "createdAt": "2024-06-10T00:00:00.000Z"
+                },
+                {
+                    "id": "ibm-granite/granite-8b-code-instruct-128k",
+                    "createdAt": "2024-06-10T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _microsoft = server
+        .mock("GET", "/hf/microsoft.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "microsoft/Phi-3-vision-128k-instruct",
+                    "pipeline_tag": "image-text-to-text",
+                    "createdAt": "2024-04-23T00:00:00.000Z"
+                },
+                {
+                    "id": "microsoft/kosmos-2-patch14-224",
+                    "pipeline_tag": "image-text-to-text",
+                    "createdAt": "2023-06-01T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _bigcode = server
+        .mock("GET", "/hf/bigcode.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "bigcode/starcoder2-15b",
+                    "createdAt": "2024-02-29T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _deepseek = server
+        .mock("GET", "/hf/deepseek.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "deepseek-ai/deepseek-coder-6.7b-instruct",
+                    "createdAt": "2024-01-01T00:00:00.000Z"
+                },
+                {
+                    "id": "deepseek-ai/DeepSeek-V3.1-Terminus",
+                    "createdAt": "2025-09-22T00:00:00.000Z"
+                },
+                {
+                    "id": "deepseek-ai/DeepSeek-V3.1-Base",
+                    "createdAt": "2025-09-22T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _ai21 = server
+        .mock("GET", "/hf/ai21.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "ai21labs/AI21-Jamba-Large-1.5",
+                    "createdAt": "2024-08-01T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _writer = server
+        .mock("GET", "/hf/writer.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "Writer/Palmyra-Med-70B",
+                    "createdAt": "2023-10-17T00:00:00.000Z"
+                },
+                {
+                    "id": "Writer/Palmyra-Med-70B-32K",
+                    "createdAt": "2024-03-19T00:00:00.000Z"
+                },
+                {
+                    "id": "Writer/Palmyra-Fin-70B-32K",
+                    "createdAt": "2024-03-19T00:00:00.000Z"
+                },
+                {
+                    "id": "Writer/Palmyra-Creative",
+                    "createdAt": "2023-10-17T00:00:00.000Z"
+                },
+                {
+                    "id": "Writer/Palmyra-Creative-dummy-weights",
+                    "createdAt": "2023-10-17T00:00:00.000Z"
+                },
+                {
+                    "id": "Writer/Palmyra-Med-70B-vllm",
+                    "createdAt": "2023-10-17T00:00:00.000Z"
+                },
+                {
+                    "id": "Writer/Palmyra-Med-70B-mlx-int4",
+                    "createdAt": "2023-10-17T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+    let _nvidia = server
+        .mock("GET", "/hf/nvidia.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+                    "createdAt": "2025-01-01T00:00:00.000Z"
+                },
+                {
+                    "id": "nvidia/Llama-3.1-Nemotron-Safety-Guard-8B-v3",
+                    "createdAt": "2025-01-01T00:00:00.000Z"
+                },
+                {
+                    "id": "nvidia/Nemotron-4-340B-Instruct",
+                    "createdAt": "2024-06-14T00:00:00.000Z"
+                },
+                {
+                    "id": "nvidia/NVIDIA-Nemotron-Parse-v1.2",
+                    "createdAt": "2025-01-01T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let dir = tempdir().expect("tempdir should create");
+    let store = ModelCatalogStore::new(ModelCatalogConfig {
+        cache_path: dir.path().join("model-catalog-cache.json"),
+        custom_path: dir.path().join("model-catalog-custom.json"),
+        cache_max_age_secs: 60,
+    });
+    let service = ModelCatalogService::with_remote_sources(
+        store,
+        vec![
+            sources::ModelCatalogRemoteSource::new(
+                "hf-google",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/google.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-mistral",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/mistral.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-meta",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/meta.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-ibm",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/ibm.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-microsoft",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/microsoft.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-bigcode",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/bigcode.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-deepseek",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/deepseek.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-ai21",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/ai21.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-writer",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/writer.json", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "hf-nvidia",
+                sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+                [format!("{}/hf/nvidia.json", server.url())],
+            ),
+        ],
+    )
+    .await
+    .expect("service should load");
+
+    let snapshot = service
+        .refresh_from_registry(&ProviderRegistry::new(), None)
+        .await
+        .expect("refresh should succeed");
+
+    assert!(snapshot.official.models.contains_key("gemma-2b"));
+    assert!(snapshot.official.models.contains_key("codegemma-1.1-7b"));
+    assert!(snapshot.official.models.contains_key("recurrentgemma-2b"));
+    assert!(snapshot.official.models.contains_key("deplot"));
+    assert!(snapshot.official.models.contains_key("mixtral-8x22b-v0.1"));
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("codestral-22b-instruct-v0.1")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("mistral-large-2-instruct")
+    );
+    assert!(snapshot.official.models.contains_key("llama2-70b"));
+    assert!(snapshot.official.models.contains_key("codellama-70b"));
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("granite-3.0-8b-instruct")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("granite-34b-code-instruct")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("granite-8b-code-instruct")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("phi-3-vision-128k-instruct")
+    );
+    assert!(snapshot.official.models.contains_key("kosmos-2"));
+    assert!(snapshot.official.models.contains_key("starcoder2-15b"));
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("deepseek-coder-6.7b-instruct")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("deepseek-v3.1-terminus")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("jamba-1.5-large-instruct")
+    );
+    assert!(snapshot.official.models.contains_key("palmyra-med-70b"));
+    assert!(snapshot.official.models.contains_key("palmyra-med-70b-32k"));
+    assert!(snapshot.official.models.contains_key("palmyra-fin-70b-32k"));
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("palmyra-creative-122b")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("llama-3.1-nemotron-ultra-253b-v1")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("llama-3.1-nemotron-safety-guard-8b-v3")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("nemotron-4-340b-instruct")
+    );
+    assert!(snapshot.official.models.contains_key("nemotron-parse"));
+    assert!(!snapshot.official.models.contains_key("gemma-2b-it-tflite"));
+    assert!(
+        !snapshot
+            .official
+            .models
+            .contains_key("recurrentgemma-2b-flax")
+    );
+    assert!(!snapshot.official.models.contains_key("deplot-sfp-cpp"));
+    assert!(!snapshot.official.models.contains_key("deepseek-v3.1-base"));
+    assert!(
+        !snapshot
+            .official
+            .models
+            .contains_key("palmyra-creative-dummy-weights")
+    );
+    assert!(
+        !snapshot
+            .official
+            .models
+            .contains_key("palmyra-med-70b-vllm")
+    );
+    assert!(
+        !snapshot
+            .official
+            .models
+            .contains_key("palmyra-med-70b-mlx-int4")
+    );
+
+    let phi = snapshot
+        .official
+        .models
+        .get("phi-3-vision-128k-instruct")
+        .expect("phi-3-vision-128k-instruct should exist");
+    assert_eq!(phi.origin.as_deref(), Some("Microsoft"));
+    assert_eq!(phi.open_weights, Some(true));
+    assert_eq!(phi.release_date.as_deref(), Some("2024-04-23"));
+    assert_eq!(
+        phi.capabilities
+            .input_support(crate::model::ModelInputModality::Image),
+        Some(CapabilitySupport::Supported)
+    );
+
+    let jamba = snapshot
+        .official
+        .models
+        .get("jamba-1.5-large-instruct")
+        .expect("jamba alias should exist");
+    assert_eq!(jamba.origin.as_deref(), Some("AI21 Labs"));
+    assert_eq!(jamba.display_name.as_deref(), Some("AI21-Jamba-Large-1.5"));
+
+    let palmyra = snapshot
+        .official
+        .models
+        .get("palmyra-med-70b")
+        .expect("palmyra-med-70b should exist");
+    assert_eq!(palmyra.origin.as_deref(), Some("Writer"));
+    assert_eq!(palmyra.display_name.as_deref(), Some("Palmyra-Med-70B"));
+
+    let terminus = snapshot
+        .official
+        .models
+        .get("deepseek-v3.1-terminus")
+        .expect("deepseek-v3.1-terminus should exist");
+    assert_eq!(terminus.origin.as_deref(), Some("DeepSeek"));
+    assert_eq!(terminus.release_date.as_deref(), Some("2025-09-22"));
+}
+
+#[tokio::test]
+async fn refresh_from_registry_merges_additional_official_hugging_face_families() {
+    let mut server = mockito::Server::new_async().await;
+    let _additional = server
+        .mock("GET", "/hf/additional.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "Snowflake/snowflake-arctic-embed-l",
+                    "pipeline_tag": "sentence-similarity",
+                    "createdAt": "2024-04-12T13:54:34.000Z"
+                },
+                {
+                    "id": "adept/fuyu-8b",
+                    "pipeline_tag": "image-text-to-text",
+                    "createdAt": "2023-10-17T22:42:08.000Z"
+                },
+                {
+                    "id": "aisingapore/SEA-LION-v1-7B-IT",
+                    "createdAt": "2024-02-01T06:19:29.000Z"
+                },
+                {
+                    "id": "aisingapore/SEA-LION-v1-7B-IT-GPTQ",
+                    "createdAt": "2024-02-01T06:19:29.000Z"
+                },
+                {
+                    "id": "stockmark/Stockmark-2-100B-Instruct",
+                    "createdAt": "2025-07-08T03:42:05.000Z"
+                },
+                {
+                    "id": "stockmark/Stockmark-2-100B-Instruct-beta-AWQ",
+                    "createdAt": "2025-04-03T15:17:58.000Z"
+                },
+                {
+                    "id": "Zyphra/Zamba2-7B-Instruct",
+                    "createdAt": "2024-10-10T06:31:04.000Z"
+                },
+                {
+                    "id": "nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
+                    "createdAt": "2024-10-12T02:37:13.000Z"
+                },
+                {
+                    "id": "nvidia/Llama3-ChatQA-1.5-70B",
+                    "createdAt": "2024-04-28T21:44:57.000Z"
+                },
+                {
+                    "id": "nvidia/Cosmos-Reason2-8B",
+                    "pipeline_tag": "image-text-to-text",
+                    "createdAt": "2025-12-12T17:50:27.000Z"
+                },
+                {
+                    "id": "nvidia/Mistral-NeMo-Minitron-8B-Instruct",
+                    "createdAt": "2024-10-02T07:04:44.000Z"
+                },
+                {
+                    "id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+                    "createdAt": "2025-12-04T03:37:11.000Z"
+                },
+                {
+                    "id": "nvidia/Riva-Translate-4B-Instruct",
+                    "createdAt": "2025-06-09T00:43:37.000Z"
+                },
+                {
+                    "id": "nvidia/llama-nemotron-embed-1b-v2",
+                    "pipeline_tag": "feature-extraction",
+                    "createdAt": "2025-10-16T22:44:33.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let dir = tempdir().expect("tempdir should create");
+    let store = ModelCatalogStore::new(ModelCatalogConfig {
+        cache_path: dir.path().join("model-catalog-cache.json"),
+        custom_path: dir.path().join("model-catalog-custom.json"),
+        cache_max_age_secs: 60,
+    });
+    let service = ModelCatalogService::with_remote_sources(
+        store,
+        vec![sources::ModelCatalogRemoteSource::new(
+            "hf-additional",
+            sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [format!("{}/hf/additional.json", server.url())],
+        )],
+    )
+    .await
+    .expect("service should load");
+
+    let snapshot = service
+        .refresh_from_registry(&ProviderRegistry::new(), None)
+        .await
+        .expect("refresh should succeed");
+
+    assert!(snapshot.official.models.contains_key("arctic-embed-l"));
+    assert!(snapshot.official.models.contains_key("fuyu-8b"));
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("sea-lion-7b-instruct")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("stockmark-2-100b-instruct")
+    );
+    assert!(snapshot.official.models.contains_key("zamba2-7b-instruct"));
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("llama-3.1-nemotron-70b-instruct")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("llama3-chatqa-1.5-70b")
+    );
+    assert!(snapshot.official.models.contains_key("cosmos-reason2-8b"));
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("mistral-nemo-minitron-8b-8k-instruct")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("nemotron-nano-3-30b-a3b")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("riva-translate-4b-instruct")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("llama-nemotron-embed-1b-v2")
+    );
+    assert!(
+        !snapshot
+            .official
+            .models
+            .contains_key("sea-lion-v1-7b-it-gptq")
+    );
+    assert!(
+        !snapshot
+            .official
+            .models
+            .contains_key("stockmark-2-100b-instruct-beta-awq")
+    );
+
+    let cosmos = snapshot
+        .official
+        .models
+        .get("cosmos-reason2-8b")
+        .expect("cosmos-reason2-8b should exist");
+    assert_eq!(cosmos.origin.as_deref(), Some("NVIDIA"));
+    assert_eq!(cosmos.release_date.as_deref(), Some("2025-12-12"));
+    assert_eq!(
+        cosmos
+            .capabilities
+            .input_support(crate::model::ModelInputModality::Image),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(cosmos.output_modalities, vec![String::from("text")]);
+
+    let fuyu = snapshot
+        .official
+        .models
+        .get("fuyu-8b")
+        .expect("fuyu-8b should exist");
+    assert_eq!(fuyu.origin.as_deref(), Some("Adept"));
+    assert_eq!(
+        fuyu.capabilities
+            .input_support(crate::model::ModelInputModality::Image),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(fuyu.output_modalities, vec![String::from("text")]);
+
+    let sea_lion = snapshot
+        .official
+        .models
+        .get("sea-lion-7b-instruct")
+        .expect("sea-lion-7b-instruct should exist");
+    assert_eq!(sea_lion.origin.as_deref(), Some("AI Singapore"));
+    assert_eq!(sea_lion.display_name.as_deref(), Some("SEA-LION-v1-7B-IT"));
+}
+
+#[tokio::test]
+async fn refresh_from_registry_infers_hugging_face_tags_as_capabilities() {
+    let mut server = mockito::Server::new_async().await;
+    let _hf = server
+        .mock("GET", "/hf/tagged.json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            serde_json::json!([
+                {
+                    "id": "microsoft/Phi-3-multimodal-mini-4k-instruct",
+                    "tags": ["vision", "audio", "video", "document"],
+                    "createdAt": "2024-04-23T00:00:00.000Z"
+                }
+            ])
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let dir = tempdir().expect("tempdir should create");
+    let store = ModelCatalogStore::new(ModelCatalogConfig {
+        cache_path: dir.path().join("model-catalog-cache.json"),
+        custom_path: dir.path().join("model-catalog-custom.json"),
+        cache_max_age_secs: 60,
+    });
+    let service = ModelCatalogService::with_remote_sources(
+        store,
+        vec![sources::ModelCatalogRemoteSource::new(
+            "hf-tagged",
+            sources::ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [format!("{}/hf/tagged.json", server.url())],
+        )],
+    )
+    .await
+    .expect("service should load");
+
+    let snapshot = service
+        .refresh_from_registry(&ProviderRegistry::new(), None)
+        .await
+        .expect("refresh should succeed");
+
+    let model = snapshot
+        .official
+        .models
+        .get("phi-3-multimodal-mini-4k-instruct")
+        .expect("tagged hf model should exist");
+    assert_eq!(model.origin.as_deref(), Some("Microsoft"));
+    assert_eq!(
+        model
+            .capabilities
+            .input_support(crate::model::ModelInputModality::Image),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(
+        model
+            .capabilities
+            .input_support(crate::model::ModelInputModality::Audio),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(
+        model
+            .capabilities
+            .input_support(crate::model::ModelInputModality::Video),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(
+        model
+            .capabilities
+            .input_support(crate::model::ModelInputModality::Document),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(model.output_modalities, vec![String::from("text")]);
+}
+
+#[tokio::test]
+async fn refresh_from_registry_merges_curated_official_html_signals() {
+    let mut server = mockito::Server::new_async().await;
+    let _nvidia_docs = server
+        .mock("GET", "/html/nvidia-models.html")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            r#"
+            <a href="/nim/reference/nvidia-embed-qa-4">nvidia / embed-qa-4</a>
+            <a href="/nim/reference/nvidia-ising-calibration-1-35b-a3b">nvidia / ising-calibration-1-35b-a3b</a>
+            <a href="/nim/reference/nvidia-llama-3_2-nemoretriever-1b-vlm-embed-v1">nvidia / llama-3.2-nemoretriever-1b-vlm-embed-v1</a>
+            <a href="/nim/reference/nvidia-llama-3_2-nv-embedqa-1b-v1">nvidia / llama-3.2-nv-embedqa-1b-v1</a>
+            <a href="/nim/reference/nvidia-llama-3_2-nv-embedqa-1b-v2">nvidia / llama-3.2-nv-embedqa-1b-v2</a>
+            <a href="/nim/reference/nvidia-nemoretriever-parse">nvidia / nemoretriever-parse</a>
+            <a href="/nim/reference/nvidia-nv-embedqa-e5-v5">nvidia / nv-embedqa-e5-v5</a>
+            <a href="/nim/reference/nvidia-nvclip">nvidia / nvclip</a>
+            <a href="/nim/reference/nvidia-vila">nvidia / vila</a>
+            <script type="application/json">
+            {
+              "docs": [
+                {"filename":"nvidia-nim-api-for-databricksdbrx-instruct.json"},
+                {"filename":"nvidia-nim-api-for-nvidianemotron-4-340b-reward.json"},
+                {"filename":"nvidia-nim-api-for-nvidianeva-22b.json"},
+                {"filename":"nvidia-nim-api-for-nvidianv-embedqa-mistral-7b-v2.json"}
+              ]
+            }
+            </script>
+            "#,
+        )
+        .create_async()
+        .await;
+    let _nvidia_build = server
+        .mock("GET", "/html/nvidia-synthetic-video-detector.html")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            r#"
+            <html>
+              <body>
+                <h1>synthetic-video-detector</h1>
+                <p>NVIDIA Synthetic Video Detector is an AI-powered micro-service for detecting AI-generated videos.</p>
+              </body>
+            </html>
+            "#,
+        )
+        .create_async()
+        .await;
+
+    let dir = tempdir().expect("tempdir should create");
+    let store = ModelCatalogStore::new(ModelCatalogConfig {
+        cache_path: dir.path().join("model-catalog-cache.json"),
+        custom_path: dir.path().join("model-catalog-custom.json"),
+        cache_max_age_secs: 60,
+    });
+    let service = ModelCatalogService::with_remote_sources(
+        store,
+        vec![
+            sources::ModelCatalogRemoteSource::new(
+                "nvidia-docs",
+                sources::ModelCatalogRemoteSourceKind::OfficialHtmlSignals,
+                [format!("{}/html/nvidia-models.html", server.url())],
+            ),
+            sources::ModelCatalogRemoteSource::new(
+                "nvidia-build",
+                sources::ModelCatalogRemoteSourceKind::OfficialHtmlSignals,
+                [format!(
+                    "{}/html/nvidia-synthetic-video-detector.html",
+                    server.url()
+                )],
+            ),
+        ],
+    )
+    .await
+    .expect("service should load");
+
+    let snapshot = service
+        .refresh_from_registry(&ProviderRegistry::new(), None)
+        .await
+        .expect("refresh should succeed");
+
+    for model_id in [
+        "ai-synthetic-video-detector",
+        "synthetic-video-detector",
+        "dbrx-instruct",
+        "embed-qa-4",
+        "ising-calibration-1-35b-a3b",
+        "llama-3.2-nemoretriever-1b-vlm-embed-v1",
+        "llama-3.2-nv-embedqa-1b-v1",
+        "llama-3.2-nv-embedqa-1b-v2",
+        "nemoretriever-parse",
+        "nemotron-4-340b-reward",
+        "neva-22b",
+        "nv-embedqa-e5-v5",
+        "nv-embedqa-mistral-7b-v2",
+        "nvclip",
+        "vila",
+    ] {
+        assert!(
+            snapshot.official.models.contains_key(model_id),
+            "{model_id} should exist"
+        );
+    }
+
+    let synthetic = snapshot
+        .official
+        .models
+        .get("ai-synthetic-video-detector")
+        .expect("ai-synthetic-video-detector should exist");
+    assert_eq!(synthetic.origin.as_deref(), Some("NVIDIA"));
+    assert_eq!(
+        synthetic.display_name.as_deref(),
+        Some("synthetic-video-detector")
+    );
+    assert_eq!(
+        synthetic
+            .capabilities
+            .input_support(crate::model::ModelInputModality::Video),
+        Some(CapabilitySupport::Supported)
+    );
+    assert_eq!(synthetic.output_modalities, vec![String::from("text")]);
+
+    let dbrx = snapshot
+        .official
+        .models
+        .get("dbrx-instruct")
+        .expect("dbrx-instruct should exist");
+    assert_eq!(dbrx.origin.as_deref(), Some("Databricks"));
+}
+
+#[tokio::test]
+async fn refresh_from_registry_keeps_live_provider_specific_models() {
+    let dir = tempdir().expect("tempdir should create");
+    let store = ModelCatalogStore::new(ModelCatalogConfig {
+        cache_path: dir.path().join("model-catalog-cache.json"),
+        custom_path: dir.path().join("model-catalog-custom.json"),
+        cache_max_age_secs: 60,
+    });
+    let service = ModelCatalogService::with_remote_sources(store, Vec::new())
+        .await
+        .expect("service should load");
+
+    let mut providers = ProviderRegistry::new();
+    providers.register(StaticListProvider::new(
+        "gateway",
+        "deepseek-v4-flash-free",
+        vec![
+            Model::new("gateway", "deepseek-v4-flash-free"),
+            Model::new("gateway", "nvidia/llama-3.1-nemotron-ultra-253b-v1"),
+            Model::new("gateway", "deepseek-ai/deepseek-v3.1-terminus"),
+        ],
+    ));
+
+    let snapshot = service
+        .refresh_from_registry(&providers, None)
+        .await
+        .expect("refresh should succeed");
+
+    assert!(snapshot.official.models.contains_key("deepseek-v4-flash"));
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("llama-3.1-nemotron-ultra-253b-v1")
+    );
+    assert!(
+        snapshot
+            .official
+            .models
+            .contains_key("deepseek-v3.1-terminus")
     );
 }
 

@@ -87,6 +87,7 @@ pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
             })
             .collect(),
         capabilities: capability_patch_from_model(&model.capabilities),
+        source_priority: CatalogDefinitionSourcePriority::default(),
     }
 }
 
@@ -239,6 +240,7 @@ pub(super) fn merge_catalog_definition(
             .or_insert_with(|| mode.clone());
     }
     merge_capability_patch(&mut current.capabilities, &next.capabilities);
+    merge_source_priority(&mut current.source_priority, &next.source_priority);
 }
 
 pub(super) fn merge_catalog_thinking_mode(
@@ -426,6 +428,20 @@ pub(super) fn merge_public_source_catalog_definition(
             .or_insert_with(|| mode.clone());
     }
     merge_capability_patch(&mut current.capabilities, &next.capabilities);
+    merge_source_priority(&mut current.source_priority, &next.source_priority);
+}
+
+fn merge_source_priority(
+    current: &mut CatalogDefinitionSourcePriority,
+    next: &CatalogDefinitionSourcePriority,
+) {
+    current.sort_priority = current.sort_priority.max(next.sort_priority);
+    current.descriptive_priority = current.descriptive_priority.max(next.descriptive_priority);
+    current.limits_priority = current.limits_priority.max(next.limits_priority);
+    current.capability_priority = current.capability_priority.max(next.capability_priority);
+    current.semantics_priority = current.semantics_priority.max(next.semantics_priority);
+    current.pricing_priority = current.pricing_priority.max(next.pricing_priority);
+    current.mode_priority = current.mode_priority.max(next.mode_priority);
 }
 
 pub(super) fn merge_speed_mode_request_override_fill_missing(

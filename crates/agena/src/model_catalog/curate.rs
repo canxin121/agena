@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::AppError;
 
-use super::{CatalogModelDefinition, ModelCatalogDocument};
+use super::{CatalogDefinitionSourcePriority, CatalogModelDefinition, ModelCatalogDocument};
 
 const BANNED_SOURCE_PREFIXES: &[&str] = &[
     "openai.",
@@ -46,6 +46,7 @@ const OFFICIAL_ROOTS: &[&str] = &[
     "codellama",
     "command",
     "deepseek",
+    "deplot",
     "devstral",
     "doubao",
     "e5",
@@ -105,6 +106,7 @@ const OFFICIAL_ROOTS: &[&str] = &[
     "qwen3",
     "qwq",
     "recraft",
+    "recurrentgemma",
     "rerank",
     "ring",
     "riverflow",
@@ -183,15 +185,23 @@ static BLOCKED_TOKENS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 
 static LLAMA_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     [
+        r"^llama-2-(7b|13b|70b)$",
         r"^llama-2-(7b|13b|70b)-chat$",
+        r"^llama2-(7b|13b|70b)$",
+        r"^llama2-(7b|13b|70b)-chat$",
         r"^llama-3-(8b|70b)-instruct$",
+        r"^llama-3\.1-nemoguard-8b-(content-safety|topic-control)$",
+        r"^llama-3\.1-nemotron-[a-z0-9.-]+$",
         r"^llama-3\.1-(8b|70b|405b)-instruct$",
+        r"^llama-3\.2-(nemoretriever|nv-embedqa)-[a-z0-9.-]+$",
         r"^llama-3\.2-(1b|3b)-instruct$",
         r"^llama-3\.2-(11b|90b)-vision-instruct$",
+        r"^llama-3\.3-nemotron-super-49b-v1(\.5)?$",
         r"^llama-3\.3-70b-instruct$",
         r"^llama-4-(maverick|scout)$",
         r"^llama-4-(maverick|scout)-17b(-128e|-16e)?-instruct$",
         r"^llama-guard-",
+        r"^llama-nemotron-(embed|embed-vl|rerank|rerank-vl)-[a-z0-9.-]+$",
     ]
     .into_iter()
     .map(|pattern| Regex::new(pattern).unwrap())
@@ -219,8 +229,9 @@ static CODEGEMMA_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         .collect()
 });
 
-static LLAMA3_CANONICAL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^llama3(\.1-8b|\.3-70b-instruct)$").unwrap());
+static LLAMA3_CANONICAL_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^llama3((\.1-8b|\.3-70b-instruct)|-chatqa-(1\.5|2)-(8b|70b))$").unwrap()
+});
 
 static DISPLAY_ORIGIN_RULES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     [
@@ -458,6 +469,7 @@ const ROOT_ORIGINS: &[(&str, &str)] = &[
     ("codellama", "Meta"),
     ("command", "Cohere"),
     ("deepseek", "DeepSeek"),
+    ("deplot", "Google"),
     ("devstral", "Mistral AI"),
     ("doubao", "ByteDance"),
     ("e5", "Microsoft"),
@@ -511,6 +523,7 @@ const ROOT_ORIGINS: &[(&str, &str)] = &[
     ("qwen3", "Alibaba"),
     ("qwq", "Alibaba"),
     ("recraft", "Recraft"),
+    ("recurrentgemma", "Google"),
     ("rerank", "Cohere"),
     ("runway", "Runway"),
     ("seed", "ByteDance"),
@@ -536,11 +549,34 @@ struct CatalogCandidate {
 pub(super) fn curate_catalog_document(
     document: ModelCatalogDocument,
 ) -> Result<ModelCatalogDocument, AppError> {
+    curate_catalog_document_with_mode(document, CatalogCurationMode::Public)
+}
+
+pub(super) fn curate_live_catalog_document(
+    document: ModelCatalogDocument,
+) -> Result<ModelCatalogDocument, AppError> {
+    curate_catalog_document_with_mode(document, CatalogCurationMode::Live)
+}
+
+#[derive(Clone, Copy)]
+enum CatalogCurationMode {
+    Public,
+    Live,
+}
+
+fn curate_catalog_document_with_mode(
+    document: ModelCatalogDocument,
+    mode: CatalogCurationMode,
+) -> Result<ModelCatalogDocument, AppError> {
     let mut curated_models = BTreeMap::<String, CatalogCandidate>::new();
 
     for (raw_id, definition) in document.models {
         let canonical_id = normalized_catalog_model_id(raw_id.as_str());
-        if !is_allowed_canonical_model_id(canonical_id.as_str()) {
+        let allowed = match mode {
+            CatalogCurationMode::Public => is_allowed_canonical_model_id(canonical_id.as_str()),
+            CatalogCurationMode::Live => is_allowed_live_canonical_model_id(canonical_id.as_str()),
+        };
+        if !allowed {
             continue;
         }
 
@@ -590,6 +626,9 @@ pub(super) fn normalized_catalog_model_id(model_id: &str) -> String {
         normalized = stripped.to_owned();
     }
     if let Some(stripped) = normalized.strip_suffix(":free") {
+        normalized = stripped.to_owned();
+    }
+    if let Some(stripped) = normalized.strip_suffix("-free") {
         normalized = stripped.to_owned();
     }
     if normalized == "study_gpt-chatgpt-4o-latest" {
@@ -690,6 +729,9 @@ fn is_allowed_canonical_model_id(id: &str) -> bool {
     if id.is_empty() || id.contains('/') || is_canonical_source_alias(id) {
         return false;
     }
+    if matches!(id, "deepseek-v3.1-terminus" | "vila") {
+        return true;
+    }
     if BLOCKED_TOKENS.iter().any(|pattern| pattern.is_match(id)) {
         return false;
     }
@@ -722,6 +764,10 @@ fn is_allowed_canonical_model_id(id: &str) -> bool {
         || looks_like_generic_model_id(id)
 }
 
+fn is_allowed_live_canonical_model_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains('/') && !is_canonical_source_alias(id)
+}
+
 fn looks_like_generic_model_id(id: &str) -> bool {
     let has_alpha = id.chars().any(|ch| ch.is_ascii_alphabetic());
     let has_signal = id.contains('-')
@@ -739,6 +785,11 @@ fn is_canonical_source_alias(id: &str) -> bool {
 }
 
 fn compare_candidates(next: &CatalogCandidate, current: &CatalogCandidate) -> i32 {
+    let source_priority_delta = next.definition.source_priority.sort_priority
+        - current.definition.source_priority.sort_priority;
+    if source_priority_delta != 0 {
+        return source_priority_delta;
+    }
     let source_delta = source_preference_score(
         next.raw_id.as_str(),
         next.canonical_id.as_str(),
@@ -778,6 +829,7 @@ fn source_preference_score(
     if raw_id_lower.ends_with("@default")
         || raw_id_lower.ends_with("-maas")
         || raw_id_lower.ends_with(":free")
+        || raw_id_lower.ends_with("-free")
     {
         score -= 200;
     }
@@ -833,8 +885,39 @@ fn merge_definitions(
     let mut primary_value = serde_json::to_value(primary).map_err(AppError::from)?;
     let fallback_value = serde_json::to_value(fallback).map_err(AppError::from)?;
     merge_json(&mut primary_value, &fallback_value);
-    serde_json::from_value(primary_value)
-        .map_err(|err| AppError::Config(format!("merge model catalog definitions: {err}")))
+    let mut merged: CatalogModelDefinition = serde_json::from_value(primary_value)
+        .map_err(|err| AppError::Config(format!("merge model catalog definitions: {err}")))?;
+    merged.source_priority = CatalogDefinitionSourcePriority {
+        sort_priority: primary
+            .source_priority
+            .sort_priority
+            .max(fallback.source_priority.sort_priority),
+        descriptive_priority: primary
+            .source_priority
+            .descriptive_priority
+            .max(fallback.source_priority.descriptive_priority),
+        limits_priority: primary
+            .source_priority
+            .limits_priority
+            .max(fallback.source_priority.limits_priority),
+        capability_priority: primary
+            .source_priority
+            .capability_priority
+            .max(fallback.source_priority.capability_priority),
+        semantics_priority: primary
+            .source_priority
+            .semantics_priority
+            .max(fallback.source_priority.semantics_priority),
+        pricing_priority: primary
+            .source_priority
+            .pricing_priority
+            .max(fallback.source_priority.pricing_priority),
+        mode_priority: primary
+            .source_priority
+            .mode_priority
+            .max(fallback.source_priority.mode_priority),
+    };
+    Ok(merged)
 }
 
 fn merge_json(primary: &mut Value, fallback: &Value) {
@@ -1041,5 +1124,9 @@ mod tests {
         );
         assert_eq!(normalized_catalog_model_id("Kimi-K2_6"), "kimi-k2.6");
         assert_eq!(normalized_catalog_model_id("gpt-oss:120b"), "gpt-oss-120b");
+        assert_eq!(
+            normalized_catalog_model_id("deepseek-v4-flash-free"),
+            "deepseek-v4-flash"
+        );
     }
 }

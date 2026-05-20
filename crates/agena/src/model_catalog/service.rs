@@ -38,7 +38,7 @@ impl ModelCatalogService {
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
                 .timeout(Duration::from_secs(20))
-                .user_agent(format!("agena/{} model-catalog", env!("CARGO_PKG_VERSION")))
+                .user_agent(crate::provider::CODEX_USER_AGENT)
                 .build()?,
             remote_sources,
         })

@@ -168,6 +168,7 @@ fn default_http_adapter_model_list_adapters(
                 enabled: true,
                 model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+                    user_agent: None,
                     extra_headers: BTreeMap::new(),
                     options: OpenAiProviderOptions {
                         backend: OpenAiBackendConfig::Api,
@@ -186,6 +187,7 @@ fn default_http_adapter_model_list_adapters(
                 enabled: true,
                 model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
+                    user_agent: None,
                     extra_headers: BTreeMap::new(),
                     options: AnthropicProviderOptions {
                         models_url: None,
@@ -201,6 +203,7 @@ fn default_http_adapter_model_list_adapters(
                 enabled: true,
                 model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
+                    user_agent: None,
                     extra_headers: BTreeMap::new(),
                     options: GeminiProviderOptions {
                         auth_header: None,
@@ -257,6 +260,7 @@ mod tests {
             enabled: true,
             model_discovery: Default::default(),
             definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+                user_agent: None,
                 extra_headers: BTreeMap::new(),
                 options: OpenAiProviderOptions {
                     backend: OpenAiBackendConfig::Api,

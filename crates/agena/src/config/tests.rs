@@ -1067,6 +1067,7 @@ api_key_env = "OPENCODE_API_KEY"
 enabled = true
 api_mode = "chat"
 models_url = "https://opencode.ai/zen/go/v1/models"
+user_agent = "codex/custom"
 
 [providers."opencode-go".adapters.openai.models."minimax-m2.7"]
 enabled = false
@@ -1120,6 +1121,7 @@ enabled = false
             );
             assert_eq!(config.options.auth_header, "authorization");
             assert_eq!(config.options.auth_scheme.as_deref(), Some("Bearer"));
+            assert_eq!(config.user_agent.as_deref(), Some("codex/custom"));
         }
         other => panic!("expected openai adapter, got {other:?}"),
     }

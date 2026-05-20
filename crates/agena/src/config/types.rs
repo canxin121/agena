@@ -540,6 +540,8 @@ pub struct OllamaProviderOptions {
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct HttpProviderAdapterConfig<T> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
     pub extra_headers: BTreeMap<String, String>,
     pub options: T,
 }
@@ -547,6 +549,7 @@ pub struct HttpProviderAdapterConfig<T> {
 impl<T: fmt::Debug> fmt::Debug for HttpProviderAdapterConfig<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HttpProviderAdapterConfig")
+            .field("user_agent", &self.user_agent)
             .field("extra_headers", &self.extra_headers)
             .field("options", &self.options)
             .finish()

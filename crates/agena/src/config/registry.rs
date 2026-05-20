@@ -24,8 +24,8 @@ use crate::{
 
 use super::raw::parse_adapter_model_ref;
 use super::{
-    ConfigEnvironment, ConfigError, OpenAiApiModeConfig, ProcessEnvironment,
-    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
+    ConfigEnvironment, ConfigError, HttpProviderAdapterConfig, OpenAiApiModeConfig,
+    ProcessEnvironment, ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
     ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderModelDiscoveryConfig,
     ProviderProtocolPathsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
     ResolvedProviderConfig,
@@ -35,8 +35,7 @@ const ATOMGIT_GATEWAY_ROOT: &str = "https://api-ai.gitcode.com";
 const ATOMGIT_LLM_BASE_URL: &str = "https://api-ai.gitcode.com/v1";
 // AtomGit's LLM gateway is OpenAI-compatible for inference, but model
 // catalogue lookup is served by the CodingPlan API.
-const ATOMGIT_CODING_PLAN_MODELS_URL: &str =
-    "https://api.gitcode.com/api/v5/coding-plan/models-v2?plan_type=Max";
+const ATOMGIT_CODING_PLAN_MODELS_URL: &str = "https://api.gitcode.com/api/v5/coding-plan/models-v2";
 const LIST_MODELS_DEFAULT_MODEL_ID: &str = "__list_models__";
 
 #[derive(Debug, Clone)]
@@ -521,7 +520,14 @@ fn build_adapter_provider(
                     adapter.options.auth_header.clone(),
                     adapter.options.auth_scheme.clone(),
                 )
-                .with_extra_headers(to_hash_map(&adapter.extra_headers))
+                .with_extra_headers(http_adapter_extra_headers(
+                    adapter,
+                    Some(http_adapter_default_user_agent(
+                        auth,
+                        HttpAdapterKind::OpenAi,
+                        adapter_default_model,
+                    )),
+                ))
                 .with_api_mode(adapter.options.api_mode.into())
                 .with_stream_mode(adapter.options.stream_mode.into())
                 .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
@@ -559,7 +565,14 @@ fn build_adapter_provider(
                         adapter.options.auth_header.clone(),
                         adapter.options.auth_scheme.clone(),
                     )
-                    .with_extra_headers(to_hash_map(&adapter.extra_headers))
+                    .with_extra_headers(http_adapter_extra_headers(
+                        adapter,
+                        Some(http_adapter_default_user_agent(
+                            auth,
+                            HttpAdapterKind::OpenAi,
+                            adapter_default_model,
+                        )),
+                    ))
                     .with_api_mode(adapter.options.api_mode.into())
                     .with_stream_mode(adapter.options.stream_mode.into())
                     .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
@@ -597,7 +610,14 @@ fn build_adapter_provider(
                     .with_stream_mode(adapter.options.stream_mode.into())
                     .with_models_url(adapter.options.models_url.clone())
                     .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
-                    .with_extra_headers(to_hash_map(&adapter.extra_headers));
+                    .with_extra_headers(http_adapter_extra_headers(
+                        adapter,
+                        Some(http_adapter_default_user_agent(
+                            auth,
+                            HttpAdapterKind::OpenAi,
+                            adapter_default_model,
+                        )),
+                    ));
                     if let Some(auth_data) = credential.auth_data {
                         provider = provider.with_auth_data(auth_data);
                     }
@@ -624,7 +644,14 @@ fn build_adapter_provider(
                         adapter.options.auth_header.clone(),
                         adapter.options.auth_scheme.clone(),
                     )
-                    .with_extra_headers(to_hash_map(&adapter.extra_headers))
+                    .with_extra_headers(http_adapter_extra_headers(
+                        adapter,
+                        Some(http_adapter_default_user_agent(
+                            auth,
+                            HttpAdapterKind::OpenAi,
+                            adapter_default_model,
+                        )),
+                    ))
                     .with_api_mode(atomgit_openai_api_mode(
                         adapter.options.api_mode,
                         adapter.options.api_mode_explicit,
@@ -634,6 +661,7 @@ fn build_adapter_provider(
                     .with_models_url(atomgit_model_listing_url(
                         adapter.options.models_url.clone(),
                     ))
+                    .with_atomgit_coding_plan_models(adapter.options.models_url.is_none())
                     .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
 
                     if let Some(family) = adapter.options.capability_family {
@@ -667,7 +695,14 @@ fn build_adapter_provider(
                         adapter.options.auth_header.clone(),
                         adapter.options.auth_scheme.clone(),
                     )
-                    .with_extra_headers(to_hash_map(&adapter.extra_headers))
+                    .with_extra_headers(http_adapter_extra_headers(
+                        adapter,
+                        Some(http_adapter_default_user_agent(
+                            auth,
+                            HttpAdapterKind::OpenAi,
+                            adapter_default_model,
+                        )),
+                    ))
                     .with_api_mode(adapter.options.api_mode.into())
                     .with_stream_mode(adapter.options.stream_mode.into())
                     .with_realtime_ws_url(adapter.options.realtime_ws_url.clone())
@@ -763,7 +798,14 @@ fn build_adapter_provider(
                 )
                 .with_beta_header(adapter.options.extra_beta_header.clone())
                 .with_eager_input_streaming_override(adapter.options.eager_input_streaming)
-                .with_extra_headers(to_hash_map(&adapter.extra_headers));
+                .with_extra_headers(http_adapter_extra_headers(
+                    adapter,
+                    Some(http_adapter_default_user_agent(
+                        auth,
+                        HttpAdapterKind::Anthropic,
+                        adapter_default_model,
+                    )),
+                ));
 
                 if let Some(auth_data) = credential.auth_data {
                     provider = provider.with_auth_data(auth_data);
@@ -796,7 +838,14 @@ fn build_adapter_provider(
                 )
                 .with_beta_header(adapter.options.extra_beta_header.clone())
                 .with_eager_input_streaming_override(adapter.options.eager_input_streaming)
-                .with_extra_headers(to_hash_map(&adapter.extra_headers)),
+                .with_extra_headers(http_adapter_extra_headers(
+                    adapter,
+                    Some(http_adapter_default_user_agent(
+                        auth,
+                        HttpAdapterKind::Anthropic,
+                        adapter_default_model,
+                    )),
+                )),
             ),
         },
         ProviderAdapterDefinition::Gemini(adapter) => Arc::new({
@@ -815,7 +864,14 @@ fn build_adapter_provider(
                 resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Gemini)?,
                 adapter_default_model.to_owned(),
             )
-            .with_extra_headers(to_hash_map(&adapter.extra_headers))
+            .with_extra_headers(http_adapter_extra_headers(
+                adapter,
+                Some(http_adapter_default_user_agent(
+                    auth,
+                    HttpAdapterKind::Gemini,
+                    adapter_default_model,
+                )),
+            ))
             .with_stream_mode(adapter.options.stream_mode.into())
             .with_realtime_ws_url(adapter.options.realtime_ws_url.clone());
             if let Some(header) = adapter.options.auth_header.clone() {
@@ -1108,6 +1164,37 @@ enum HttpAdapterKind {
     OpenAi,
     Anthropic,
     Gemini,
+}
+
+fn http_adapter_default_user_agent(
+    auth: &ProviderAuthConfig,
+    adapter: HttpAdapterKind,
+    default_model: &str,
+) -> String {
+    credential_user_agent(auth, default_model).unwrap_or_else(|| match adapter {
+        HttpAdapterKind::OpenAi => crate::provider::CODEX_USER_AGENT.to_owned(),
+        HttpAdapterKind::Anthropic => crate::provider::CLAUDE_CODE_API_USER_AGENT.to_owned(),
+        HttpAdapterKind::Gemini => crate::provider::gemini_cli_user_agent(default_model),
+    })
+}
+
+fn credential_user_agent(auth: &ProviderAuthConfig, default_model: &str) -> Option<String> {
+    let ProviderAuthConfig::Credential(config) = auth else {
+        return None;
+    };
+
+    match config.issuer {
+        crate::provider::auth::CredentialIssuer::AtomGit => {
+            Some(crate::provider::ATOMCODE_USER_AGENT.to_owned())
+        }
+        crate::provider::auth::CredentialIssuer::OpenaiChatgpt => {
+            Some(crate::provider::CODEX_USER_AGENT.to_owned())
+        }
+        crate::provider::auth::CredentialIssuer::GoogleAdc => {
+            Some(crate::provider::gemini_cli_user_agent(default_model))
+        }
+        _ => None,
+    }
 }
 
 fn resolve_http_adapter_base_url(
@@ -1708,6 +1795,42 @@ fn auth_supports_selector(auth: &AuthData, selector: AuthSecretSelector) -> bool
             } => !refresh.trim().is_empty() || !access.trim().is_empty(),
         },
     }
+}
+
+fn http_adapter_extra_headers<T>(
+    adapter: &HttpProviderAdapterConfig<T>,
+    default_user_agent: Option<String>,
+) -> HashMap<String, String> {
+    let mut headers = to_hash_map(&adapter.extra_headers);
+    if let Some(user_agent) = adapter
+        .user_agent
+        .as_deref()
+        .and_then(|value| normalize_text(value))
+    {
+        set_user_agent_header(&mut headers, user_agent);
+    } else if !has_user_agent_header(&headers)
+        && let Some(user_agent) = default_user_agent.as_deref().and_then(normalize_text)
+    {
+        set_user_agent_header(&mut headers, user_agent);
+    }
+    headers
+}
+
+fn has_user_agent_header(headers: &HashMap<String, String>) -> bool {
+    headers
+        .keys()
+        .any(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
+}
+
+fn set_user_agent_header(headers: &mut HashMap<String, String>, user_agent: String) {
+    if let Some(existing) = headers
+        .keys()
+        .find(|key| key.eq_ignore_ascii_case(reqwest::header::USER_AGENT.as_str()))
+        .cloned()
+    {
+        headers.remove(&existing);
+    }
+    headers.insert(reqwest::header::USER_AGENT.as_str().to_owned(), user_agent);
 }
 
 fn to_hash_map<K, V>(map: &std::collections::BTreeMap<K, V>) -> HashMap<K, V>
@@ -2509,6 +2632,108 @@ auth_scheme = "Bearer"
     }
 
     #[test]
+    fn http_adapter_extra_headers_apply_default_and_configured_user_agent() {
+        let adapter = crate::config::HttpProviderAdapterConfig {
+            user_agent: None,
+            extra_headers: BTreeMap::new(),
+            options: (),
+        };
+        let headers = super::http_adapter_extra_headers(&adapter, Some("codex/default".to_owned()));
+        assert_eq!(
+            headers.get("user-agent").map(String::as_str),
+            Some("codex/default")
+        );
+
+        let adapter = crate::config::HttpProviderAdapterConfig {
+            user_agent: Some("atomcode/custom".to_owned()),
+            extra_headers: BTreeMap::from([("User-Agent".to_owned(), "ignored".to_owned())]),
+            options: (),
+        };
+        let headers = super::http_adapter_extra_headers(&adapter, Some("codex/default".to_owned()));
+        assert_eq!(
+            headers.get("user-agent").map(String::as_str),
+            Some("atomcode/custom")
+        );
+        assert!(!headers.contains_key("User-Agent"));
+    }
+
+    #[test]
+    fn http_adapter_default_user_agent_prefers_credential_then_adapter() {
+        let api_auth = ProviderAuthConfig::Api(crate::config::ProviderApiAuthConfig {
+            base_url: None,
+            protocol_paths: ProviderProtocolPathsConfig::default(),
+            api_key: Some("sk-test".to_owned()),
+            api_key_env: None,
+        });
+        assert_eq!(
+            super::http_adapter_default_user_agent(
+                &api_auth,
+                super::HttpAdapterKind::OpenAi,
+                "gpt-5.3-codex"
+            ),
+            crate::provider::CODEX_USER_AGENT
+        );
+        assert_eq!(
+            super::http_adapter_default_user_agent(
+                &api_auth,
+                super::HttpAdapterKind::Anthropic,
+                "claude-sonnet-4-5"
+            ),
+            crate::provider::CLAUDE_CODE_API_USER_AGENT
+        );
+        assert!(
+            super::http_adapter_default_user_agent(
+                &api_auth,
+                super::HttpAdapterKind::Gemini,
+                "gemini-3-pro-preview"
+            )
+            .starts_with("GeminiCLI/")
+        );
+
+        let atomgit_auth =
+            ProviderAuthConfig::Credential(crate::config::ProviderCredentialAuthConfig {
+                issuer: crate::provider::auth::CredentialIssuer::AtomGit,
+                credential: None,
+                base_url: None,
+                protocol_paths: ProviderProtocolPathsConfig::default(),
+                service_key_env: None,
+                instance_url: None,
+                ai_gateway_url: None,
+                ai_gateway_headers: BTreeMap::new(),
+                feature_flags: BTreeMap::new(),
+            });
+        assert_eq!(
+            super::http_adapter_default_user_agent(
+                &atomgit_auth,
+                super::HttpAdapterKind::OpenAi,
+                "Kimi-K2-Instruct"
+            ),
+            crate::provider::ATOMCODE_USER_AGENT
+        );
+
+        let google_auth =
+            ProviderAuthConfig::Credential(crate::config::ProviderCredentialAuthConfig {
+                issuer: crate::provider::auth::CredentialIssuer::GoogleAdc,
+                credential: None,
+                base_url: None,
+                protocol_paths: ProviderProtocolPathsConfig::default(),
+                service_key_env: None,
+                instance_url: None,
+                ai_gateway_url: None,
+                ai_gateway_headers: BTreeMap::new(),
+                feature_flags: BTreeMap::new(),
+            });
+        assert!(
+            super::http_adapter_default_user_agent(
+                &google_auth,
+                super::HttpAdapterKind::OpenAi,
+                "gemini-3-pro-preview"
+            )
+            .starts_with("GeminiCLI/")
+        );
+    }
+
+    #[test]
     fn atomgit_openai_api_mode_defaults_to_chat_unless_explicit() {
         assert_eq!(
             super::atomgit_openai_api_mode(crate::config::OpenAiApiModeConfig::Auto, false),
@@ -2553,6 +2778,7 @@ auth_scheme = "Bearer"
             model_discovery: Default::default(),
             definition: crate::config::ProviderAdapterDefinition::Anthropic(
                 crate::config::HttpProviderAdapterConfig {
+                    user_agent: None,
                     extra_headers: BTreeMap::new(),
                     options: crate::config::AnthropicProviderOptions {
                         models_url: None,
@@ -2711,6 +2937,7 @@ auth_scheme = "Bearer"
             model_discovery: Default::default(),
             definition: crate::config::ProviderAdapterDefinition::Gemini(
                 crate::config::HttpProviderAdapterConfig {
+                    user_agent: None,
                     extra_headers: BTreeMap::new(),
                     options: crate::config::GeminiProviderOptions {
                         auth_header: None,

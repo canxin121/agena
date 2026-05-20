@@ -69,15 +69,20 @@ impl GeminiAdapter {
         base_url: impl Into<String>,
         default_model: impl Into<String>,
     ) -> Self {
+        let default_model = ModelId::new(default_model);
+        let user_agent = crate::provider::gemini_cli_user_agent(default_model.as_str());
         Self {
             client,
             api_key,
             base_url: utils::normalize_base_url(base_url.into().as_str()),
-            default_model: ModelId::new(default_model),
+            default_model,
             auth_mode: GeminiAuthMode::QueryParameter {
                 name: "key".to_owned(),
             },
-            extra_headers: HashMap::new(),
+            extra_headers: HashMap::from([(
+                reqwest::header::USER_AGENT.as_str().to_owned(),
+                user_agent,
+            )]),
             stream_mode: GeminiStreamMode::Sse,
             realtime_ws_url: None,
         }

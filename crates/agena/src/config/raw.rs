@@ -1124,6 +1124,7 @@ pub(crate) struct RawProviderAdapterConfig {
     pub(crate) messages_url: Option<String>,
     pub(crate) auth_header: Option<String>,
     pub(crate) auth_scheme: Option<String>,
+    pub(crate) user_agent: Option<String>,
     pub(crate) extra_beta_header: Option<String>,
     pub(crate) eager_input_streaming: Option<bool>,
     pub(crate) extra_headers: BTreeMap<String, String>,
@@ -1148,6 +1149,7 @@ impl Merge for RawProviderAdapterConfig {
         merge_option(&mut self.messages_url, overlay.messages_url);
         merge_option(&mut self.auth_header, overlay.auth_header);
         merge_option(&mut self.auth_scheme, overlay.auth_scheme);
+        merge_option(&mut self.user_agent, overlay.user_agent);
         merge_option(&mut self.extra_beta_header, overlay.extra_beta_header);
         merge_option(
             &mut self.eager_input_streaming,
@@ -1347,6 +1349,7 @@ fn resolve_adapter(
         raw.messages_url,
         raw.auth_header,
         raw.auth_scheme,
+        raw.user_agent,
         raw.extra_beta_header,
         raw.eager_input_streaming,
         raw.extra_headers,
@@ -1388,6 +1391,7 @@ fn resolve_adapter_config(
     messages_url: Option<String>,
     auth_header: Option<String>,
     auth_scheme: Option<String>,
+    user_agent: Option<String>,
     extra_beta_header: Option<String>,
     eager_input_streaming: Option<bool>,
     extra_headers: BTreeMap<String, String>,
@@ -1442,6 +1446,7 @@ fn resolve_adapter_config(
                 }
             }
             ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+                user_agent: normalize_optional(user_agent),
                 extra_headers,
                 options: super::OpenAiProviderOptions {
                     backend,
@@ -1467,6 +1472,7 @@ fn resolve_adapter_config(
                 });
             }
             ProviderAdapterDefinition::Anthropic(HttpProviderAdapterConfig {
+                user_agent: normalize_optional(user_agent),
                 extra_headers,
                 options: super::AnthropicProviderOptions {
                     models_url: normalize_optional(models_url),
@@ -1490,6 +1496,7 @@ fn resolve_adapter_config(
                 });
             }
             ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
+                user_agent: normalize_optional(user_agent),
                 extra_headers,
                 options: super::GeminiProviderOptions {
                     auth_header: normalize_optional(auth_header),

@@ -384,6 +384,13 @@ enabled = true
 enabled = true
 ```
 
+AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Lite`
+调用 CodingPlan `claim-v2`，再用命中的 tier 请求 `models-v2`。如果需要覆盖
+请求身份，可以在 HTTP adapter 上设置 `user_agent`；否则 AtomGit credential
+会默认使用 AtomCode 风格的 User-Agent。内置默认 User-Agent 使用固定的官方
+产品版本字符串，不使用 agena 名称或版本；其他 header 继续放在
+`extra_headers`。
+
 ### GitHub Copilot Anthropic
 
 ```toml

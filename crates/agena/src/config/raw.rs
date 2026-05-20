@@ -1,23 +1,25 @@
 use std::{collections::BTreeMap, fs, path::Path, str::FromStr};
 
+use merge::Merge as DeriveMerge;
 use serde::{Deserialize, Serialize};
-use toml::Value;
+use serde_json::Value;
 
 use crate::provider::{
-    ConfiguredModelDefinition, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
-    ProviderRequestRetryConfig, ProviderStreamReplayConfig,
-    auth::{AuthData, CredentialIssuer},
+    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ProviderRequestRetryConfig,
+    ProviderStreamReplayConfig, auth::CredentialIssuer,
 };
 
 use super::{
     AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, DefaultConfig,
     HttpProviderAdapterConfig, McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig,
-    ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
-    ProviderGitlabAuthConfig, ProviderModelDiscoveryConfig, ProviderProtocolPathsConfig,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    ResolvedProviderModelConfig, RuntimeConfig, RuntimeModelCatalogConfig, StreamTransportMode,
-    TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
+    ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderAdapterOverlay,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderAuthMode, ProviderAuthOverlay,
+    ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderGitlabAuthConfig,
+    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
+    ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
+    RuntimeConfig, RuntimeModelCatalogConfig, StreamTransportMode, TelemetryConfig, TracingConfig,
+    UiConfig, WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -34,7 +36,7 @@ impl RawConfigFile {
         match fs::read_to_string(path) {
             Ok(text) => {
                 reject_unsupported_fields(path, &text)?;
-                let config = toml::from_str::<RawConfig>(&text).map_err(|source| {
+                let config = serde_json::from_str::<RawConfig>(&text).map_err(|source| {
                     ConfigError::ParseFile {
                         path: path.to_path_buf(),
                         source,
@@ -63,20 +65,21 @@ pub(crate) fn validate_config_text(
     env: &dyn ConfigEnvironment,
 ) -> Result<(), ConfigError> {
     reject_unsupported_fields(path, text)?;
-    let config = toml::from_str::<RawConfig>(text).map_err(|source| ConfigError::ParseFile {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let config =
+        serde_json::from_str::<RawConfig>(text).map_err(|source| ConfigError::ParseFile {
+            path: path.to_path_buf(),
+            source,
+        })?;
     config.resolve_with_env(env)?;
     Ok(())
 }
 
 fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError> {
-    let value = toml::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
+    let value = serde_json::from_str::<Value>(text).map_err(|source| ConfigError::ParseFile {
         path: path.to_path_buf(),
         source,
     })?;
-    let Some(table) = value.as_table() else {
+    let Some(table) = value.as_object() else {
         return Ok(());
     };
     if table.contains_key("mode") {
@@ -92,9 +95,9 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
             )));
         }
     }
-    if let Some(providers) = table.get("providers").and_then(Value::as_table) {
+    if let Some(providers) = table.get("providers").and_then(Value::as_object) {
         for (provider_id, provider) in providers {
-            let Some(provider) = provider.as_table() else {
+            let Some(provider) = provider.as_object() else {
                 continue;
             };
             if provider.contains_key("variants")
@@ -105,14 +108,14 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
                     "provider `{provider_id}` model modes must be configured under `providers.{provider_id}.models.\"<model-id>\".thinking_modes` or `.speed_modes`; provider-level modes are not supported"
                 )));
             }
-            if let Some(adapters) = provider.get("adapters").and_then(Value::as_table) {
+            if let Some(adapters) = provider.get("adapters").and_then(Value::as_object) {
                 for (adapter_id, adapter) in adapters {
-                    let Some(adapter) = adapter.as_table() else {
+                    let Some(adapter) = adapter.as_object() else {
                         continue;
                     };
-                    if let Some(models) = adapter.get("models").and_then(Value::as_table) {
+                    if let Some(models) = adapter.get("models").and_then(Value::as_object) {
                         for (model_id, model) in models {
-                            let Some(model) = model.as_table() else {
+                            let Some(model) = model.as_object() else {
                                 continue;
                             };
                             for field in ["target_model"] {
@@ -146,7 +149,7 @@ pub(crate) struct RawConfig {
     pub(crate) mcp: Option<McpConfig>,
     pub(crate) lsp: Option<crate::config::types::LspConfig>,
     pub(crate) web: Option<WebToolsConfig>,
-    pub(crate) providers: BTreeMap<String, RawProviderConfig>,
+    pub(crate) providers: BTreeMap<String, ProviderOverlay>,
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "hooks")]
     pub(crate) hooks: Vec<crate::hooks::HookEntry>,
 }
@@ -513,13 +516,9 @@ where
         .map_err(|err| ConfigError::Validation(format!("plugins.list.{plugin_id}.options: {err}")))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[allow(dead_code)]
 pub(crate) struct RawPluginConfig;
-
-impl Merge for RawPluginConfig {
-    fn merge_from(&mut self, _overlay: Self) {}
-}
 
 impl Merge for PluginConfig {
     fn merge_from(&mut self, overlay: Self) {
@@ -585,21 +584,16 @@ impl Merge for ProjectInstructionsConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawTracingConfig {
+    #[merge(strategy = option_override)]
     pub(crate) filter: Option<String>,
     #[serde(alias = "database_level")]
+    #[merge(strategy = option_override)]
     pub(crate) database: Option<String>,
+    #[merge(strategy = option_override)]
     pub(crate) adapter: Option<String>,
-}
-
-impl Merge for RawTracingConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.filter, overlay.filter);
-        merge_option(&mut self.database, overlay.database);
-        merge_option(&mut self.adapter, overlay.adapter);
-    }
 }
 
 fn validate_database_log_level(value: &str) -> Result<(), ConfigError> {
@@ -615,35 +609,25 @@ fn validate_tracing_level(field: &str, value: &str) -> Result<(), ConfigError> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawTelemetryConfig {
+    #[merge(strategy = option_override)]
     pub(crate) enabled: Option<bool>,
+    #[merge(strategy = option_override)]
     pub(crate) service_name: Option<String>,
+    #[merge(strategy = option_override)]
     pub(crate) otlp_endpoint: Option<String>,
     #[serde(default)]
+    #[merge(strategy = map_extend)]
     pub(crate) headers: BTreeMap<String, String>,
 }
 
-impl Merge for RawTelemetryConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.enabled, overlay.enabled);
-        merge_option(&mut self.service_name, overlay.service_name);
-        merge_option(&mut self.otlp_endpoint, overlay.otlp_endpoint);
-        self.headers.extend(overlay.headers);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawUiConfig {
+    #[merge(strategy = option_override)]
     pub(crate) locale: Option<String>,
-}
-
-impl Merge for RawUiConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.locale, overlay.locale);
-    }
 }
 
 impl Merge for crate::config::types::AgentConfig {
@@ -702,23 +686,18 @@ impl Merge for crate::agent::AgentPermissionConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawDefaultConfig {
+    #[merge(strategy = option_override)]
     pub(crate) provider: Option<String>,
+    #[merge(strategy = option_override)]
     pub(crate) adapter: Option<String>,
+    #[merge(strategy = option_override)]
     pub(crate) model: Option<String>,
+    #[merge(strategy = option_override)]
     pub(crate) agent: Option<String>,
-}
-
-impl Merge for RawDefaultConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.provider, overlay.provider);
-        merge_option(&mut self.adapter, overlay.adapter);
-        merge_option(&mut self.model, overlay.model);
-        merge_option(&mut self.agent, overlay.agent);
-    }
 }
 
 impl RawDefaultConfig {
@@ -756,28 +735,23 @@ impl RawDefaultConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct RawRuntimeConfig {
+    #[merge(strategy = option_struct_merge)]
     pub(crate) provider_http: Option<RawProviderHttpConfig>,
+    #[merge(strategy = option_struct_merge)]
     pub(crate) request_retry: Option<RawRequestRetryConfig>,
+    #[merge(strategy = option_struct_merge)]
     pub(crate) stream_replay: Option<RawStreamReplayConfig>,
+    #[merge(strategy = option_struct_merge)]
     pub(crate) model_catalog: Option<RawRuntimeModelCatalogConfig>,
+    #[merge(strategy = option_struct_merge)]
     pub(crate) reload: Option<RawRuntimeReloadConfig>,
+    #[merge(strategy = option_struct_merge)]
     pub(crate) janitor: Option<RawRuntimeJanitorConfig>,
+    #[merge(strategy = option_struct_merge)]
     pub(crate) session_cache: Option<RawSessionCacheConfig>,
-}
-
-impl Merge for RawRuntimeConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option_struct(&mut self.provider_http, overlay.provider_http);
-        merge_option_struct(&mut self.request_retry, overlay.request_retry);
-        merge_option_struct(&mut self.stream_replay, overlay.stream_replay);
-        merge_option_struct(&mut self.model_catalog, overlay.model_catalog);
-        merge_option_struct(&mut self.reload, overlay.reload);
-        merge_option_struct(&mut self.janitor, overlay.janitor);
-        merge_option_struct(&mut self.session_cache, overlay.session_cache);
-    }
 }
 
 impl RuntimeConfig {
@@ -887,107 +861,69 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawProviderHttpConfig {
+    #[merge(strategy = option_override)]
     pub(crate) timeout_secs: Option<u64>,
+    #[merge(strategy = option_override)]
     pub(crate) connect_timeout_secs: Option<u64>,
 }
 
-impl Merge for RawProviderHttpConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.timeout_secs, overlay.timeout_secs);
-        merge_option(&mut self.connect_timeout_secs, overlay.connect_timeout_secs);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawRequestRetryConfig {
+    #[merge(strategy = option_override)]
     pub(crate) max_retries: Option<u32>,
+    #[merge(strategy = option_override)]
     pub(crate) base_delay_ms: Option<u64>,
+    #[merge(strategy = option_override)]
     pub(crate) max_delay_ms: Option<u64>,
 }
 
-impl Merge for RawRequestRetryConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.max_retries, overlay.max_retries);
-        merge_option(&mut self.base_delay_ms, overlay.base_delay_ms);
-        merge_option(&mut self.max_delay_ms, overlay.max_delay_ms);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawStreamReplayConfig {
+    #[merge(strategy = option_override)]
     pub(crate) max_retries_after_output: Option<u32>,
+    #[merge(strategy = option_override)]
     pub(crate) max_tracked_events: Option<usize>,
 }
 
-impl Merge for RawStreamReplayConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(
-            &mut self.max_retries_after_output,
-            overlay.max_retries_after_output,
-        );
-        merge_option(&mut self.max_tracked_events, overlay.max_tracked_events);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawRuntimeModelCatalogConfig {
+    #[merge(strategy = option_override)]
     pub(crate) cache_max_age_secs: Option<u64>,
 }
 
-impl Merge for RawRuntimeModelCatalogConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.cache_max_age_secs, overlay.cache_max_age_secs);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawRuntimeReloadConfig {
+    #[merge(strategy = option_override)]
     pub(crate) enabled: Option<bool>,
+    #[merge(strategy = option_override)]
     pub(crate) poll_interval_secs: Option<u64>,
 }
 
-impl Merge for RawRuntimeReloadConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.enabled, overlay.enabled);
-        merge_option(&mut self.poll_interval_secs, overlay.poll_interval_secs);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawRuntimeJanitorConfig {
+    #[merge(strategy = option_override)]
     pub(crate) enabled: Option<bool>,
+    #[merge(strategy = option_override)]
     pub(crate) interval_secs: Option<u64>,
 }
 
-impl Merge for RawRuntimeJanitorConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.enabled, overlay.enabled);
-        merge_option(&mut self.interval_secs, overlay.interval_secs);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 pub(crate) struct RawSessionCacheConfig {
+    #[merge(strategy = option_override)]
     pub(crate) max_sessions: Option<usize>,
+    #[merge(strategy = option_override)]
     pub(crate) ttl_secs: Option<u64>,
+    #[merge(strategy = option_override)]
     pub(crate) max_bytes: Option<usize>,
-}
-
-impl Merge for RawSessionCacheConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.max_sessions, overlay.max_sessions);
-        merge_option(&mut self.ttl_secs, overlay.ttl_secs);
-        merge_option(&mut self.max_bytes, overlay.max_bytes);
-    }
 }
 
 // PluginConfig (alias for agena_plugin_host::PluginsConfig) is parsed
@@ -1027,168 +963,7 @@ impl std::str::FromStr for ProviderKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub(crate) struct RawProviderModelConfig {
-    pub(crate) enabled: Option<bool>,
-    #[serde(flatten)]
-    pub(crate) definition: ConfiguredModelDefinition,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ProviderAuthMode {
-    None,
-    Api,
-    #[serde(rename = "gitlab_api")]
-    Gitlab,
-    Credential,
-    BedrockSigv4,
-    GoogleAdc,
-    SapAiCore,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawProviderProtocolPathsConfig {
-    pub(crate) openai: Option<String>,
-    pub(crate) anthropic: Option<String>,
-    pub(crate) gemini: Option<String>,
-}
-
-impl Merge for RawProviderProtocolPathsConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.openai, overlay.openai);
-        merge_option(&mut self.anthropic, overlay.anthropic);
-        merge_option(&mut self.gemini, overlay.gemini);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawProviderAuthConfig {
-    pub(crate) mode: Option<ProviderAuthMode>,
-    pub(crate) base_url: Option<String>,
-    pub(crate) protocol_paths: Option<RawProviderProtocolPathsConfig>,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_key_env: Option<String>,
-    pub(crate) instance_url: Option<String>,
-    pub(crate) ai_gateway_url: Option<String>,
-    pub(crate) ai_gateway_headers: BTreeMap<String, String>,
-    pub(crate) feature_flags: BTreeMap<String, bool>,
-    pub(crate) issuer: Option<CredentialIssuer>,
-    #[serde(default)]
-    pub(crate) credential: Option<AuthData>,
-    pub(crate) profile: Option<String>,
-    pub(crate) access_key_id: Option<String>,
-    pub(crate) secret_access_key: Option<String>,
-    pub(crate) session_token: Option<String>,
-    pub(crate) region: Option<String>,
-    pub(crate) service_key_env: Option<String>,
-}
-
-impl Merge for RawProviderAuthConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.mode, overlay.mode);
-        merge_option(&mut self.base_url, overlay.base_url);
-        merge_option_struct(&mut self.protocol_paths, overlay.protocol_paths);
-        merge_option(&mut self.api_key, overlay.api_key);
-        merge_option(&mut self.api_key_env, overlay.api_key_env);
-        merge_option(&mut self.instance_url, overlay.instance_url);
-        merge_option(&mut self.ai_gateway_url, overlay.ai_gateway_url);
-        self.ai_gateway_headers.extend(overlay.ai_gateway_headers);
-        self.feature_flags.extend(overlay.feature_flags);
-        merge_option(&mut self.issuer, overlay.issuer);
-        merge_option(&mut self.credential, overlay.credential);
-        merge_option(&mut self.profile, overlay.profile);
-        merge_option(&mut self.access_key_id, overlay.access_key_id);
-        merge_option(&mut self.secret_access_key, overlay.secret_access_key);
-        merge_option(&mut self.session_token, overlay.session_token);
-        merge_option(&mut self.region, overlay.region);
-        merge_option(&mut self.service_key_env, overlay.service_key_env);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawProviderAdapterConfig {
-    pub(crate) backend: Option<super::OpenAiBackendConfig>,
-    pub(crate) enabled: Option<bool>,
-    pub(crate) model_discovery: Option<ProviderModelDiscoveryConfig>,
-    pub(crate) base_url: Option<String>,
-    pub(crate) models_url: Option<String>,
-    pub(crate) capability_family: Option<ProviderCapabilityFamilyConfig>,
-    pub(crate) messages_url: Option<String>,
-    pub(crate) auth_header: Option<String>,
-    pub(crate) auth_scheme: Option<String>,
-    pub(crate) user_agent: Option<String>,
-    pub(crate) extra_beta_header: Option<String>,
-    pub(crate) eager_input_streaming: Option<bool>,
-    pub(crate) extra_headers: BTreeMap<String, String>,
-    pub(crate) api_mode: Option<OpenAiApiModeConfig>,
-    pub(crate) stream_mode: Option<StreamTransportMode>,
-    pub(crate) realtime_ws_url: Option<String>,
-    pub(crate) instance_url: Option<String>,
-    pub(crate) ai_gateway_url: Option<String>,
-    pub(crate) ai_gateway_headers: BTreeMap<String, String>,
-    pub(crate) feature_flags: BTreeMap<String, bool>,
-    pub(crate) models: BTreeMap<String, RawProviderModelConfig>,
-}
-
-impl Merge for RawProviderAdapterConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.backend, overlay.backend);
-        merge_option(&mut self.enabled, overlay.enabled);
-        merge_option(&mut self.model_discovery, overlay.model_discovery);
-        merge_option(&mut self.base_url, overlay.base_url);
-        merge_option(&mut self.models_url, overlay.models_url);
-        merge_option(&mut self.capability_family, overlay.capability_family);
-        merge_option(&mut self.messages_url, overlay.messages_url);
-        merge_option(&mut self.auth_header, overlay.auth_header);
-        merge_option(&mut self.auth_scheme, overlay.auth_scheme);
-        merge_option(&mut self.user_agent, overlay.user_agent);
-        merge_option(&mut self.extra_beta_header, overlay.extra_beta_header);
-        merge_option(
-            &mut self.eager_input_streaming,
-            overlay.eager_input_streaming,
-        );
-        self.extra_headers.extend(overlay.extra_headers);
-        merge_option(&mut self.api_mode, overlay.api_mode);
-        merge_option(&mut self.stream_mode, overlay.stream_mode);
-        merge_option(&mut self.realtime_ws_url, overlay.realtime_ws_url);
-        merge_option(&mut self.instance_url, overlay.instance_url);
-        merge_option(&mut self.ai_gateway_url, overlay.ai_gateway_url);
-        self.ai_gateway_headers.extend(overlay.ai_gateway_headers);
-        self.feature_flags.extend(overlay.feature_flags);
-        self.models.extend(overlay.models);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawProviderConfig {
-    pub(crate) enabled: Option<bool>,
-    pub(crate) default_adapter: Option<String>,
-    pub(crate) default_model: Option<String>,
-    pub(crate) auth: Option<RawProviderAuthConfig>,
-    pub(crate) adapters: BTreeMap<String, RawProviderAdapterConfig>,
-}
-
-impl Merge for RawProviderConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        merge_option(&mut self.enabled, overlay.enabled);
-        merge_option(&mut self.default_adapter, overlay.default_adapter);
-        merge_option(&mut self.default_model, overlay.default_model);
-        merge_option_struct(&mut self.auth, overlay.auth);
-        self.adapters.extend(overlay.adapters);
-    }
-}
-
-impl RawProviderConfig {
+impl ProviderOverlay {
     fn resolve(
         self,
         provider_id: String,
@@ -1321,7 +1096,7 @@ struct ResolvedAdapterWithModels {
 
 const DEFAULT_SAP_AI_CORE_SERVICE_KEY_ENV: &str = "AICORE_SERVICE_KEY";
 
-fn normalize_model_configs(models: &mut BTreeMap<String, RawProviderModelConfig>) {
+fn normalize_model_configs(models: &mut BTreeMap<String, ProviderModelOverlay>) {
     for configured in models.values_mut() {
         configured.definition.capabilities.normalize_compact_patch();
     }
@@ -1330,7 +1105,7 @@ fn normalize_model_configs(models: &mut BTreeMap<String, RawProviderModelConfig>
 fn resolve_adapter(
     provider_id: &str,
     adapter_id: &str,
-    raw: RawProviderAdapterConfig,
+    raw: ProviderAdapterOverlay,
 ) -> Result<ResolvedAdapterWithModels, ConfigError> {
     let kind =
         ProviderKind::from_str(adapter_id).map_err(|_| ConfigError::MissingProviderKind {
@@ -1364,15 +1139,7 @@ fn resolve_adapter(
     let models = raw
         .models
         .into_iter()
-        .map(|(model_id, configured)| {
-            Ok((
-                model_id.clone(),
-                ResolvedProviderModelConfig {
-                    enabled: configured.enabled.unwrap_or(true),
-                    definition: configured.definition,
-                },
-            ))
-        })
+        .map(|(model_id, configured)| Ok((model_id.clone(), configured)))
         .collect::<Result<BTreeMap<_, _>, ConfigError>>()?;
     Ok(ResolvedAdapterWithModels { config, models })
 }
@@ -1526,7 +1293,7 @@ fn resolve_adapter_config(
 
 fn resolve_provider_auth<'a>(
     provider_id: &str,
-    raw_auth: Option<RawProviderAuthConfig>,
+    raw_auth: Option<ProviderAuthOverlay>,
     adapters: impl IntoIterator<Item = &'a ResolvedProviderAdapterConfig>,
 ) -> Result<ProviderAuthConfig, ConfigError> {
     let adapters = adapters.into_iter().collect::<Vec<_>>();
@@ -1623,7 +1390,7 @@ fn resolve_provider_auth<'a>(
 
 fn resolve_credential_auth(
     provider_id: &str,
-    raw_auth: RawProviderAuthConfig,
+    raw_auth: ProviderAuthOverlay,
     issuer: CredentialIssuer,
 ) -> Result<ProviderAuthConfig, ConfigError> {
     let credential = raw_auth
@@ -1755,7 +1522,7 @@ fn resolve_credential_auth(
 
 fn resolve_gitlab_auth(
     provider_id: &str,
-    raw_auth: RawProviderAuthConfig,
+    raw_auth: ProviderAuthOverlay,
 ) -> Result<ProviderAuthConfig, ConfigError> {
     if raw_auth.base_url.is_some()
         || raw_auth.protocol_paths.is_some()
@@ -1798,7 +1565,7 @@ fn resolve_gitlab_auth(
 
 fn resolve_protocol_paths(
     provider_id: &str,
-    raw: Option<RawProviderProtocolPathsConfig>,
+    raw: Option<ProviderProtocolPathsOverlay>,
     field: &str,
 ) -> Result<ProviderProtocolPathsConfig, ConfigError> {
     let raw = raw.unwrap_or_default();
@@ -1840,7 +1607,7 @@ fn normalize_protocol_path(
 }
 
 fn infer_provider_auth_mode(
-    raw_auth: &RawProviderAuthConfig,
+    raw_auth: &ProviderAuthOverlay,
     adapters: &[&ResolvedProviderAdapterConfig],
 ) -> ProviderAuthMode {
     if raw_auth.credential.is_some() || raw_auth.issuer.is_some() {
@@ -2085,10 +1852,46 @@ pub(crate) trait Merge {
     fn merge_from(&mut self, overlay: Self);
 }
 
+macro_rules! impl_local_merge_via_crate {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl Merge for $ty {
+                fn merge_from(&mut self, overlay: Self) {
+                    <Self as merge::Merge>::merge(self, overlay);
+                }
+            }
+        )*
+    };
+}
+
+impl_local_merge_via_crate!(
+    RawPluginConfig,
+    RawTracingConfig,
+    RawTelemetryConfig,
+    RawUiConfig,
+    RawDefaultConfig,
+    RawRuntimeConfig,
+    RawProviderHttpConfig,
+    RawRequestRetryConfig,
+    RawStreamReplayConfig,
+    RawRuntimeModelCatalogConfig,
+    RawRuntimeReloadConfig,
+    RawRuntimeJanitorConfig,
+    RawSessionCacheConfig,
+    ProviderProtocolPathsOverlay,
+    ProviderAuthOverlay,
+    ProviderAdapterOverlay,
+    ProviderOverlay,
+);
+
 pub(crate) fn merge_option<T>(base: &mut Option<T>, overlay: Option<T>) {
     if let Some(value) = overlay {
         *base = Some(value);
     }
+}
+
+pub(crate) fn option_override<T>(base: &mut Option<T>, overlay: Option<T>) {
+    merge_option(base, overlay);
 }
 
 pub(crate) fn merge_option_struct<T>(base: &mut Option<T>, overlay: Option<T>)
@@ -2100,6 +1903,13 @@ where
         (None, Some(overlay)) => *base = Some(overlay),
         _ => {}
     }
+}
+
+pub(crate) fn option_struct_merge<T>(base: &mut Option<T>, overlay: Option<T>)
+where
+    T: Merge,
+{
+    merge_option_struct(base, overlay);
 }
 
 pub(crate) fn merge_map<T>(base: &mut BTreeMap<String, T>, overlay: BTreeMap<String, T>)
@@ -2114,6 +1924,13 @@ where
             }
         }
     }
+}
+
+pub(crate) fn map_extend<K, V>(base: &mut BTreeMap<K, V>, overlay: BTreeMap<K, V>)
+where
+    K: Ord,
+{
+    base.extend(overlay);
 }
 
 fn normalize_optional(value: Option<String>) -> Option<String> {
@@ -2139,7 +1956,7 @@ fn validate_permission_config(
 fn validate_configured_models(
     provider_id: &str,
     scope: &str,
-    models: &BTreeMap<String, RawProviderModelConfig>,
+    models: &BTreeMap<String, ProviderModelOverlay>,
 ) -> Result<(), ConfigError> {
     for (model_id, configured) in models {
         if model_id.trim().is_empty() {

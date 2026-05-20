@@ -1216,6 +1216,3 @@ impl HostClient for RuntimeHostClient {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

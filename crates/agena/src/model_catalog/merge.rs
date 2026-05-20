@@ -29,7 +29,7 @@ pub(super) fn provider_priority(provider_id: &str, resolution: Option<&ConfigRes
         .unwrap_or_default()
 }
 
-pub(super) fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
+pub fn catalog_definition_from_model(model: &Model) -> CatalogModelDefinition {
     CatalogModelDefinition {
         lifecycle: model.metadata.lifecycle,
         context_window_tokens: model.metadata.limits.context_window_tokens,

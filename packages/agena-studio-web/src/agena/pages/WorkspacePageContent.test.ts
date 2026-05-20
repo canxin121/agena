@@ -40,7 +40,7 @@ describe('WorkspacePageContent', () => {
           worktree_active_sessions: 0,
           worktree_managed_dirs: 0,
         }),
-        getVcsDiffRaw: async () => 'diff --git a/.agena/config.toml b/.agena/config.toml\n+mode = "studio"\n',
+        getVcsDiffRaw: async () => 'diff --git a/.agena/config.json b/.agena/config.json\n+mode = "studio"\n',
         initGitProject: async () => ({
           workspace_root: '/repo-b',
           git_available: true,
@@ -69,7 +69,7 @@ describe('WorkspacePageContent', () => {
               path: '.agena',
               children: [
                 { kind: 'directory', name: 'skills', path: '.agena/skills', children: [] },
-                { kind: 'file', name: 'config.toml', path: '.agena/config.toml', size: 128 },
+                { kind: 'file', name: 'config.json', path: '.agena/config.json', size: 128 },
               ],
             },
           ],
@@ -101,6 +101,6 @@ describe('WorkspacePageContent', () => {
     expect(html.includes('.agena/skills')).toBe(true)
     expect(html.includes('3 entries')).toBe(true)
     expect(html.includes('raw_diff=available')).toBe(true)
-    expect(html.includes('diff --git a/.agena/config.toml b/.agena/config.toml')).toBe(true)
+    expect(html.includes('diff --git a/.agena/config.json b/.agena/config.json')).toBe(true)
   })
 })

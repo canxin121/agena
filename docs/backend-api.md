@@ -44,7 +44,7 @@ agena-studio \
   --host 127.0.0.1 \
   --port 3210 \
   --workspace-root "$PWD" \
-  --config ~/.agena/config.toml
+  --config ~/.agena/config.json
 ```
 
 常用参数和环境变量：
@@ -185,7 +185,7 @@ Studio 层健康检查。响应使用 camelCase：
   "generation": 1,
   "loadedAt": "2026-05-13T00:00:00Z",
   "workspaceRoot": "/repo",
-  "configPath": "/home/user/.agena/config.toml",
+  "configPath": "/home/user/.agena/config.json",
   "configFound": true,
   "providerIds": ["anthropic"],
   "sessionRuntimeAvailable": true
@@ -344,7 +344,7 @@ If-Match: <session.version>
 
 ### Settings
 
-Settings API 操作当前 runtime 使用的 `config.toml`。读接口可以读 resolved effective config，也可以直接读文件；写接口只编辑文件，并在实际变更且请求 reload 时自动触发 runtime reload。
+Settings API 操作当前 runtime 使用的 `config.json`。读接口可以读 resolved effective config，也可以直接读文件；写接口只编辑文件，并在实际变更且请求 reload 时自动触发 runtime reload。
 
 | Method | Path                         | 说明                                                                      |
 | ------ | ---------------------------- | ------------------------------------------------------------------------- |
@@ -353,11 +353,11 @@ Settings API 操作当前 runtime 使用的 `config.toml`。读接口可以读 r
 | PUT    | `/api/v1/settings`           | 设置一个 TOML path 的值                                                   |
 | PATCH  | `/api/v1/settings`           | 深度合并一个 JSON object 到目标 TOML table；`null` 表示删除 key           |
 | DELETE | `/api/v1/settings`           | 删除一个 TOML path。query: `path`、`dry_run`、`validate`、`reload`         |
-| POST   | `/api/v1/settings/validate`  | 校验当前 `config.toml` 能否被 runtime 加载；body 可为空                     |
+| POST   | `/api/v1/settings/validate`  | 校验当前 `config.json` 能否被 runtime 加载；body 可为空                     |
 
 Path 使用点分语法。带点的 table key 用引号包起来，例如 `plugins.list."agena.mcp".options.servers.filesystem`。
 
-`source=effective` 读取已经应用默认值、文件、环境变量和 CLI override 后的 resolved config，path 根节点是 resolved config 本身，例如 `runtime.reload.enabled`。`source=file` 读取原始 `config.toml`，不会补默认值。
+`source=effective` 读取已经应用默认值、文件、环境变量和 CLI override 后的 resolved config，path 根节点是 resolved config 本身，例如 `runtime.reload.enabled`。`source=file` 读取原始 `config.json`，不会补默认值。
 
 `PUT /api/v1/settings` 请求：
 
@@ -508,7 +508,7 @@ Marketplace search/install 请求示例：
   "spec": "plugin-id@1.2.3",
   "registry_id": "default",
   "registry_url": "https://example.com/marketplace.json",
-  "config_path": "~/.agena/config.toml",
+  "config_path": "~/.agena/config.json",
   "force": false,
   "dry_run": false,
   "allow_unverified": false,

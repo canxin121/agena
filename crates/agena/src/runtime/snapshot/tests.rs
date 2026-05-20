@@ -6,10 +6,10 @@ use std::path::Path;
 #[test]
 fn build_profile_agent_uses_only_profile_permission() {
     let config_path = std::env::temp_dir().join(format!(
-        "agena-runtime-snapshot-empty-test-{}.toml",
+        "agena-runtime-snapshot-empty-test-{}.json",
         std::process::id()
     ));
-    std::fs::write(&config_path, "").expect("test config should be written");
+    std::fs::write(&config_path, "{}").expect("test config should be written");
 
     let resolution = ConfigLoader::<ProcessEnvironment>::new(ProcessEnvironment)
         .load(&LoadConfigRequest {

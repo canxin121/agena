@@ -1,4 +1,4 @@
-//! `agena.settings` plugin: read and edit Agena's active `config.toml`.
+//! `agena.settings` plugin: read and edit Agena's active `config.json`.
 
 use std::{
     path::PathBuf,
@@ -205,7 +205,7 @@ impl SettingsPlugin {
 impl Plugin for SettingsPlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest::builder("agena-settings", env!("CARGO_PKG_VERSION"))
-            .description("Read and edit Agena runtime settings in config.toml.")
+            .description("Read and edit Agena runtime settings in config.json.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .tools(entries())
             .build()
@@ -274,10 +274,10 @@ fn entries() -> Vec<PluginToolDecl> {
             crate::entry::definition::json_schema_for::<SettingsEditToolInput>(),
         )
         .description(
-            "Settings edit command. Set command to set, delete, or patch; pass that command's payload in args. Edits validate config.toml and reload by default.",
+            "Settings edit command. Set command to set, delete, or patch; pass that command's payload in args. Edits validate config.json and reload by default.",
         )
-        .summary("Edit config.toml settings.")
-        .help("Use command `set`, `delete`, or `patch` to mutate config.toml. Edits validate the file and reload the runtime by default. This tool is deferred because it writes configuration.")
+        .summary("Edit config.json settings.")
+        .help("Use command `set`, `delete`, or `patch` to mutate config.json. Edits validate the file and reload the runtime by default. This tool is deferred because it writes configuration.")
         .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()])
         .host_capabilities([
             crate::plugin::sdk::HostCapability::ReadConfig,

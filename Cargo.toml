@@ -151,6 +151,7 @@ keyring-core = "1.0.0"
 lru = "0.18.0"
 lsp-types = "0.97.0"
 mime_guess = "2.0.5"
+merge = "0.2.0"
 mockito = "1.7.2"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 opentelemetry = "0.31.0"

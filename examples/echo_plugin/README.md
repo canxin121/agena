@@ -24,7 +24,7 @@ cargo build --release
 
 ## 加载
 
-在 `config.toml` 中显式声明 cdylib plugin：
+在 `config.json` 中显式声明 cdylib plugin：
 
 ```toml
 [plugins.list.echo]

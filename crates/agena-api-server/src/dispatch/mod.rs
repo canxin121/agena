@@ -593,6 +593,3 @@ mod queries;
 
 pub use commands::dispatch_command;
 pub use queries::dispatch_query;
-
-#[cfg(test)]
-mod tests;

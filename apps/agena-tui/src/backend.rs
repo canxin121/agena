@@ -1,6 +1,8 @@
 use std::{
     collections::HashSet,
+    collections::hash_map::DefaultHasher,
     env, fs,
+    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, OnceLock},
@@ -11,10 +13,12 @@ use agena::permission::PermissionScope;
 use agena::{
     config::{
         ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
-        ConfigSettingsPatchInput, ConfigSettingsSetInput, ProcessEnvironment, ProviderAuthConfig,
-        delete_file_setting, draft_atomgit_provider_adapter_models_target,
-        draft_gitlab_provider_adapter_models_target, draft_provider_adapter_models_target,
-        list_provider_adapter_models_for_target, patch_file_settings, read_file_setting,
+        ConfigSettingsPatchInput, ConfigSettingsSetInput, ProcessEnvironment,
+        ProviderAdapterOverlay, ProviderAuthConfig, ProviderAuthMode, ProviderAuthOverlay,
+        ProviderModelOverlay, ProviderOverlay, delete_file_setting,
+        draft_atomgit_provider_adapter_models_target, draft_gitlab_provider_adapter_models_target,
+        draft_provider_adapter_models_target, list_provider_adapter_models_for_target,
+        patch_file_settings, provider_model_overlay_from_catalog_definition, read_file_setting,
         saved_provider_adapter_models_target, set_file_setting,
     },
     event::{DomainEvent, EventKind},
@@ -24,6 +28,7 @@ use agena::{
         ExitWorktreeToolInput, PartContent, ToolInvocation, UserInputReply,
     },
     model::{AdapterId, ModelRef, ModelSpeedModeRequestOverride},
+    model_catalog::{CatalogModelDefinition, catalog_definition_from_model},
     permission::PermissionReplyKind,
     provider::ProviderModel,
     provider::auth::{
@@ -423,6 +428,81 @@ impl ProviderCredentialDraftBundle {
             self.gitlab.redirect_uri = DEFAULT_LOCAL_OAUTH_REDIRECT_URI.to_owned();
         }
     }
+
+    fn active_tokens(&self, issuer: Option<CredentialIssuer>) -> Option<&ProviderOAuthTokensDraft> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => Some(&self.openai_chatgpt.tokens),
+            Some(CredentialIssuer::GithubCopilot) => Some(&self.github_copilot.tokens),
+            Some(CredentialIssuer::Gitlab) => Some(&self.gitlab.tokens),
+            Some(CredentialIssuer::AtomGit) => Some(&self.atomgit.tokens),
+            Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+        }
+    }
+
+    fn active_tokens_mut(
+        &mut self,
+        issuer: Option<CredentialIssuer>,
+    ) -> Option<&mut ProviderOAuthTokensDraft> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => Some(&mut self.openai_chatgpt.tokens),
+            Some(CredentialIssuer::GithubCopilot) => Some(&mut self.github_copilot.tokens),
+            Some(CredentialIssuer::Gitlab) => Some(&mut self.gitlab.tokens),
+            Some(CredentialIssuer::AtomGit) => Some(&mut self.atomgit.tokens),
+            Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => None,
+        }
+    }
+
+    fn redirect_uri(&self, issuer: Option<CredentialIssuer>) -> Option<&str> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                Some(self.openai_chatgpt.redirect_uri.as_str())
+            }
+            Some(CredentialIssuer::Gitlab) => Some(self.gitlab.redirect_uri.as_str()),
+            _ => None,
+        }
+    }
+
+    fn callback_url(&self, issuer: Option<CredentialIssuer>) -> Option<&str> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => {
+                Some(self.openai_chatgpt.callback_url.as_str())
+            }
+            Some(CredentialIssuer::Gitlab) => Some(self.gitlab.callback_url.as_str()),
+            _ => None,
+        }
+    }
+
+    fn account_id(&self, issuer: Option<CredentialIssuer>) -> Option<&str> {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => Some(self.openai_chatgpt.account_id.as_str()),
+            Some(CredentialIssuer::AtomGit) => Some(self.atomgit.account_id.as_str()),
+            _ => None,
+        }
+    }
+
+    fn set_redirect_uri(&mut self, issuer: Option<CredentialIssuer>, value: String) {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => self.openai_chatgpt.redirect_uri = value,
+            Some(CredentialIssuer::Gitlab) => self.gitlab.redirect_uri = value,
+            _ => {}
+        }
+    }
+
+    fn set_callback_url(&mut self, issuer: Option<CredentialIssuer>, value: String) {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => self.openai_chatgpt.callback_url = value,
+            Some(CredentialIssuer::Gitlab) => self.gitlab.callback_url = value,
+            _ => {}
+        }
+    }
+
+    fn set_account_id(&mut self, issuer: Option<CredentialIssuer>, value: String) {
+        match issuer {
+            Some(CredentialIssuer::OpenaiChatgpt) => self.openai_chatgpt.account_id = value,
+            Some(CredentialIssuer::AtomGit) => self.atomgit.account_id = value,
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -432,11 +512,8 @@ pub struct ProviderDraftAuthActionResult {
     pub clipboard_text: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ProviderConfigDraft {
-    pub source_provider_id: Option<String>,
-    pub provider_id: String,
-    pub auth_kind: ProviderDraftAuthKind,
+#[derive(Debug, Clone, Default)]
+pub struct ProviderDraftAuthDetails {
     pub base_url: String,
     pub instance_url: String,
     pub api_key_env: String,
@@ -448,15 +525,35 @@ pub struct ProviderConfigDraft {
     pub secret_access_key: String,
     pub session_token: String,
     pub service_key_env: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderConfigDraft {
+    pub source_provider_id: Option<String>,
+    pub provider_id: String,
+    pub auth_kind: ProviderDraftAuthKind,
+    pub auth: ProviderDraftAuthDetails,
     pub credential_drafts: ProviderCredentialDraftBundle,
     pub default_adapter: String,
     pub default_model: String,
 }
 
 impl ProviderConfigDraft {
+    pub fn new_empty() -> Self {
+        Self {
+            source_provider_id: None,
+            provider_id: String::new(),
+            auth_kind: ProviderDraftAuthKind::Unset,
+            auth: ProviderDraftAuthDetails::default(),
+            credential_drafts: ProviderCredentialDraftBundle::default(),
+            default_adapter: String::new(),
+            default_model: String::new(),
+        }
+    }
+
     pub fn normalize_shape(&mut self) {
         self.credential_drafts.normalize_shape();
-        self.credential_issuer = self
+        self.auth.credential_issuer = self
             .auth_kind
             .credential_issuer()
             .map(credential_issuer_label)
@@ -465,84 +562,84 @@ impl ProviderConfigDraft {
 
         match self.auth_kind {
             ProviderDraftAuthKind::Unset => {
-                self.base_url.clear();
-                self.api_key_env.clear();
-                self.api_key.clear();
-                self.region.clear();
-                self.profile.clear();
-                self.access_key_id.clear();
-                self.secret_access_key.clear();
-                self.session_token.clear();
-                self.service_key_env.clear();
+                self.auth.base_url.clear();
+                self.auth.api_key_env.clear();
+                self.auth.api_key.clear();
+                self.auth.region.clear();
+                self.auth.profile.clear();
+                self.auth.access_key_id.clear();
+                self.auth.secret_access_key.clear();
+                self.auth.session_token.clear();
+                self.auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::None => {
-                self.base_url.clear();
-                self.api_key_env.clear();
-                self.api_key.clear();
-                self.region.clear();
-                self.profile.clear();
-                self.access_key_id.clear();
-                self.secret_access_key.clear();
-                self.session_token.clear();
-                self.service_key_env.clear();
+                self.auth.base_url.clear();
+                self.auth.api_key_env.clear();
+                self.auth.api_key.clear();
+                self.auth.region.clear();
+                self.auth.profile.clear();
+                self.auth.access_key_id.clear();
+                self.auth.secret_access_key.clear();
+                self.auth.session_token.clear();
+                self.auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::Api => {
-                self.region.clear();
-                self.profile.clear();
-                self.access_key_id.clear();
-                self.secret_access_key.clear();
-                self.session_token.clear();
-                self.service_key_env.clear();
+                self.auth.region.clear();
+                self.auth.profile.clear();
+                self.auth.access_key_id.clear();
+                self.auth.secret_access_key.clear();
+                self.auth.session_token.clear();
+                self.auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::Gitlab => {
-                self.base_url.clear();
-                self.region.clear();
-                self.profile.clear();
-                self.access_key_id.clear();
-                self.secret_access_key.clear();
-                self.session_token.clear();
-                self.service_key_env.clear();
-                if self.instance_url.trim().is_empty() {
-                    self.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
+                self.auth.base_url.clear();
+                self.auth.region.clear();
+                self.auth.profile.clear();
+                self.auth.access_key_id.clear();
+                self.auth.secret_access_key.clear();
+                self.auth.session_token.clear();
+                self.auth.service_key_env.clear();
+                if self.auth.instance_url.trim().is_empty() {
+                    self.auth.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
                 }
             }
             ProviderDraftAuthKind::Credential(None) => {
-                self.base_url.clear();
-                self.api_key_env.clear();
-                self.api_key.clear();
-                self.region.clear();
-                self.profile.clear();
-                self.access_key_id.clear();
-                self.secret_access_key.clear();
-                self.session_token.clear();
-                self.service_key_env.clear();
+                self.auth.base_url.clear();
+                self.auth.api_key_env.clear();
+                self.auth.api_key.clear();
+                self.auth.region.clear();
+                self.auth.profile.clear();
+                self.auth.access_key_id.clear();
+                self.auth.secret_access_key.clear();
+                self.auth.session_token.clear();
+                self.auth.service_key_env.clear();
             }
             ProviderDraftAuthKind::Credential(Some(issuer)) => {
-                self.api_key_env.clear();
-                self.api_key.clear();
-                self.region.clear();
-                self.profile.clear();
-                self.access_key_id.clear();
-                self.secret_access_key.clear();
-                self.session_token.clear();
+                self.auth.api_key_env.clear();
+                self.auth.api_key.clear();
+                self.auth.region.clear();
+                self.auth.profile.clear();
+                self.auth.access_key_id.clear();
+                self.auth.secret_access_key.clear();
+                self.auth.session_token.clear();
                 if !issuer.uses_http_endpoint() {
-                    self.base_url.clear();
+                    self.auth.base_url.clear();
                 }
-                if issuer == CredentialIssuer::Gitlab && self.instance_url.trim().is_empty() {
-                    self.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
+                if issuer == CredentialIssuer::Gitlab && self.auth.instance_url.trim().is_empty() {
+                    self.auth.instance_url = DEFAULT_GITLAB_INSTANCE_URL.to_owned();
                 }
                 if issuer.requires_service_key_env() {
-                    if self.service_key_env.trim().is_empty() {
-                        self.service_key_env = "AICORE_SERVICE_KEY".to_owned();
+                    if self.auth.service_key_env.trim().is_empty() {
+                        self.auth.service_key_env = "AICORE_SERVICE_KEY".to_owned();
                     }
                 } else {
-                    self.service_key_env.clear();
+                    self.auth.service_key_env.clear();
                 }
             }
             ProviderDraftAuthKind::BedrockSigv4 => {
-                self.api_key_env.clear();
-                self.api_key.clear();
-                self.service_key_env.clear();
+                self.auth.api_key_env.clear();
+                self.auth.api_key.clear();
+                self.auth.service_key_env.clear();
             }
         }
 
@@ -556,6 +653,762 @@ impl ProviderConfigDraft {
         if self.default_adapter.trim().is_empty() {
             self.default_model.clear();
         }
+    }
+
+    pub fn from_resolved(
+        provider_id: &str,
+        provider: &agena::config::ResolvedProviderConfig,
+    ) -> Self {
+        let uses_legacy_gitlab_adapter = provider.adapters.contains_key("gitlab");
+        let mut credential_drafts = ProviderCredentialDraftBundle::default();
+        let (
+            auth_kind,
+            base_url,
+            instance_url,
+            api_key_env,
+            api_key,
+            credential_issuer,
+            region,
+            profile,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            service_key_env,
+        ) = match &provider.auth {
+            ProviderAuthConfig::Api(api) => {
+                let auth_kind = if uses_legacy_gitlab_adapter {
+                    ProviderDraftAuthKind::Gitlab
+                } else {
+                    ProviderDraftAuthKind::Api
+                };
+                (
+                    auth_kind,
+                    api.base_url.clone().unwrap_or_default(),
+                    String::new(),
+                    api.api_key_env.clone().unwrap_or_default(),
+                    api.api_key.clone().unwrap_or_default(),
+                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                )
+            }
+            ProviderAuthConfig::Gitlab(config) => (
+                ProviderDraftAuthKind::Gitlab,
+                String::new(),
+                config.instance_url.clone().unwrap_or_default(),
+                config.api_key_env.clone().unwrap_or_default(),
+                config.api_key.clone().unwrap_or_default(),
+                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            ProviderAuthConfig::None => (
+                ProviderDraftAuthKind::None,
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
+            ProviderAuthConfig::Credential(config) => {
+                populate_provider_credential_drafts(
+                    &mut credential_drafts,
+                    config.issuer,
+                    config.credential.as_ref(),
+                );
+                (
+                    ProviderDraftAuthKind::Credential(Some(config.issuer)),
+                    config.base_url.clone().unwrap_or_default(),
+                    config.instance_url.clone().unwrap_or_default(),
+                    String::new(),
+                    String::new(),
+                    credential_issuer_label(config.issuer).to_owned(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    config.service_key_env.clone().unwrap_or_default(),
+                )
+            }
+            ProviderAuthConfig::BedrockSigv4(sigv4) => (
+                ProviderDraftAuthKind::BedrockSigv4,
+                sigv4.base_url.clone(),
+                String::new(),
+                String::new(),
+                String::new(),
+                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                sigv4.region.clone(),
+                sigv4.profile.clone().unwrap_or_default(),
+                sigv4.access_key_id.clone().unwrap_or_default(),
+                sigv4.secret_access_key.clone().unwrap_or_default(),
+                sigv4.session_token.clone().unwrap_or_default(),
+                String::new(),
+            ),
+        };
+
+        let mut draft = Self {
+            source_provider_id: Some(provider_id.to_owned()),
+            provider_id: provider_id.to_owned(),
+            auth_kind,
+            auth: ProviderDraftAuthDetails {
+                base_url,
+                instance_url,
+                api_key_env,
+                api_key,
+                credential_issuer,
+                region,
+                profile,
+                access_key_id,
+                secret_access_key,
+                session_token,
+                service_key_env,
+            },
+            credential_drafts,
+            default_adapter: provider.default_adapter.clone(),
+            default_model: provider.default_model.clone(),
+        };
+        draft.normalize_shape();
+        draft
+    }
+
+    fn to_provider_overlay(
+        &self,
+        default_adapter: &str,
+        default_model: &str,
+        adapters: std::collections::BTreeMap<String, ProviderAdapterOverlay>,
+        include_defaults: bool,
+    ) -> Result<ProviderOverlay> {
+        Ok(ProviderOverlay {
+            enabled: Some(true),
+            default_adapter: include_defaults.then(|| default_adapter.to_owned()),
+            default_model: include_defaults.then(|| default_model.to_owned()),
+            auth: Some(self.to_auth_overlay()?),
+            adapters,
+        })
+    }
+
+    fn to_auth_overlay(&self) -> Result<ProviderAuthOverlay> {
+        let credential = self.oauth_auth_data()?;
+        let mut overlay = ProviderAuthOverlay {
+            mode: Some(self.to_provider_auth_mode()?),
+            ..ProviderAuthOverlay::default()
+        };
+
+        match self.auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                return Err(anyhow!("provider auth_mode is required before saving"));
+            }
+            ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::Api => {
+                overlay.base_url = trimmed_owned(self.auth.base_url.as_str());
+                overlay.api_key_env = trimmed_owned(self.auth.api_key_env.as_str());
+                overlay.api_key = trimmed_owned(self.auth.api_key.as_str());
+            }
+            ProviderDraftAuthKind::Gitlab => {
+                overlay.instance_url = trimmed_owned(self.auth.instance_url.as_str());
+                overlay.api_key_env = trimmed_owned(self.auth.api_key_env.as_str());
+                overlay.api_key = trimmed_owned(self.auth.api_key.as_str());
+            }
+            ProviderDraftAuthKind::Credential(None) => {
+                return Err(anyhow!("credential_issuer is required before saving"));
+            }
+            ProviderDraftAuthKind::Credential(Some(_)) => {
+                let issuer = parse_credential_issuer(self.auth.credential_issuer.as_str())?;
+                overlay.issuer = Some(issuer);
+                if issuer == CredentialIssuer::Gitlab {
+                    overlay.instance_url = trimmed_owned(self.auth.instance_url.as_str());
+                }
+                if issuer.uses_http_endpoint() {
+                    overlay.base_url = trimmed_owned(self.auth.base_url.as_str());
+                }
+                if issuer.requires_service_key_env() {
+                    overlay.service_key_env = trimmed_owned(self.auth.service_key_env.as_str());
+                }
+                overlay.credential = credential;
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                overlay.base_url = trimmed_owned(self.auth.base_url.as_str());
+                overlay.region = trimmed_owned(self.auth.region.as_str());
+                overlay.profile = trimmed_owned(self.auth.profile.as_str());
+                overlay.access_key_id = trimmed_owned(self.auth.access_key_id.as_str());
+                overlay.secret_access_key = trimmed_owned(self.auth.secret_access_key.as_str());
+                overlay.session_token = trimmed_owned(self.auth.session_token.as_str());
+            }
+        }
+
+        Ok(overlay)
+    }
+
+    fn to_provider_auth_mode(&self) -> Result<ProviderAuthMode> {
+        match self.auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                Err(anyhow!("provider auth_mode is required before saving"))
+            }
+            ProviderDraftAuthKind::None => Ok(ProviderAuthMode::None),
+            ProviderDraftAuthKind::Api => Ok(ProviderAuthMode::Api),
+            ProviderDraftAuthKind::Gitlab => Ok(ProviderAuthMode::Gitlab),
+            ProviderDraftAuthKind::Credential(_) => Ok(ProviderAuthMode::Credential),
+            ProviderDraftAuthKind::BedrockSigv4 => Ok(ProviderAuthMode::BedrockSigv4),
+        }
+    }
+
+    fn oauth_auth_data(&self) -> Result<Option<AuthData>> {
+        match self.auth_kind {
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
+                let tokens = &self.credential_drafts.openai_chatgpt.tokens;
+                if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                    && optional_non_empty(tokens.access_token.as_str()).is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::OpenaiChatgpt),
+                    refresh: tokens.refresh_token.clone(),
+                    access: tokens.access_token.clone(),
+                    expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                    account_id: optional_non_empty(
+                        self.credential_drafts.openai_chatgpt.account_id.as_str(),
+                    )
+                    .map(ToOwned::to_owned),
+                    enterprise_url: None,
+                    user: None,
+                }))
+            }
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
+                let tokens = &self.credential_drafts.github_copilot.tokens;
+                if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                    && optional_non_empty(tokens.access_token.as_str()).is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::GithubCopilot),
+                    refresh: tokens.refresh_token.clone(),
+                    access: tokens.access_token.clone(),
+                    expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                    account_id: None,
+                    enterprise_url: optional_non_empty(
+                        self.credential_drafts
+                            .github_copilot
+                            .enterprise_domain
+                            .as_str(),
+                    )
+                    .map(ToOwned::to_owned),
+                    user: None,
+                }))
+            }
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
+                let tokens = &self.credential_drafts.gitlab.tokens;
+                if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                    && optional_non_empty(tokens.access_token.as_str()).is_none()
+                {
+                    return Ok(None);
+                }
+                Ok(Some(AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::Gitlab),
+                    refresh: tokens.refresh_token.clone(),
+                    access: tokens.access_token.clone(),
+                    expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                    account_id: None,
+                    enterprise_url: None,
+                    user: None,
+                }))
+            }
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+                let tokens = &self.credential_drafts.atomgit.tokens;
+                if optional_non_empty(tokens.refresh_token.as_str()).is_none()
+                    && optional_non_empty(tokens.access_token.as_str()).is_none()
+                {
+                    return Ok(None);
+                }
+                let account_id =
+                    optional_non_empty(self.credential_drafts.atomgit.account_id.as_str())
+                        .map(ToOwned::to_owned);
+                let username = optional_non_empty(self.credential_drafts.atomgit.username.as_str())
+                    .map(ToOwned::to_owned);
+                let user = match (account_id.clone(), username.clone()) {
+                    (Some(id), Some(username)) => Some(OAuthUserInfo {
+                        id,
+                        username,
+                        name: optional_non_empty(
+                            self.credential_drafts.atomgit.display_name.as_str(),
+                        )
+                        .map(ToOwned::to_owned),
+                        email: optional_non_empty(self.credential_drafts.atomgit.email.as_str())
+                            .map(ToOwned::to_owned),
+                        avatar_url: optional_non_empty(
+                            self.credential_drafts.atomgit.avatar_url.as_str(),
+                        )
+                        .map(ToOwned::to_owned),
+                    }),
+                    (None, None) => None,
+                    _ => {
+                        return Err(anyhow!(
+                            "atomgit manual credential requires both account_id and username when storing user metadata"
+                        ));
+                    }
+                };
+                Ok(Some(AuthData::OAuth {
+                    issuer: Some(CredentialIssuer::AtomGit),
+                    refresh: tokens.refresh_token.clone(),
+                    access: tokens.access_token.clone(),
+                    expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
+                    account_id,
+                    enterprise_url: None,
+                    user,
+                }))
+            }
+            ProviderDraftAuthKind::Credential(Some(
+                CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore,
+            ))
+            | ProviderDraftAuthKind::Unset
+            | ProviderDraftAuthKind::None
+            | ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::Gitlab
+            | ProviderDraftAuthKind::Credential(None)
+            | ProviderDraftAuthKind::BedrockSigv4 => Ok(None),
+        }
+    }
+
+    fn active_credential_issuer(&self) -> Option<CredentialIssuer> {
+        self.auth_kind.credential_issuer()
+    }
+
+    pub(crate) fn active_tokens(&self) -> Option<&ProviderOAuthTokensDraft> {
+        self.credential_drafts
+            .active_tokens(self.active_credential_issuer())
+    }
+
+    fn active_tokens_mut(&mut self) -> Option<&mut ProviderOAuthTokensDraft> {
+        self.credential_drafts
+            .active_tokens_mut(self.active_credential_issuer())
+    }
+
+    pub(crate) fn redirect_uri(&self) -> Option<&str> {
+        self.credential_drafts
+            .redirect_uri(self.active_credential_issuer())
+    }
+
+    pub(crate) fn callback_url(&self) -> Option<&str> {
+        self.credential_drafts
+            .callback_url(self.active_credential_issuer())
+    }
+
+    pub(crate) fn account_id(&self) -> Option<&str> {
+        self.credential_drafts
+            .account_id(self.active_credential_issuer())
+    }
+
+    pub(crate) fn set_redirect_uri(&mut self, value: String) {
+        self.credential_drafts
+            .set_redirect_uri(self.active_credential_issuer(), value);
+    }
+
+    pub(crate) fn set_callback_url(&mut self, value: String) {
+        self.credential_drafts
+            .set_callback_url(self.active_credential_issuer(), value);
+    }
+
+    pub(crate) fn set_refresh_token(&mut self, value: String) {
+        if let Some(tokens) = self.active_tokens_mut() {
+            tokens.refresh_token = value;
+        }
+    }
+
+    pub(crate) fn set_access_token(&mut self, value: String) {
+        if let Some(tokens) = self.active_tokens_mut() {
+            tokens.access_token = value;
+        }
+    }
+
+    pub(crate) fn set_expires_at_ms(&mut self, value: String) {
+        if let Some(tokens) = self.active_tokens_mut() {
+            tokens.expires_at_ms = value;
+        }
+    }
+
+    pub(crate) fn set_account_id(&mut self, value: String) {
+        self.credential_drafts
+            .set_account_id(self.active_credential_issuer(), value);
+    }
+
+    pub(crate) fn supports_interactive_auth(&self) -> bool {
+        matches!(
+            self.auth_kind,
+            ProviderDraftAuthKind::Credential(Some(
+                CredentialIssuer::OpenaiChatgpt
+                    | CredentialIssuer::GithubCopilot
+                    | CredentialIssuer::Gitlab
+                    | CredentialIssuer::AtomGit
+            ))
+        )
+    }
+
+    pub(crate) fn supports_saved_model_listing(&self) -> bool {
+        match self.auth_kind {
+            ProviderDraftAuthKind::Api | ProviderDraftAuthKind::Gitlab => true,
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                issuer.supports_saved_model_listing()
+            }
+            ProviderDraftAuthKind::Unset
+            | ProviderDraftAuthKind::None
+            | ProviderDraftAuthKind::Credential(None)
+            | ProviderDraftAuthKind::BedrockSigv4 => false,
+        }
+    }
+
+    pub(crate) fn tokens_present(&self) -> bool {
+        self.active_tokens().is_some_and(|tokens| {
+            !tokens.refresh_token.trim().is_empty() || !tokens.access_token.trim().is_empty()
+        })
+    }
+
+    fn validate_for_adapters(
+        &self,
+        adapter_ids: &std::collections::BTreeSet<String>,
+    ) -> Result<()> {
+        let default_adapter = required_trimmed(self.default_adapter.as_str(), "default_adapter")?;
+        if !self.auth_kind.supports_adapter(default_adapter) {
+            return Err(anyhow!(
+                "auth {} does not support default_adapter `{default_adapter}`; expected one of {}",
+                self.auth_kind.label(),
+                supported_provider_draft_adapter_list(&self.auth_kind),
+            ));
+        }
+
+        let incompatible = adapter_ids
+            .iter()
+            .filter(|adapter_id| !self.auth_kind.supports_adapter(adapter_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !incompatible.is_empty() {
+            return Err(anyhow!(
+                "auth {} does not support adapter(s): {}; expected one of {}",
+                self.auth_kind.label(),
+                incompatible.join(", "),
+                supported_provider_draft_adapter_list(&self.auth_kind),
+            ));
+        }
+
+        match self.auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                return Err(anyhow!("provider auth_mode is required"));
+            }
+            ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::Api => {
+                let requires_base_url = adapter_ids.iter().any(|adapter_id| {
+                    self.auth_kind
+                        .adapter_rule(adapter_id.as_str())
+                        .map(|rule| rule.requires_base_url)
+                        .unwrap_or(false)
+                });
+                if requires_base_url && optional_non_empty(self.auth.base_url.as_str()).is_none() {
+                    return Err(anyhow!(
+                        "api auth requires base_url when using openai, anthropic, or gemini adapters"
+                    ));
+                }
+            }
+            ProviderDraftAuthKind::Gitlab => {
+                if optional_non_empty(self.auth.api_key.as_str()).is_none()
+                    && optional_non_empty(self.auth.api_key_env.as_str()).is_none()
+                {
+                    return Err(anyhow!("gitlab_api auth requires api_key or api_key_env"));
+                }
+            }
+            ProviderDraftAuthKind::Credential(None) => {
+                return Err(anyhow!("credential auth requires credential_issuer"));
+            }
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                if issuer.uses_http_endpoint()
+                    && optional_non_empty(self.auth.base_url.as_str()).is_none()
+                {
+                    return Err(anyhow!(
+                        "credential issuer `{}` requires base_url",
+                        credential_issuer_label(issuer)
+                    ));
+                }
+                if issuer.requires_service_key_env()
+                    && optional_non_empty(self.auth.service_key_env.as_str()).is_none()
+                {
+                    return Err(anyhow!(
+                        "credential issuer `{}` requires service_key_env",
+                        credential_issuer_label(issuer)
+                    ));
+                }
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                let has_access_key_id =
+                    optional_non_empty(self.auth.access_key_id.as_str()).is_some();
+                let has_secret_access_key =
+                    optional_non_empty(self.auth.secret_access_key.as_str()).is_some();
+                if has_access_key_id ^ has_secret_access_key {
+                    return Err(anyhow!(
+                        "bedrock_sigv4 requires access_key_id and secret_access_key together"
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_listing_request(&self, adapter_ids: &[String]) -> Result<()> {
+        let selected = adapter_ids
+            .iter()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>();
+        if selected.is_empty() {
+            return Err(anyhow!(
+                "draft adapter model listing requires at least one explicit adapter"
+            ));
+        }
+        let unsupported = selected
+            .iter()
+            .filter(|adapter_id| {
+                self.auth_kind
+                    .adapter_rule(adapter_id)
+                    .map(|rule| !rule.supports_draft_model_listing)
+                    .unwrap_or(true)
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        if !unsupported.is_empty() {
+            return Err(anyhow!(
+                "draft adapter model listing only supports adapters with live model discovery for the current auth; unsupported: {}",
+                unsupported.join(", ")
+            ));
+        }
+        self.validate_for_adapters(
+            &selected
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect::<std::collections::BTreeSet<_>>(),
+        )
+    }
+
+    fn build_listing_target(
+        &self,
+        adapter_ids: &[String],
+    ) -> Result<agena::config::ProviderAdapterModelsTarget> {
+        if !self.auth_kind.supports_draft_model_listing() {
+            return Err(anyhow!(
+                "draft adapter model listing requires api, gitlab_api, or atomgit credential auth; current auth is {}",
+                self.auth_kind.label()
+            ));
+        }
+        self.validate_listing_request(adapter_ids)?;
+        match self.auth_kind {
+            ProviderDraftAuthKind::Api => draft_provider_adapter_models_target(
+                Some(self.provider_id.as_str()),
+                self.auth.base_url.as_str(),
+                agena::config::ProviderProtocolPathsConfig::default(),
+                Some(self.auth.api_key.as_str()),
+                Some(self.auth.api_key_env.as_str()),
+                adapter_ids,
+            )
+            .map_err(map_provider_adapter_models_config_error),
+            ProviderDraftAuthKind::Gitlab => draft_gitlab_provider_adapter_models_target(
+                Some(self.provider_id.as_str()),
+                Some(self.auth.api_key.as_str()),
+                Some(self.auth.api_key_env.as_str()),
+                adapter_ids,
+            )
+            .map_err(map_provider_adapter_models_config_error),
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
+                let credential = self.oauth_auth_data()?.ok_or_else(|| {
+                    anyhow!(
+                        "draft atomgit model listing requires OAuth tokens; run AtomGit auth first or enter tokens manually"
+                    )
+                })?;
+                if !auth_data_has_access_or_api_key(&credential) {
+                    return Err(anyhow!(
+                        "draft atomgit model listing requires a non-empty access token; run AtomGit auth first or enter access_token manually"
+                    ));
+                }
+                draft_atomgit_provider_adapter_models_target(
+                    Some(self.provider_id.as_str()),
+                    credential,
+                    adapter_ids,
+                )
+                .map_err(map_provider_adapter_models_config_error)
+            }
+            _ => unreachable!("listing guard ensures only supported draft auth kinds reach here"),
+        }
+    }
+
+    pub(crate) fn request_fingerprint(&self, adapter_ids: &[String]) -> String {
+        let mut hasher = DefaultHasher::new();
+        self.source_provider_id
+            .as_deref()
+            .unwrap_or("<new>")
+            .trim()
+            .hash(&mut hasher);
+        self.provider_id.trim().hash(&mut hasher);
+        self.auth_kind.label().hash(&mut hasher);
+        self.auth.base_url.trim().hash(&mut hasher);
+        self.auth.instance_url.trim().hash(&mut hasher);
+        self.auth.api_key_env.trim().hash(&mut hasher);
+        self.auth.api_key.trim().hash(&mut hasher);
+        self.auth.credential_issuer.trim().hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .redirect_uri
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .callback_url
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .tokens
+            .refresh_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .tokens
+            .access_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .tokens
+            .expires_at_ms
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .openai_chatgpt
+            .account_id
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .github_copilot
+            .enterprise_domain
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .github_copilot
+            .tokens
+            .refresh_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .github_copilot
+            .tokens
+            .access_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .github_copilot
+            .tokens
+            .expires_at_ms
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .redirect_uri
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .callback_url
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .tokens
+            .refresh_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .tokens
+            .access_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .gitlab
+            .tokens
+            .expires_at_ms
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .atomgit
+            .tokens
+            .refresh_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .atomgit
+            .tokens
+            .access_token
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .atomgit
+            .tokens
+            .expires_at_ms
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .atomgit
+            .account_id
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .atomgit
+            .username
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .atomgit
+            .display_name
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .atomgit
+            .email
+            .trim()
+            .hash(&mut hasher);
+        self.credential_drafts
+            .atomgit
+            .avatar_url
+            .trim()
+            .hash(&mut hasher);
+        self.auth.region.trim().hash(&mut hasher);
+        self.auth.profile.trim().hash(&mut hasher);
+        self.auth.access_key_id.trim().hash(&mut hasher);
+        self.auth.secret_access_key.trim().hash(&mut hasher);
+        self.auth.session_token.trim().hash(&mut hasher);
+        self.auth.service_key_env.trim().hash(&mut hasher);
+        self.default_adapter.trim().hash(&mut hasher);
+        self.default_model.trim().hash(&mut hasher);
+        let mut normalized_adapter_ids = adapter_ids
+            .iter()
+            .map(|adapter_id| adapter_id.trim())
+            .filter(|adapter_id| !adapter_id.is_empty())
+            .collect::<Vec<_>>();
+        normalized_adapter_ids.sort_unstable();
+        normalized_adapter_ids.hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
     }
 }
 
@@ -928,25 +1781,7 @@ impl Backend {
 
     pub fn provider_config_draft(&self, provider_id: Option<&str>) -> Result<ProviderConfigDraft> {
         let Some(provider_id) = provider_id.map(str::trim).filter(|value| !value.is_empty()) else {
-            let mut draft = ProviderConfigDraft {
-                source_provider_id: None,
-                provider_id: String::new(),
-                auth_kind: ProviderDraftAuthKind::Unset,
-                base_url: String::new(),
-                instance_url: String::new(),
-                api_key_env: String::new(),
-                api_key: String::new(),
-                credential_issuer: String::new(),
-                region: String::new(),
-                profile: String::new(),
-                access_key_id: String::new(),
-                secret_access_key: String::new(),
-                session_token: String::new(),
-                service_key_env: String::new(),
-                credential_drafts: ProviderCredentialDraftBundle::default(),
-                default_adapter: String::new(),
-                default_model: String::new(),
-            };
+            let mut draft = ProviderConfigDraft::new_empty();
             draft.normalize_shape();
             return Ok(draft);
         };
@@ -958,130 +1793,7 @@ impl Backend {
             .providers
             .get(provider_id)
             .ok_or_else(|| anyhow!("provider not found: {provider_id}"))?;
-
-        let uses_legacy_gitlab_adapter = provider.adapters.contains_key("gitlab");
-        let mut credential_drafts = ProviderCredentialDraftBundle::default();
-        let (
-            auth_kind,
-            base_url,
-            instance_url,
-            api_key_env,
-            api_key,
-            credential_issuer,
-            region,
-            profile,
-            access_key_id,
-            secret_access_key,
-            session_token,
-            service_key_env,
-        ) = match &provider.auth {
-            ProviderAuthConfig::Api(api) => {
-                let auth_kind = if uses_legacy_gitlab_adapter {
-                    ProviderDraftAuthKind::Gitlab
-                } else {
-                    ProviderDraftAuthKind::Api
-                };
-                (
-                    auth_kind,
-                    api.base_url.clone().unwrap_or_default(),
-                    String::new(),
-                    api.api_key_env.clone().unwrap_or_default(),
-                    api.api_key.clone().unwrap_or_default(),
-                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                )
-            }
-            ProviderAuthConfig::Gitlab(config) => (
-                ProviderDraftAuthKind::Gitlab,
-                String::new(),
-                config.instance_url.clone().unwrap_or_default(),
-                config.api_key_env.clone().unwrap_or_default(),
-                config.api_key.clone().unwrap_or_default(),
-                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            ProviderAuthConfig::None => (
-                ProviderDraftAuthKind::None,
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-                String::new(),
-            ),
-            ProviderAuthConfig::Credential(config) => {
-                populate_provider_credential_drafts(
-                    &mut credential_drafts,
-                    config.issuer,
-                    config.credential.as_ref(),
-                );
-                (
-                    ProviderDraftAuthKind::Credential(Some(config.issuer)),
-                    config.base_url.clone().unwrap_or_default(),
-                    config.instance_url.clone().unwrap_or_default(),
-                    String::new(),
-                    String::new(),
-                    credential_issuer_label(config.issuer).to_owned(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    config.service_key_env.clone().unwrap_or_default(),
-                )
-            }
-            ProviderAuthConfig::BedrockSigv4(sigv4) => (
-                ProviderDraftAuthKind::BedrockSigv4,
-                sigv4.base_url.clone(),
-                String::new(),
-                String::new(),
-                String::new(),
-                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
-                sigv4.region.clone(),
-                sigv4.profile.clone().unwrap_or_default(),
-                sigv4.access_key_id.clone().unwrap_or_default(),
-                sigv4.secret_access_key.clone().unwrap_or_default(),
-                sigv4.session_token.clone().unwrap_or_default(),
-                String::new(),
-            ),
-        };
-
-        let mut draft = ProviderConfigDraft {
-            source_provider_id: Some(provider_id.to_owned()),
-            provider_id: provider_id.to_owned(),
-            auth_kind,
-            base_url,
-            instance_url,
-            api_key_env,
-            api_key,
-            credential_issuer,
-            region,
-            profile,
-            access_key_id,
-            secret_access_key,
-            session_token,
-            service_key_env,
-            credential_drafts,
-            default_adapter: provider.default_adapter.clone(),
-            default_model: provider.default_model.clone(),
-        };
-        draft.normalize_shape();
-        Ok(draft)
+        Ok(ProviderConfigDraft::from_resolved(provider_id, provider))
     }
 
     pub async fn start_provider_draft_auth(
@@ -1396,49 +2108,7 @@ impl Backend {
     ) -> Result<ProviderAdapterModelsResponse> {
         let mut draft = draft.clone();
         draft.normalize_shape();
-        if !draft.auth_kind.supports_draft_model_listing() {
-            return Err(anyhow!(
-                "draft adapter model listing requires api, gitlab_api, or atomgit credential auth; current auth is {}",
-                draft.auth_kind.label()
-            ));
-        }
-        validate_provider_draft_listing_request(&draft, adapter_ids)?;
-        let target = match draft.auth_kind {
-            ProviderDraftAuthKind::Api => draft_provider_adapter_models_target(
-                Some(draft.provider_id.as_str()),
-                draft.base_url.as_str(),
-                agena::config::ProviderProtocolPathsConfig::default(),
-                Some(draft.api_key.as_str()),
-                Some(draft.api_key_env.as_str()),
-                adapter_ids,
-            ),
-            ProviderDraftAuthKind::Gitlab => draft_gitlab_provider_adapter_models_target(
-                Some(draft.provider_id.as_str()),
-                Some(draft.api_key.as_str()),
-                Some(draft.api_key_env.as_str()),
-                adapter_ids,
-            ),
-            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-                let credential = provider_draft_oauth_auth_data(&draft)?
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "draft atomgit model listing requires OAuth tokens; run AtomGit auth first or enter tokens manually"
-                        )
-                    })?;
-                if !auth_data_has_access_or_api_key(&credential) {
-                    return Err(anyhow!(
-                        "draft atomgit model listing requires a non-empty access token; run AtomGit auth first or enter access_token manually"
-                    ));
-                }
-                draft_atomgit_provider_adapter_models_target(
-                    Some(draft.provider_id.as_str()),
-                    credential,
-                    adapter_ids,
-                )
-            }
-            _ => unreachable!("listing guard ensures only supported draft auth kinds reach here"),
-        }
-        .map_err(map_provider_adapter_models_config_error)?;
+        let target = draft.build_listing_target(adapter_ids)?;
         self.list_provider_adapter_models_with_target(target).await
     }
 
@@ -1476,7 +2146,7 @@ impl Backend {
             optional_non_empty(draft.default_model.as_str()).map(str::to_owned);
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, selected_adapter_ids);
-        validate_provider_draft_shape(&draft, &effective_adapter_ids)?;
+        draft.validate_for_adapters(&effective_adapter_ids)?;
 
         let catalog_entries = self.lookup_model_catalog_entries(
             &adapter_model_lists
@@ -1501,7 +2171,7 @@ impl Backend {
             .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
         let provider_object = provider_value
             .as_object_mut()
-            .ok_or_else(|| anyhow!("existing provider settings must be a TOML table"))?;
+            .ok_or_else(|| anyhow!("existing provider settings must be a JSON object"))?;
         let mut adapters = provider_object
             .remove("adapters")
             .and_then(|value| value.as_object().cloned())
@@ -1518,7 +2188,7 @@ impl Backend {
                 .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
             let adapter_object = adapter_value
                 .as_object_mut()
-                .ok_or_else(|| anyhow!("provider adapter `{adapter_id}` must be a TOML table"))?;
+                .ok_or_else(|| anyhow!("provider adapter `{adapter_id}` must be a JSON object"))?;
             let configured_models = adapter_models
                 .models
                 .iter()
@@ -1609,7 +2279,7 @@ impl Backend {
         let adapter_id = required_trimmed(adapter_models.adapter_id.as_str(), "adapter_id")?;
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        validate_provider_draft_shape(&draft, &effective_adapter_ids)?;
+        draft.validate_for_adapters(&effective_adapter_ids)?;
         let catalog_entries = self.lookup_model_catalog_entries(
             &adapter_models
                 .models
@@ -1673,7 +2343,7 @@ impl Backend {
         let model_id = required_trimmed(model_id, "model_id")?;
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        validate_provider_draft_shape(&draft, &effective_adapter_ids)?;
+        draft.validate_for_adapters(&effective_adapter_ids)?;
         let catalog_entries =
             self.lookup_model_catalog_entries(&[catalog_lookup_id_for_model_id(model_id)]);
         let model_value =
@@ -1782,7 +2452,7 @@ impl Backend {
         };
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        validate_provider_draft_shape(&draft, &effective_adapter_ids)?;
+        draft.validate_for_adapters(&effective_adapter_ids)?;
         let default_adapter = if set_default {
             adapter_id
         } else {
@@ -3281,7 +3951,7 @@ async fn start_provider_draft_auth(
             })
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
-            let instance_url = required_trimmed(draft.instance_url.as_str(), "instance_url")?;
+            let instance_url = required_trimmed(draft.auth.instance_url.as_str(), "instance_url")?;
             let redirect_uri = required_trimmed(
                 draft.credential_drafts.gitlab.redirect_uri.as_str(),
                 "redirect_uri",
@@ -3401,7 +4071,7 @@ async fn continue_provider_draft_auth(
                 .browser
                 .clone()
                 .ok_or_else(|| anyhow!("start browser auth first with o"))?;
-            let instance_url = required_trimmed(draft.instance_url.as_str(), "instance_url")?;
+            let instance_url = required_trimmed(draft.auth.instance_url.as_str(), "instance_url")?;
             let redirect_uri = required_trimmed(
                 draft.credential_drafts.gitlab.redirect_uri.as_str(),
                 "redirect_uri",
@@ -3641,6 +4311,18 @@ fn provider_model_json_for_model_id(
     model_id: &str,
     provider_model: Option<&ProviderModel>,
 ) -> JsonValue {
+    provider_model_overlay_to_json(provider_model_overlay_for_model_id(
+        catalog_entries,
+        model_id,
+        provider_model,
+    ))
+}
+
+fn provider_model_overlay_for_model_id(
+    catalog_entries: &[ModelCatalogEntryResource],
+    model_id: &str,
+    provider_model: Option<&ProviderModel>,
+) -> ProviderModelOverlay {
     preferred_catalog_entry_for_model_id(catalog_entries, model_id)
         .or_else(|| {
             let lookup_id = catalog_lookup_id_for_model_id(model_id);
@@ -3648,152 +4330,70 @@ fn provider_model_json_for_model_id(
                 .then(|| preferred_catalog_entry_for_model_id(catalog_entries, lookup_id.as_str()))
                 .flatten()
         })
-        .map(catalog_entry_to_provider_model_value)
+        .map(catalog_entry_to_provider_model_overlay)
         .or_else(|| {
             provider_model.and_then(|provider_model| {
                 preferred_catalog_entry_for_provider_model(catalog_entries, provider_model)
-                    .map(catalog_entry_to_provider_model_value)
-                    .or_else(|| Some(provider_model_to_provider_model_value(provider_model)))
+                    .map(catalog_entry_to_provider_model_overlay)
+                    .or_else(|| Some(provider_model_to_provider_model_overlay(provider_model)))
             })
         })
-        .unwrap_or_else(|| JsonValue::Object(JsonMap::new()))
+        .unwrap_or_default()
 }
 
-fn catalog_entry_to_provider_model_value(entry: &ModelCatalogEntryResource) -> JsonValue {
-    let mut value = JsonMap::new();
-    if let Some(lifecycle) = entry.lifecycle {
-        value.insert("lifecycle".to_owned(), json!(lifecycle));
+fn provider_model_overlay_to_json(overlay: ProviderModelOverlay) -> JsonValue {
+    if overlay.definition.is_empty() {
+        return JsonValue::Object(JsonMap::new());
     }
-    if let Some(context_window_tokens) = entry.context_window_tokens {
-        value.insert(
-            "context_window_tokens".to_owned(),
-            JsonValue::Number(context_window_tokens.into()),
-        );
-    }
-    if let Some(max_input_tokens) = entry.max_input_tokens {
-        value.insert(
-            "max_input_tokens".to_owned(),
-            JsonValue::Number(max_input_tokens.into()),
-        );
-    }
-    if let Some(max_output_tokens) = entry.max_output_tokens {
-        value.insert(
-            "max_output_tokens".to_owned(),
-            JsonValue::Number(max_output_tokens.into()),
-        );
-    }
-    if let Some(display_name) = non_empty(entry.display_name.as_deref()) {
-        value.insert(
-            "display_name".to_owned(),
-            JsonValue::String(display_name.to_owned()),
-        );
-    }
-    if let Some(description) = non_empty(entry.description.as_deref()) {
-        value.insert(
-            "description".to_owned(),
-            JsonValue::String(description.to_owned()),
-        );
-    }
-    if let Some(knowledge_cutoff) = non_empty(entry.knowledge_cutoff.as_deref()) {
-        value.insert(
-            "knowledge_cutoff".to_owned(),
-            JsonValue::String(knowledge_cutoff.to_owned()),
-        );
-    }
-    if let Some(release_date) = non_empty(entry.release_date.as_deref()) {
-        value.insert(
-            "release_date".to_owned(),
-            JsonValue::String(release_date.to_owned()),
-        );
-    }
-    if let Some(last_updated) = non_empty(entry.last_updated.as_deref()) {
-        value.insert(
-            "last_updated".to_owned(),
-            JsonValue::String(last_updated.to_owned()),
-        );
-    }
-    if let Some(open_weights) = entry.open_weights {
-        value.insert("open_weights".to_owned(), JsonValue::Bool(open_weights));
-    }
-    if let Some(default_thinking_mode) = non_empty(entry.default_thinking_mode.as_deref()) {
-        value.insert(
-            "default_thinking_mode".to_owned(),
-            JsonValue::String(default_thinking_mode.to_owned()),
-        );
-    }
-    if let Some(supports_parallel_tool_calls) = entry.supports_parallel_tool_calls {
-        value.insert(
-            "supports_parallel_tool_calls".to_owned(),
-            JsonValue::Bool(supports_parallel_tool_calls),
-        );
-    }
-    if let Some(supports_verbosity) = entry.supports_verbosity {
-        value.insert(
-            "supports_verbosity".to_owned(),
-            JsonValue::Bool(supports_verbosity),
-        );
-    }
-    if let Some(default_verbosity) = non_empty(entry.default_verbosity.as_deref()) {
-        value.insert(
-            "default_verbosity".to_owned(),
-            JsonValue::String(default_verbosity.to_owned()),
-        );
-    }
-    if let Some(default_temperature) = non_empty(entry.default_temperature.as_deref()) {
-        value.insert(
-            "default_temperature".to_owned(),
-            JsonValue::String(default_temperature.to_owned()),
-        );
-    }
-    if let Some(default_top_p) = non_empty(entry.default_top_p.as_deref()) {
-        value.insert(
-            "default_top_p".to_owned(),
-            JsonValue::String(default_top_p.to_owned()),
-        );
-    }
-    if let Some(default_top_k) = entry.default_top_k {
-        value.insert(
-            "default_top_k".to_owned(),
-            JsonValue::Number(default_top_k.into()),
-        );
-    }
-    if let Some(assistant_reasoning_interleaved) = entry.assistant_reasoning_interleaved {
-        value.insert(
-            "assistant_reasoning_interleaved".to_owned(),
-            JsonValue::Bool(assistant_reasoning_interleaved),
-        );
-    }
-    if let Some(assistant_reasoning_field) = non_empty(entry.assistant_reasoning_field.as_deref()) {
-        value.insert(
-            "assistant_reasoning_field".to_owned(),
-            JsonValue::String(assistant_reasoning_field.to_owned()),
-        );
-    }
-    if !entry.output_modalities.is_empty() {
-        value.insert(
-            "output_modalities".to_owned(),
-            json!(entry.output_modalities),
-        );
-    }
-    if let Some(pricing) = entry.pricing.as_ref() {
-        value.insert("pricing".to_owned(), json!(pricing));
-    }
-    if !entry.thinking_modes.is_empty() {
-        value.insert("thinking_modes".to_owned(), json!(entry.thinking_modes));
-    }
-    if !entry.speed_modes.is_empty() {
-        value.insert("speed_modes".to_owned(), json!(entry.speed_modes));
-    }
-    let capabilities_patch = sanitized_catalog_capability_patch(&entry.capabilities);
-    if let Ok(JsonValue::Object(capabilities)) = serde_json::to_value(&capabilities_patch) {
-        for (key, part) in capabilities {
-            let is_empty_object = matches!(&part, JsonValue::Object(object) if object.is_empty());
-            if !part.is_null() && !is_empty_object {
-                value.insert(key, part);
+
+    match serde_json::to_value(overlay) {
+        Ok(JsonValue::Object(mut value)) => {
+            if matches!(value.get("enabled"), Some(JsonValue::Bool(true))) {
+                value.remove("enabled");
             }
+            JsonValue::Object(value)
         }
+        Ok(other) => other,
+        Err(_) => JsonValue::Object(JsonMap::new()),
     }
-    JsonValue::Object(value)
+}
+
+fn catalog_entry_to_provider_model_overlay(
+    entry: &ModelCatalogEntryResource,
+) -> ProviderModelOverlay {
+    provider_model_overlay_from_catalog_definition(&catalog_entry_to_catalog_definition(entry))
+}
+
+fn catalog_entry_to_catalog_definition(
+    entry: &ModelCatalogEntryResource,
+) -> CatalogModelDefinition {
+    CatalogModelDefinition {
+        lifecycle: entry.lifecycle,
+        context_window_tokens: entry.context_window_tokens,
+        max_input_tokens: entry.max_input_tokens,
+        max_output_tokens: entry.max_output_tokens,
+        description: entry.description.clone(),
+        knowledge_cutoff: entry.knowledge_cutoff.clone(),
+        release_date: entry.release_date.clone(),
+        last_updated: entry.last_updated.clone(),
+        open_weights: entry.open_weights,
+        default_thinking_mode: entry.default_thinking_mode.clone(),
+        supports_parallel_tool_calls: entry.supports_parallel_tool_calls,
+        supports_verbosity: entry.supports_verbosity,
+        default_verbosity: entry.default_verbosity.clone(),
+        default_temperature: entry.default_temperature.clone(),
+        default_top_p: entry.default_top_p.clone(),
+        default_top_k: entry.default_top_k,
+        assistant_reasoning_interleaved: entry.assistant_reasoning_interleaved,
+        assistant_reasoning_field: entry.assistant_reasoning_field.clone(),
+        output_modalities: entry.output_modalities.clone(),
+        pricing: entry.pricing.clone(),
+        display_name: entry.display_name.clone(),
+        origin: entry.origin.clone(),
+        thinking_modes: entry.thinking_modes.clone(),
+        speed_modes: entry.speed_modes.clone(),
+        capabilities: sanitized_catalog_capability_patch(&entry.capabilities),
+    }
 }
 
 fn sanitized_catalog_capability_patch(
@@ -3863,192 +4463,8 @@ fn sanitized_catalog_capability_patch(
     patch
 }
 
-fn provider_model_to_provider_model_value(model: &ProviderModel) -> JsonValue {
-    let mut value = JsonMap::new();
-    if let Some(display_name) = non_empty(model.display_name.as_deref()) {
-        value.insert(
-            "display_name".to_owned(),
-            JsonValue::String(display_name.to_owned()),
-        );
-    }
-    if let Some(lifecycle) = model.metadata.lifecycle {
-        value.insert("lifecycle".to_owned(), json!(lifecycle));
-    }
-    if let Some(context_window_tokens) = model.metadata.limits.context_window_tokens {
-        value.insert(
-            "context_window_tokens".to_owned(),
-            JsonValue::Number(context_window_tokens.into()),
-        );
-    }
-    if let Some(max_input_tokens) = model.metadata.limits.max_input_tokens {
-        value.insert(
-            "max_input_tokens".to_owned(),
-            JsonValue::Number(max_input_tokens.into()),
-        );
-    }
-    if let Some(max_output_tokens) = model.metadata.limits.max_output_tokens {
-        value.insert(
-            "max_output_tokens".to_owned(),
-            JsonValue::Number(max_output_tokens.into()),
-        );
-    }
-    if let Some(description) = non_empty(model.metadata.description.as_deref()) {
-        value.insert(
-            "description".to_owned(),
-            JsonValue::String(description.to_owned()),
-        );
-    }
-    if let Some(knowledge_cutoff) = non_empty(model.metadata.knowledge_cutoff.as_deref()) {
-        value.insert(
-            "knowledge_cutoff".to_owned(),
-            JsonValue::String(knowledge_cutoff.to_owned()),
-        );
-    }
-    if let Some(release_date) = non_empty(model.metadata.release_date.as_deref()) {
-        value.insert(
-            "release_date".to_owned(),
-            JsonValue::String(release_date.to_owned()),
-        );
-    }
-    if let Some(last_updated) = non_empty(model.metadata.last_updated.as_deref()) {
-        value.insert(
-            "last_updated".to_owned(),
-            JsonValue::String(last_updated.to_owned()),
-        );
-    }
-    if let Some(open_weights) = model.metadata.open_weights {
-        value.insert("open_weights".to_owned(), JsonValue::Bool(open_weights));
-    }
-    if let Some(default_thinking_mode) = non_empty(model.metadata.default_thinking_mode.as_deref())
-    {
-        value.insert(
-            "default_thinking_mode".to_owned(),
-            JsonValue::String(default_thinking_mode.to_owned()),
-        );
-    }
-    if let Some(supports_parallel_tool_calls) = model.metadata.supports_parallel_tool_calls {
-        value.insert(
-            "supports_parallel_tool_calls".to_owned(),
-            JsonValue::Bool(supports_parallel_tool_calls),
-        );
-    }
-    if let Some(supports_verbosity) = model.metadata.supports_verbosity {
-        value.insert(
-            "supports_verbosity".to_owned(),
-            JsonValue::Bool(supports_verbosity),
-        );
-    }
-    if let Some(default_verbosity) = non_empty(model.metadata.default_verbosity.as_deref()) {
-        value.insert(
-            "default_verbosity".to_owned(),
-            JsonValue::String(default_verbosity.to_owned()),
-        );
-    }
-    if let Some(default_temperature) = non_empty(model.metadata.default_temperature.as_deref()) {
-        value.insert(
-            "default_temperature".to_owned(),
-            JsonValue::String(default_temperature.to_owned()),
-        );
-    }
-    if let Some(default_top_p) = non_empty(model.metadata.default_top_p.as_deref()) {
-        value.insert(
-            "default_top_p".to_owned(),
-            JsonValue::String(default_top_p.to_owned()),
-        );
-    }
-    if let Some(default_top_k) = model.metadata.default_top_k {
-        value.insert(
-            "default_top_k".to_owned(),
-            JsonValue::Number(default_top_k.into()),
-        );
-    }
-    if let Some(assistant_reasoning_interleaved) = model.metadata.assistant_reasoning_interleaved {
-        value.insert(
-            "assistant_reasoning_interleaved".to_owned(),
-            JsonValue::Bool(assistant_reasoning_interleaved),
-        );
-    }
-    if let Some(assistant_reasoning_field) =
-        non_empty(model.metadata.assistant_reasoning_field.as_deref())
-    {
-        value.insert(
-            "assistant_reasoning_field".to_owned(),
-            JsonValue::String(assistant_reasoning_field.to_owned()),
-        );
-    }
-    if !model.metadata.output_modalities.is_empty() {
-        value.insert(
-            "output_modalities".to_owned(),
-            json!(model.metadata.output_modalities),
-        );
-    }
-    if let Some(pricing) = model.metadata.pricing.as_ref() {
-        value.insert("pricing".to_owned(), json!(pricing));
-    }
-    if !model.thinking_modes.is_empty() {
-        let thinking_modes = model
-            .thinking_modes
-            .iter()
-            .map(|(name, mode)| {
-                (
-                    name.clone(),
-                    json!({
-                        "display_name": mode.display_name,
-                        "description": mode.description,
-                        "thinking": mode.thinking,
-                        "request_override": mode.request_override,
-                        "adapter_overrides": mode.adapter_overrides,
-                    }),
-                )
-            })
-            .collect::<JsonMap<String, JsonValue>>();
-        value.insert(
-            "thinking_modes".to_owned(),
-            JsonValue::Object(thinking_modes),
-        );
-    }
-    if !model.speed_modes.is_empty() {
-        let speed_modes = model
-            .speed_modes
-            .iter()
-            .map(|(name, mode)| {
-                (
-                    name.clone(),
-                    json!({
-                        "display_name": mode.display_name,
-                        "description": mode.description,
-                        "request_override": mode.request_override,
-                        "adapter_overrides": mode.adapter_overrides,
-                    }),
-                )
-            })
-            .collect::<JsonMap<String, JsonValue>>();
-        value.insert("speed_modes".to_owned(), JsonValue::Object(speed_modes));
-    }
-
-    let mut supported_features = Vec::new();
-    if model.capabilities.tool_calling.is_supported() {
-        supported_features.push("tool_calling");
-    }
-    if model.capabilities.streaming.is_supported() {
-        supported_features.push("streaming");
-    }
-    if model.capabilities.reasoning.is_supported() {
-        supported_features.push("reasoning");
-    }
-    if model.capabilities.structured_output.is_supported() {
-        supported_features.push("structured_output");
-    }
-    if model.capabilities.temperature_supported.is_supported() {
-        supported_features.push("temperature");
-    }
-    if !supported_features.is_empty() {
-        value.insert(
-            "features".to_owned(),
-            json!({ "supported": supported_features }),
-        );
-    }
-    JsonValue::Object(value)
+fn provider_model_to_provider_model_overlay(model: &ProviderModel) -> ProviderModelOverlay {
+    provider_model_overlay_from_catalog_definition(&catalog_definition_from_model(model))
 }
 
 fn dedupe_vec<T: PartialEq>(values: &mut Vec<T>) {
@@ -4094,134 +4510,6 @@ fn map_provider_adapter_models_config_error(error: agena::config::ConfigError) -
     }
 }
 
-fn validate_provider_draft_listing_request(
-    draft: &ProviderConfigDraft,
-    adapter_ids: &[String],
-) -> Result<()> {
-    let selected = adapter_ids
-        .iter()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    if selected.is_empty() {
-        return Err(anyhow!(
-            "draft adapter model listing requires at least one explicit adapter"
-        ));
-    }
-    let unsupported = selected
-        .iter()
-        .filter(|adapter_id| {
-            draft
-                .auth_kind
-                .adapter_rule(adapter_id)
-                .map(|rule| !rule.supports_draft_model_listing)
-                .unwrap_or(true)
-        })
-        .copied()
-        .collect::<Vec<_>>();
-    if !unsupported.is_empty() {
-        return Err(anyhow!(
-            "draft adapter model listing only supports adapters with live model discovery for the current auth; unsupported: {}",
-            unsupported.join(", ")
-        ));
-    }
-    validate_provider_draft_shape(
-        draft,
-        &selected
-            .into_iter()
-            .map(ToOwned::to_owned)
-            .collect::<std::collections::BTreeSet<_>>(),
-    )
-}
-
-fn validate_provider_draft_shape(
-    draft: &ProviderConfigDraft,
-    adapter_ids: &std::collections::BTreeSet<String>,
-) -> Result<()> {
-    let default_adapter = required_trimmed(draft.default_adapter.as_str(), "default_adapter")?;
-    if !draft.auth_kind.supports_adapter(default_adapter) {
-        return Err(anyhow!(
-            "auth {} does not support default_adapter `{default_adapter}`; expected one of {}",
-            draft.auth_kind.label(),
-            supported_provider_draft_adapter_list(&draft.auth_kind),
-        ));
-    }
-
-    let incompatible = adapter_ids
-        .iter()
-        .filter(|adapter_id| !draft.auth_kind.supports_adapter(adapter_id.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !incompatible.is_empty() {
-        return Err(anyhow!(
-            "auth {} does not support adapter(s): {}; expected one of {}",
-            draft.auth_kind.label(),
-            incompatible.join(", "),
-            supported_provider_draft_adapter_list(&draft.auth_kind),
-        ));
-    }
-
-    match draft.auth_kind {
-        ProviderDraftAuthKind::Unset => {
-            return Err(anyhow!("provider auth_mode is required"));
-        }
-        ProviderDraftAuthKind::None => {}
-        ProviderDraftAuthKind::Api => {
-            let requires_base_url = adapter_ids.iter().any(|adapter_id| {
-                draft
-                    .auth_kind
-                    .adapter_rule(adapter_id.as_str())
-                    .map(|rule| rule.requires_base_url)
-                    .unwrap_or(false)
-            });
-            if requires_base_url && optional_non_empty(draft.base_url.as_str()).is_none() {
-                return Err(anyhow!(
-                    "api auth requires base_url when using openai, anthropic, or gemini adapters"
-                ));
-            }
-        }
-        ProviderDraftAuthKind::Gitlab => {
-            if optional_non_empty(draft.api_key.as_str()).is_none()
-                && optional_non_empty(draft.api_key_env.as_str()).is_none()
-            {
-                return Err(anyhow!("gitlab_api auth requires api_key or api_key_env"));
-            }
-        }
-        ProviderDraftAuthKind::Credential(None) => {
-            return Err(anyhow!("credential auth requires credential_issuer"));
-        }
-        ProviderDraftAuthKind::Credential(Some(issuer)) => {
-            if issuer.uses_http_endpoint() && optional_non_empty(draft.base_url.as_str()).is_none()
-            {
-                return Err(anyhow!(
-                    "credential issuer `{}` requires base_url",
-                    credential_issuer_label(issuer)
-                ));
-            }
-            if issuer.requires_service_key_env()
-                && optional_non_empty(draft.service_key_env.as_str()).is_none()
-            {
-                return Err(anyhow!(
-                    "credential issuer `{}` requires service_key_env",
-                    credential_issuer_label(issuer)
-                ));
-            }
-        }
-        ProviderDraftAuthKind::BedrockSigv4 => {
-            let has_access_key_id = optional_non_empty(draft.access_key_id.as_str()).is_some();
-            let has_secret_access_key =
-                optional_non_empty(draft.secret_access_key.as_str()).is_some();
-            if has_access_key_id ^ has_secret_access_key {
-                return Err(anyhow!(
-                    "bedrock_sigv4 requires access_key_id and secret_access_key together"
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn supported_provider_draft_adapter_list(auth_kind: &ProviderDraftAuthKind) -> String {
     let supported = auth_kind
         .adapter_rules()
@@ -4247,123 +4535,6 @@ fn parse_oauth_expires_at_ms(value: &str) -> Result<i64> {
         .map(|value| value.unwrap_or(0))
 }
 
-fn provider_draft_oauth_auth_data(draft: &ProviderConfigDraft) -> Result<Option<AuthData>> {
-    match draft.auth_kind {
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
-            let tokens = &draft.credential_drafts.openai_chatgpt.tokens;
-            if optional_non_empty(tokens.refresh_token.as_str()).is_none()
-                && optional_non_empty(tokens.access_token.as_str()).is_none()
-            {
-                return Ok(None);
-            }
-            Ok(Some(AuthData::OAuth {
-                issuer: Some(CredentialIssuer::OpenaiChatgpt),
-                refresh: tokens.refresh_token.clone(),
-                access: tokens.access_token.clone(),
-                expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
-                account_id: optional_non_empty(
-                    draft.credential_drafts.openai_chatgpt.account_id.as_str(),
-                )
-                .map(ToOwned::to_owned),
-                enterprise_url: None,
-                user: None,
-            }))
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
-            let tokens = &draft.credential_drafts.github_copilot.tokens;
-            if optional_non_empty(tokens.refresh_token.as_str()).is_none()
-                && optional_non_empty(tokens.access_token.as_str()).is_none()
-            {
-                return Ok(None);
-            }
-            Ok(Some(AuthData::OAuth {
-                issuer: Some(CredentialIssuer::GithubCopilot),
-                refresh: tokens.refresh_token.clone(),
-                access: tokens.access_token.clone(),
-                expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
-                account_id: None,
-                enterprise_url: optional_non_empty(
-                    draft
-                        .credential_drafts
-                        .github_copilot
-                        .enterprise_domain
-                        .as_str(),
-                )
-                .map(ToOwned::to_owned),
-                user: None,
-            }))
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
-            let tokens = &draft.credential_drafts.gitlab.tokens;
-            if optional_non_empty(tokens.refresh_token.as_str()).is_none()
-                && optional_non_empty(tokens.access_token.as_str()).is_none()
-            {
-                return Ok(None);
-            }
-            Ok(Some(AuthData::OAuth {
-                issuer: Some(CredentialIssuer::Gitlab),
-                refresh: tokens.refresh_token.clone(),
-                access: tokens.access_token.clone(),
-                expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
-                account_id: None,
-                enterprise_url: None,
-                user: None,
-            }))
-        }
-        ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-            let tokens = &draft.credential_drafts.atomgit.tokens;
-            if optional_non_empty(tokens.refresh_token.as_str()).is_none()
-                && optional_non_empty(tokens.access_token.as_str()).is_none()
-            {
-                return Ok(None);
-            }
-            let account_id =
-                optional_non_empty(draft.credential_drafts.atomgit.account_id.as_str())
-                    .map(ToOwned::to_owned);
-            let username = optional_non_empty(draft.credential_drafts.atomgit.username.as_str())
-                .map(ToOwned::to_owned);
-            let user = match (account_id.clone(), username.clone()) {
-                (Some(id), Some(username)) => Some(OAuthUserInfo {
-                    id,
-                    username,
-                    name: optional_non_empty(draft.credential_drafts.atomgit.display_name.as_str())
-                        .map(ToOwned::to_owned),
-                    email: optional_non_empty(draft.credential_drafts.atomgit.email.as_str())
-                        .map(ToOwned::to_owned),
-                    avatar_url: optional_non_empty(
-                        draft.credential_drafts.atomgit.avatar_url.as_str(),
-                    )
-                    .map(ToOwned::to_owned),
-                }),
-                (None, None) => None,
-                _ => {
-                    return Err(anyhow!(
-                        "atomgit manual credential requires both account_id and username when storing user metadata"
-                    ));
-                }
-            };
-            Ok(Some(AuthData::OAuth {
-                issuer: Some(CredentialIssuer::AtomGit),
-                refresh: tokens.refresh_token.clone(),
-                access: tokens.access_token.clone(),
-                expires_at_ms: parse_oauth_expires_at_ms(tokens.expires_at_ms.as_str())?,
-                account_id,
-                enterprise_url: None,
-                user,
-            }))
-        }
-        ProviderDraftAuthKind::Credential(Some(
-            CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore,
-        ))
-        | ProviderDraftAuthKind::Unset
-        | ProviderDraftAuthKind::None
-        | ProviderDraftAuthKind::Api
-        | ProviderDraftAuthKind::Gitlab
-        | ProviderDraftAuthKind::Credential(None)
-        | ProviderDraftAuthKind::BedrockSigv4 => Ok(None),
-    }
-}
-
 fn auth_data_has_access_or_api_key(auth: &AuthData) -> bool {
     match auth {
         AuthData::Api { key } | AuthData::WellKnown { key, .. } => !key.trim().is_empty(),
@@ -4378,230 +4549,26 @@ fn build_provider_patch_value(
     adapters: JsonValue,
     include_defaults: bool,
 ) -> Result<JsonValue> {
-    let mut value = JsonMap::new();
-    value.insert("enabled".to_owned(), JsonValue::Bool(true));
-    if include_defaults {
-        value.insert(
-            "default_adapter".to_owned(),
-            JsonValue::String(default_adapter.to_owned()),
-        );
-        value.insert(
-            "default_model".to_owned(),
-            JsonValue::String(default_model.to_owned()),
-        );
-    }
-    value.insert(
-        "auth".to_owned(),
-        JsonValue::Object(build_provider_auth_patch_value(draft)?),
-    );
-    value.insert("adapters".to_owned(), adapters);
-    Ok(JsonValue::Object(value))
+    let adapters = serde_json::from_value::<
+        std::collections::BTreeMap<String, ProviderAdapterOverlay>,
+    >(adapters)
+    .map_err(api_error)?;
+    let overlay =
+        draft.to_provider_overlay(default_adapter, default_model, adapters, include_defaults)?;
+    serde_json::to_value(overlay)
+        .map_err(api_error)
+        .map_err(Into::into)
 }
 
 fn build_provider_auth_patch_value(
     draft: &ProviderConfigDraft,
 ) -> Result<JsonMap<String, JsonValue>> {
-    let mut auth = JsonMap::new();
-    let inline_credential = provider_draft_oauth_auth_data(draft)?;
-    auth.insert(
-        "mode".to_owned(),
-        JsonValue::String(draft.auth_kind.mode_label().to_owned()),
-    );
-    match draft.auth_kind {
-        ProviderDraftAuthKind::Unset => {
-            return Err(anyhow!("provider auth_mode is required before saving"));
-        }
-        ProviderDraftAuthKind::None => {
-            auth.insert("base_url".to_owned(), JsonValue::Null);
-            auth.insert("instance_url".to_owned(), JsonValue::Null);
-            auth.insert("api_key_env".to_owned(), JsonValue::Null);
-            auth.insert("api_key".to_owned(), JsonValue::Null);
-            auth.insert("credential".to_owned(), JsonValue::Null);
-            auth.insert("issuer".to_owned(), JsonValue::Null);
-            auth.insert("region".to_owned(), JsonValue::Null);
-            auth.insert("profile".to_owned(), JsonValue::Null);
-            auth.insert("access_key_id".to_owned(), JsonValue::Null);
-            auth.insert("secret_access_key".to_owned(), JsonValue::Null);
-            auth.insert("session_token".to_owned(), JsonValue::Null);
-            auth.insert("service_key_env".to_owned(), JsonValue::Null);
-        }
-        ProviderDraftAuthKind::Api => {
-            auth.insert("instance_url".to_owned(), JsonValue::Null);
-            auth.insert("issuer".to_owned(), JsonValue::Null);
-            auth.insert("region".to_owned(), JsonValue::Null);
-            auth.insert("profile".to_owned(), JsonValue::Null);
-            auth.insert("access_key_id".to_owned(), JsonValue::Null);
-            auth.insert("secret_access_key".to_owned(), JsonValue::Null);
-            auth.insert("session_token".to_owned(), JsonValue::Null);
-            auth.insert("service_key_env".to_owned(), JsonValue::Null);
-            auth.insert("credential".to_owned(), JsonValue::Null);
-            if let Some(base_url) = non_empty(Some(draft.base_url.as_str())) {
-                auth.insert(
-                    "base_url".to_owned(),
-                    JsonValue::String(base_url.to_owned()),
-                );
-            } else {
-                auth.insert("base_url".to_owned(), JsonValue::Null);
-            }
-            if let Some(api_key_env) = non_empty(Some(draft.api_key_env.as_str())) {
-                auth.insert(
-                    "api_key_env".to_owned(),
-                    JsonValue::String(api_key_env.to_owned()),
-                );
-            } else {
-                auth.insert("api_key_env".to_owned(), JsonValue::Null);
-            }
-            if let Some(api_key) = non_empty(Some(draft.api_key.as_str())) {
-                auth.insert("api_key".to_owned(), JsonValue::String(api_key.to_owned()));
-            } else {
-                auth.insert("api_key".to_owned(), JsonValue::Null);
-            }
-        }
-        ProviderDraftAuthKind::Gitlab => {
-            auth.insert("base_url".to_owned(), JsonValue::Null);
-            if let Some(instance_url) = non_empty(Some(draft.instance_url.as_str())) {
-                auth.insert(
-                    "instance_url".to_owned(),
-                    JsonValue::String(instance_url.to_owned()),
-                );
-            } else {
-                auth.insert("instance_url".to_owned(), JsonValue::Null);
-            }
-            auth.insert("issuer".to_owned(), JsonValue::Null);
-            auth.insert("region".to_owned(), JsonValue::Null);
-            auth.insert("profile".to_owned(), JsonValue::Null);
-            auth.insert("access_key_id".to_owned(), JsonValue::Null);
-            auth.insert("secret_access_key".to_owned(), JsonValue::Null);
-            auth.insert("session_token".to_owned(), JsonValue::Null);
-            auth.insert("service_key_env".to_owned(), JsonValue::Null);
-            auth.insert("credential".to_owned(), JsonValue::Null);
-            if let Some(api_key_env) = non_empty(Some(draft.api_key_env.as_str())) {
-                auth.insert(
-                    "api_key_env".to_owned(),
-                    JsonValue::String(api_key_env.to_owned()),
-                );
-            } else {
-                auth.insert("api_key_env".to_owned(), JsonValue::Null);
-            }
-            if let Some(api_key) = non_empty(Some(draft.api_key.as_str())) {
-                auth.insert("api_key".to_owned(), JsonValue::String(api_key.to_owned()));
-            } else {
-                auth.insert("api_key".to_owned(), JsonValue::Null);
-            }
-        }
-        ProviderDraftAuthKind::Credential(None) => {
-            return Err(anyhow!("credential_issuer is required before saving"));
-        }
-        ProviderDraftAuthKind::Credential(Some(_)) => {
-            let issuer = parse_credential_issuer(draft.credential_issuer.as_str())?;
-            auth.insert("api_key_env".to_owned(), JsonValue::Null);
-            auth.insert("api_key".to_owned(), JsonValue::Null);
-            auth.insert("region".to_owned(), JsonValue::Null);
-            auth.insert("profile".to_owned(), JsonValue::Null);
-            auth.insert("access_key_id".to_owned(), JsonValue::Null);
-            auth.insert("secret_access_key".to_owned(), JsonValue::Null);
-            auth.insert("session_token".to_owned(), JsonValue::Null);
-            auth.insert(
-                "issuer".to_owned(),
-                JsonValue::String(credential_issuer_label(issuer).to_owned()),
-            );
-            if issuer == CredentialIssuer::Gitlab {
-                if let Some(instance_url) = non_empty(Some(draft.instance_url.as_str())) {
-                    auth.insert(
-                        "instance_url".to_owned(),
-                        JsonValue::String(instance_url.to_owned()),
-                    );
-                } else {
-                    auth.insert("instance_url".to_owned(), JsonValue::Null);
-                }
-            } else {
-                auth.insert("instance_url".to_owned(), JsonValue::Null);
-            }
-            if issuer.uses_http_endpoint() {
-                if let Some(base_url) = non_empty(Some(draft.base_url.as_str())) {
-                    auth.insert(
-                        "base_url".to_owned(),
-                        JsonValue::String(base_url.to_owned()),
-                    );
-                } else {
-                    auth.insert("base_url".to_owned(), JsonValue::Null);
-                }
-            } else {
-                auth.insert("base_url".to_owned(), JsonValue::Null);
-            }
-            if issuer.requires_service_key_env() {
-                if let Some(service_key_env) = non_empty(Some(draft.service_key_env.as_str())) {
-                    auth.insert(
-                        "service_key_env".to_owned(),
-                        JsonValue::String(service_key_env.to_owned()),
-                    );
-                } else {
-                    auth.insert("service_key_env".to_owned(), JsonValue::Null);
-                }
-            } else {
-                auth.insert("service_key_env".to_owned(), JsonValue::Null);
-            }
-            if let Some(credential) = inline_credential {
-                auth.insert(
-                    "credential".to_owned(),
-                    serde_json::to_value(credential).map_err(api_error)?,
-                );
-            } else {
-                auth.insert("credential".to_owned(), JsonValue::Null);
-            }
-        }
-        ProviderDraftAuthKind::BedrockSigv4 => {
-            auth.insert("api_key_env".to_owned(), JsonValue::Null);
-            auth.insert("api_key".to_owned(), JsonValue::Null);
-            auth.insert("instance_url".to_owned(), JsonValue::Null);
-            auth.insert("credential".to_owned(), JsonValue::Null);
-            auth.insert("issuer".to_owned(), JsonValue::Null);
-            auth.insert("service_key_env".to_owned(), JsonValue::Null);
-            if let Some(base_url) = non_empty(Some(draft.base_url.as_str())) {
-                auth.insert(
-                    "base_url".to_owned(),
-                    JsonValue::String(base_url.to_owned()),
-                );
-            } else {
-                auth.insert("base_url".to_owned(), JsonValue::Null);
-            }
-            if let Some(region) = non_empty(Some(draft.region.as_str())) {
-                auth.insert("region".to_owned(), JsonValue::String(region.to_owned()));
-            } else {
-                auth.insert("region".to_owned(), JsonValue::Null);
-            }
-            if let Some(profile) = non_empty(Some(draft.profile.as_str())) {
-                auth.insert("profile".to_owned(), JsonValue::String(profile.to_owned()));
-            } else {
-                auth.insert("profile".to_owned(), JsonValue::Null);
-            }
-            if let Some(access_key_id) = non_empty(Some(draft.access_key_id.as_str())) {
-                auth.insert(
-                    "access_key_id".to_owned(),
-                    JsonValue::String(access_key_id.to_owned()),
-                );
-            } else {
-                auth.insert("access_key_id".to_owned(), JsonValue::Null);
-            }
-            if let Some(secret_access_key) = non_empty(Some(draft.secret_access_key.as_str())) {
-                auth.insert(
-                    "secret_access_key".to_owned(),
-                    JsonValue::String(secret_access_key.to_owned()),
-                );
-            } else {
-                auth.insert("secret_access_key".to_owned(), JsonValue::Null);
-            }
-            if let Some(session_token) = non_empty(Some(draft.session_token.as_str())) {
-                auth.insert(
-                    "session_token".to_owned(),
-                    JsonValue::String(session_token.to_owned()),
-                );
-            } else {
-                auth.insert("session_token".to_owned(), JsonValue::Null);
-            }
-        }
-    }
-    Ok(auth)
+    serde_json::to_value(draft.to_auth_overlay()?)
+        .map_err(api_error)
+        .and_then(|value| match value {
+            JsonValue::Object(object) => Ok(object),
+            _ => Err(anyhow!("provider auth overlay must serialize as an object")),
+        })
 }
 
 fn provider_model_settings_path(provider_id: &str, adapter_id: &str, model_id: &str) -> String {
@@ -4768,6 +4735,10 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     })
 }
 
+fn trimmed_owned(value: &str) -> Option<String> {
+    non_empty(Some(value)).map(ToOwned::to_owned)
+}
+
 fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
     let mut staged = 0_u64;
     let mut unstaged = 0_u64;
@@ -4866,7 +4837,6 @@ fn detect_mime(path: &Path, bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     fn provider_studio_test_draft(
         default_adapter: &str,
@@ -4877,222 +4847,23 @@ mod tests {
             source_provider_id: None,
             provider_id: "oc".to_string(),
             auth_kind: ProviderDraftAuthKind::Api,
-            base_url: "https://opencode.ai/zen".to_string(),
-            instance_url: String::new(),
-            api_key_env: String::new(),
-            api_key: api_key.to_string(),
-            credential_issuer: "openai_chatgpt".to_string(),
-            region: String::new(),
-            profile: String::new(),
-            access_key_id: String::new(),
-            secret_access_key: String::new(),
-            session_token: String::new(),
-            service_key_env: String::new(),
+            auth: ProviderDraftAuthDetails {
+                base_url: "https://opencode.ai/zen".to_string(),
+                instance_url: String::new(),
+                api_key_env: String::new(),
+                api_key: api_key.to_string(),
+                credential_issuer: "openai_chatgpt".to_string(),
+                region: String::new(),
+                profile: String::new(),
+                access_key_id: String::new(),
+                secret_access_key: String::new(),
+                session_token: String::new(),
+                service_key_env: String::new(),
+            },
             credential_drafts: ProviderCredentialDraftBundle::default(),
             default_adapter: default_adapter.to_string(),
             default_model: default_model.to_string(),
         }
-    }
-
-    fn provider_studio_test_adapter_models(
-        adapter_id: &str,
-        resolved_base_url: &str,
-        model_ids: &[&str],
-    ) -> ProviderAdapterModelsResource {
-        ProviderAdapterModelsResource {
-            adapter_id: adapter_id.to_string(),
-            enabled: true,
-            resolved_base_url: Some(resolved_base_url.to_string()),
-            models: model_ids
-                .iter()
-                .map(|model_id| ProviderModel::new(adapter_id, *model_id))
-                .collect(),
-            error: None,
-        }
-    }
-
-    fn provider_studio_test_catalog_entry(
-        model_id: &str,
-        capabilities: agena::provider::ModelCapabilityPatch,
-    ) -> ModelCatalogEntryResource {
-        ModelCatalogEntryResource {
-            model_id: model_id.to_string(),
-            kind: ModelCatalogEntryKind::Official,
-            source: ModelCatalogSourceKind::Generated,
-            source_label: None,
-            has_local_override: false,
-            display_name: None,
-            origin: None,
-            lifecycle: None,
-            context_window_tokens: None,
-            max_input_tokens: None,
-            max_output_tokens: None,
-            description: None,
-            knowledge_cutoff: None,
-            release_date: None,
-            last_updated: None,
-            open_weights: None,
-            default_thinking_mode: None,
-            supports_parallel_tool_calls: None,
-            supports_verbosity: None,
-            default_verbosity: None,
-            default_temperature: None,
-            default_top_p: None,
-            default_top_k: None,
-            assistant_reasoning_interleaved: None,
-            assistant_reasoning_field: None,
-            output_modalities: Vec::new(),
-            pricing: None,
-            thinking_modes: std::collections::BTreeMap::new(),
-            speed_modes: std::collections::BTreeMap::new(),
-            capabilities,
-        }
-    }
-
-    fn build_provider_save_patch(
-        draft: &ProviderConfigDraft,
-        adapter_model_lists: &[ProviderAdapterModelsResource],
-        selected: &std::collections::BTreeSet<String>,
-        catalog_entries: &[ModelCatalogEntryResource],
-    ) -> JsonValue {
-        let mut adapters = JsonMap::new();
-
-        for adapter_models in adapter_model_lists {
-            if adapter_models.error.is_some()
-                || !selected.contains(adapter_models.adapter_id.as_str())
-            {
-                continue;
-            }
-            let configured_models = adapter_models
-                .models
-                .iter()
-                .map(|model| {
-                    (
-                        model.id.to_string(),
-                        provider_model_json_for_model_id(
-                            &catalog_entries,
-                            model.id.as_str(),
-                            Some(model),
-                        ),
-                    )
-                })
-                .collect::<JsonMap<_, _>>();
-            adapters.insert(
-                adapter_models.adapter_id.clone(),
-                json!({
-                    "enabled": true,
-                    "models": configured_models,
-                }),
-            );
-        }
-
-        let default_model_value =
-            provider_model_json_for_model_id(catalog_entries, draft.default_model.as_str(), None);
-        adapters
-            .entry(draft.default_adapter.clone())
-            .or_insert_with(|| json!({ "enabled": true }));
-        ensure_provider_model_entry(
-            adapters
-                .get_mut(draft.default_adapter.as_str())
-                .expect("default adapter patch should exist"),
-            draft.default_model.as_str(),
-            default_model_value,
-        )
-        .expect("default model patch should be inserted");
-
-        build_provider_patch_value(
-            &draft,
-            draft.default_adapter.as_str(),
-            draft.default_model.as_str(),
-            JsonValue::Object(adapters),
-            true,
-        )
-        .expect("provider patch should build")
-    }
-
-    fn build_api_provider_save_patch() -> JsonValue {
-        let draft = provider_studio_test_draft("gemini", "deepseek-v4-flash-free", "test-token");
-        let adapter_model_lists = vec![
-            provider_studio_test_adapter_models(
-                "openai",
-                "https://opencode.ai/zen/v1",
-                &["deepseek-v4-flash-free"],
-            ),
-            provider_studio_test_adapter_models(
-                "anthropic",
-                "https://opencode.ai/zen/v1",
-                &["deepseek-v4-flash-free"],
-            ),
-            ProviderAdapterModelsResource {
-                adapter_id: "gemini".to_string(),
-                enabled: true,
-                resolved_base_url: Some("https://opencode.ai/zen/v1beta".to_string()),
-                models: Vec::new(),
-                error: Some("google api request failed".to_string()),
-            },
-        ];
-        let selected =
-            std::collections::BTreeSet::from(["openai".to_string(), "anthropic".to_string()]);
-        build_provider_save_patch(&draft, &adapter_model_lists, &selected, &[])
-    }
-
-    #[test]
-    fn provider_patch_accepts_api_provider_with_unselected_default_adapter() {
-        let provider_patch = build_api_provider_save_patch();
-        let config = NamedTempFile::new().expect("temp config should exist");
-        patch_file_settings(
-            config.path(),
-            ConfigSettingsPatchInput {
-                path: Some("providers".to_string()),
-                changes: json!({
-                    "oc": provider_patch,
-                }),
-                dry_run: false,
-                validate: true,
-                reload: false,
-            },
-        )
-        .expect("provider patch should validate and write");
-    }
-
-    #[test]
-    fn provider_set_save_replaces_existing_provider_table() {
-        let provider_patch = build_api_provider_save_patch();
-        let config = NamedTempFile::new().expect("temp config should exist");
-        fs::write(
-            config.path(),
-            r#"
-[providers.oc]
-default_adapter = "gitlab"
-default_model = "duo-chat-gpt-5-2"
-
-[providers.oc.auth]
-mode = "gitlab_api"
-api_key_env = "GITLAB_TOKEN"
-
-[providers.oc.adapters.gitlab]
-enabled = true
-"#,
-        )
-        .expect("seed config should write");
-
-        set_file_setting(
-            config.path(),
-            ConfigSettingsSetInput {
-                path: "providers.\"oc\"".to_string(),
-                value: provider_patch,
-                dry_run: false,
-                validate: true,
-                reload: false,
-            },
-        )
-        .expect("provider table replacement should validate and write");
-
-        let text = fs::read_to_string(config.path()).expect("config should be readable");
-        assert!(!text.contains("[providers.oc.adapters.gitlab]"));
-        assert!(text.contains("[providers.oc.adapters.openai]"));
-        assert!(text.contains("[providers.oc.adapters.anthropic]"));
-        assert!(text.contains("[providers.oc.adapters.gemini]"));
     }
 
     #[test]
@@ -5100,8 +4871,8 @@ enabled = true
         let mut draft = provider_studio_test_draft("openai", "duo-chat-gpt-5-2", "");
         draft.provider_id = "gitlab-oauth".to_string();
         draft.auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab));
-        draft.credential_issuer = "gitlab".to_string();
-        draft.instance_url = "https://gitlab.example.com".to_string();
+        draft.auth.credential_issuer = "gitlab".to_string();
+        draft.auth.instance_url = "https://gitlab.example.com".to_string();
         draft.credential_drafts.gitlab.tokens.refresh_token = "refresh-token".to_string();
         draft.credential_drafts.gitlab.tokens.access_token = "access-token".to_string();
         draft.credential_drafts.gitlab.tokens.expires_at_ms = "123".to_string();
@@ -5124,89 +4895,5 @@ enabled = true
         assert_eq!(credential.get("refresh"), Some(&json!("refresh-token")));
         assert_eq!(credential.get("access"), Some(&json!("access-token")));
         assert_eq!(credential.get("expires_at_ms"), Some(&json!(123)));
-    }
-
-    #[test]
-    fn provider_patch_accepts_opencode_zen_public_with_all_openai_and_anthropic_models() {
-        use agena::provider::{
-            FeatureCapabilityPatch, FeatureCapabilityPatchBody, ModelCapabilityFeature,
-            ModelCapabilityPatch,
-        };
-
-        let draft = provider_studio_test_draft("openai", "glm-5", "public");
-        let model_ids = [
-            "gpt-5.5",
-            "glm-5",
-            "claude-opus-4-7",
-            "qwen3.6-plus",
-            "minimax-m2.5",
-        ];
-        let adapter_model_lists = vec![
-            provider_studio_test_adapter_models("openai", "https://opencode.ai/zen/v1", &model_ids),
-            provider_studio_test_adapter_models(
-                "anthropic",
-                "https://opencode.ai/zen/v1",
-                &model_ids,
-            ),
-        ];
-        let selected =
-            std::collections::BTreeSet::from(["openai".to_string(), "anthropic".to_string()]);
-        let catalog_entries = vec![
-            provider_studio_test_catalog_entry(
-                "glm-5",
-                ModelCapabilityPatch {
-                    features: Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
-                        supported: vec![
-                            ModelCapabilityFeature::StructuredOutput,
-                            ModelCapabilityFeature::Reasoning,
-                        ],
-                        unsupported: vec![ModelCapabilityFeature::StructuredOutput],
-                    })),
-                    ..ModelCapabilityPatch::default()
-                },
-            ),
-            provider_studio_test_catalog_entry("gpt-5.5", ModelCapabilityPatch::default()),
-            provider_studio_test_catalog_entry("claude-opus-4-7", ModelCapabilityPatch::default()),
-            provider_studio_test_catalog_entry("qwen3.6-plus", ModelCapabilityPatch::default()),
-            provider_studio_test_catalog_entry("minimax-m2.5", ModelCapabilityPatch::default()),
-        ];
-        let provider_patch =
-            build_provider_save_patch(&draft, &adapter_model_lists, &selected, &catalog_entries);
-        let config = NamedTempFile::new().expect("temp config should exist");
-
-        set_file_setting(
-            config.path(),
-            ConfigSettingsSetInput {
-                path: "providers.\"oc\"".to_string(),
-                value: provider_patch,
-                dry_run: false,
-                validate: true,
-                reload: false,
-            },
-        )
-        .expect("opencode zen provider patch should validate and write");
-
-        let text = fs::read_to_string(config.path()).expect("config should be readable");
-        assert!(text.contains("base_url = \"https://opencode.ai/zen\""));
-        assert!(text.contains("api_key = \"public\""));
-        for path in [
-            "providers.\"oc\".adapters.openai.models.\"glm-5\"",
-            "providers.\"oc\".adapters.anthropic.models.\"glm-5\"",
-            "providers.\"oc\".adapters.openai.models.\"claude-opus-4-7\"",
-            "providers.\"oc\".adapters.anthropic.models.\"claude-opus-4-7\"",
-            "providers.\"oc\".adapters.openai.models.\"qwen3.6-plus\"",
-            "providers.\"oc\".adapters.anthropic.models.\"qwen3.6-plus\"",
-        ] {
-            let value = read_file_setting(
-                config.path(),
-                ConfigSettingsGetInput {
-                    path: Some(path.to_string()),
-                    source: agena::config::ConfigSettingsSource::File,
-                },
-            )
-            .expect("saved model entry should be readable")
-            .value;
-            assert!(value.is_object(), "{path} should exist as an object");
-        }
     }
 }

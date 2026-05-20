@@ -45,7 +45,6 @@ impl ConfigResolution {
     pub fn render(&self, format: ConfigOutputFormat) -> Result<String, ConfigError> {
         match format {
             ConfigOutputFormat::Json => Ok(serde_json::to_string_pretty(self)?),
-            ConfigOutputFormat::Toml => Ok(toml::to_string_pretty(self)?),
         }
     }
 }
@@ -526,11 +525,22 @@ pub enum ProviderAdapterDefinition {
     AmazonBedrock(AmazonBedrockProviderOptions),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ResolvedProviderModelConfig {
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
     #[serde(flatten)]
     pub definition: ConfiguredModelDefinition,
+}
+
+impl Default for ResolvedProviderModelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            definition: ConfiguredModelDefinition::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -576,6 +586,14 @@ where
     T: Default + PartialEq,
 {
     value == &T::default()
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -667,7 +685,6 @@ impl From<ProviderCapabilityFamilyConfig> for CapabilityFamily {
 #[serde(rename_all = "snake_case")]
 pub enum ConfigOutputFormat {
     Json,
-    Toml,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -292,7 +292,7 @@ const backendState = computed(() => {
             id="desktop-config-path"
             v-model="props.desktopForm.agena_config_path"
             class="input mono"
-            placeholder="/workspace/.agena/config.toml"
+            placeholder="/workspace/.agena/config.json"
           />
         </div>
         <div class="field">

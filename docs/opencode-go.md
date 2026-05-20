@@ -36,7 +36,7 @@ export OPENCODE_API_KEY=...
 
 ## OpenCode Go
 
-把下面片段放进 `~/.agena/config.toml`。默认模型使用 OpenAI-compatible 路由，MiniMax M2.7 / M2.5 使用 Anthropic Messages 路由。
+把下面片段放进 `~/.agena/config.json`。默认模型使用 OpenAI-compatible 路由，MiniMax M2.7 / M2.5 使用 Anthropic Messages 路由。
 
 ```toml
 [default]

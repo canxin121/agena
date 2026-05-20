@@ -730,6 +730,7 @@ mod tests {
                 enabled: true,
                 model_discovery: Default::default(),
                 definition: ProviderAdapterDefinition::OpenAi(HttpProviderAdapterConfig {
+                    user_agent: None,
                     extra_headers: Default::default(),
                     options: OpenAiProviderOptions {
                         backend,
@@ -771,6 +772,10 @@ mod tests {
             base_url: None,
             protocol_paths: ProviderProtocolPathsConfig::default(),
             service_key_env: None,
+            instance_url: None,
+            ai_gateway_url: None,
+            ai_gateway_headers: Default::default(),
+            feature_flags: Default::default(),
         }
     }
 
@@ -933,6 +938,10 @@ mod tests {
                 base_url: Some("https://vertex.example.com".to_owned()),
                 protocol_paths: ProviderProtocolPathsConfig::default(),
                 service_key_env: None,
+                instance_url: None,
+                ai_gateway_url: None,
+                ai_gateway_headers: Default::default(),
+                feature_flags: Default::default(),
             }),
             vec![],
         );
@@ -961,6 +970,10 @@ mod tests {
                 base_url: Some("https://api.example.com/v2".to_owned()),
                 protocol_paths: ProviderProtocolPathsConfig::default(),
                 service_key_env: Some("AICORE_SERVICE_KEY".to_owned()),
+                instance_url: None,
+                ai_gateway_url: None,
+                ai_gateway_headers: Default::default(),
+                feature_flags: Default::default(),
             }),
             vec![],
         );

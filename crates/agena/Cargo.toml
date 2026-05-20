@@ -38,6 +38,7 @@ http-body-util = { workspace = true }
 imagesize = { workspace = true }
 oauth2 = { workspace = true }
 mime_guess = { workspace = true }
+merge = { workspace = true }
 path-clean = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 html2md = { workspace = true }

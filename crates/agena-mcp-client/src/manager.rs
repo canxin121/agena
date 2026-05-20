@@ -19,7 +19,7 @@ use crate::protocol::{
     CallToolResult, GetPromptResult, ListPromptsResult, ListResourcesResult, ReadResourceResult,
     ToolDescriptor,
 };
-use crate::transport::{HttpTransport, HttpTransportMode, StdioTransport};
+use crate::transport::{HttpTransport, HttpTransportMode, StdioTransport, WsTransport};
 
 #[derive(Debug, Clone)]
 pub enum ServerSpec {
@@ -35,9 +35,14 @@ pub enum ServerSpec {
         headers: HashMap<String, String>,
         auth: Option<HttpAuth>,
     },
+    Ws {
+        url: Url,
+        headers: HashMap<String, String>,
+        auth: Option<HttpAuth>,
+    },
 }
 
-/// Authentication strategy for HTTP MCP servers. Materialized into an
+/// Authentication strategy for remote MCP servers. Materialized into an
 /// `Authorization` header at connect time; explicit `headers` always win
 /// when both are set.
 #[derive(Debug, Clone)]
@@ -121,6 +126,18 @@ impl McpConnectionManager {
                     apply_http_auth(name, auth, &mut headers, self.token_store.as_deref());
                 }
                 let t = HttpTransport::connect(url, mode, headers).await?;
+                (McpClient::new(Arc::new(t)), network_target)
+            }
+            ServerSpec::Ws {
+                url,
+                mut headers,
+                auth,
+            } => {
+                let network_target = Some(url.to_string());
+                if let Some(auth) = auth {
+                    apply_http_auth(name, auth, &mut headers, self.token_store.as_deref());
+                }
+                let t = WsTransport::connect(url, headers).await?;
                 (McpClient::new(Arc::new(t)), network_target)
             }
         };

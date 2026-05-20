@@ -25,21 +25,21 @@ use crate::plugin::sdk::host_api::{
     HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
     HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus,
     HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostTodoItem, HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
-    HostUpdateGoalResponse, HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent,
-    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
-    current_host_callback_context,
+    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpHttpMode,
+    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
+    HostMcpServerSpec, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
+    HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse,
+    HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostStorageDeleteRequest,
+    HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
+    HostStorageListResponse, HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus,
+    HostTodoWriteRequest, HostUpdateGoalRequest, HostUpdateGoalResponse, HostWorktreeEntry,
+    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -1160,15 +1160,36 @@ impl HostClient for RuntimeHostClient {
             },
             HostMcpServerSpec::Http {
                 url,
+                mode,
                 bearer,
                 headers,
             } => {
                 let url = url::Url::parse(&url)
                     .map_err(|e| PluginError::invalid_params(format!("invalid mcp url: {e}")))?;
                 let auth = bearer.map(agena_mcp_client::HttpAuth::Bearer);
+                let mode = match mode {
+                    HostMcpHttpMode::Sse => agena_mcp_client::HttpTransportMode::Sse,
+                    HostMcpHttpMode::StreamableHttp => {
+                        agena_mcp_client::HttpTransportMode::StreamableHttp
+                    }
+                };
                 agena_mcp_client::ServerSpec::Http {
                     url,
-                    mode: agena_mcp_client::HttpTransportMode::StreamableHttp,
+                    mode,
+                    headers: headers.into_iter().collect(),
+                    auth,
+                }
+            }
+            HostMcpServerSpec::Ws {
+                url,
+                bearer,
+                headers,
+            } => {
+                let url = url::Url::parse(&url)
+                    .map_err(|e| PluginError::invalid_params(format!("invalid mcp url: {e}")))?;
+                let auth = bearer.map(agena_mcp_client::HttpAuth::Bearer);
+                agena_mcp_client::ServerSpec::Ws {
+                    url,
                     headers: headers.into_iter().collect(),
                     auth,
                 }

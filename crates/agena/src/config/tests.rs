@@ -838,7 +838,8 @@ enabled = true
         .expect_err("mismatched credential issuer should be rejected");
     assert!(matches!(
         err,
-        ConfigError::InvalidProviderConfig { provider_id, .. } if provider_id == "bad"
+        ConfigError::InvalidProviderConfig { provider_id, message }
+            if provider_id == "bad" && message.contains("Claude Console API key")
     ));
 }
 
@@ -870,6 +871,63 @@ enabled = true
         ConfigError::InvalidProviderConfig { provider_id, message }
             if provider_id == "bad" && message.contains("use `openai`")
     ));
+}
+
+#[test]
+fn gemini_adapter_loads_stream_mode_and_realtime_ws_url() {
+    let path = write_temp_config(
+        r#"
+[providers.google]
+default_model = "gemini/gemini-2.5-flash"
+
+[providers.google.auth]
+mode = "api"
+base_url = "https://generativelanguage.googleapis.com"
+api_key_env = "GEMINI_API_KEY"
+
+[providers.google.adapters.gemini]
+enabled = true
+stream_mode = "realtime_websocket"
+realtime_ws_url = "wss://gateway.example.com/google-live"
+auth_header = "x-goog-api-key"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("google")
+        .expect("google provider should exist");
+    match provider
+        .adapters
+        .get("gemini")
+        .expect("gemini adapter should exist")
+        .definition
+    {
+        ProviderAdapterDefinition::Gemini(ref config) => {
+            assert_eq!(
+                config.options.stream_mode,
+                StreamTransportMode::RealtimeWebSocket
+            );
+            assert_eq!(
+                config.options.realtime_ws_url.as_deref(),
+                Some("wss://gateway.example.com/google-live")
+            );
+            assert_eq!(
+                config.options.auth_header.as_deref(),
+                Some("x-goog-api-key")
+            );
+        }
+        ref other => panic!("expected gemini adapter, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1757,6 +1815,47 @@ brave_api_key = "secret"
         resolution.config.web.search.backend,
         crate::config::WebSearchBackendKind::Brave
     );
+}
+
+#[test]
+fn plugin_options_load_mcp_remote_transport_variants() {
+    let path = write_temp_config(
+        r#"
+[plugins.list."agena.mcp"]
+kind = "static"
+
+[plugins.list."agena.mcp".options.servers.docs]
+transport = "http"
+url = "https://mcp.example.com"
+mode = "sse"
+
+[plugins.list."agena.mcp".options.servers.browser]
+transport = "ws"
+url = "wss://mcp.example.com/socket"
+headers = { X-Workspace = "test" }
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("plugin-backed mcp config should load");
+
+    assert!(matches!(
+        resolution.config.mcp.servers.get("docs"),
+        Some(crate::config::McpServerConfig::Http {
+            mode: crate::config::McpHttpMode::Sse,
+            ..
+        })
+    ));
+    assert!(matches!(
+        resolution.config.mcp.servers.get("browser"),
+        Some(crate::config::McpServerConfig::Ws { url, .. })
+            if url == "wss://mcp.example.com/socket"
+    ));
 }
 
 #[test]

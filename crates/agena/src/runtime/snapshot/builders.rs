@@ -198,39 +198,14 @@ pub(super) async fn build_mcp_manager(
                 headers,
                 auth,
             } => {
-                let parsed = match url::Url::parse(url) {
-                    Ok(u) => u,
-                    Err(e) => {
-                        tracing::warn!(
-                            target: "agena::mcp",
-                            "skipping mcp server '{name}': invalid url '{url}': {e}"
-                        );
-                        continue;
-                    }
+                let Some(parsed) = parse_mcp_server_url(name.as_str(), url.as_str()) else {
+                    continue;
                 };
                 let mode = match mode {
                     crate::config::McpHttpMode::Sse => HttpTransportMode::Sse,
                     crate::config::McpHttpMode::StreamableHttp => HttpTransportMode::StreamableHttp,
                 };
-                let auth = auth.as_ref().map(|cfg| match cfg {
-                    crate::config::McpHttpAuthConfig::Bearer { token } => {
-                        agena_mcp_client::HttpAuth::Bearer(token.clone())
-                    }
-                    crate::config::McpHttpAuthConfig::BearerFromEnv { env } => {
-                        agena_mcp_client::HttpAuth::BearerFromEnv(env.clone())
-                    }
-                    crate::config::McpHttpAuthConfig::BearerFromStore => {
-                        agena_mcp_client::HttpAuth::BearerFromStore
-                    }
-                    crate::config::McpHttpAuthConfig::Custom { headers } => {
-                        agena_mcp_client::HttpAuth::Custom(
-                            headers
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect(),
-                        )
-                    }
-                });
+                let auth = map_mcp_auth(auth.as_ref());
                 ServerSpec::Http {
                     url: parsed,
                     mode,
@@ -239,6 +214,19 @@ pub(super) async fn build_mcp_manager(
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),
                     auth,
+                }
+            }
+            crate::config::McpServerConfig::Ws { url, headers, auth } => {
+                let Some(parsed) = parse_mcp_server_url(name.as_str(), url.as_str()) else {
+                    continue;
+                };
+                ServerSpec::Ws {
+                    url: parsed,
+                    headers: headers
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    auth: map_mcp_auth(auth.as_ref()),
                 }
             }
         };
@@ -252,6 +240,41 @@ pub(super) async fn build_mcp_manager(
         }
     }
     manager
+}
+
+fn parse_mcp_server_url(name: &str, url: &str) -> Option<url::Url> {
+    match url::Url::parse(url) {
+        Ok(parsed) => Some(parsed),
+        Err(err) => {
+            tracing::warn!(
+                target: "agena::mcp",
+                "skipping mcp server '{name}': invalid url '{url}': {err}"
+            );
+            None
+        }
+    }
+}
+
+fn map_mcp_auth(
+    auth: Option<&crate::config::McpHttpAuthConfig>,
+) -> Option<agena_mcp_client::HttpAuth> {
+    auth.map(|cfg| match cfg {
+        crate::config::McpHttpAuthConfig::Bearer { token } => {
+            agena_mcp_client::HttpAuth::Bearer(token.clone())
+        }
+        crate::config::McpHttpAuthConfig::BearerFromEnv { env } => {
+            agena_mcp_client::HttpAuth::BearerFromEnv(env.clone())
+        }
+        crate::config::McpHttpAuthConfig::BearerFromStore => {
+            agena_mcp_client::HttpAuth::BearerFromStore
+        }
+        crate::config::McpHttpAuthConfig::Custom { headers } => agena_mcp_client::HttpAuth::Custom(
+            headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        ),
+    })
 }
 
 pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {

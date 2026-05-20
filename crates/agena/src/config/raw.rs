@@ -1479,6 +1479,8 @@ fn resolve_adapter_config(
             })
         }
         ProviderKind::Gemini => {
+            let stream_mode = stream_mode.unwrap_or(StreamTransportMode::Sse);
+            let realtime_ws_url = normalize_optional(realtime_ws_url);
             if normalize_optional(base_url.clone()).is_some() {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.to_owned(),
@@ -1489,9 +1491,11 @@ fn resolve_adapter_config(
             }
             ProviderAdapterDefinition::Gemini(HttpProviderAdapterConfig {
                 extra_headers,
-                options: super::SimpleHttpProviderOptions {
+                options: super::GeminiProviderOptions {
                     auth_header: normalize_optional(auth_header),
                     auth_scheme: normalize_optional(auth_scheme),
+                    stream_mode,
+                    realtime_ws_url,
                 },
             })
         }
@@ -2003,9 +2007,8 @@ fn validate_provider_auth<'a>(
                 ) {
                     return Err(ConfigError::InvalidProviderConfig {
                         provider_id: provider_id.to_owned(),
-                        message:
-                            "credential issuer does not match `anthropic` adapter requirements"
-                                .to_owned(),
+                        message: "credential issuer does not match `anthropic` adapter requirements; use `api` auth with a Claude Console API key for first-party Anthropic access"
+                            .to_owned(),
                     });
                 }
             }

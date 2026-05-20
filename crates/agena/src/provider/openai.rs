@@ -1028,7 +1028,8 @@ impl OpenAiAdapter {
         let provider_name = self.id.clone();
         let provider_id = ProviderId::new(provider_name.as_str());
         let model_name = ModelId::new(model);
-        let input_text = build_realtime_input_text(request.messages.as_slice());
+        let conversation_items =
+            Self::realtime_conversation_items_for_messages(request.messages.as_slice());
         let response_tools = (!request.tools.is_empty()).then(|| {
             serde_json::to_value(Self::responses_tools(request.tools.as_slice()))
                 .expect("realtime tool definitions should serialize")
@@ -1063,17 +1064,10 @@ impl OpenAiAdapter {
                     })?;
             }
 
-            if let Some(text) = input_text.filter(|value| !value.is_empty()) {
+            for item in &conversation_items {
                 let event = serde_json::json!({
                     "type": "conversation.item.create",
-                    "item": {
-                        "type": "message",
-                        "role": "user",
-                        "content": [{
-                            "type": "input_text",
-                            "text": text,
-                        }],
-                    }
+                    "item": item,
                 });
                 utils::adapter_log_stream_event(
                     provider_name.as_str(),
@@ -1093,7 +1087,7 @@ impl OpenAiAdapter {
             }
 
             let mut response = serde_json::json!({
-                "modalities": ["text"],
+                "output_modalities": ["text"],
             });
             if let Some(temperature) = temperature {
                 response["temperature"] = serde_json::json!(temperature);
@@ -1494,6 +1488,20 @@ impl OpenAiAdapter {
 
         apply_responses_prompt_cache_hints(input.as_mut_slice());
         input
+    }
+
+    fn realtime_conversation_items_for_messages(
+        messages: &[Message],
+    ) -> Vec<OpenAiRealtimeConversationItem> {
+        let mut input = Vec::new();
+        for message in messages {
+            Self::append_responses_items_for_message(&mut input, message);
+        }
+        clear_responses_prompt_cache_hints(input.as_mut_slice());
+        input
+            .into_iter()
+            .map(OpenAiRealtimeConversationItem::from_responses_input)
+            .collect()
     }
 
     fn attachment_upload_name(item: &AttachmentItem) -> String {
@@ -2585,6 +2593,38 @@ impl OpenAiResponsesInputItem {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum OpenAiRealtimeConversationItem {
+    Message(OpenAiRealtimeMessageItem),
+    FunctionCall(OpenAiFunctionCallItem),
+    FunctionCallOutput(OpenAiFunctionCallOutputItem),
+}
+
+impl OpenAiRealtimeConversationItem {
+    fn from_responses_input(value: OpenAiResponsesInputItem) -> Self {
+        match value {
+            OpenAiResponsesInputItem::Message(message) => {
+                Self::Message(OpenAiRealtimeMessageItem {
+                    kind: "message",
+                    role: message.role,
+                    content: message.content,
+                })
+            }
+            OpenAiResponsesInputItem::FunctionCall(item) => Self::FunctionCall(item),
+            OpenAiResponsesInputItem::FunctionCallOutput(item) => Self::FunctionCallOutput(item),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiRealtimeMessageItem {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    role: String,
+    content: Vec<OpenAiInputContent>,
+}
+
+#[derive(Debug, Serialize)]
 struct OpenAiFunctionCallItem {
     #[serde(rename = "type")]
     kind: &'static str,
@@ -2786,37 +2826,6 @@ fn clear_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInputItem]) {
             OpenAiResponsesInputItem::FunctionCallOutput(item) => item.copilot_cache_control = None,
         }
     }
-}
-
-fn build_realtime_input_text(messages: &[Message]) -> Option<String> {
-    let normalized = messages
-        .iter()
-        .filter_map(|message| {
-            let text = wire_message::project_text_lossy(message);
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some((message.role, trimmed.to_owned()))
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if normalized.is_empty() {
-        return None;
-    }
-
-    if normalized.len() == 1 && matches!(normalized[0].0, Role::User) {
-        return Some(normalized[0].1.clone());
-    }
-
-    Some(
-        normalized
-            .into_iter()
-            .map(|(role, text)| format!("{role}: {text}"))
-            .collect::<Vec<_>>()
-            .join("\n\n"),
-    )
 }
 
 fn session_text_lossy(message: &Message, projected_parts: &[wire_message::WirePart]) -> String {
@@ -4738,6 +4747,7 @@ mod tests {
 
             let (mut writer, mut reader) = ws_stream.split();
 
+            let mut saw_user_message = false;
             let mut saw_response_create = false;
             while let Some(message) = reader.next().await {
                 let message = message.expect("request message should parse");
@@ -4746,7 +4756,16 @@ mod tests {
                 };
                 let value: serde_json::Value =
                     serde_json::from_str(text.as_str()).expect("request event should be json");
+                if value.get("type").and_then(|v| v.as_str()) == Some("conversation.item.create") {
+                    if value["item"]["type"] == "message" {
+                        assert_eq!(value["item"]["role"], "user");
+                        assert_eq!(value["item"]["content"][0]["type"], "input_text");
+                        assert_eq!(value["item"]["content"][0]["text"], "hello");
+                        saw_user_message = true;
+                    }
+                }
                 if value.get("type").and_then(|v| v.as_str()) == Some("response.create") {
+                    assert_eq!(value["response"]["output_modalities"][0], "text");
                     assert_eq!(value["response"]["tools"][0]["name"], "project_search");
                     assert_eq!(
                         value["response"]["tools"][0]["parameters"]["properties"]["query"]["type"],
@@ -4757,6 +4776,7 @@ mod tests {
                 }
             }
 
+            assert!(saw_user_message);
             assert!(saw_response_create);
 
             writer
@@ -4903,6 +4923,120 @@ mod tests {
                 .as_deref(),
             Some("Bearer sk-test")
         );
+    }
+
+    #[tokio::test]
+    async fn complete_stream_realtime_ws_sends_tool_results_as_function_call_output() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener
+                .accept()
+                .await
+                .expect("connection should be accepted");
+
+            let ws_stream = tokio_tungstenite::accept_hdr_async(
+                tcp,
+                |_: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                 response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("websocket upgrade should succeed");
+
+            let (mut writer, mut reader) = ws_stream.split();
+
+            let mut saw_function_output = false;
+            while let Some(message) = reader.next().await {
+                let message = message.expect("request message should parse");
+                let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+                    continue;
+                };
+                let value: serde_json::Value =
+                    serde_json::from_str(text.as_str()).expect("request event should be json");
+                if value.get("type").and_then(|v| v.as_str()) == Some("conversation.item.create")
+                    && value["item"]["type"] == "function_call_output"
+                {
+                    assert_eq!(value["item"]["call_id"], "call_1");
+                    assert_eq!(value["item"]["output"], "{\"ok\":true}");
+                    saw_function_output = true;
+                }
+                if value.get("type").and_then(|v| v.as_str()) == Some("response.create") {
+                    break;
+                }
+            }
+
+            assert!(saw_function_output);
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "type": "response.done",
+                        "response": {
+                            "status": "completed",
+                            "usage": {
+                                "input_tokens": 3,
+                                "output_tokens": 1
+                            }
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("response done should send");
+        });
+
+        let provider = OpenAiAdapter::new(
+            reqwest::Client::new(),
+            "sk-test",
+            format!("http://{addr}"),
+            "gpt-4o-realtime-preview",
+        )
+        .with_stream_mode(OpenAiStreamMode::RealtimeWebSocket)
+        .with_realtime_ws_url(Some(format!("ws://{addr}/realtime")));
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("gpt-4o-realtime-preview"),
+                system: None,
+                messages: vec![Message::prompt_tool_result("call_1", "{\"ok\":true}")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut saw_completed = false;
+        while let Some(item) = stream.next().await {
+            if let CompletionStreamEvent::Completed { finish_reason, .. } =
+                item.expect("event should parse")
+            {
+                assert!(matches!(finish_reason, Some(CompletionFinishReason::Stop)));
+                saw_completed = true;
+            }
+        }
+
+        assert!(saw_completed);
+        server.await.expect("server task should finish");
     }
 
     #[tokio::test]

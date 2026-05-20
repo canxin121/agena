@@ -45,6 +45,7 @@ pub struct AnthropicAdapter {
     messages_url: Option<String>,
     profile: AnthropicProfile,
     extra_headers: HashMap<String, String>,
+    eager_input_streaming_override: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +108,7 @@ impl AnthropicAdapter {
             messages_url: None,
             profile: AnthropicProfile::Standard,
             extra_headers,
+            eager_input_streaming_override: None,
         }
     }
 
@@ -167,6 +169,11 @@ impl AnthropicAdapter {
                 self.extra_headers.remove("anthropic-beta");
             }
         }
+        self
+    }
+
+    pub fn with_eager_input_streaming_override(mut self, value: Option<bool>) -> Self {
+        self.eager_input_streaming_override = value;
         self
     }
 
@@ -420,6 +427,10 @@ impl AnthropicAdapter {
     }
 
     fn supports_eager_input_streaming(&self) -> bool {
+        if let Some(enabled) = self.eager_input_streaming_override {
+            return enabled;
+        }
+
         match self.profile {
             AnthropicProfile::Standard => Self::is_bundled_base_url(self.base_url.as_str()),
             AnthropicProfile::GithubCopilot => false,
@@ -1834,6 +1845,21 @@ mod tests {
         let tools = provider.tools(&[sample_tool_definition()]);
 
         assert!(!provider.extra_headers.contains_key("anthropic-beta"));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].eager_input_streaming, None);
+    }
+
+    #[test]
+    fn explicit_eager_input_streaming_override_can_disable_bundled_default() {
+        let provider = AnthropicAdapter::new(
+            reqwest::Client::new(),
+            "ak-test",
+            "https://api.anthropic.com/v1",
+            "claude-3-7-sonnet-latest",
+        )
+        .with_eager_input_streaming_override(Some(false));
+        let tools = provider.tools(&[sample_tool_definition()]);
+
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].eager_input_streaming, None);
     }

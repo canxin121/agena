@@ -1,4 +1,4 @@
-//! Transport abstraction and concrete implementations (stdio, HTTP/SSE).
+//! Transport abstraction and concrete implementations (stdio, HTTP/SSE, WebSocket).
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -8,9 +8,11 @@ use crate::protocol::InboundMessage;
 
 pub mod http;
 pub mod stdio;
+pub mod ws;
 
 pub use http::{HttpTransport, HttpTransportMode};
 pub use stdio::StdioTransport;
+pub use ws::WsTransport;
 
 /// Bidirectional message channel to a single MCP server.
 ///

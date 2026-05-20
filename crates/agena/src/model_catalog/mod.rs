@@ -29,6 +29,7 @@ pub use decorate::{catalog_definition_to_provider_definition, decorate_provider_
 pub use merge::catalog_definition_from_model;
 pub use service::ModelCatalogService;
 pub use store::ModelCatalogStore;
+pub(crate) use types::CatalogDefinitionSourcePriority;
 pub use types::{
     CatalogModelDefinition, ModelCatalogConfig, ModelCatalogDocument, ModelCatalogEntryRecord,
     ModelCatalogEntrySourceKind, ModelCatalogProviderRecord, ModelCatalogResponse,

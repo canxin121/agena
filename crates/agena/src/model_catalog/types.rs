@@ -11,6 +11,17 @@ pub enum ModelCatalogEntrySourceKind {
     Cache,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct CatalogDefinitionSourcePriority {
+    pub sort_priority: i32,
+    pub descriptive_priority: i32,
+    pub limits_priority: i32,
+    pub capability_priority: i32,
+    pub semantics_priority: i32,
+    pub pricing_priority: i32,
+    pub mode_priority: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct CatalogModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,6 +74,8 @@ pub struct CatalogModelDefinition {
     pub speed_modes: BTreeMap<String, ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
+    #[serde(skip, default)]
+    pub(crate) source_priority: CatalogDefinitionSourcePriority,
 }
 
 impl CatalogModelDefinition {
@@ -224,6 +237,7 @@ impl ModelCatalogEntryRecord {
             thinking_modes: self.thinking_modes.clone(),
             speed_modes: self.speed_modes.clone(),
             capabilities: self.capabilities.clone(),
+            source_priority: CatalogDefinitionSourcePriority::default(),
         }
     }
 }

@@ -147,6 +147,7 @@ impl ModelCatalogService {
         let mut merged = ModelCatalogDocument::default();
         let mut warnings = Vec::new();
         let mut succeeded = 0_usize;
+        let mut has_live_provider_models = false;
 
         let (remote_documents, remote_warnings) =
             sources::fetch_documents(&self.client, &self.remote_sources).await;
@@ -154,9 +155,10 @@ impl ModelCatalogService {
         let mut remote_documents = remote_documents;
         remote_documents.sort_by(|left, right| {
             right
-                .kind
-                .priority()
-                .cmp(&left.kind.priority())
+                .grade
+                .sort_priority
+                .cmp(&left.grade.sort_priority)
+                .then_with(|| right.kind.priority().cmp(&left.kind.priority()))
                 .then_with(|| left.name.cmp(&right.name))
         });
         for fetched in remote_documents {
@@ -170,6 +172,7 @@ impl ModelCatalogService {
         {
             Ok((Some(document), warning)) => {
                 merge_live_provider_catalog_document(&mut merged, document);
+                has_live_provider_models = true;
                 succeeded += 1;
                 if let Some(warning) = warning {
                     warnings.push(warning);
@@ -199,8 +202,12 @@ impl ModelCatalogService {
             )));
         }
 
-        let mut document = curate::curate_catalog_document(merged)
-            .map_err(|err| AppError::Config(format!("curate generated model catalog: {err}")))?;
+        let mut document = if has_live_provider_models {
+            curate::curate_live_catalog_document(merged)
+        } else {
+            curate::curate_catalog_document(merged)
+        }
+        .map_err(|err| AppError::Config(format!("curate generated model catalog: {err}")))?;
         sources::enrich_catalog_document_thinking_modes(&mut document);
         let warning = (!warnings.is_empty()).then(|| warnings.join("; "));
         Ok((document, warning))
@@ -256,10 +263,11 @@ impl ModelCatalogService {
             )));
         }
 
-        let document = curate::curate_catalog_document(ModelCatalogDocument { models: raw_models })
-            .map_err(|err| {
-                AppError::Config(format!("curate live provider model catalog: {err}"))
-            })?;
+        let document =
+            curate::curate_live_catalog_document(ModelCatalogDocument { models: raw_models })
+                .map_err(|err| {
+                    AppError::Config(format!("curate live provider model catalog: {err}"))
+                })?;
         let warning = (!errors.is_empty()).then(|| {
             format!(
                 "live provider model lists generated catalog from {succeeded} provider(s); skipped {} provider(s): {}",

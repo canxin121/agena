@@ -12,23 +12,66 @@ use crate::{
         ModelCapabilityFeature, ModelCapabilityPatch, ReasoningEffort, ThinkingRequest,
     },
 };
+use futures_util::future::join_all;
 use serde::Deserialize;
 
-use super::{CatalogModelDefinition, ModelCatalogDocument, merge_catalog_definition};
+use super::{
+    CatalogDefinitionSourcePriority, CatalogModelDefinition, ModelCatalogDocument,
+    merge_catalog_definition,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelCatalogRemoteSourceKind {
     ModelsDev,
     OpenAiCodexModels,
+    HuggingFaceOfficial,
+    OfficialHtmlSignals,
     RouterForMe,
 }
 
 impl ModelCatalogRemoteSourceKind {
     pub fn priority(self) -> u8 {
         match self {
-            Self::ModelsDev => 3,
-            Self::OpenAiCodexModels => 2,
+            Self::ModelsDev => 4,
+            Self::OpenAiCodexModels => 3,
+            Self::HuggingFaceOfficial => 2,
+            Self::OfficialHtmlSignals => 0,
             Self::RouterForMe => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelCatalogRemoteSourceTier {
+    OfficialStructured,
+    CuratedStructured,
+    OfficialRegistry,
+    CuratedAggregator,
+    OfficialHtmlSignal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModelCatalogRemoteSourceGrade {
+    pub tier: ModelCatalogRemoteSourceTier,
+    pub sort_priority: i32,
+    pub descriptive_priority: i32,
+    pub limits_priority: i32,
+    pub capability_priority: i32,
+    pub semantics_priority: i32,
+    pub pricing_priority: i32,
+    pub mode_priority: i32,
+}
+
+impl ModelCatalogRemoteSourceGrade {
+    pub fn definition_priority(self) -> CatalogDefinitionSourcePriority {
+        CatalogDefinitionSourcePriority {
+            sort_priority: self.sort_priority,
+            descriptive_priority: self.descriptive_priority,
+            limits_priority: self.limits_priority,
+            capability_priority: self.capability_priority,
+            semantics_priority: self.semantics_priority,
+            pricing_priority: self.pricing_priority,
+            mode_priority: self.mode_priority,
         }
     }
 }
@@ -37,6 +80,7 @@ impl ModelCatalogRemoteSourceKind {
 pub struct ModelCatalogRemoteSource {
     pub name: String,
     pub kind: ModelCatalogRemoteSourceKind,
+    pub grade: ModelCatalogRemoteSourceGrade,
     pub urls: Vec<String>,
 }
 
@@ -46,8 +90,10 @@ impl ModelCatalogRemoteSource {
         kind: ModelCatalogRemoteSourceKind,
         urls: impl IntoIterator<Item = String>,
     ) -> Self {
+        let name = name.into();
         Self {
-            name: name.into(),
+            grade: default_source_grade(name.as_str(), kind),
+            name,
             kind,
             urls: urls.into_iter().collect(),
         }
@@ -58,6 +104,7 @@ impl ModelCatalogRemoteSource {
 pub struct FetchedModelCatalogDocument {
     pub name: String,
     pub kind: ModelCatalogRemoteSourceKind,
+    pub grade: ModelCatalogRemoteSourceGrade,
     pub document: ModelCatalogDocument,
 }
 
@@ -85,6 +132,272 @@ pub fn default_public_sources() -> Vec<ModelCatalogRemoteSource> {
                 ),
             ],
         ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-google-gemma",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=google&search=gemma&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-google-codegemma",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=google&search=codegemma&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-google-recurrentgemma",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=google&search=recurrentgemma&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-google-deplot",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=google&search=deplot&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-mistralai-mixtral",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=mistralai&search=mixtral&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-mistralai-codestral",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=mistralai&search=codestral&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-mistralai-mistral-large",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=mistralai&search=Mistral-Large-Instruct-2407&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-meta-llama2",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=meta-llama&search=Llama-2-&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-codellama",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=codellama&search=CodeLlama-&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-ibm-granite",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=ibm-granite&search=granite-&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-microsoft-phi-vision",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=microsoft&search=Phi-3-vision-128k-instruct&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-microsoft-kosmos",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=microsoft&search=Kosmos-2&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-bigcode-starcoder2",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=bigcode&search=starcoder2&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-snowflake-arctic-embed",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=Snowflake&search=snowflake-arctic-embed-l&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-adept-fuyu",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=adept&search=fuyu&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-aisingapore-sea-lion",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=aisingapore&search=SEA-LION-v1-7B-IT&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-stockmark-2",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=stockmark&search=Stockmark-2-100B-Instruct&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-zyphra-zamba2",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=Zyphra&search=Zamba2-7B-Instruct&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-deepseek-coder",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=deepseek-ai&search=deepseek-coder-6.7b-instruct&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-deepseek-v3.1",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=deepseek-ai&search=DeepSeek-V3.1&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-ai21-jamba",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=ai21labs&search=AI21-Jamba-&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-writer-palmyra-med",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=Writer&search=Palmyra-Med-70B&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-writer-palmyra-fin",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=Writer&search=Palmyra-Fin-70B-32K&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-writer-palmyra-creative",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=Writer&search=Palmyra-Creative&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-nemotron",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=Llama-3_1-Nemotron&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-nemotron-70b",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=Llama-3.1-Nemotron-70B-Instruct&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-nemotron-4",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=Nemotron-4-340B&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-nemoguard",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=Nemoguard&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-embed-vl",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=embed-vl-1b-v2&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-embed",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=llama-nemotron-embed-1b-v2&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-chatqa",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=ChatQA-1.5-70B&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-cosmos-reason",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=Cosmos-Reason2-8B&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-minitron",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=Mistral-NeMo-Minitron-8B-Instruct&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-nemotron-nano",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=NVIDIA-Nemotron-3-Nano-30B-A3B-BF16&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-nemotron-parse",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=Nemotron-Parse&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "huggingface-nvidia-riva-translate",
+            ModelCatalogRemoteSourceKind::HuggingFaceOfficial,
+            [String::from(
+                "https://huggingface.co/api/models?author=nvidia&search=Riva-Translate-4B-Instruct&limit=100",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "nvidia-nim-reference-models",
+            ModelCatalogRemoteSourceKind::OfficialHtmlSignals,
+            [String::from(
+                "https://docs.api.nvidia.com/nim/reference/models-1",
+            )],
+        ),
+        ModelCatalogRemoteSource::new(
+            "nvidia-build-synthetic-video-detector",
+            ModelCatalogRemoteSourceKind::OfficialHtmlSignals,
+            [String::from(
+                "https://build.nvidia.com/nvidia/synthetic-video-detector/modelcard",
+            )],
+        ),
     ]
 }
 
@@ -95,12 +408,20 @@ pub async fn fetch_documents(
     let mut documents = Vec::new();
     let mut warnings = Vec::new();
 
-    for source in sources {
-        match fetch_source_document(client, source).await {
+    let results = join_all(
+        sources
+            .iter()
+            .map(|source| async move { (source, fetch_source_document(client, source).await) }),
+    )
+    .await;
+
+    for (source, result) in results {
+        match result {
             Ok(document) => documents.push(FetchedModelCatalogDocument {
                 name: source.name.clone(),
                 kind: source.kind,
-                document,
+                grade: source.grade,
+                document: annotate_document_source_priority(document, source.grade),
             }),
             Err(error) => warnings.push(format!("{}: {error}", source.name)),
         }
@@ -140,6 +461,12 @@ async fn fetch_and_parse_source_document(
         ModelCatalogRemoteSourceKind::ModelsDev => parse_models_dev_document(body.as_str()),
         ModelCatalogRemoteSourceKind::OpenAiCodexModels => {
             parse_openai_codex_models_document(body.as_str())
+        }
+        ModelCatalogRemoteSourceKind::HuggingFaceOfficial => {
+            parse_hugging_face_official_document(body.as_str())
+        }
+        ModelCatalogRemoteSourceKind::OfficialHtmlSignals => {
+            parse_official_html_signals_document(body.as_str())
         }
         ModelCatalogRemoteSourceKind::RouterForMe => parse_router_document(body.as_str()),
     }
@@ -214,7 +541,7 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                     adapter_id.as_deref(),
                 ),
                 capabilities: model_capability_patch(
-                    modalities_to_support(model.modalities.as_ref()),
+                    models_dev_input_support(model.modalities.as_ref(), model.attachment),
                     features_from_bool_flags(&[
                         (ModelCapabilityFeature::Reasoning, model.reasoning),
                         (ModelCapabilityFeature::ToolCalling, model.tool_call),
@@ -225,6 +552,7 @@ fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppErro
                         (ModelCapabilityFeature::Temperature, model.temperature),
                     ]),
                 ),
+                source_priority: CatalogDefinitionSourcePriority::default(),
             };
 
             merge_document_entry(&mut document, model_id, definition);
@@ -254,12 +582,25 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
             if model.thinking.is_some() {
                 supported_features.push(ModelCapabilityFeature::Reasoning);
             }
-            if let Some(parameters) = model.supported_parameters.as_ref()
-                && parameters
+            if let Some(parameters) = model.supported_parameters.as_ref() {
+                if parameters
                     .iter()
                     .any(|parameter| parameter.eq_ignore_ascii_case("temperature"))
-            {
-                supported_features.push(ModelCapabilityFeature::Temperature);
+                {
+                    supported_features.push(ModelCapabilityFeature::Temperature);
+                }
+                if parameters
+                    .iter()
+                    .any(|parameter| parameter.eq_ignore_ascii_case("tools"))
+                {
+                    supported_features.push(ModelCapabilityFeature::ToolCalling);
+                }
+                if parameters.iter().any(|parameter| {
+                    parameter.eq_ignore_ascii_case("response_format")
+                        || parameter.eq_ignore_ascii_case("json_schema")
+                }) {
+                    supported_features.push(ModelCapabilityFeature::StructuredOutput);
+                }
             }
 
             let definition = CatalogModelDefinition {
@@ -297,6 +638,7 @@ fn parse_router_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
                     input_support,
                     (supported_features, unsupported_features),
                 ),
+                source_priority: CatalogDefinitionSourcePriority::default(),
             };
 
             merge_document_entry(&mut document, model_id, definition);
@@ -356,23 +698,424 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
                     Vec::new(),
                 ),
                 (
-                    (!model
-                        .supported_reasoning_levels
-                        .as_deref()
-                        .unwrap_or(&[])
-                        .is_empty())
-                    .then_some(ModelCapabilityFeature::Reasoning)
+                    [
+                        (!model
+                            .supported_reasoning_levels
+                            .as_deref()
+                            .unwrap_or(&[])
+                            .is_empty())
+                        .then_some(ModelCapabilityFeature::Reasoning),
+                        (model.supports_parallel_tool_calls == Some(true))
+                            .then_some(ModelCapabilityFeature::ToolCalling),
+                    ]
                     .into_iter()
+                    .flatten()
                     .collect(),
                     Vec::new(),
                 ),
             ),
+            source_priority: CatalogDefinitionSourcePriority::default(),
         };
 
         merge_document_entry(&mut document, model_id, definition);
     }
 
     Ok(document)
+}
+
+fn parse_hugging_face_official_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
+    let payload: Vec<HuggingFaceHubModel> = serde_json::from_str(body)?;
+    let mut document = ModelCatalogDocument::default();
+
+    for model in payload {
+        let repo_id = normalize_optional_string(model.id.or(model.model_id)).unwrap_or_default();
+        if repo_id.is_empty() || model.private || !hugging_face_model_is_supported(repo_id.as_str())
+        {
+            continue;
+        }
+
+        let Some((owner, repo_name)) = repo_id.split_once('/') else {
+            continue;
+        };
+        let Some(origin) = hugging_face_owner_origin(owner) else {
+            continue;
+        };
+
+        let definition = CatalogModelDefinition {
+            lifecycle: None,
+            context_window_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            description: None,
+            knowledge_cutoff: None,
+            release_date: hugging_face_release_date(model.created_at.as_deref()),
+            last_updated: None,
+            open_weights: Some(true),
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: hugging_face_output_modalities(
+                model.pipeline_tag.as_deref(),
+                repo_name,
+                model.tags.as_deref(),
+            ),
+            pricing: None,
+            display_name: Some(repo_name.to_owned()),
+            origin: Some(origin.to_owned()),
+            thinking_modes: BTreeMap::new(),
+            speed_modes: BTreeMap::new(),
+            capabilities: hugging_face_capability_patch(
+                model.pipeline_tag.as_deref(),
+                repo_name,
+                model.tags.as_deref(),
+            ),
+            source_priority: CatalogDefinitionSourcePriority::default(),
+        };
+
+        for alias in hugging_face_model_aliases(repo_name) {
+            merge_document_entry(&mut document, alias, definition.clone());
+        }
+    }
+
+    Ok(document)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OfficialHtmlModelSignal {
+    model_ids: &'static [&'static str],
+    display_name: &'static str,
+    origin: &'static str,
+    markers: &'static [&'static str],
+    input_modalities: &'static [ModelInputModality],
+    output_modalities: &'static [&'static str],
+}
+
+const OFFICIAL_HTML_MODEL_SIGNALS: &[OfficialHtmlModelSignal] = &[
+    OfficialHtmlModelSignal {
+        model_ids: &["dbrx-instruct"],
+        display_name: "dbrx-instruct",
+        origin: "Databricks",
+        markers: &["filename\":\"nvidia-nim-api-for-databricksdbrx-instruct.json\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["embed-qa-4"],
+        display_name: "embed-qa-4",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-embed-qa-4\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["ising-calibration-1-35b-a3b"],
+        display_name: "ising-calibration-1-35b-a3b",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-ising-calibration-1-35b-a3b\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["llama-3.2-nemoretriever-1b-vlm-embed-v1"],
+        display_name: "llama-3.2-nemoretriever-1b-vlm-embed-v1",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-llama-3_2-nemoretriever-1b-vlm-embed-v1\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["llama-3.2-nv-embedqa-1b-v1"],
+        display_name: "llama-3.2-nv-embedqa-1b-v1",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-llama-3_2-nv-embedqa-1b-v1\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["llama-3.2-nv-embedqa-1b-v2"],
+        display_name: "llama-3.2-nv-embedqa-1b-v2",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-llama-3_2-nv-embedqa-1b-v2\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["nemoretriever-parse"],
+        display_name: "nemoretriever-parse",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-nemoretriever-parse\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["nemotron-4-340b-reward"],
+        display_name: "nemotron-4-340b-reward",
+        origin: "NVIDIA",
+        markers: &["filename\":\"nvidia-nim-api-for-nvidianemotron-4-340b-reward.json\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["neva-22b"],
+        display_name: "neva-22b",
+        origin: "NVIDIA",
+        markers: &["filename\":\"nvidia-nim-api-for-nvidianeva-22b.json\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["nv-embedqa-e5-v5"],
+        display_name: "nv-embedqa-e5-v5",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-nv-embedqa-e5-v5\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["nv-embedqa-mistral-7b-v2"],
+        display_name: "nv-embedqa-mistral-7b-v2",
+        origin: "NVIDIA",
+        markers: &["filename\":\"nvidia-nim-api-for-nvidianv-embedqa-mistral-7b-v2.json\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["nvclip"],
+        display_name: "nvclip",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-nvclip\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["vila"],
+        display_name: "vila",
+        origin: "NVIDIA",
+        markers: &["href=\"/nim/reference/nvidia-vila\""],
+        input_modalities: &[],
+        output_modalities: &[],
+    },
+    OfficialHtmlModelSignal {
+        model_ids: &["ai-synthetic-video-detector", "synthetic-video-detector"],
+        display_name: "synthetic-video-detector",
+        origin: "NVIDIA",
+        markers: &["synthetic-video-detector"],
+        input_modalities: &[ModelInputModality::Video],
+        output_modalities: &["text"],
+    },
+];
+
+fn parse_official_html_signals_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
+    let normalized = body.trim().to_ascii_lowercase();
+    let mut document = ModelCatalogDocument::default();
+
+    for signal in OFFICIAL_HTML_MODEL_SIGNALS {
+        if !signal
+            .markers
+            .iter()
+            .any(|marker| normalized.contains(marker))
+        {
+            continue;
+        }
+
+        let definition = CatalogModelDefinition {
+            lifecycle: None,
+            context_window_tokens: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            description: None,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: signal
+                .output_modalities
+                .iter()
+                .map(|modality| (*modality).to_owned())
+                .collect(),
+            pricing: None,
+            display_name: Some(signal.display_name.to_owned()),
+            origin: Some(signal.origin.to_owned()),
+            thinking_modes: BTreeMap::new(),
+            speed_modes: BTreeMap::new(),
+            capabilities: model_capability_patch(
+                (signal.input_modalities.to_vec(), Vec::new()),
+                (Vec::new(), Vec::new()),
+            ),
+            source_priority: CatalogDefinitionSourcePriority::default(),
+        };
+
+        for model_id in signal.model_ids {
+            merge_document_entry(&mut document, (*model_id).to_owned(), definition.clone());
+        }
+    }
+
+    Ok(document)
+}
+
+fn default_source_grade(
+    source_name: &str,
+    kind: ModelCatalogRemoteSourceKind,
+) -> ModelCatalogRemoteSourceGrade {
+    let normalized = source_name.trim().to_ascii_lowercase();
+    match kind {
+        ModelCatalogRemoteSourceKind::OpenAiCodexModels => ModelCatalogRemoteSourceGrade {
+            tier: ModelCatalogRemoteSourceTier::OfficialStructured,
+            sort_priority: 900,
+            descriptive_priority: 700,
+            limits_priority: 850,
+            capability_priority: 900,
+            semantics_priority: 1_000,
+            pricing_priority: 100,
+            mode_priority: 1_000,
+        },
+        ModelCatalogRemoteSourceKind::ModelsDev if normalized == "models.dev" => {
+            ModelCatalogRemoteSourceGrade {
+                tier: ModelCatalogRemoteSourceTier::CuratedStructured,
+                sort_priority: 950,
+                descriptive_priority: 950,
+                limits_priority: 950,
+                capability_priority: 950,
+                semantics_priority: 825,
+                pricing_priority: 1_000,
+                mode_priority: 900,
+            }
+        }
+        ModelCatalogRemoteSourceKind::RouterForMe => ModelCatalogRemoteSourceGrade {
+            tier: ModelCatalogRemoteSourceTier::CuratedAggregator,
+            sort_priority: 650,
+            descriptive_priority: 550,
+            limits_priority: 800,
+            capability_priority: 750,
+            semantics_priority: 500,
+            pricing_priority: 0,
+            mode_priority: 850,
+        },
+        ModelCatalogRemoteSourceKind::HuggingFaceOfficial => ModelCatalogRemoteSourceGrade {
+            tier: ModelCatalogRemoteSourceTier::OfficialRegistry,
+            sort_priority: 600,
+            descriptive_priority: 700,
+            limits_priority: 0,
+            capability_priority: 550,
+            semantics_priority: 0,
+            pricing_priority: 0,
+            mode_priority: 0,
+        },
+        ModelCatalogRemoteSourceKind::OfficialHtmlSignals => ModelCatalogRemoteSourceGrade {
+            tier: ModelCatalogRemoteSourceTier::OfficialHtmlSignal,
+            sort_priority: 400,
+            descriptive_priority: 300,
+            limits_priority: 0,
+            capability_priority: 250,
+            semantics_priority: 0,
+            pricing_priority: 0,
+            mode_priority: 0,
+        },
+        ModelCatalogRemoteSourceKind::ModelsDev => ModelCatalogRemoteSourceGrade {
+            tier: ModelCatalogRemoteSourceTier::CuratedStructured,
+            sort_priority: 900,
+            descriptive_priority: 900,
+            limits_priority: 900,
+            capability_priority: 900,
+            semantics_priority: 800,
+            pricing_priority: 950,
+            mode_priority: 850,
+        },
+    }
+}
+
+fn annotate_document_source_priority(
+    mut document: ModelCatalogDocument,
+    grade: ModelCatalogRemoteSourceGrade,
+) -> ModelCatalogDocument {
+    let base = grade.definition_priority();
+    for definition in document.models.values_mut() {
+        definition.source_priority = source_priority_for_definition(definition, &base);
+    }
+    document
+}
+
+fn source_priority_for_definition(
+    definition: &CatalogModelDefinition,
+    base: &CatalogDefinitionSourcePriority,
+) -> CatalogDefinitionSourcePriority {
+    CatalogDefinitionSourcePriority {
+        sort_priority: (!definition.is_empty())
+            .then_some(base.sort_priority)
+            .unwrap_or_default(),
+        descriptive_priority: definition_has_descriptive_fields(definition)
+            .then_some(base.descriptive_priority)
+            .unwrap_or_default(),
+        limits_priority: definition_has_limit_fields(definition)
+            .then_some(base.limits_priority)
+            .unwrap_or_default(),
+        capability_priority: definition_has_capability_fields(definition)
+            .then_some(base.capability_priority)
+            .unwrap_or_default(),
+        semantics_priority: definition_has_semantic_fields(definition)
+            .then_some(base.semantics_priority)
+            .unwrap_or_default(),
+        pricing_priority: definition
+            .pricing
+            .is_some()
+            .then_some(base.pricing_priority)
+            .unwrap_or_default(),
+        mode_priority: definition_has_mode_fields(definition)
+            .then_some(base.mode_priority)
+            .unwrap_or_default(),
+    }
+}
+
+pub(crate) fn definition_has_descriptive_fields(definition: &CatalogModelDefinition) -> bool {
+    definition.lifecycle.is_some()
+        || definition.description.is_some()
+        || definition.knowledge_cutoff.is_some()
+        || definition.release_date.is_some()
+        || definition.last_updated.is_some()
+        || definition.open_weights.is_some()
+        || definition.display_name.is_some()
+        || definition.origin.is_some()
+}
+
+pub(crate) fn definition_has_limit_fields(definition: &CatalogModelDefinition) -> bool {
+    definition.context_window_tokens.is_some()
+        || definition.max_input_tokens.is_some()
+        || definition.max_output_tokens.is_some()
+}
+
+pub(crate) fn definition_has_capability_fields(definition: &CatalogModelDefinition) -> bool {
+    !definition.output_modalities.is_empty() || !definition.capabilities.is_empty()
+}
+
+pub(crate) fn definition_has_semantic_fields(definition: &CatalogModelDefinition) -> bool {
+    definition.default_thinking_mode.is_some()
+        || definition.supports_parallel_tool_calls.is_some()
+        || definition.supports_verbosity.is_some()
+        || definition.default_verbosity.is_some()
+        || definition.default_temperature.is_some()
+        || definition.default_top_p.is_some()
+        || definition.default_top_k.is_some()
+        || definition.assistant_reasoning_interleaved.is_some()
+        || definition.assistant_reasoning_field.is_some()
+}
+
+pub(crate) fn definition_has_mode_fields(definition: &CatalogModelDefinition) -> bool {
+    !definition.thinking_modes.is_empty() || !definition.speed_modes.is_empty()
 }
 
 fn merge_document_entry(
@@ -764,21 +1507,24 @@ fn codex_input_support(input_modalities: Option<&[String]>) -> Vec<ModelInputMod
     supported
 }
 
-fn modalities_to_support(
+fn models_dev_input_support(
     modalities: Option<&ModelsDevModalities>,
+    attachment: Option<bool>,
 ) -> (Vec<ModelInputModality>, Vec<ModelInputModality>) {
     let mut supported = Vec::new();
     let unsupported = Vec::new();
-    let Some(modalities) = modalities else {
-        return (supported, unsupported);
-    };
-    for modality in &modalities.input {
-        if let Some(mapped) = map_modality_name(modality)
-            && mapped != ModelInputModality::Text
-            && !supported.contains(&mapped)
-        {
-            supported.push(mapped);
+    if let Some(modalities) = modalities {
+        for modality in &modalities.input {
+            if let Some(mapped) = map_modality_name(modality)
+                && mapped != ModelInputModality::Text
+                && !supported.contains(&mapped)
+            {
+                supported.push(mapped);
+            }
         }
+    }
+    if attachment == Some(true) && !supported.contains(&ModelInputModality::File) {
+        supported.push(ModelInputModality::File);
     }
     (supported, unsupported)
 }
@@ -892,6 +1638,282 @@ fn model_capability_patch(
         ),
         ..ModelCapabilityPatch::default()
     }
+}
+
+fn hugging_face_capability_patch(
+    pipeline_tag: Option<&str>,
+    repo_name: &str,
+    tags: Option<&[String]>,
+) -> ModelCapabilityPatch {
+    let normalized_repo = repo_name.trim().to_ascii_lowercase();
+    let normalized_pipeline = pipeline_tag
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let mut supported_inputs = Vec::new();
+    let tag_set = normalized_tag_set(tags);
+
+    if matches!(
+        normalized_pipeline.as_str(),
+        "image-text-to-text"
+            | "image-to-text"
+            | "visual-question-answering"
+            | "image-classification"
+            | "object-detection"
+            | "image-segmentation"
+            | "document-question-answering"
+            | "any-to-any"
+    ) || normalized_repo.contains("vision")
+        || normalized_repo.contains("kosmos")
+        || tag_set.iter().any(|tag| {
+            matches!(
+                tag.as_str(),
+                "vision"
+                    | "image-text-to-text"
+                    | "image-to-text"
+                    | "visual-question-answering"
+                    | "image-classification"
+                    | "object-detection"
+                    | "image-segmentation"
+                    | "document-question-answering"
+            )
+        })
+    {
+        supported_inputs.push(ModelInputModality::Image);
+    }
+    if matches!(
+        normalized_pipeline.as_str(),
+        "automatic-speech-recognition"
+            | "audio-to-audio"
+            | "audio-classification"
+            | "voice-activity-detection"
+    ) || tag_set.iter().any(|tag| {
+        matches!(
+            tag.as_str(),
+            "audio" | "audio-to-audio" | "automatic-speech-recognition" | "audio-classification"
+        )
+    }) {
+        supported_inputs.push(ModelInputModality::Audio);
+    }
+    if matches!(
+        normalized_pipeline.as_str(),
+        "video-text-to-text" | "video-classification" | "video-text-retrieval"
+    ) || tag_set.iter().any(|tag| {
+        matches!(
+            tag.as_str(),
+            "video" | "video-text-to-text" | "video-classification"
+        )
+    }) {
+        supported_inputs.push(ModelInputModality::Video);
+    }
+    if matches!(normalized_pipeline.as_str(), "document-question-answering")
+        || tag_set
+            .iter()
+            .any(|tag| matches!(tag.as_str(), "document-question-answering" | "document"))
+    {
+        supported_inputs.push(ModelInputModality::Document);
+    }
+    supported_inputs.dedup();
+
+    model_capability_patch((supported_inputs, Vec::new()), (Vec::new(), Vec::new()))
+}
+
+fn hugging_face_output_modalities(
+    pipeline_tag: Option<&str>,
+    repo_name: &str,
+    tags: Option<&[String]>,
+) -> Vec<String> {
+    let normalized_repo = repo_name.trim().to_ascii_lowercase();
+    let normalized_pipeline = pipeline_tag
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let tag_set = normalized_tag_set(tags);
+
+    if normalized_pipeline == "any-to-any" {
+        return vec!["text".to_owned(), "image".to_owned()];
+    }
+    if matches!(
+        normalized_pipeline.as_str(),
+        "image-text-to-text"
+            | "image-to-text"
+            | "visual-question-answering"
+            | "text-generation"
+            | "text2text-generation"
+            | "translation"
+            | "summarization"
+            | "automatic-speech-recognition"
+            | "document-question-answering"
+            | "video-text-to-text"
+    ) {
+        return vec!["text".to_owned()];
+    }
+    if matches!(
+        normalized_pipeline.as_str(),
+        "text-to-image" | "image-to-image"
+    ) {
+        return vec!["image".to_owned()];
+    }
+    if matches!(
+        normalized_pipeline.as_str(),
+        "text-to-audio" | "text-to-speech" | "audio-to-audio"
+    ) {
+        return vec!["audio".to_owned()];
+    }
+    if matches!(
+        normalized_pipeline.as_str(),
+        "text-to-video" | "image-to-video"
+    ) {
+        return vec!["video".to_owned()];
+    }
+    if normalized_repo.contains("vision") || normalized_repo.contains("kosmos") {
+        return vec!["text".to_owned()];
+    }
+    if tag_set.iter().any(|tag| tag == "vision") {
+        return vec!["text".to_owned()];
+    }
+    Vec::new()
+}
+
+fn normalized_tag_set(tags: Option<&[String]>) -> Vec<String> {
+    let mut values = Vec::new();
+    for tag in tags.unwrap_or(&[]) {
+        let normalized = tag.trim().to_ascii_lowercase();
+        if !normalized.is_empty() && !values.contains(&normalized) {
+            values.push(normalized);
+        }
+    }
+    values
+}
+
+fn hugging_face_owner_origin(owner: &str) -> Option<&'static str> {
+    match owner.trim().to_ascii_lowercase().as_str() {
+        "google" => Some("Google"),
+        "meta-llama" | "codellama" => Some("Meta"),
+        "mistralai" => Some("Mistral AI"),
+        "ibm-granite" => Some("IBM"),
+        "microsoft" => Some("Microsoft"),
+        "bigcode" => Some("BigCode"),
+        "snowflake" => Some("Snowflake"),
+        "adept" => Some("Adept"),
+        "aisingapore" => Some("AI Singapore"),
+        "stockmark" => Some("Stockmark"),
+        "zyphra" => Some("Zyphra"),
+        "deepseek-ai" => Some("DeepSeek"),
+        "ai21labs" => Some("AI21 Labs"),
+        "nvidia" => Some("NVIDIA"),
+        "writer" => Some("Writer"),
+        _ => None,
+    }
+}
+
+fn hugging_face_release_date(created_at: Option<&str>) -> Option<String> {
+    let created_at = created_at?.trim();
+    let date = created_at.split('T').next().unwrap_or_default().trim();
+    (!date.is_empty()).then(|| date.to_owned())
+}
+
+fn hugging_face_model_is_supported(repo_id: &str) -> bool {
+    let Some((owner, repo_name)) = repo_id.split_once('/') else {
+        return false;
+    };
+    if hugging_face_owner_origin(owner).is_none() {
+        return false;
+    }
+
+    let normalized = repo_name.trim().to_ascii_lowercase();
+    if normalized == "nvidia-nemotron-3-nano-30b-a3b-bf16" {
+        return true;
+    }
+    !matches!(
+        normalized.as_str(),
+        value
+            if value.ends_with("-gguf")
+                || value.ends_with("-onnx")
+                || value.contains("-onnx-")
+                || value.ends_with("-tflite")
+                || value.ends_with("-keras")
+                || value.ends_with("-pytorch")
+                || value.ends_with("-ov")
+                || value.ends_with("-accelerator")
+                || value.ends_with("-assistant")
+                || value.ends_with("-fp8")
+                || value.ends_with("-bf16")
+                || value.ends_with("-nvfp4")
+                || value.ends_with("-awq")
+                || value.ends_with("-gptq")
+                || value.ends_with("-exl2")
+                || value.ends_with("-flax")
+                || value.ends_with("-vllm")
+                || value.ends_with("-dummy-weights")
+                || value.contains("tiny-random")
+                || value.contains("-mlx-")
+                || value.contains("-sfp-cpp")
+                || value.contains("-reward")
+                || value.contains("-base")
+    )
+}
+
+fn hugging_face_model_aliases(repo_name: &str) -> Vec<String> {
+    let normalized = repo_name.trim().to_ascii_lowercase();
+    let mut aliases = vec![repo_name.trim().to_owned()];
+
+    if let Some(stripped) = normalized.strip_suffix("-hf") {
+        aliases.push(stripped.to_owned());
+    }
+    if normalized.starts_with("codegemma-") && normalized.ends_with("-it") {
+        aliases.push(normalized.trim_end_matches("-it").to_owned());
+    }
+    if normalized.starts_with("llama-2-") {
+        aliases.push(normalized.replacen("llama-2-", "llama2-", 1));
+    }
+    if normalized == "codestral-22b-v0.1" {
+        aliases.push("codestral-22b-instruct-v0.1".to_owned());
+    }
+    if normalized == "mistral-large-instruct-2407" {
+        aliases.push("mistral-large-2-instruct".to_owned());
+    }
+    if normalized == "kosmos-2-patch14-224" {
+        aliases.push("kosmos-2".to_owned());
+    }
+    if normalized == "snowflake-arctic-embed-l" {
+        aliases.push("arctic-embed-l".to_owned());
+    }
+    if normalized == "sea-lion-v1-7b-it" {
+        aliases.push("sea-lion-7b-instruct".to_owned());
+    }
+    if normalized == "granite-34b-code-instruct-8k" {
+        aliases.push("granite-34b-code-instruct".to_owned());
+    }
+    if matches!(
+        normalized.as_str(),
+        "granite-8b-code-instruct-4k" | "granite-8b-code-instruct-128k"
+    ) {
+        aliases.push("granite-8b-code-instruct".to_owned());
+    }
+    if normalized == "palmyra-creative" {
+        aliases.push("palmyra-creative-122b".to_owned());
+    }
+    if normalized == "mistral-nemo-minitron-8b-instruct" {
+        aliases.push("mistral-nemo-minitron-8b-8k-instruct".to_owned());
+    }
+    if normalized == "nvidia-nemotron-3-nano-30b-a3b-bf16" {
+        aliases.push("nemotron-nano-3-30b-a3b".to_owned());
+    }
+    if normalized.starts_with("nvidia-nemotron-parse-") {
+        aliases.push("nemotron-parse".to_owned());
+    }
+    if let Some((size, version)) = normalized
+        .strip_prefix("ai21-jamba-")
+        .and_then(|value| value.rsplit_once('-'))
+    {
+        aliases.push(format!("jamba-{size}-{version}"));
+        aliases.push(format!("jamba-{version}-{size}-instruct"));
+    }
+
+    aliases.sort();
+    aliases.dedup();
+    aliases
 }
 
 fn map_modality_name(value: &str) -> Option<ModelInputModality> {
@@ -1079,6 +2101,8 @@ struct ModelsDevModel {
     structured_output: Option<bool>,
     #[serde(default)]
     temperature: Option<bool>,
+    #[serde(default)]
+    attachment: Option<bool>,
     #[serde(default)]
     modalities: Option<ModelsDevModalities>,
     #[serde(default)]
@@ -1277,4 +2301,20 @@ struct OpenAiCodexServiceTier {
     name: Option<String>,
     #[serde(default)]
     description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HuggingFaceHubModel {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default, rename = "modelId")]
+    model_id: Option<String>,
+    #[serde(default)]
+    pipeline_tag: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default, rename = "createdAt")]
+    created_at: Option<String>,
+    #[serde(default)]
+    private: bool,
 }

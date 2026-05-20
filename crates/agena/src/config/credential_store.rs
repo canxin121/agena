@@ -12,7 +12,9 @@ use crate::{
     provider::auth::{AuthData, AuthStore},
 };
 
-use super::{ProviderApiAuthConfig, ProviderAuthConfig, ResolvedProviderConfig};
+use super::{
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderGitlabAuthConfig, ResolvedProviderConfig,
+};
 
 #[derive(Debug, Clone)]
 pub struct ProviderConfigCredentialStore {
@@ -29,7 +31,7 @@ impl ProviderConfigCredentialStore {
     pub fn all_provider_configs(
         &self,
     ) -> Result<HashMap<String, ResolvedProviderConfig>, AppError> {
-        Ok(load_provider_configs(self.config_path.as_path())?)
+        load_provider_configs(self.config_path.as_path())
     }
 
     fn read_doc(&self) -> Result<DocumentMut, AppError> {
@@ -165,12 +167,10 @@ impl AuthStore for ProviderConfigCredentialStore {
 
 pub fn provider_auth_data(resolved: &ResolvedProviderConfig) -> Option<AuthData> {
     match &resolved.auth {
-        ProviderAuthConfig::None
-        | ProviderAuthConfig::GoogleAdc(_)
-        | ProviderAuthConfig::BedrockSigv4(_) => None,
+        ProviderAuthConfig::None | ProviderAuthConfig::BedrockSigv4(_) => None,
         ProviderAuthConfig::Api(api) => secret_auth_data(api),
+        ProviderAuthConfig::Gitlab(config) => gitlab_auth_data(config),
         ProviderAuthConfig::Credential(config) => config.credential.clone(),
-        ProviderAuthConfig::SapAiCore(config) => secret_auth_data(&config.api),
     }
 }
 
@@ -191,7 +191,14 @@ pub fn provider_supports_openai_oauth(resolved: &ResolvedProviderConfig) -> bool
 }
 
 pub fn provider_has_gitlab_adapter(resolved: &ResolvedProviderConfig) -> bool {
-    resolved.adapters.values().any(|adapter| {
+    matches!(
+        resolved.auth,
+        ProviderAuthConfig::Gitlab(_)
+            | ProviderAuthConfig::Credential(super::ProviderCredentialAuthConfig {
+                issuer: crate::provider::auth::CredentialIssuer::Gitlab,
+                ..
+            })
+    ) || resolved.adapters.values().any(|adapter| {
         matches!(
             adapter.definition,
             super::ProviderAdapterDefinition::Gitlab(_)
@@ -200,6 +207,25 @@ pub fn provider_has_gitlab_adapter(resolved: &ResolvedProviderConfig) -> bool {
 }
 
 pub fn provider_gitlab_instance_url(resolved: &ResolvedProviderConfig) -> Option<String> {
+    if let ProviderAuthConfig::Gitlab(config) = &resolved.auth {
+        return Some(
+            config
+                .instance_url
+                .clone()
+                .unwrap_or_else(|| "https://gitlab.com".to_owned()),
+        );
+    }
+    if let ProviderAuthConfig::Credential(config) = &resolved.auth
+        && config.issuer == crate::provider::auth::CredentialIssuer::Gitlab
+    {
+        return Some(
+            config
+                .instance_url
+                .clone()
+                .unwrap_or_else(|| "https://gitlab.com".to_owned()),
+        );
+    }
+
     let mut urls = resolved
         .adapters
         .values()
@@ -254,16 +280,14 @@ pub fn provider_supports_atomgit_oauth(resolved: &ResolvedProviderConfig) -> boo
 
 pub fn provider_supports_api_key_write(resolved: &ResolvedProviderConfig) -> bool {
     match resolved.auth {
-        ProviderAuthConfig::SapAiCore(_) => true,
         ProviderAuthConfig::Api(_) => {
             !provider_supports_openai_oauth(resolved)
                 && !provider_supports_copilot_device(resolved)
                 && !provider_supports_atomgit_oauth(resolved)
         }
+        ProviderAuthConfig::Gitlab(_) => true,
         ProviderAuthConfig::Credential(_) => false,
-        ProviderAuthConfig::None
-        | ProviderAuthConfig::GoogleAdc(_)
-        | ProviderAuthConfig::BedrockSigv4(_) => false,
+        ProviderAuthConfig::None | ProviderAuthConfig::BedrockSigv4(_) => false,
     }
 }
 
@@ -277,6 +301,16 @@ fn load_provider_configs(path: &Path) -> Result<HashMap<String, ResolvedProvider
 }
 
 fn secret_auth_data(secret: &ProviderApiAuthConfig) -> Option<AuthData> {
+    if let Some(key) = normalize_text(secret.api_key.as_deref()) {
+        return Some(AuthData::Api { key });
+    }
+    None
+}
+
+fn gitlab_auth_data(secret: &ProviderGitlabAuthConfig) -> Option<AuthData> {
+    if let Some(credential) = secret.credential.clone() {
+        return Some(credential);
+    }
     if let Some(key) = normalize_text(secret.api_key.as_deref()) {
         return Some(AuthData::Api { key });
     }
@@ -310,6 +344,8 @@ fn credential_issuer_value(issuer: crate::provider::auth::CredentialIssuer) -> &
         crate::provider::auth::CredentialIssuer::OpenaiChatgpt => "openai_chatgpt",
         crate::provider::auth::CredentialIssuer::GithubCopilot => "github_copilot",
         crate::provider::auth::CredentialIssuer::Gitlab => "gitlab",
+        crate::provider::auth::CredentialIssuer::GoogleAdc => "google_adc",
+        crate::provider::auth::CredentialIssuer::SapAiCore => "sap_ai_core",
         crate::provider::auth::CredentialIssuer::AtomGit => "atomgit",
     }
 }

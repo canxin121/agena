@@ -18,6 +18,7 @@ use crate::session::history::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub enum EventKind {
     // --- runtime / UI projection ---

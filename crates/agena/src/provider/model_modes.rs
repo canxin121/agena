@@ -345,14 +345,7 @@ fn gpt5_codex_reasoning_modes(
         return None;
     }
     let version = gpt5_version(model);
-    let efforts = if version.is_some_and(|version| version >= 3) {
-        vec![
-            ReasoningEffort::Low,
-            ReasoningEffort::Medium,
-            ReasoningEffort::High,
-            ReasoningEffort::Xhigh,
-        ]
-    } else if model.contains("codex-max") || version.is_some_and(|version| version >= 2) {
+    let efforts = if model.contains("codex-max") || version.is_some_and(|version| version >= 2) {
         vec![
             ReasoningEffort::Low,
             ReasoningEffort::Medium,

@@ -4,6 +4,7 @@ use crate::error::AppError;
 
 const DEFAULT_PROVIDER_HTTP_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_PROVIDER_CONNECT_TIMEOUT_SECS: u64 = 15;
+const DEFAULT_PROVIDER_USER_AGENT: &str = concat!("agena/", env!("CARGO_PKG_VERSION"));
 const DEFAULT_PROVIDER_REQUEST_MAX_RETRIES: u32 = 5;
 const DEFAULT_PROVIDER_RETRY_BASE_DELAY_MS: u64 = 250;
 const DEFAULT_PROVIDER_RETRY_MAX_DELAY_MS: u64 = 2_000;
@@ -41,6 +42,7 @@ impl ProviderHttpClientConfig {
         reqwest::Client::builder()
             .timeout(self.timeout)
             .connect_timeout(self.connect_timeout)
+            .user_agent(DEFAULT_PROVIDER_USER_AGENT)
             .build()
             .map_err(AppError::from)
     }
@@ -82,4 +84,31 @@ impl Default for ProviderStreamReplayConfig {
 pub struct ProviderRuntimeConfig {
     pub request_retry: ProviderRequestRetryConfig,
     pub stream_replay: ProviderStreamReplayConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn provider_http_client_sets_agena_user_agent() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/ua")
+            .match_header("user-agent", DEFAULT_PROVIDER_USER_AGENT)
+            .with_status(200)
+            .create_async()
+            .await;
+
+        let client = ProviderHttpClientConfig::default()
+            .build_client()
+            .expect("client should build");
+        let response = client
+            .get(format!("{}/ua", server.url()))
+            .send()
+            .await
+            .expect("request should succeed");
+
+        assert!(response.status().is_success());
+    }
 }

@@ -956,7 +956,7 @@ impl ModelCapabilities {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ModelSpeedModeRequestOverride {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
@@ -996,15 +996,6 @@ impl ModelSpeedModeRequestOverride {
         }
         merge_json_patch_maps(&mut merged.body_patch, &other.body_patch);
         merged
-    }
-}
-
-impl Default for ModelSpeedModeRequestOverride {
-    fn default() -> Self {
-        Self {
-            headers: BTreeMap::new(),
-            body_patch: BTreeMap::new(),
-        }
     }
 }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::model::ModelMetadata;
 
 pub fn catalog_definition_to_provider_definition(
     definition: &CatalogModelDefinition,
@@ -6,8 +7,42 @@ pub fn catalog_definition_to_provider_definition(
     definition.clone().into_configured_definition()
 }
 
+pub(crate) fn apply_catalog_definition_as_baseline(
+    definition: &CatalogModelDefinition,
+    capability_fallback: &ModelCapabilities,
+    metadata_fallback: &ModelMetadata,
+    mut model: Model,
+) -> Model {
+    let configured = catalog_definition_to_provider_definition(definition);
+    let catalog_capabilities = configured
+        .capabilities
+        .apply_to(ModelCapabilities::default());
+    let primary_capabilities = if model.capabilities.is_default_placeholder() {
+        capability_fallback.clone()
+    } else {
+        model
+            .capabilities
+            .clone()
+            .with_fallbacks_from(capability_fallback)
+    };
+    model.capabilities = primary_capabilities.with_fallbacks_from(&catalog_capabilities);
+
+    let catalog_metadata = configured.metadata();
+    let primary_metadata = model
+        .metadata
+        .clone()
+        .with_fallbacks_from(metadata_fallback);
+    model.metadata = primary_metadata.with_fallbacks_from(&catalog_metadata);
+
+    model.thinking_modes =
+        merge_catalog_baseline_thinking_modes(model.thinking_modes, &configured.thinking_modes);
+    model.speed_modes =
+        merge_catalog_baseline_speed_modes(model.speed_modes, &configured.speed_modes);
+    model
+}
+
 pub fn decorate_provider_models(
-    provider: &dyn ModelProvider,
+    provider: &dyn ModelRuntime,
     provider_record: &ModelCatalogProviderRecord,
     mut models: Vec<Model>,
 ) -> Vec<Model> {
@@ -65,7 +100,7 @@ pub fn decorate_provider_models(
 }
 
 fn decorate_provider_model(
-    provider: &dyn ModelProvider,
+    provider: &dyn ModelRuntime,
     provider_record: &ModelCatalogProviderRecord,
     model_id: ModelId,
     mut model: Model,
@@ -81,15 +116,13 @@ fn decorate_provider_model(
         model.display_name = Some(display_name);
     }
 
-    if let Some(configured) = catalog_definition_for_model_id(provider_record, model_id.as_str())
-        .cloned()
-        .map(|definition| catalog_definition_to_provider_definition(&definition))
-    {
+    if let Some(definition) = catalog_definition_for_model_id(provider_record, model_id.as_str()) {
         let adapter_id = model.adapter_id.clone();
-        configured.apply_to_model(
-            model,
+        apply_catalog_definition_as_baseline(
+            definition,
             &provider.model_capabilities_for_adapter(adapter_id.as_ref(), &model_id),
             &provider_model_metadata(provider, adapter_id.as_ref(), &model_id),
+            model,
         )
     } else {
         model
@@ -97,7 +130,7 @@ fn decorate_provider_model(
 }
 
 fn provider_model_metadata(
-    provider: &dyn ModelProvider,
+    provider: &dyn ModelRuntime,
     adapter_id: Option<&crate::model::AdapterId>,
     model: &ModelId,
 ) -> crate::model::ModelMetadata {
@@ -105,53 +138,146 @@ fn provider_model_metadata(
 }
 
 fn provider_model_thinking_modes(
-    provider: &dyn ModelProvider,
+    provider: &dyn ModelRuntime,
     provider_record: &ModelCatalogProviderRecord,
     adapter_id: Option<&crate::model::AdapterId>,
     model: &ModelId,
 ) -> BTreeMap<String, crate::model::ModelThinkingMode> {
-    let mut modes = provider.model_thinking_modes_for_adapter(adapter_id, model);
-    if let Some(configured) = catalog_definition_for_model_id(provider_record, model.as_str())
-        .cloned()
-        .map(|definition| catalog_definition_to_provider_definition(&definition))
-    {
-        for (name, configured_mode) in &configured.thinking_modes {
-            match configured_mode.apply_to_mode(modes.get(name)) {
-                Some(mode) => {
-                    modes.insert(name.clone(), mode);
-                }
-                None => {
-                    modes.remove(name);
-                }
-            }
-        }
+    let modes = provider.model_thinking_modes_for_adapter(adapter_id, model);
+    if let Some(definition) = catalog_definition_for_model_id(provider_record, model.as_str()) {
+        merge_catalog_baseline_thinking_modes(
+            modes,
+            &catalog_definition_to_provider_definition(definition).thinking_modes,
+        )
+    } else {
+        modes
     }
-    modes
 }
 
 fn provider_model_speed_modes(
-    provider: &dyn ModelProvider,
+    provider: &dyn ModelRuntime,
     provider_record: &ModelCatalogProviderRecord,
     adapter_id: Option<&crate::model::AdapterId>,
     model: &ModelId,
 ) -> BTreeMap<String, crate::model::ModelSpeedMode> {
-    let mut modes = provider.model_speed_modes_for_adapter(adapter_id, model);
-    if let Some(configured) = catalog_definition_for_model_id(provider_record, model.as_str())
-        .cloned()
-        .map(|definition| catalog_definition_to_provider_definition(&definition))
-    {
-        for (name, configured_mode) in &configured.speed_modes {
-            match configured_mode.apply_to_mode(modes.get(name)) {
-                Some(mode) => {
-                    modes.insert(name.clone(), mode);
-                }
-                None => {
-                    modes.remove(name);
+    let modes = provider.model_speed_modes_for_adapter(adapter_id, model);
+    if let Some(definition) = catalog_definition_for_model_id(provider_record, model.as_str()) {
+        merge_catalog_baseline_speed_modes(
+            modes,
+            &catalog_definition_to_provider_definition(definition).speed_modes,
+        )
+    } else {
+        modes
+    }
+}
+
+pub(crate) fn merge_catalog_baseline_thinking_modes(
+    mut primary: BTreeMap<String, crate::model::ModelThinkingMode>,
+    baseline: &BTreeMap<String, ConfiguredModelThinkingMode>,
+) -> BTreeMap<String, crate::model::ModelThinkingMode> {
+    for (name, configured) in baseline {
+        if configured.disabled {
+            continue;
+        }
+        match primary.remove(name) {
+            Some(mode) => {
+                primary.insert(
+                    name.clone(),
+                    merge_catalog_baseline_thinking_mode(mode, configured),
+                );
+            }
+            None => {
+                if let Some(mode) = configured.apply_to_mode(None) {
+                    primary.insert(name.clone(), mode);
                 }
             }
         }
     }
-    modes
+    primary
+}
+
+pub(crate) fn merge_catalog_baseline_speed_modes(
+    mut primary: BTreeMap<String, crate::model::ModelSpeedMode>,
+    baseline: &BTreeMap<String, ConfiguredModelSpeedMode>,
+) -> BTreeMap<String, crate::model::ModelSpeedMode> {
+    for (name, configured) in baseline {
+        if configured.disabled {
+            continue;
+        }
+        match primary.remove(name) {
+            Some(mode) => {
+                primary.insert(
+                    name.clone(),
+                    merge_catalog_baseline_speed_mode(mode, configured),
+                );
+            }
+            None => {
+                if let Some(mode) = configured.apply_to_mode(None) {
+                    primary.insert(name.clone(), mode);
+                }
+            }
+        }
+    }
+    primary
+}
+
+fn merge_catalog_baseline_thinking_mode(
+    mut primary: crate::model::ModelThinkingMode,
+    baseline: &ConfiguredModelThinkingMode,
+) -> crate::model::ModelThinkingMode {
+    if let Some(mode) = baseline.apply_to_mode(None) {
+        if primary.display_name.is_none() {
+            primary.display_name = mode.display_name;
+        }
+        if primary.description.is_none() {
+            primary.description = mode.description;
+        }
+        if primary.thinking.is_none() {
+            primary.thinking = mode.thinking;
+        }
+        primary.request_override = mode.request_override.merged_with(&primary.request_override);
+        for (adapter_id, override_patch) in mode.adapter_overrides {
+            match primary.adapter_overrides.remove(adapter_id.as_str()) {
+                Some(existing) => {
+                    primary
+                        .adapter_overrides
+                        .insert(adapter_id, override_patch.merged_with(&existing));
+                }
+                None => {
+                    primary.adapter_overrides.insert(adapter_id, override_patch);
+                }
+            }
+        }
+    }
+    primary
+}
+
+fn merge_catalog_baseline_speed_mode(
+    mut primary: crate::model::ModelSpeedMode,
+    baseline: &ConfiguredModelSpeedMode,
+) -> crate::model::ModelSpeedMode {
+    if let Some(mode) = baseline.apply_to_mode(None) {
+        if primary.display_name.is_none() {
+            primary.display_name = mode.display_name;
+        }
+        if primary.description.is_none() {
+            primary.description = mode.description;
+        }
+        primary.request_override = mode.request_override.merged_with(&primary.request_override);
+        for (adapter_id, override_patch) in mode.adapter_overrides {
+            match primary.adapter_overrides.remove(adapter_id.as_str()) {
+                Some(existing) => {
+                    primary
+                        .adapter_overrides
+                        .insert(adapter_id, override_patch.merged_with(&existing));
+                }
+                None => {
+                    primary.adapter_overrides.insert(adapter_id, override_patch);
+                }
+            }
+        }
+    }
+    primary
 }
 
 fn catalog_definition_for_model_id<'a>(

@@ -519,7 +519,11 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                     steps: entry.steps,
                     allowed_tools: entry.allowed_tools,
                     permission: entry.permission,
-                    model: entry.model,
+                    default: agena_api::resource::RuntimeAgentDefaultResource {
+                        provider: entry.default.provider,
+                        adapter: entry.default.adapter,
+                        model: entry.default.model,
+                    },
                     aliases: entry.aliases,
                     scope: entry.scope,
                     source_path: entry.source_path.map(|path| path.display().to_string()),

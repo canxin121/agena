@@ -274,10 +274,10 @@ impl SessionManager {
                 steps: profile.frontmatter.steps,
             })
             .unwrap_or_default();
-        let profile_model = resolved_profile
+        let profile_default = resolved_profile
             .as_ref()
-            .and_then(|profile| profile.frontmatter.model.clone());
-        let requested_model = request.requested_model.clone().or(profile_model);
+            .map(|profile| profile.frontmatter.default.clone());
+        let requested_model = request.requested_model.clone();
 
         if let Some(existing) = self
             .find_child_session_for_task(request.parent_session_id, request.task_id.as_deref())
@@ -298,8 +298,13 @@ impl SessionManager {
             existing = self
                 .persist_session_changes(existing, Vec::new(), Vec::new(), None, state.clone())
                 .await?;
-            let options =
-                self.subtask_run_options(&existing, &parent, requested_model.as_deref())?;
+            let options = self.subtask_run_options(
+                &existing,
+                &parent,
+                &state,
+                requested_model.as_deref(),
+                profile_default.as_ref(),
+            )?;
             let session = Box::pin(self.continue_session(SessionContinueRequest {
                 session_id: existing.id,
                 options: options.clone(),
@@ -335,11 +340,18 @@ impl SessionManager {
             .persist_session_changes(child, Vec::new(), Vec::new(), None, state.clone())
             .await?;
 
-        let options = self.subtask_run_options(&child, &parent, requested_model.as_deref())?;
+        let options = self.subtask_run_options(
+            &child,
+            &parent,
+            &state,
+            requested_model.as_deref(),
+            profile_default.as_ref(),
+        )?;
         let child_id = child.id;
         drop(child);
         drop(parent);
         drop(prompt);
+        drop(profile_default);
         drop(requested_model);
         let manager = self.background_handle();
         let run_options = options.clone();

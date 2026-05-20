@@ -167,17 +167,17 @@ fn loader_reads_database_log_level_from_env() {
         })
         .expect("config should load");
 
-    assert_eq!(resolution.config.tracing.database_level, "error");
+    assert_eq!(resolution.config.tracing.database, "error");
 }
 
 #[test]
-fn cli_override_parser_supports_tracing_database_level() {
-    let parsed = "tracing.database_level=debug"
+fn cli_override_parser_supports_tracing_database() {
+    let parsed = "tracing.database=debug"
         .parse::<ConfigOverride>()
         .expect("override should parse");
     assert!(matches!(
         parsed,
-        ConfigOverride::TracingDatabaseLevel(value) if value == "debug"
+        ConfigOverride::TracingDatabase(value) if value == "debug"
     ));
 }
 
@@ -185,7 +185,8 @@ fn cli_override_parser_supports_tracing_database_level() {
 fn tracing_env_filter_includes_database_targets() {
     let tracing = crate::config::TracingConfig {
         filter: "info".to_string(),
-        database_level: "error".to_string(),
+        database: "error".to_string(),
+        adapter: "trace".to_string(),
     };
 
     let filter = tracing.env_filter().expect("env filter should parse");
@@ -195,6 +196,35 @@ fn tracing_env_filter_includes_database_targets() {
     assert!(rendered.contains("sqlx=error"));
     assert!(rendered.contains("sea_orm=error"));
     assert!(rendered.contains("sea_orm_migration=error"));
+    assert!(rendered.contains("agena::adapter=trace"));
+}
+
+#[test]
+fn loader_reads_adapter_log_level_from_env() {
+    let env = TestEnvironment {
+        vars: BTreeMap::from([("AGENA_ADAPTER_LOG".to_owned(), "trace".to_owned())]),
+    };
+    let path = write_temp_config("");
+    let loader = ConfigLoader::new(env);
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    assert_eq!(resolution.config.tracing.adapter, "trace");
+}
+
+#[test]
+fn cli_override_parser_supports_tracing_adapter() {
+    let parsed = "tracing.adapter=debug"
+        .parse::<ConfigOverride>()
+        .expect("override should parse");
+    assert!(matches!(
+        parsed,
+        ConfigOverride::TracingAdapter(value) if value == "debug"
+    ));
 }
 
 #[test]
@@ -363,7 +393,7 @@ enabled = true
     assert_eq!(provider.default_model, "openai/gpt-5");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://api.openai.com");
+            assert_eq!(api.base_url.as_deref(), Some("https://api.openai.com"));
             assert_eq!(api.api_key.as_deref(), Some("sk-test"));
             assert!(api.api_key_env.is_none());
         }
@@ -554,6 +584,156 @@ enabled = true
 }
 
 #[test]
+fn google_adc_legacy_mode_resolves_to_credential_issuer_with_endpoint() {
+    let path = write_temp_config(
+        r#"
+[providers.vertex]
+default_model = "openai/google/gemini-2.5-flash"
+
+[providers.vertex.auth]
+mode = "google_adc"
+base_url = "https://us-central1-aiplatform.googleapis.com"
+
+[providers.vertex.auth.protocol_paths]
+openai = "/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+
+[providers.vertex.adapters.openai]
+enabled = true
+capability_family = "gemini"
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("vertex")
+        .expect("vertex provider should exist");
+
+    match &provider.auth {
+        ProviderAuthConfig::Credential(config) => {
+            assert_eq!(
+                config.issuer,
+                crate::provider::auth::CredentialIssuer::GoogleAdc
+            );
+            assert_eq!(
+                config.base_url.as_deref(),
+                Some("https://us-central1-aiplatform.googleapis.com")
+            );
+            assert_eq!(
+                config.protocol_paths.openai,
+                "/v1/projects/PROJECT/locations/us-central1/endpoints/openapi"
+            );
+            assert!(config.service_key_env.is_none());
+            assert!(config.credential.is_none());
+        }
+        other => panic!("expected credential auth, got {other:?}"),
+    }
+}
+
+#[test]
+fn sap_ai_core_credential_issuer_resolves_service_key_endpoint() {
+    let path = write_temp_config(
+        r#"
+[providers.sap]
+default_model = "openai/anthropic/claude-sonnet-4"
+
+[providers.sap.auth]
+mode = "credential"
+issuer = "sap_ai_core"
+base_url = "https://api.example.com/v2"
+service_key_env = "AICORE_SERVICE_KEY"
+
+[providers.sap.adapters.openai]
+enabled = true
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("sap")
+        .expect("sap provider should exist");
+
+    match &provider.auth {
+        ProviderAuthConfig::Credential(config) => {
+            assert_eq!(
+                config.issuer,
+                crate::provider::auth::CredentialIssuer::SapAiCore
+            );
+            assert_eq!(
+                config.base_url.as_deref(),
+                Some("https://api.example.com/v2")
+            );
+            assert_eq!(
+                config.service_key_env.as_deref(),
+                Some("AICORE_SERVICE_KEY")
+            );
+            assert!(config.credential.is_none());
+        }
+        other => panic!("expected credential auth, got {other:?}"),
+    }
+}
+
+#[test]
+fn sap_ai_core_legacy_mode_with_api_key_normalizes_to_api_auth() {
+    let path = write_temp_config(
+        r#"
+[providers.sap]
+default_model = "openai/anthropic/claude-sonnet-4"
+
+[providers.sap.auth]
+mode = "sap_ai_core"
+base_url = "https://api.example.com/v2"
+api_key = "sap-api-token"
+
+[providers.sap.adapters.openai]
+enabled = true
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("config should load");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("sap")
+        .expect("sap provider should exist");
+
+    match &provider.auth {
+        ProviderAuthConfig::Api(config) => {
+            assert_eq!(
+                config.base_url.as_deref(),
+                Some("https://api.example.com/v2")
+            );
+            assert_eq!(config.api_key.as_deref(), Some("sap-api-token"));
+        }
+        other => panic!("expected api auth, got {other:?}"),
+    }
+}
+
+#[test]
 fn openai_provider_rejects_mismatched_credential_issuer_and_backend() {
     let path = write_temp_config(
         r#"
@@ -736,7 +916,7 @@ enabled = true
     assert_eq!(provider.default_model, "gpt-4.1-mini");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://gateway.example.com");
+            assert_eq!(api.base_url.as_deref(), Some("https://gateway.example.com"));
             assert_eq!(api.api_key_env.as_deref(), Some("SHARED_GATEWAY_API_KEY"));
         }
         other => panic!("expected shared api auth, got {other:?}"),
@@ -864,7 +1044,7 @@ enabled = false
     assert_eq!(provider.default_model, "kimi-k2.6");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://opencode.ai/zen/go");
+            assert_eq!(api.base_url.as_deref(), Some("https://opencode.ai/zen/go"));
             assert_eq!(api.protocol_paths.openai, "/v1");
             assert_eq!(api.protocol_paths.anthropic, "/v1");
             assert_eq!(api.protocol_paths.gemini, "/v1beta");
@@ -974,7 +1154,7 @@ enabled = true
 
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://opencode.ai/zen");
+            assert_eq!(api.base_url.as_deref(), Some("https://opencode.ai/zen"));
             assert_eq!(api.protocol_paths.openai, "/v1");
             assert_eq!(api.protocol_paths.anthropic, "/v1");
             assert_eq!(api.protocol_paths.gemini, "/v1");
@@ -1157,7 +1337,6 @@ timeout_secs = 90
         .load(&LoadConfigRequest {
             config_path: Some(path),
             overrides: vec![ConfigOverride::ProviderHttpTimeoutSecs(12)],
-            ..LoadConfigRequest::default()
         })
         .expect("config should load");
 
@@ -1261,7 +1440,7 @@ api_key = "sk-inline"
         .expect("openai provider should exist");
     match &provider.auth {
         ProviderAuthConfig::Api(api) => {
-            assert_eq!(api.base_url, "https://api.openai.com");
+            assert_eq!(api.base_url.as_deref(), Some("https://api.openai.com"));
             assert_eq!(api.api_key.as_deref(), Some("sk-inline"));
         }
         other => panic!("unexpected auth config: {other:?}"),
@@ -2097,7 +2276,7 @@ bash = "ask"
 description = "Planning agent"
 prompt = "You are a planner."
 allowed_entries = ["read", "grep"]
-model = "openai/gpt-5"
+default = { provider = "openai", adapter = "openai", model = "gpt-5" }
 aliases = ["plan"]
 
 [agents.planner.permission.inherit]
@@ -2217,7 +2396,9 @@ todo_write = "allow"
         }
         other => panic!("expected ordered bash tool rules, got {other:?}"),
     }
-    assert_eq!(planner.model.as_deref(), Some("openai/gpt-5"));
+    assert_eq!(planner.default.provider.as_deref(), Some("openai"));
+    assert_eq!(planner.default.adapter.as_deref(), Some("openai"));
+    assert_eq!(planner.default.model.as_deref(), Some("gpt-5"));
     assert_eq!(planner.aliases, vec!["plan"]);
     assert!(!planner.disabled);
 }
@@ -2315,6 +2496,45 @@ enabled = true
             .expect("provider should resolve")
             .default_model,
         "gpt-5"
+    );
+}
+
+#[test]
+fn default_adapter_without_default_model_must_reference_enabled_adapter() {
+    let path = write_temp_config(
+        r#"
+[default]
+provider = "openai"
+adapter = "anthropic"
+
+[providers.openai]
+default_adapter = "openai"
+default_model = "gpt-5"
+
+[providers.openai.auth]
+mode = "api"
+base_url = "https://api.openai.com"
+api_key = "dummy"
+
+[providers.openai.adapters.openai]
+enabled = true
+
+[providers.openai.adapters.anthropic]
+enabled = false
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("disabled default adapter should be rejected");
+
+    assert!(
+        err.to_string()
+            .contains("default.adapter `anthropic` references disabled adapter")
     );
 }
 
@@ -2522,5 +2742,117 @@ enabled = true
     assert!(matches!(
         adapter.definition,
         ProviderAdapterDefinition::AmazonBedrock(_)
+    ));
+}
+
+#[test]
+fn gitlab_api_auth_allows_missing_base_url() {
+    let path = write_temp_config(
+        r#"
+[providers.gitlab_token]
+default_model = "gitlab/duo-chat"
+
+[providers.gitlab_token.auth]
+mode = "api"
+api_key_env = "GITLAB_TOKEN"
+
+[providers.gitlab_token.adapters.gitlab]
+enabled = true
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let resolution = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect("gitlab api auth should load without base_url");
+
+    let provider = resolution
+        .config
+        .providers
+        .get("gitlab_token")
+        .expect("gitlab_token provider should exist");
+
+    match &provider.auth {
+        ProviderAuthConfig::Api(api) => {
+            assert!(api.base_url.is_none());
+            assert_eq!(api.api_key_env.as_deref(), Some("GITLAB_TOKEN"));
+        }
+        other => panic!("expected api auth, got {other:?}"),
+    }
+    assert!(matches!(
+        provider
+            .adapters
+            .get("gitlab")
+            .expect("gitlab adapter should exist")
+            .definition,
+        ProviderAdapterDefinition::Gitlab(_)
+    ));
+}
+
+#[test]
+fn http_api_auth_requires_base_url() {
+    let path = write_temp_config(
+        r#"
+[providers.gateway]
+default_model = "openai/gpt-5.4"
+
+[providers.gateway.auth]
+mode = "api"
+api_key_env = "OPENAI_API_KEY"
+
+[providers.gateway.adapters.openai]
+enabled = true
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("openai api auth should require base_url");
+
+    assert!(matches!(
+        err,
+        ConfigError::InvalidProviderConfig { provider_id, message }
+            if provider_id == "gateway"
+                && message.contains("requires `base_url` for `openai` adapters")
+    ));
+}
+
+#[test]
+fn api_auth_rejects_amazon_bedrock_adapter() {
+    let path = write_temp_config(
+        r#"
+[providers.bad_bedrock]
+default_model = "amazon_bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0"
+
+[providers.bad_bedrock.auth]
+mode = "api"
+base_url = "https://bedrock-runtime.us-east-1.amazonaws.com"
+api_key_env = "BEDROCK_TOKEN"
+
+[providers.bad_bedrock.adapters.amazon_bedrock]
+enabled = true
+"#,
+    );
+
+    let loader = ConfigLoader::new(TestEnvironment::default());
+    let err = loader
+        .load(&LoadConfigRequest {
+            config_path: Some(path),
+            ..LoadConfigRequest::default()
+        })
+        .expect_err("amazon_bedrock should reject api auth");
+
+    assert!(matches!(
+        err,
+        ConfigError::InvalidProviderConfig { provider_id, message }
+            if provider_id == "bad_bedrock"
+                && message.contains("api auth is not supported by `amazon_bedrock` adapters")
     ));
 }

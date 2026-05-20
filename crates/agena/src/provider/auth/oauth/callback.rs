@@ -12,6 +12,42 @@ pub struct OAuthCallback {
     pub state: String,
 }
 
+pub fn parse_oauth_callback_url(
+    callback_url: &str,
+    expected_state: Option<&str>,
+) -> Result<OAuthCallback, AppError> {
+    let parsed = url::Url::parse(callback_url.trim())
+        .map_err(|error| AppError::Config(format!("invalid oauth callback url: {error}")))?;
+
+    if let Some(error) = parsed.query_pairs().find(|(key, _)| key == "error") {
+        return Err(AppError::Provider(format!(
+            "oauth callback failed: {}",
+            error.1
+        )));
+    }
+
+    let code = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.to_string())
+        .ok_or_else(|| AppError::Provider("oauth callback missing code".to_owned()))?;
+    let state = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.to_string())
+        .ok_or_else(|| AppError::Provider("oauth callback missing state".to_owned()))?;
+
+    if let Some(expected_state) = expected_state
+        && state != expected_state
+    {
+        return Err(AppError::Provider(
+            "oauth callback state mismatch (potential csrf)".to_owned(),
+        ));
+    }
+
+    Ok(OAuthCallback { code, state })
+}
+
 pub fn wait_for_oauth_callback(
     port: u16,
     expected_state: &str,
@@ -42,39 +78,28 @@ pub fn wait_for_oauth_callback(
                     .to_owned();
 
                 let url = format!("http://localhost:{port}{path}");
-                let parsed = url::Url::parse(url.as_str()).map_err(|error| {
-                    AppError::Config(format!("invalid oauth callback url: {error}"))
-                })?;
-
-                if let Some(error) = parsed.query_pairs().find(|(key, _)| key == "error") {
-                    let body = oauth_html_error(error.1.as_ref());
-                    write_http_html(&mut stream, 400, body.as_str())?;
-                    return Err(AppError::Provider(format!(
-                        "oauth callback failed: {}",
-                        error.1
-                    )));
+                match parse_oauth_callback_url(url.as_str(), Some(expected_state)) {
+                    Ok(callback) => {
+                        write_http_html(&mut stream, 200, oauth_html_success())?;
+                        return Ok(callback);
+                    }
+                    Err(AppError::Provider(message)) => {
+                        write_http_html(
+                            &mut stream,
+                            400,
+                            oauth_html_error(message.as_str()).as_str(),
+                        )?;
+                        return Err(AppError::Provider(message));
+                    }
+                    Err(error) => {
+                        write_http_html(
+                            &mut stream,
+                            400,
+                            oauth_html_error(error.to_string().as_str()).as_str(),
+                        )?;
+                        return Err(error);
+                    }
                 }
-
-                let code = parsed
-                    .query_pairs()
-                    .find(|(key, _)| key == "code")
-                    .map(|(_, value)| value.to_string())
-                    .ok_or_else(|| AppError::Provider("oauth callback missing code".to_owned()))?;
-                let state = parsed
-                    .query_pairs()
-                    .find(|(key, _)| key == "state")
-                    .map(|(_, value)| value.to_string())
-                    .ok_or_else(|| AppError::Provider("oauth callback missing state".to_owned()))?;
-
-                if state != expected_state {
-                    write_http_html(&mut stream, 400, oauth_html_error("Invalid state").as_str())?;
-                    return Err(AppError::Provider(
-                        "oauth callback state mismatch (potential csrf)".to_owned(),
-                    ));
-                }
-
-                write_http_html(&mut stream, 200, oauth_html_success())?;
-                return Ok(OAuthCallback { code, state });
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(100));
@@ -112,4 +137,35 @@ fn oauth_html_error(error: &str) -> String {
         "<!doctype html><html><body><h1>Authorization Failed</h1><p>{}</p></body></html>",
         error
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_oauth_callback_url_extracts_code_and_state() {
+        let callback = parse_oauth_callback_url(
+            "http://127.0.0.1:1455/callback?code=abc&state=xyz",
+            Some("xyz"),
+        )
+        .expect("callback url should parse");
+        assert_eq!(
+            callback,
+            OAuthCallback {
+                code: "abc".to_owned(),
+                state: "xyz".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_oauth_callback_url_rejects_state_mismatch() {
+        let error = parse_oauth_callback_url(
+            "http://127.0.0.1:1455/callback?code=abc&state=wrong",
+            Some("xyz"),
+        )
+        .expect_err("state mismatch should fail");
+        assert!(error.to_string().contains("state mismatch"));
+    }
 }

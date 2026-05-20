@@ -86,10 +86,10 @@ impl Plugin for EchoPlugin {
             return Ok(None);
         }
         let mut new_input = input.input.clone();
-        if let Some(text) = new_input.get_mut("text") {
-            if let Some(s) = text.as_str() {
-                *text = serde_json::Value::String(format!("[prepared] {s}"));
-            }
+        if let Some(text) = new_input.get_mut("text")
+            && let Some(s) = text.as_str()
+        {
+            *text = serde_json::Value::String(format!("[prepared] {s}"));
         }
         Ok(Some(ToolBeforePatch {
             input: Some(new_input),

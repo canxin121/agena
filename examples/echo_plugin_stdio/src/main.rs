@@ -74,5 +74,5 @@ impl Plugin for EchoPlugin {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::io::Result<()> {
-    agena_plugin_sdk::drivers::stdio::serve_stdio(EchoPlugin::default()).await
+    agena_plugin_sdk::drivers::stdio::serve_stdio(EchoPlugin).await
 }

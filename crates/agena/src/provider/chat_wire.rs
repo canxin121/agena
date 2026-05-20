@@ -1,9 +1,9 @@
 /// Shared wire types and message-conversion helpers for OpenAI-compatible
 /// Chat Completions API endpoints.
 ///
-/// Both `openai.rs` (Chat API path) and `openai_compatible.rs` use the same
-/// JSON wire format; the structs defined here are reused by both rather than
-/// duplicating them across files.
+/// `openai.rs` uses these shared structs for both native OpenAI Chat mode and
+/// OpenAI-compatible chat backends, rather than maintaining duplicate wire
+/// types for each adapter flavor.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -554,10 +554,6 @@ pub(crate) fn parse_completion_response(
 
 /// Convert a `CompletionRequest` into the flat `Vec<ChatMessage>` wire format
 /// used by Chat Completions endpoints.
-pub(crate) fn request_to_chat_messages(request: &CompletionRequest) -> Vec<ChatMessage> {
-    request_to_chat_messages_with_assistant_reasoning_field(request, None)
-}
-
 pub(crate) fn request_to_chat_messages_with_assistant_reasoning_field(
     request: &CompletionRequest,
     assistant_reasoning_field: Option<&str>,
@@ -754,6 +750,45 @@ fn apply_assistant_reasoning_field(
     }
 }
 
+fn assistant_content_and_tool_calls(
+    message: &Message,
+    parts: &[wire_message::WirePart],
+) -> (Option<Value>, Vec<ChatToolCallRequest>) {
+    if parts.is_empty() {
+        return (Some(Value::String(message.as_text_lossy())), Vec::new());
+    }
+
+    let mut text_chunks = Vec::new();
+    let mut tool_calls = Vec::new();
+    for part in parts {
+        match part {
+            wire_message::WirePart::Text { text } => text_chunks.push(text.clone()),
+            wire_message::WirePart::ToolCall {
+                id,
+                name,
+                arguments_json,
+            } => {
+                tool_calls.push(ChatToolCallRequest {
+                    kind: "function".to_owned(),
+                    id: id.clone(),
+                    function: ChatFunctionCallRequest {
+                        name: name.clone(),
+                        arguments: arguments_json.clone(),
+                    },
+                });
+            }
+            wire_message::WirePart::Attachment { item } => {
+                text_chunks.push(wire_message::hint_text(item));
+            }
+            wire_message::WirePart::ToolResult { tool_call_id, .. } => {
+                text_chunks.push(format!("[tool_result:{tool_call_id}]"));
+            }
+        }
+    }
+    let content = (!text_chunks.is_empty()).then(|| Value::String(text_chunks.join("")));
+    (content, tool_calls)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -790,32 +825,35 @@ mod tests {
 
     #[test]
     fn request_to_chat_messages_uses_assistant_reasoning_field_from_message_metadata() {
-        let messages = request_to_chat_messages(&CompletionRequest {
-            model: ModelId::new("custom-model"),
-            system: None,
-            messages: vec![
-                assistant_message_with_reasoning_and_metadata(
-                    "reasoning_details",
-                    "Plan carefully",
-                    "Intermediate answer",
-                ),
-                Message::prompt_text(Role::User, "continue"),
-            ],
-            tools: Vec::new(),
-            temperature: None,
-            max_output_tokens: None,
-            prompt_cache_key: None,
-            previous_response_id: None,
-            prompt_window_generation: None,
-            stop_sequences: Vec::new(),
-            top_p: None,
-            top_k: None,
-            seed: None,
-            thinking: None,
-            verbosity: None,
-            request_override: Default::default(),
-            response_format: None,
-        });
+        let messages = request_to_chat_messages_with_assistant_reasoning_field(
+            &CompletionRequest {
+                model: ModelId::new("custom-model"),
+                system: None,
+                messages: vec![
+                    assistant_message_with_reasoning_and_metadata(
+                        "reasoning_details",
+                        "Plan carefully",
+                        "Intermediate answer",
+                    ),
+                    Message::prompt_text(Role::User, "continue"),
+                ],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            },
+            None,
+        );
 
         let assistant = messages
             .iter()
@@ -931,43 +969,4 @@ mod tests {
             Some("reasoning_content")
         );
     }
-}
-
-fn assistant_content_and_tool_calls(
-    message: &Message,
-    parts: &[wire_message::WirePart],
-) -> (Option<Value>, Vec<ChatToolCallRequest>) {
-    if parts.is_empty() {
-        return (Some(Value::String(message.as_text_lossy())), Vec::new());
-    }
-
-    let mut text_chunks = Vec::new();
-    let mut tool_calls = Vec::new();
-    for part in parts {
-        match part {
-            wire_message::WirePart::Text { text } => text_chunks.push(text.clone()),
-            wire_message::WirePart::ToolCall {
-                id,
-                name,
-                arguments_json,
-            } => {
-                tool_calls.push(ChatToolCallRequest {
-                    kind: "function".to_owned(),
-                    id: id.clone(),
-                    function: ChatFunctionCallRequest {
-                        name: name.clone(),
-                        arguments: arguments_json.clone(),
-                    },
-                });
-            }
-            wire_message::WirePart::Attachment { item } => {
-                text_chunks.push(wire_message::hint_text(item));
-            }
-            wire_message::WirePart::ToolResult { tool_call_id, .. } => {
-                text_chunks.push(format!("[tool_result:{tool_call_id}]"));
-            }
-        }
-    }
-    let content = (!text_chunks.is_empty()).then(|| Value::String(text_chunks.join("")));
-    (content, tool_calls)
 }

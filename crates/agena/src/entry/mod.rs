@@ -467,13 +467,11 @@ impl ToolExecutor {
         if tags
             .iter()
             .any(|tag| tag == &crate::plugin::sdk::ToolTag::Shell)
-        {
-            if shell_command_from_invocation(invocation)
+            && shell_command_from_invocation(invocation)
                 .as_deref()
                 .is_some_and(bash::is_read_only_command)
-            {
-                return Ok(());
-            }
+        {
+            return Ok(());
         }
 
         Err(ToolError::PermissionDenied(format!(

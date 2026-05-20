@@ -21,7 +21,7 @@ use crate::model::{ModelId, ModelRef, ProviderId};
 use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
 use crate::provider::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    CompletionUsage, ModelProvider, ProviderModel, ProviderRegistry,
+    CompletionUsage, ModelRuntime, ProviderModel, ProviderRegistry,
 };
 use crate::session::{ContextGovernor, ContextPolicy};
 
@@ -318,7 +318,7 @@ impl RecordingProvider {
 }
 
 #[async_trait]
-impl ModelProvider for ScriptedProvider {
+impl ModelRuntime for ScriptedProvider {
     fn id(&self) -> &str {
         "scripted"
     }
@@ -722,7 +722,7 @@ async fn build_manager_with_provider<P>(
     provider: P,
 ) -> SessionManager
 where
-    P: ModelProvider + 'static,
+    P: ModelRuntime + 'static,
 {
     let db = Database::connect("sqlite::memory:")
         .await
@@ -1095,7 +1095,7 @@ async fn build_manager_with_provider_on_db<P>(
     provider: P,
 ) -> SessionManager
 where
-    P: ModelProvider + 'static,
+    P: ModelRuntime + 'static,
 {
     let agents = crate::agents::SubagentRegistry::discover(root, None);
     let executor = ToolExecutor::new(
@@ -1131,7 +1131,7 @@ async fn build_manager_with_provider_and_plugins_on_db<P>(
     plugins: Arc<crate::plugin::PluginHost>,
 ) -> SessionManager
 where
-    P: ModelProvider + 'static,
+    P: ModelRuntime + 'static,
 {
     let agents = crate::agents::SubagentRegistry::discover(root, None);
     let mut registry = ProviderRegistry::new();
@@ -1212,7 +1212,7 @@ struct InterruptibleProvider {
 }
 
 #[async_trait]
-impl ModelProvider for InterruptibleProvider {
+impl ModelRuntime for InterruptibleProvider {
     fn id(&self) -> &str {
         "interruptible"
     }
@@ -1796,7 +1796,7 @@ async fn streaming_tool_execution_persists_in_progress_output_impl() {
 struct InterruptedStreamProvider;
 
 #[async_trait]
-impl ModelProvider for InterruptedStreamProvider {
+impl ModelRuntime for InterruptedStreamProvider {
     fn id(&self) -> &str {
         "interrupted"
     }
@@ -1836,7 +1836,7 @@ impl ModelProvider for InterruptedStreamProvider {
 }
 
 #[async_trait]
-impl ModelProvider for RecordingProvider {
+impl ModelRuntime for RecordingProvider {
     fn id(&self) -> &str {
         "recording"
     }
@@ -2254,7 +2254,7 @@ async fn spawn_subtask_applies_registered_profile_context() {
     fs::create_dir_all(&agents_dir).expect("create agents dir");
     fs::write(
             agents_dir.join("reviewer.md"),
-            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - fs\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\nmodel: scripted-model/audit\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
+            "---\ndescription: reviewer\nmode: all\nallowed_entries:\n  - fs\npermission:\n  path:\n    rules:\n      \"*.env\":\n        read: ask\n      \"*\":\n        read: allow\ndefault:\n  model: scripted-model/audit\naliases: [\"audit\"]\n---\nYou are a strict reviewer.",
         )
         .expect("write reviewer profile");
     let service = build_manager(
@@ -2349,7 +2349,7 @@ async fn submit_user_turn_applies_requested_root_agent_profile() {
     fs::create_dir_all(&agents_dir).expect("create agents dir");
     fs::write(
             agents_dir.join("planner.md"),
-            "---\ndescription: planner\nallowed_entries:\n  - fs\n  - shell\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      shell: ask\n    rules:\n      shell:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\nmodel: scripted-model/plan\naliases: [\"plan\"]\n---\nYou are a precise planner.",
+            "---\ndescription: planner\nallowed_entries:\n  - fs\n  - shell\npermission:\n  path:\n    workspace:\n      read: allow\n      write: deny\n  entries:\n    names:\n      shell: ask\n    rules:\n      shell:\n        \"git push *\": deny\n        \"git *\": allow\n        \"*\": ask\ndefault:\n  model: scripted-model/plan\naliases: [\"plan\"]\n---\nYou are a precise planner.",
         )
         .expect("write planner profile");
     let service = build_manager(
@@ -2438,6 +2438,101 @@ async fn submit_user_turn_applies_requested_root_agent_profile() {
         scripted_provider_id().as_str()
     );
     assert_eq!(user_message.metadata.model_id, "scripted-model/plan");
+}
+
+#[tokio::test]
+async fn submit_user_turn_parses_explicit_root_agent_provider_route() {
+    let workspace = TempWorkspace::new();
+    let agents_dir = workspace.root.join(".agena").join("agents");
+    fs::create_dir_all(&agents_dir).expect("create agents dir");
+    fs::write(
+        agents_dir.join("router.md"),
+        "---\ndescription: router\nallowed_entries:\n  - fs\ndefault:\n  provider: scripted\n  model: scripted-model/plan\naliases: [\"route\"]\n---\nYou route to an explicit provider model.",
+    )
+    .expect("write router profile");
+    let service = build_manager(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "route model".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let session = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: SessionRunOptions {
+                agent_profile: Some("route".to_string()),
+                ..run_options()
+            },
+            parts: vec![PartContent::text("Use the routed model.")],
+        })
+        .await
+        .expect("submit turn");
+
+    assert_eq!(
+        session.runtime.execution.agent_profile.as_deref(),
+        Some("router")
+    );
+    assert_eq!(
+        session.runtime.execution.model_provider_id.as_deref(),
+        Some("scripted")
+    );
+    assert_eq!(
+        session.runtime.execution.model_id.as_deref(),
+        Some("scripted-model/plan")
+    );
+}
+
+#[tokio::test]
+async fn submit_user_turn_default_agent_keeps_root_session_model() {
+    let workspace = TempWorkspace::new();
+    let service = build_manager(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig {
+            default_agent: Some("build".to_string()),
+            ..SessionManagerConfig::default()
+        },
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "implicit default agent".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let session = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: run_options(),
+            parts: vec![PartContent::text("hello")],
+        })
+        .await
+        .expect("submit turn");
+
+    assert_eq!(
+        session.runtime.execution.agent_profile.as_deref(),
+        Some("build")
+    );
+    assert_eq!(
+        session.runtime.execution.model_provider_id.as_deref(),
+        Some("scripted")
+    );
+    assert_eq!(
+        session.runtime.execution.model_id.as_deref(),
+        Some("scripted-model")
+    );
 }
 
 #[tokio::test]
@@ -3663,7 +3758,7 @@ async fn restart_after_interrupted_turn_can_continue_session() {
     }
 
     #[async_trait]
-    impl ModelProvider for RestartableProvider {
+    impl ModelRuntime for RestartableProvider {
         fn id(&self) -> &str {
             "restartable"
         }
@@ -4576,11 +4671,10 @@ async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
 
     let started = async {
         for _ in 0..500 {
-            if requests
+            if !requests
                 .lock()
                 .expect("recording provider request lock should succeed")
-                .len()
-                >= 1
+                .is_empty()
             {
                 return true;
             }
@@ -4942,7 +5036,7 @@ async fn cancel_active_turn_aborts_a_running_turn() {
     struct SlowProvider;
 
     #[async_trait]
-    impl ModelProvider for SlowProvider {
+    impl ModelRuntime for SlowProvider {
         fn id(&self) -> &str {
             "slow"
         }

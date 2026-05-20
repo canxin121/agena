@@ -23,17 +23,17 @@ pub use types::{
     OllamaProviderOptions, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
     PluginConfig, ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
-    ProviderGoogleAdcAuthConfig, ProviderHttpConfig, ProviderModelDiscoveryConfig,
-    ProviderProtocolPathsConfig, ProviderSapAiCoreAuthConfig, RequestRetryConfig, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    RuntimeConfig, RuntimeJanitorConfig, RuntimeModelCatalogConfig, RuntimeReloadConfig,
-    SessionCacheConfig, SimpleHttpProviderOptions, StreamReplayConfig, StreamTransportMode,
-    TracingConfig, UiConfig, WebSearchBackend, WebSearchBackendKind, WebSearchConfig,
-    WebToolsConfig,
+    ProviderGitlabAuthConfig, ProviderHttpConfig, ProviderModelDiscoveryConfig,
+    ProviderProtocolPathsConfig, RequestRetryConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, ResolvedProviderModelConfig, RuntimeConfig, RuntimeJanitorConfig,
+    RuntimeModelCatalogConfig, RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions,
+    StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend,
+    WebSearchBackendKind, WebSearchConfig, WebToolsConfig,
 };
 
 pub use adapter_models::{
     HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS, ProviderAdapterModelsTarget,
+    draft_atomgit_provider_adapter_models_target, draft_gitlab_provider_adapter_models_target,
     draft_provider_adapter_models_target, list_provider_adapter_models_for_target,
     saved_provider_adapter_models_target,
 };

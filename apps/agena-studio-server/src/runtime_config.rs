@@ -171,7 +171,6 @@ mod tests {
                 cors_origins: Some(vec!["http://localhost:5173".to_string()]),
                 cors_allow_all: Some(true),
                 ui_cookie_samesite: Some("strict".to_string()),
-                ..BackendRuntimeConfig::default()
             },
         };
 

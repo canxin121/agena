@@ -241,7 +241,7 @@ impl ModelCatalogDocument {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ModelCatalogSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
@@ -253,18 +253,6 @@ pub struct ModelCatalogSnapshot {
     pub official: ModelCatalogDocument,
     #[serde(default)]
     pub custom: ModelCatalogDocument,
-}
-
-impl Default for ModelCatalogSnapshot {
-    fn default() -> Self {
-        Self {
-            last_refresh_at: None,
-            last_successful_source: None,
-            last_error: None,
-            official: ModelCatalogDocument::default(),
-            custom: ModelCatalogDocument::default(),
-        }
-    }
 }
 
 impl ModelCatalogSnapshot {

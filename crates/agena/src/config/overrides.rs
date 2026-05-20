@@ -9,7 +9,8 @@ use super::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigOverride {
     TracingFilter(String),
-    TracingDatabaseLevel(String),
+    TracingDatabase(String),
+    TracingAdapter(String),
     UiLocale(String),
     DefaultProvider(String),
     DefaultAdapter(String),
@@ -63,7 +64,10 @@ impl FromStr for ConfigOverride {
         match key {
             "mode" => Err(ConfigError::UnsupportedModeConfig { field: "mode" }),
             "tracing.filter" => Ok(Self::TracingFilter(raw_value.to_owned())),
-            "tracing.database_level" => Ok(Self::TracingDatabaseLevel(raw_value.to_owned())),
+            "tracing.database" | "tracing.database_level" => {
+                Ok(Self::TracingDatabase(raw_value.to_owned()))
+            }
+            "tracing.adapter" => Ok(Self::TracingAdapter(raw_value.to_owned())),
             "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
             "default.provider" => Ok(Self::DefaultProvider(raw_value.to_owned())),
             "default.adapter" => Ok(Self::DefaultAdapter(raw_value.to_owned())),
@@ -107,11 +111,17 @@ impl ConfigOverride {
                     .get_or_insert_with(RawTracingConfig::default)
                     .filter = Some(filter.clone());
             }
-            Self::TracingDatabaseLevel(level) => {
+            Self::TracingDatabase(level) => {
                 config
                     .tracing
                     .get_or_insert_with(RawTracingConfig::default)
-                    .database_level = Some(level.clone());
+                    .database = Some(level.clone());
+            }
+            Self::TracingAdapter(mode) => {
+                config
+                    .tracing
+                    .get_or_insert_with(RawTracingConfig::default)
+                    .adapter = Some(mode.clone());
             }
             Self::UiLocale(locale) => {
                 config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale.clone());

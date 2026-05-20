@@ -1107,10 +1107,10 @@ async fn upsert_part_projection(
 }
 
 async fn count_parts_for_message(db: &DatabaseConnection, message_id: i64) -> Result<u64, DbErr> {
-    Ok(activity_part::Entity::find()
+    activity_part::Entity::find()
         .filter(activity_part::Column::MessageId.eq(message_id))
         .count(db)
-        .await?)
+        .await
 }
 
 async fn touch_message_projection(

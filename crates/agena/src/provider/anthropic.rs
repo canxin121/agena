@@ -3,7 +3,10 @@ use futures_core::Stream;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 use crate::{
@@ -12,7 +15,7 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        CompletionToolCall, CompletionUsage, ManagedCredential, ModelProvider, ProviderModel,
+        CompletionToolCall, CompletionUsage, ManagedCredential, ModelRuntime, ProviderModel,
         StreamResumePolicy, ThinkingDisplay, ThinkingRequest, auth::AuthData, prompt_cache, sse,
         utils, wire_message,
     },
@@ -26,9 +29,10 @@ const DEFAULT_ANTHROPIC_BETA_HEADER: &str =
     "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14";
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 const DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
+const ADAPTER_KIND: &str = "anthropic";
 
 #[derive(Clone)]
-pub struct AnthropicProvider {
+pub struct AnthropicAdapter {
     id: String,
     client: reqwest::Client,
     api_key: ManagedCredential,
@@ -49,7 +53,7 @@ pub enum AnthropicProfile {
     GithubCopilot,
 }
 
-impl AnthropicProvider {
+impl AnthropicAdapter {
     pub fn new(
         client: reqwest::Client,
         api_key: impl Into<String>,
@@ -231,7 +235,7 @@ impl AnthropicProvider {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
-        let stream = ModelProvider::complete_stream(self, request).await?;
+        let stream = ModelRuntime::complete_stream(self, request).await?;
         utils::aggregate_stream(self.id.as_str(), fallback_model, stream).await
     }
 
@@ -476,49 +480,40 @@ impl AnthropicProvider {
 
     async fn send_json<R>(
         &self,
+        operation: &str,
         endpoint: String,
-        body: &impl Serialize,
+        body: &serde_json::Value,
         request: Option<&CompletionRequest>,
     ) -> Result<R, AppError>
     where
         R: for<'de> Deserialize<'de>,
     {
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            self.apply_headers(
-                self.client
-                    .post(endpoint.clone())
-                    .header("anthropic-version", ANTHROPIC_VERSION)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                api_key,
-                request,
-            )
-            .json(body)
+            let mut headers = self.auth_headers(api_key, request);
+            headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
+            headers.insert(
+                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                "application/json".to_owned(),
+            );
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                operation,
+                "POST",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                Some(body),
+            );
+            utils::apply_resolved_request_headers(self.client.post(endpoint.clone()), &headers)
+                .json(body)
         })
         .await?;
 
-        utils::parse_json_response(self.id.as_str(), response).await
+        utils::parse_json_response_logged(self.id.as_str(), ADAPTER_KIND, operation, response).await
     }
 
-    fn apply_headers(
-        &self,
-        req: reqwest::RequestBuilder,
-        api_key: &str,
-        request: Option<&CompletionRequest>,
-    ) -> reqwest::RequestBuilder {
-        let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
-        let mut req = req.header(self.auth_header.as_str(), auth_value);
-        if matches!(self.profile, AnthropicProfile::GithubCopilot) {
-            req = req
-                .header(reqwest::header::USER_AGENT, "agena/0.1.0")
-                .header("openai-intent", "conversation-edits");
-            if let Some(request) = request {
-                req = req.header("x-initiator", Self::initiator(request));
-                if Self::is_vision_request(request) {
-                    req = req.header("Copilot-Vision-Request", "true");
-                }
-            }
-        }
-        let headers = request
+    fn resolved_headers(&self, request: Option<&CompletionRequest>) -> HashMap<String, String> {
+        let mut headers = request
             .map(|request| {
                 utils::merged_request_headers(
                     &self.extra_headers,
@@ -526,7 +521,37 @@ impl AnthropicProvider {
                 )
             })
             .unwrap_or_else(|| self.extra_headers.clone());
-        utils::apply_request_headers(self.id.as_str(), req, &headers)
+        if matches!(self.profile, AnthropicProfile::GithubCopilot) {
+            headers
+                .entry(reqwest::header::USER_AGENT.as_str().to_owned())
+                .or_insert_with(|| "agena/0.1.0".to_owned());
+            headers
+                .entry("openai-intent".to_owned())
+                .or_insert_with(|| "conversation-edits".to_owned());
+            if let Some(request) = request {
+                headers.insert(
+                    "x-initiator".to_owned(),
+                    Self::initiator(request).to_owned(),
+                );
+                if Self::is_vision_request(request) {
+                    headers.insert("Copilot-Vision-Request".to_owned(), "true".to_owned());
+                }
+            }
+        }
+        headers
+    }
+
+    fn auth_headers(
+        &self,
+        api_key: &str,
+        request: Option<&CompletionRequest>,
+    ) -> BTreeMap<String, String> {
+        let mut headers = self.resolved_headers(request);
+        headers.insert(
+            self.auth_header.clone(),
+            utils::auth_header_value(self.auth_scheme.as_deref(), api_key),
+        );
+        utils::resolved_request_headers(self.id.as_str(), &headers)
     }
 }
 
@@ -540,7 +565,7 @@ fn normalize_domain(value: &str) -> String {
 }
 
 #[async_trait]
-impl ModelProvider for AnthropicProvider {
+impl ModelRuntime for AnthropicAdapter {
     fn id(&self) -> &str {
         self.id.as_str()
     }
@@ -591,18 +616,28 @@ impl ModelProvider for AnthropicProvider {
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let endpoint = self.models_endpoint()?;
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            self.apply_headers(
-                self.client
-                    .get(endpoint.as_str())
-                    .header("anthropic-version", ANTHROPIC_VERSION),
-                api_key,
+            let mut headers = self.auth_headers(api_key, None);
+            headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "list_models",
+                "GET",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
                 None,
-            )
+            );
+            utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
         })
         .await?;
 
-        let payload: AnthropicModelListResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+        let payload: AnthropicModelListResponse = utils::parse_json_response_logged(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "list_models",
+            response,
+        )
+        .await?;
         Ok(payload
             .into_items()
             .into_iter()
@@ -618,7 +653,7 @@ impl ModelProvider for AnthropicProvider {
 
     #[tracing::instrument(skip_all, fields(provider = tracing::field::Empty, model = %request.model))]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        tracing::Span::current().record("provider", &tracing::field::display(self.id.as_str()));
+        tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
 
@@ -671,7 +706,12 @@ impl ModelProvider for AnthropicProvider {
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response: AnthropicMessagesResponse = self
-            .send_json(self.messages_endpoint()?, &body_json, Some(&request))
+            .send_json(
+                "complete.messages",
+                self.messages_endpoint()?,
+                &body_json,
+                Some(&request),
+            )
             .await?;
 
         let text = response
@@ -752,7 +792,7 @@ impl ModelProvider for AnthropicProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        tracing::Span::current().record("provider", &tracing::field::display(self.id.as_str()));
+        tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
 
         let mut system_chunks = Vec::new();
@@ -802,25 +842,46 @@ impl ModelProvider for AnthropicProvider {
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            self.apply_headers(
-                self.client
-                    .post(
-                        self.messages_endpoint()
-                            .expect("messages endpoint should resolve"),
-                    )
-                    .header("anthropic-version", ANTHROPIC_VERSION)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                api_key,
-                Some(&request),
-            )
-            .json(&body_json)
+            let endpoint = self
+                .messages_endpoint()
+                .expect("messages endpoint should resolve");
+            let mut headers = self.auth_headers(api_key, Some(&request));
+            headers.insert("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned());
+            headers.insert(
+                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                "application/json".to_owned(),
+            );
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "complete_stream.messages",
+                "POST",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                Some(&body_json),
+            );
+            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                .json(&body_json)
         })
         .await?;
 
         if !response.status().is_success() {
-            return Err(utils::http_status_error_from_response(self.id.as_str(), response).await);
+            return Err(utils::http_status_error_from_response_logged(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "complete_stream.messages",
+                response,
+            )
+            .await);
         }
 
+        utils::adapter_log_http_response_open(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete_stream.messages",
+            response.status(),
+            response.headers(),
+        );
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(self.id.as_str());
         let model_name = model;
@@ -836,6 +897,12 @@ impl ModelProvider for AnthropicProvider {
 
             while let Some(event) = events.next().await {
                 let event = event?;
+                utils::adapter_log_stream_event(
+                    provider_id.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.messages",
+                    &event,
+                );
                 let parsed: AnthropicSseEvent =
                     utils::parse_json_value(provider_id.as_str(), "stream event", event)?;
 
@@ -1597,7 +1664,7 @@ mod tests {
     #[test]
     fn assistant_tool_results_are_projected_as_user_blocks() {
         let messages =
-            AnthropicProvider::assistant_messages_from_parts(&completed_operation_message());
+            AnthropicAdapter::assistant_messages_from_parts(&completed_operation_message());
 
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[0].role, "assistant");
@@ -1652,7 +1719,7 @@ mod tests {
             },
         ];
 
-        AnthropicProvider::apply_prompt_cache_hints(
+        AnthropicAdapter::apply_prompt_cache_hints(
             system.as_mut_slice(),
             tools.as_mut_slice(),
             messages.as_mut_slice(),
@@ -1689,7 +1756,7 @@ mod tests {
             },
         ];
 
-        AnthropicProvider::apply_prompt_cache_hints(
+        AnthropicAdapter::apply_prompt_cache_hints(
             system.as_mut_slice(),
             tools.as_mut_slice(),
             messages.as_mut_slice(),
@@ -1702,7 +1769,7 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_changes_when_auth_scope_changes() {
-        let provider_a = AnthropicProvider::new_managed(
+        let provider_a = AnthropicAdapter::new_managed(
             reqwest::Client::new(),
             ManagedCredential::environment(
                 "anthropic env",
@@ -1713,7 +1780,7 @@ mod tests {
             "https://api.anthropic.com",
             "claude-3-7-sonnet-latest",
         );
-        let provider_b = AnthropicProvider::new_managed(
+        let provider_b = AnthropicAdapter::new_managed(
             reqwest::Client::new(),
             ManagedCredential::environment(
                 "anthropic env",
@@ -1737,7 +1804,7 @@ mod tests {
 
     #[test]
     fn bundled_base_url_enables_default_beta_headers_and_eager_input_streaming() {
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             "https://api.anthropic.com/v1",
@@ -1758,7 +1825,7 @@ mod tests {
 
     #[test]
     fn proxy_base_url_disables_default_beta_headers_and_eager_input_streaming() {
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             "https://gateway.example.com/anthropic/v1",
@@ -1855,7 +1922,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -1914,7 +1981,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -1928,7 +1995,7 @@ mod tests {
         assert_eq!(models[0].id.as_str(), "claude-sonnet-4-5");
         assert_eq!(models[0].display_name.as_deref(), Some("Claude Sonnet 4.5"));
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -1945,7 +2012,7 @@ mod tests {
 
     #[test]
     fn github_copilot_profile_uses_bearer_auth_messages_v1_and_disables_eager_streaming() {
-        let provider = AnthropicProvider::new_managed_with_id(
+        let provider = AnthropicAdapter::new_managed_with_id(
             "github-copilot::anthropic",
             reqwest::Client::new(),
             ManagedCredential::static_value("copilot bearer", "token"),
@@ -2011,7 +2078,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -2093,7 +2160,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -2154,7 +2221,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -2229,7 +2296,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -2289,7 +2356,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -2366,7 +2433,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),
@@ -2447,7 +2514,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = AnthropicProvider::new(
+        let provider = AnthropicAdapter::new(
             reqwest::Client::new(),
             "ak-test",
             server.url(),

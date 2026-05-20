@@ -169,7 +169,7 @@ impl ModelCatalogService {
             .await
         {
             Ok((Some(document), warning)) => {
-                merge_catalog_document(&mut merged, document);
+                merge_live_provider_catalog_document(&mut merged, document);
                 succeeded += 1;
                 if let Some(warning) = warning {
                     warnings.push(warning);

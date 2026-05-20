@@ -19,8 +19,8 @@ use agena::{
     model_catalog::CatalogModelDefinition,
     permission::PermissionPolicy,
     provider::{
-        CompletionFinishReason, CompletionRequest, CompletionResponse, ModelProvider,
-        ProviderModel, ProviderRegistry,
+        CompletionFinishReason, CompletionRequest, CompletionResponse, ModelRuntime, ProviderModel,
+        ProviderRegistry,
     },
     session::{
         ContextGovernor, ContextPolicy, SessionManager, SessionProcessor, SessionRunOptions,
@@ -56,7 +56,7 @@ const LIVE_PROVIDER_GATEWAY_BASE_URL: &str = "https://api.cxits.cn/";
 const LIVE_PROVIDER_GATEWAY_KEY_ENV: &str = "CX_API_KEY";
 
 #[async_trait::async_trait]
-impl ModelProvider for TestProvider {
+impl ModelRuntime for TestProvider {
     fn id(&self) -> &str {
         "test"
     }
@@ -1819,7 +1819,7 @@ enabled = true
     let mut unmatched = Vec::new();
     let mut listed_entry_count = 0_usize;
 
-    for adapter in listed_adapters.iter().copied() {
+    for adapter in listed_adapters.iter() {
         let models = adapter
             .get("models")
             .and_then(|value| value.as_array())

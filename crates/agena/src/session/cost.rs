@@ -980,7 +980,6 @@ mod tests {
             cache_write_tokens: 40,
             cache_read_tokens: 60,
             total_cost: 0.042,
-            ..Default::default()
         };
         let summary = summarize(&[assistant("anthropic", "claude-haiku-4-5", usage)]);
         let line = summary.one_line();

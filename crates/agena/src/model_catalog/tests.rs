@@ -29,7 +29,7 @@ impl StaticListProvider {
 }
 
 #[async_trait::async_trait]
-impl ModelProvider for StaticListProvider {
+impl ModelRuntime for StaticListProvider {
     fn id(&self) -> &str {
         self.provider_id
     }
@@ -131,6 +131,119 @@ fn entries_keep_official_and_custom_records_separate() {
     );
     assert!(entries[1].has_local_override);
     assert!(entries[1].thinking_modes.contains_key("deep"));
+}
+
+#[test]
+fn merged_models_keep_primary_capability_when_sources_conflict() {
+    let snapshot = ModelCatalogSnapshot {
+        official: ModelCatalogDocument {
+            models: BTreeMap::from([(
+                "glm-5".to_owned(),
+                CatalogModelDefinition {
+                    capabilities: ModelCapabilityPatch {
+                        features: Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+                            supported: vec![ModelCapabilityFeature::StructuredOutput],
+                            unsupported: vec![ModelCapabilityFeature::ToolCalling],
+                        })),
+                        ..ModelCapabilityPatch::default()
+                    },
+                    ..CatalogModelDefinition::default()
+                },
+            )]),
+        },
+        custom: ModelCatalogDocument {
+            models: BTreeMap::from([(
+                "glm-5".to_owned(),
+                CatalogModelDefinition {
+                    capabilities: ModelCapabilityPatch {
+                        features: Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+                            supported: vec![ModelCapabilityFeature::ToolCalling],
+                            unsupported: vec![ModelCapabilityFeature::StructuredOutput],
+                        })),
+                        ..ModelCapabilityPatch::default()
+                    },
+                    ..CatalogModelDefinition::default()
+                },
+            )]),
+        },
+        ..ModelCatalogSnapshot::default()
+    };
+
+    let merged = snapshot.merged_models();
+    let capabilities = &merged
+        .models
+        .get("glm-5")
+        .expect("glm-5 should exist after merge")
+        .capabilities;
+
+    capabilities
+        .validate()
+        .expect("merged capability patch should stay valid");
+    assert_eq!(
+        capabilities.feature_support(ModelCapabilityFeature::StructuredOutput),
+        Some(CapabilitySupport::Unsupported)
+    );
+    assert_eq!(
+        capabilities.feature_support(ModelCapabilityFeature::ToolCalling),
+        Some(CapabilitySupport::Supported)
+    );
+}
+
+#[test]
+fn live_provider_catalog_document_corrects_public_catalog_baseline() {
+    let mut current = ModelCatalogDocument {
+        models: BTreeMap::from([(
+            "glm-5".to_owned(),
+            CatalogModelDefinition {
+                display_name: Some("GLM-5".to_owned()),
+                max_output_tokens: Some(32_768),
+                capabilities: ModelCapabilityPatch {
+                    features: Some(FeatureCapabilityPatch::Supported(vec![
+                        ModelCapabilityFeature::StructuredOutput,
+                    ])),
+                    ..ModelCapabilityPatch::default()
+                },
+                ..CatalogModelDefinition::default()
+            },
+        )]),
+    };
+    let provider_document = ModelCatalogDocument {
+        models: BTreeMap::from([(
+            "glm-5".to_owned(),
+            CatalogModelDefinition {
+                max_output_tokens: Some(8_192),
+                capabilities: ModelCapabilityPatch {
+                    features: Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+                        supported: vec![ModelCapabilityFeature::Reasoning],
+                        unsupported: vec![ModelCapabilityFeature::StructuredOutput],
+                    })),
+                    ..ModelCapabilityPatch::default()
+                },
+                ..CatalogModelDefinition::default()
+            },
+        )]),
+    };
+
+    merge_live_provider_catalog_document(&mut current, provider_document);
+
+    let corrected = current
+        .models
+        .get("glm-5")
+        .expect("glm-5 should still exist");
+    assert_eq!(corrected.display_name.as_deref(), Some("GLM-5"));
+    assert_eq!(corrected.max_output_tokens, Some(8_192));
+    assert_eq!(
+        corrected
+            .capabilities
+            .feature_support(ModelCapabilityFeature::StructuredOutput),
+        Some(CapabilitySupport::Unsupported)
+    );
+    assert_eq!(
+        corrected
+            .capabilities
+            .feature_support(ModelCapabilityFeature::Reasoning),
+        Some(CapabilitySupport::Supported)
+    );
 }
 
 #[test]

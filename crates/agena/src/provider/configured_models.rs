@@ -12,7 +12,7 @@ use crate::model::{
 };
 
 use super::{
-    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelProvider, PromptCacheShape,
+    CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelRuntime, PromptCacheShape,
     StreamResumePolicy, ThinkingRequest, chat_wire,
 };
 
@@ -433,7 +433,7 @@ fn validate_named_patch(
         }
     }
 
-    for value in supported_set.intersection(&unsupported_set) {
+    if let Some(value) = supported_set.intersection(&unsupported_set).next() {
         return Err(format!(
             "{group} capability `{value}` cannot be both supported and unsupported"
         ));
@@ -762,16 +762,16 @@ fn apply_configured_speed_modes<'a>(
 
 #[derive(Clone)]
 pub struct ConfiguredModelsProvider {
-    target: Arc<dyn ModelProvider>,
+    target: Arc<dyn ModelRuntime>,
     models: Arc<BTreeMap<String, ConfiguredModelDefinition>>,
 }
 
 impl ConfiguredModelsProvider {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(
-        target: Arc<dyn ModelProvider>,
+        target: Arc<dyn ModelRuntime>,
         models: BTreeMap<String, ConfiguredModelDefinition>,
-    ) -> Arc<dyn ModelProvider> {
+    ) -> Arc<dyn ModelRuntime> {
         if models.is_empty() {
             target
         } else {
@@ -850,7 +850,7 @@ impl ConfiguredModelsProvider {
 }
 
 #[async_trait]
-impl ModelProvider for ConfiguredModelsProvider {
+impl ModelRuntime for ConfiguredModelsProvider {
     fn id(&self) -> &str {
         self.target.id()
     }
@@ -1041,7 +1041,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl ModelProvider for StaticProvider {
+    impl ModelRuntime for StaticProvider {
         fn id(&self) -> &str {
             "test-provider"
         }

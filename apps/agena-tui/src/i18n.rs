@@ -59,6 +59,17 @@ impl I18n {
     }
 }
 
+pub const SUPPORTED_LOCALES: &[(&str, &str)] = &[
+    ("en-US", "English (United States)"),
+    ("zh-CN", "Chinese (Simplified)"),
+    ("zh-TW", "Chinese (Traditional)"),
+    ("ja-JP", "Japanese"),
+    ("ko-KR", "Korean"),
+    ("fr-FR", "French"),
+    ("de-DE", "German"),
+    ("es-ES", "Spanish"),
+];
+
 impl Default for I18n {
     fn default() -> Self {
         Self::resolve(None, None)

@@ -26,6 +26,8 @@ use super::history::{
 };
 use super::{context_governor::ContextGovernor, store::ProcessorPartIdAllocator};
 
+const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
+
 #[derive(Clone)]
 pub(crate) struct SessionRunRequest {
     pub session_id: i64,
@@ -381,6 +383,9 @@ impl SessionProcessor {
         let mut finish = None;
         let mut finish_reason_enum = FinishReason::default();
         let mut provider_metadata = None;
+        let mut visible_text = String::new();
+        let mut reasoning_text = String::new();
+        let mut saw_tool_call = false;
 
         let cancel = run.cancel.clone();
         loop {
@@ -395,6 +400,7 @@ impl SessionProcessor {
             let Some(item) = next else { break };
             match item {
                 Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
+                    visible_text.push_str(delta.as_str());
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
                     }
@@ -434,6 +440,7 @@ impl SessionProcessor {
                     arguments_delta,
                     ..
                 }) => {
+                    saw_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
                     }
@@ -478,6 +485,7 @@ impl SessionProcessor {
                     provider_metadata = completed_provider_metadata;
                 }
                 Ok(CompletionStreamEvent::ThinkingDelta { delta, .. }) => {
+                    reasoning_text.push_str(delta.as_str());
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
                     }
@@ -531,6 +539,35 @@ impl SessionProcessor {
             complete_part_status(&mut assistant, part_id)?;
         }
         if let Some(part_id) = active_reasoning_part {
+            complete_part_status(&mut assistant, part_id)?;
+        }
+
+        if provider_err.is_none()
+            && visible_text.trim().is_empty()
+            && !saw_tool_call
+            && !reasoning_text.trim().is_empty()
+            && reasoning_text.trim() != REASONING_PLACEHOLDER
+        {
+            let part_id = run.part_ids.reserve().await?;
+            self.start_text_part(&mut assistant, part_id, Utc::now())?;
+            self.emit_part_updated(&run, &assistant, part_id).await?;
+            self.append_text_delta(&mut assistant, part_id, reasoning_text.as_str())?;
+            turn_buffer
+                .push_text_delta(reasoning_text.as_str())
+                .map_err(|err| AppError::Internal(err.to_string()))?;
+
+            let seq = part_delta_sequences.entry(part_id).or_default();
+            *seq += 1;
+            self.emit_part_delta(
+                &run,
+                &assistant,
+                part_id,
+                None,
+                PartDeltaField::Text,
+                reasoning_text,
+                *seq,
+            )
+            .await?;
             complete_part_status(&mut assistant, part_id)?;
         }
 
@@ -1144,7 +1181,7 @@ mod tests {
     use crate::plugin::PluginToolDecl;
     use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
     use crate::provider::{
-        CompletionFinishReason, CompletionResponse, ModelProvider, ProviderModel,
+        CompletionFinishReason, CompletionResponse, ModelRuntime, ProviderModel,
     };
     use crate::tool::ToolPayloadInput;
 
@@ -1374,7 +1411,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl ModelProvider for OrderedStreamProvider {
+    impl ModelRuntime for OrderedStreamProvider {
         fn id(&self) -> &str {
             "ordered-stream"
         }
@@ -1654,6 +1691,101 @@ mod tests {
                     seq,
                     ..
                 }) if *message_id == 100 && *part_id == 200 && delta == "think " && *seq == 1
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn run_turn_promotes_reasoning_only_stream_to_visible_text() {
+        let mut registry = ProviderRegistry::new();
+        registry.register(OrderedStreamProvider {
+            events: vec![
+                CompletionStreamEvent::ThinkingDelta {
+                    provider_id: ProviderId::new("ordered-stream"),
+                    model: ModelId::new("ordered-model"),
+                    delta: "answer ".to_owned(),
+                },
+                CompletionStreamEvent::ThinkingDelta {
+                    provider_id: ProviderId::new("ordered-stream"),
+                    model: ModelId::new("ordered-model"),
+                    delta: "from reasoning".to_owned(),
+                },
+                CompletionStreamEvent::Completed {
+                    provider_id: ProviderId::new("ordered-stream"),
+                    model: ModelId::new("ordered-model"),
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                },
+            ],
+        });
+
+        let processor = SessionProcessor::new(
+            Arc::new(registry),
+            ContextGovernor::new(crate::session::ContextPolicy::default()),
+        );
+
+        let result = processor
+            .run_turn(SessionRunRequest {
+                session_id: 1,
+                model: ModelRef::new("ordered-stream", "ordered-model"),
+                model_thinking_mode: None,
+                model_speed_mode: None,
+                model_parallel_tool_calls: None,
+                completion: CompletionRequest {
+                    model: ModelId::new("ordered-model"),
+                    system: None,
+                    messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                    tools: Vec::new(),
+                    temperature: None,
+                    max_output_tokens: Some(64),
+                    prompt_cache_key: None,
+                    previous_response_id: None,
+                    prompt_window_generation: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking: None,
+                    verbosity: None,
+                    request_override: Default::default(),
+                    response_format: None,
+                },
+                next_message_id: 100,
+                part_ids: ProcessorPartIdAllocator::for_test(200),
+                next_call_id: 300,
+                event_publisher: None,
+                cancel: None,
+            })
+            .await
+            .expect("processor run should succeed");
+
+        let assistant = result
+            .state
+            .into_iter()
+            .find(|message| message.id == 100)
+            .expect("assistant message should be present");
+
+        assert_eq!(assistant.parts.len(), 2);
+        assert_eq!(
+            assistant.parts[0].reasoning_summary(),
+            Some(&["answer ".to_string(), "from reasoning".to_string()][..])
+        );
+        assert_eq!(assistant.parts[1].text(), Some("answer from reasoning"));
+
+        let completed = result
+            .history_items
+            .iter()
+            .find_map(|event| match event {
+                EventKind::AssistantMessageCompleted(completed) => Some(completed),
+                _ => None,
+            })
+            .expect("assistant completion history should be present");
+        assert!(completed.content.blocks.iter().any(|block| {
+            matches!(
+                block,
+                crate::session::history::TranscriptBlock::Text { text }
+                    if text == "answer from reasoning"
             )
         }));
     }

@@ -153,14 +153,16 @@ impl Default for DefaultConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TracingConfig {
     pub filter: String,
-    pub database_level: String,
+    pub database: String,
+    pub adapter: String,
 }
 
 impl Default for TracingConfig {
     fn default() -> Self {
         Self {
             filter: "info".to_string(),
-            database_level: "error".to_string(),
+            database: "error".to_string(),
+            adapter: "off".to_string(),
         }
     }
 }
@@ -169,8 +171,9 @@ impl TracingConfig {
     pub fn env_filter(&self) -> Result<EnvFilter, tracing_subscriber::filter::ParseError> {
         let mut filter = EnvFilter::try_new(self.filter.as_str())?;
         for target in ["sqlx", "sea_orm", "sea_orm_migration"] {
-            filter = filter.add_directive(format!("{target}={}", self.database_level).parse()?);
+            filter = filter.add_directive(format!("{target}={}", self.database).parse()?);
         }
+        filter = filter.add_directive(format!("agena::adapter={}", self.adapter).parse()?);
         Ok(filter)
     }
 }
@@ -292,8 +295,12 @@ pub struct AgentConfig {
         skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
     )]
     pub permission: crate::agent::AgentPermissionConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    #[serde(
+        default,
+        rename = "default",
+        skip_serializing_if = "crate::agents::AgentDefaultModelConfig::is_empty"
+    )]
+    pub default: crate::agents::AgentDefaultModelConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -341,10 +348,10 @@ pub struct ResolvedProviderConfig {
 pub enum ProviderAuthConfig {
     None,
     Api(ProviderApiAuthConfig),
+    #[serde(rename = "gitlab_api")]
+    Gitlab(ProviderGitlabAuthConfig),
     Credential(ProviderCredentialAuthConfig),
     BedrockSigv4(BedrockSigv4AuthConfig),
-    GoogleAdc(ProviderGoogleAdcAuthConfig),
-    SapAiCore(ProviderSapAiCoreAuthConfig),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -375,7 +382,8 @@ pub enum ProviderModelDiscoveryConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Default)]
 pub struct ProviderApiAuthConfig {
-    pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub protocol_paths: ProviderProtocolPathsConfig,
     pub api_key: Option<String>,
@@ -393,18 +401,38 @@ impl fmt::Debug for ProviderApiAuthConfig {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize)]
-pub struct ProviderGoogleAdcAuthConfig {
-    pub base_url: String,
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub protocol_paths: ProviderProtocolPathsConfig,
+#[derive(Clone, PartialEq, Eq, Serialize, Default)]
+pub struct ProviderGitlabAuthConfig {
+    pub api_key: Option<String>,
+    pub api_key_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential: Option<AuthData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_gateway_url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ai_gateway_headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub feature_flags: BTreeMap<String, bool>,
 }
 
-impl fmt::Debug for ProviderGoogleAdcAuthConfig {
+impl fmt::Debug for ProviderGitlabAuthConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProviderGoogleAdcAuthConfig")
-            .field("base_url", &self.base_url)
-            .field("protocol_paths", &self.protocol_paths)
+        f.debug_struct("ProviderGitlabAuthConfig")
+            .field("api_key", &redacted(self.api_key.as_deref()))
+            .field("api_key_env", &self.api_key_env)
+            .field(
+                "credential",
+                &self
+                    .credential
+                    .as_ref()
+                    .map(|credential| credential_debug_kind(credential)),
+            )
+            .field("instance_url", &self.instance_url)
+            .field("ai_gateway_url", &self.ai_gateway_url)
+            .field("ai_gateway_headers", &self.ai_gateway_headers)
+            .field("feature_flags", &self.feature_flags)
             .finish()
     }
 }
@@ -414,6 +442,20 @@ pub struct ProviderCredentialAuthConfig {
     pub issuer: CredentialIssuer,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<AuthData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub protocol_paths: ProviderProtocolPathsConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_key_env: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ai_gateway_url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ai_gateway_headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub feature_flags: BTreeMap<String, bool>,
 }
 
 impl fmt::Debug for ProviderCredentialAuthConfig {
@@ -427,6 +469,13 @@ impl fmt::Debug for ProviderCredentialAuthConfig {
                     .as_ref()
                     .map(|credential| credential_debug_kind(credential)),
             )
+            .field("base_url", &self.base_url)
+            .field("protocol_paths", &self.protocol_paths)
+            .field("service_key_env", &self.service_key_env)
+            .field("instance_url", &self.instance_url)
+            .field("ai_gateway_url", &self.ai_gateway_url)
+            .field("ai_gateway_headers", &self.ai_gateway_headers)
+            .field("feature_flags", &self.feature_flags)
             .finish()
     }
 }
@@ -453,21 +502,6 @@ impl fmt::Debug for BedrockSigv4AuthConfig {
                 &redacted(self.secret_access_key.as_deref()),
             )
             .field("session_token", &redacted(self.session_token.as_deref()))
-            .finish()
-    }
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize)]
-pub struct ProviderSapAiCoreAuthConfig {
-    pub api: ProviderApiAuthConfig,
-    pub service_key_env: String,
-}
-
-impl fmt::Debug for ProviderSapAiCoreAuthConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProviderSapAiCoreAuthConfig")
-            .field("api", &self.api)
-            .field("service_key_env", &self.service_key_env)
             .finish()
     }
 }

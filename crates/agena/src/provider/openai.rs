@@ -2,21 +2,24 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 use tokio::sync::Mutex;
 
 use crate::{
     error::AppError,
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
-    model::{ModelId, ProviderId},
+    model::{CapabilitySupport, ModelCapabilities, ModelId, ModelThinkingMode, ProviderId},
     provider::{
         CapabilityFamily, CompletionFinishReason, CompletionRequest, CompletionResponse,
         CompletionStreamEvent, CompletionToolCall, CompletionUsage, ManagedCredential,
-        ModelProvider, ProviderModel, StreamResumePolicy,
+        ModelRuntime, ProviderModel, StreamResumePolicy,
         auth::AuthData,
         chat_wire::{
             self, ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions,
-            request_to_chat_messages, tools_to_chat_definitions,
+            tools_to_chat_definitions,
         },
         prompt_cache, sse, utils, wire_message,
     },
@@ -26,9 +29,10 @@ use crate::{
 const CHATGPT_CODEX_ORIGINATOR: &str = "agena";
 const CHATGPT_CODEX_USER_AGENT: &str = concat!("agena/", env!("CARGO_PKG_VERSION"));
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
+const ADAPTER_KIND: &str = "openai";
 
 #[derive(Clone)]
-pub struct OpenAiProvider {
+pub struct OpenAiAdapter {
     id: String,
     client: reqwest::Client,
     api_key: ManagedCredential,
@@ -46,6 +50,7 @@ pub struct OpenAiProvider {
     extra_headers: HashMap<String, String>,
     stream_mode: OpenAiStreamMode,
     realtime_ws_url: Option<String>,
+    top_level_prompt_cache_override: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,7 +78,7 @@ pub enum OpenAiStreamMode {
     RealtimeWebSocket,
 }
 
-impl OpenAiProvider {
+impl OpenAiAdapter {
     pub fn new(
         client: reqwest::Client,
         api_key: impl Into<String>,
@@ -139,6 +144,7 @@ impl OpenAiProvider {
             extra_headers: HashMap::new(),
             stream_mode: OpenAiStreamMode::Sse,
             realtime_ws_url: None,
+            top_level_prompt_cache_override: None,
         }
     }
 
@@ -202,6 +208,11 @@ impl OpenAiProvider {
         self
     }
 
+    pub fn with_top_level_prompt_cache(mut self, enabled: bool) -> Self {
+        self.top_level_prompt_cache_override = Some(enabled);
+        self
+    }
+
     fn configured_public_copilot_base_url(&self) -> bool {
         self.base_url.trim_end_matches('/') == DEFAULT_COPILOT_BASE_URL
     }
@@ -256,6 +267,158 @@ impl OpenAiProvider {
             "{}/chat/completions",
             self.resolved_base_url()?.trim_end_matches('/')
         ))
+    }
+
+    fn is_openai_compatible_family(&self) -> bool {
+        matches!(self.capability_family, CapabilityFamily::OpenAiCompatible)
+    }
+
+    fn uses_chat_compatible_request_fields(&self) -> bool {
+        self.is_openai_compatible_family()
+    }
+
+    fn supports_top_level_prompt_cache(&self) -> bool {
+        if let Some(enabled) = self.top_level_prompt_cache_override {
+            return enabled;
+        }
+        self.uses_chat_compatible_request_fields()
+            && matches!(self.id.as_str(), "openrouter" | "zenmux" | "kilo")
+    }
+
+    fn is_dashscope_compatible(&self) -> bool {
+        self.id.eq_ignore_ascii_case("alibaba-cn")
+            || self.id.to_ascii_lowercase().contains("dashscope")
+            || url::Url::parse(self.base_url.as_str())
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+                .is_some_and(|host| host.contains("dashscope") && host.contains("aliyuncs.com"))
+    }
+
+    fn dashscope_reasoning_profile(model: &str) -> Option<DashscopeReasoningProfile> {
+        let normalized = model.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return None;
+        }
+        if normalized.contains("kimi-k2-thinking")
+            || normalized.contains(":thinking")
+            || normalized.contains("-thinking")
+        {
+            return Some(DashscopeReasoningProfile::AlwaysOn);
+        }
+        if normalized.contains("qwen-plus")
+            || normalized.contains("qwen3")
+            || normalized.contains("qwq")
+            || normalized.contains("deepseek-r1")
+            || normalized.contains("kimi-k2")
+            || normalized.contains("k2p")
+            || normalized.contains("k2-5")
+            || normalized.contains("qvq")
+        {
+            return Some(DashscopeReasoningProfile::Toggleable);
+        }
+        None
+    }
+
+    fn is_dashscope_reasoning_model(&self, model: &ModelId) -> bool {
+        self.is_openai_compatible_family()
+            && self.is_dashscope_compatible()
+            && Self::dashscope_reasoning_profile(model.as_str()).is_some()
+    }
+
+    fn assistant_reasoning_field_for_model(&self, model: &ModelId) -> Option<&'static str> {
+        self.is_dashscope_reasoning_model(model)
+            .then_some("reasoning_content")
+    }
+
+    fn apply_dashscope_reasoning_overrides(
+        &self,
+        model: &ModelId,
+        thinking: Option<&crate::provider::ThinkingRequest>,
+        request_override: &mut crate::model::ModelSpeedModeRequestOverride,
+    ) {
+        if !self.is_dashscope_compatible() {
+            return;
+        }
+
+        let Some(profile) = Self::dashscope_reasoning_profile(model.as_str()) else {
+            return;
+        };
+
+        match thinking {
+            Some(crate::provider::ThinkingRequest::Disabled) => {
+                if matches!(profile, DashscopeReasoningProfile::Toggleable) {
+                    request_override
+                        .body_patch
+                        .insert("enable_thinking".to_owned(), serde_json::Value::Bool(false));
+                }
+                request_override.body_patch.remove("thinking_budget");
+            }
+            Some(crate::provider::ThinkingRequest::Budget { budget_tokens }) => {
+                request_override
+                    .body_patch
+                    .entry("enable_thinking".to_owned())
+                    .or_insert_with(|| serde_json::Value::Bool(true));
+                request_override
+                    .body_patch
+                    .entry("thinking_budget".to_owned())
+                    .or_insert_with(|| serde_json::Value::from(*budget_tokens));
+            }
+            _ => {
+                if !request_override.body_patch.contains_key("enable_thinking")
+                    && !matches!(profile, DashscopeReasoningProfile::AlwaysOn)
+                {
+                    request_override
+                        .body_patch
+                        .insert("enable_thinking".to_owned(), serde_json::Value::Bool(true));
+                }
+            }
+        }
+    }
+
+    fn dashscope_thinking_modes(model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
+        let mut modes = BTreeMap::new();
+        match Self::dashscope_reasoning_profile(model.as_str()) {
+            Some(DashscopeReasoningProfile::Toggleable) => {
+                let mut disabled_override = crate::model::ModelSpeedModeRequestOverride::default();
+                disabled_override
+                    .body_patch
+                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(false));
+                modes.insert(
+                    "no-thinking".to_owned(),
+                    ModelThinkingMode::new()
+                        .with_display_name("No Thinking")
+                        .with_thinking(crate::provider::ThinkingRequest::Disabled)
+                        .with_request_override(disabled_override),
+                );
+
+                let mut enabled_override = crate::model::ModelSpeedModeRequestOverride::default();
+                enabled_override
+                    .body_patch
+                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(true));
+                modes.insert(
+                    "thinking-enabled".to_owned(),
+                    ModelThinkingMode::new()
+                        .with_display_name("Thinking")
+                        .with_description("Enable DashScope reasoning output")
+                        .with_request_override(enabled_override),
+                );
+            }
+            Some(DashscopeReasoningProfile::AlwaysOn) => {
+                let mut enabled_override = crate::model::ModelSpeedModeRequestOverride::default();
+                enabled_override
+                    .body_patch
+                    .insert("enable_thinking".to_owned(), serde_json::Value::Bool(true));
+                modes.insert(
+                    "thinking-enabled".to_owned(),
+                    ModelThinkingMode::new()
+                        .with_display_name("Thinking")
+                        .with_description("Use the model's built-in reasoning output")
+                        .with_request_override(enabled_override),
+                );
+            }
+            None => {}
+        }
+        modes
     }
 
     fn backend_key(&self) -> &'static str {
@@ -328,6 +491,7 @@ impl OpenAiProvider {
         &self,
         endpoint: &url::Url,
         api_key: &str,
+        session_affinity: Option<&str>,
     ) -> Result<http::Request<()>, AppError> {
         use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
@@ -348,6 +512,17 @@ impl OpenAiProvider {
         request
             .headers_mut()
             .insert(auth_header_name, auth_header_value);
+
+        if let Some(session_affinity) = session_affinity.filter(|value| !value.trim().is_empty()) {
+            request.headers_mut().insert(
+                http::header::HeaderName::from_static("x-session-affinity"),
+                http::header::HeaderValue::from_str(session_affinity).map_err(|err| {
+                    AppError::Config(format!(
+                        "openai session affinity header value is invalid: {err}"
+                    ))
+                })?,
+            );
+        }
 
         if endpoint
             .host_str()
@@ -441,16 +616,31 @@ impl OpenAiProvider {
         request: &CompletionRequest,
         model: String,
     ) -> Result<CompletionResponse, AppError> {
+        let model_id = ModelId::new(model.clone());
+        let prompt_cache_key = self
+            .uses_chat_compatible_request_fields()
+            .then(|| request.prompt_cache_key.clone())
+            .flatten();
+        let mut request_override = request.request_override.clone();
+        let assistant_reasoning_field = self.assistant_reasoning_field_for_model(&model_id);
+        self.apply_dashscope_reasoning_overrides(
+            &model_id,
+            request.thinking.as_ref(),
+            &mut request_override,
+        );
+
         let body = ChatCompletionRequest {
             model: model.clone(),
-            messages: self.chat_messages_for_request(request),
+            messages: self.chat_messages_for_request(request, assistant_reasoning_field),
             tools: (!request.tools.is_empty())
                 .then(|| tools_to_chat_definitions(request.tools.as_slice())),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
-            cache_control: None,
-            prompt_cache_key: None,
-            prompt_cache_key_camel_case: None,
+            cache_control: self
+                .supports_top_level_prompt_cache()
+                .then(prompt_cache::PromptCacheControl::ephemeral),
+            prompt_cache_key: prompt_cache_key.clone(),
+            prompt_cache_key_camel_case: prompt_cache_key.clone(),
             stream: false,
             stream_options: None,
             stop: request.stop_sequences.clone(),
@@ -464,25 +654,59 @@ impl OpenAiProvider {
             verbosity: request.verbosity.clone(),
         };
         let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
-            self.apply_headers(
-                self.client
-                    .post(self.chat_endpoint().expect("chat endpoint should resolve"))
-                    .header(self.auth_header.as_str(), auth_value)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                RequestHeaderContext::from_request(request),
-            )
-            .json(&body_json)
+            let endpoint = self.chat_endpoint().expect("chat endpoint should resolve");
+            let mut headers = self.auth_headers(
+                RequestHeaderContext::from_chat_request(request, prompt_cache_key.as_deref()),
+                api_key,
+            );
+            headers.insert(
+                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                "application/json".to_owned(),
+            );
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "complete.chat",
+                "POST",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                Some(&body_json),
+            );
+            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                .json(&body_json)
         })
         .await?;
 
-        let payload: ChatCompletionResponse =
-            utils::parse_json_response(self.id.as_str(), response).await?;
-
-        chat_wire::parse_completion_response(self.id.as_str(), model.as_str(), payload)
+        let payload: ChatCompletionResponse = utils::parse_json_response_logged(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete.chat",
+            response,
+        )
+        .await?;
+        let response_reasoning_field = payload
+            .choices
+            .first()
+            .and_then(|choice| choice.message.as_ref())
+            .and_then(chat_wire::assistant_reasoning_field_from_delta_or_message)
+            .or_else(|| {
+                payload
+                    .choices
+                    .first()
+                    .and_then(|choice| choice.delta.as_ref())
+                    .and_then(chat_wire::assistant_reasoning_field_from_delta_or_message)
+            })
+            .or(assistant_reasoning_field);
+        let mut parsed =
+            chat_wire::parse_completion_response(self.id.as_str(), model.as_str(), payload)?;
+        parsed.provider_metadata = utils::provider_metadata_with_assistant_reasoning_field(
+            parsed.provider_metadata.take(),
+            response_reasoning_field,
+        );
+        Ok(parsed)
     }
 
     async fn complete_stream_with_chat_api(
@@ -493,16 +717,31 @@ impl OpenAiProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
+        let model_id = ModelId::new(model.clone());
+        let prompt_cache_key = self
+            .uses_chat_compatible_request_fields()
+            .then(|| request.prompt_cache_key.clone())
+            .flatten();
+        let mut request_override = request.request_override.clone();
+        let assistant_reasoning_field = self.assistant_reasoning_field_for_model(&model_id);
+        self.apply_dashscope_reasoning_overrides(
+            &model_id,
+            request.thinking.as_ref(),
+            &mut request_override,
+        );
+
         let body = ChatCompletionRequest {
             model: model.clone(),
-            messages: self.chat_messages_for_request(request),
+            messages: self.chat_messages_for_request(request, assistant_reasoning_field),
             tools: (!request.tools.is_empty())
                 .then(|| tools_to_chat_definitions(request.tools.as_slice())),
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
-            cache_control: None,
-            prompt_cache_key: None,
-            prompt_cache_key_camel_case: None,
+            cache_control: self
+                .supports_top_level_prompt_cache()
+                .then(prompt_cache::PromptCacheControl::ephemeral),
+            prompt_cache_key: prompt_cache_key.clone(),
+            prompt_cache_key_camel_case: prompt_cache_key.clone(),
             stream: true,
             stream_options: Some(ChatStreamOptions {
                 include_usage: true,
@@ -518,25 +757,49 @@ impl OpenAiProvider {
             verbosity: request.verbosity.clone(),
         };
         let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+            utils::serialize_request_body_with_patch(&body, &request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
-            self.apply_headers(
-                self.client
-                    .post(self.chat_endpoint().expect("chat endpoint should resolve"))
-                    .header(self.auth_header.as_str(), auth_value)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                RequestHeaderContext::from_request(request),
-            )
-            .json(&body_json)
+            let endpoint = self.chat_endpoint().expect("chat endpoint should resolve");
+            let mut headers = self.auth_headers(
+                RequestHeaderContext::from_chat_request(request, prompt_cache_key.as_deref()),
+                api_key,
+            );
+            headers.insert(
+                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                "application/json".to_owned(),
+            );
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "complete_stream.chat",
+                "POST",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                Some(&body_json),
+            );
+            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                .json(&body_json)
         })
         .await?;
 
         if !response.status().is_success() {
-            return Err(utils::http_status_error_from_response(self.id.as_str(), response).await);
+            return Err(utils::http_status_error_from_response_logged(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "complete_stream.chat",
+                response,
+            )
+            .await);
         }
 
+        utils::adapter_log_http_response_open(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete_stream.chat",
+            response.status(),
+            response.headers(),
+        );
         let provider_name = self.id.clone();
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(provider_name.as_str());
@@ -547,12 +810,23 @@ impl OpenAiProvider {
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
+            let mut response_id: Option<String> = None;
+            let mut assistant_reasoning_field_seen: Option<&'static str> = None;
 
             while let Some(event) = events.next().await {
                 let event = event?;
+                utils::adapter_log_stream_event(
+                    provider_name.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.chat",
+                    &event,
+                );
 
                 let chunk: utils::ChatStreamChunk =
                     utils::parse_json_value(provider_name.as_str(), "chat stream chunk", event)?;
+                if let Some(next_response_id) = chunk.id.clone() {
+                    response_id = Some(next_response_id);
+                }
                 let choice = chunk.choices.first();
 
                 let delta = choice
@@ -568,6 +842,32 @@ impl OpenAiProvider {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
                         delta,
+                    };
+                }
+
+                let reasoning_delta = choice
+                    .and_then(|item| item.delta.as_ref())
+                    .and_then(|delta| {
+                        if assistant_reasoning_field_seen.is_none() {
+                            assistant_reasoning_field_seen =
+                                chat_wire::assistant_reasoning_field_from_fields(
+                                    delta.reasoning_content.as_ref(),
+                                    delta.reasoning_details.as_ref(),
+                                );
+                        }
+                        chat_wire::extract_reasoning_text_from_fields(
+                            delta.reasoning_content.as_ref(),
+                            delta.reasoning_details.as_ref(),
+                        )
+                    })
+                    .unwrap_or_default();
+
+                if !reasoning_delta.is_empty() {
+                    stream_has_content = true;
+                    yield CompletionStreamEvent::ThinkingDelta {
+                        provider_id: provider_id.clone(),
+                        model: model_name.clone(),
+                        delta: reasoning_delta,
                     };
                 }
 
@@ -663,7 +963,10 @@ impl OpenAiProvider {
                         stream_finish_reason.as_deref(),
                     ),
                     usage: stream_usage,
-                    provider_metadata: None,
+                    provider_metadata: utils::provider_metadata_with_assistant_reasoning_field(
+                        response_id_metadata(response_id),
+                        assistant_reasoning_field_seen.or(assistant_reasoning_field),
+                    ),
                 };
             }
         };
@@ -681,12 +984,46 @@ impl OpenAiProvider {
     > {
         let ws_endpoint = self.realtime_ws_endpoint(model.as_str())?;
         let api_key = self.api_key.resolve().await?;
-        let handshake = self.realtime_handshake_request(&ws_endpoint, api_key.as_str())?;
-        let (ws_stream, _) = tokio_tungstenite::connect_async(handshake)
+        let handshake = self.realtime_handshake_request(
+            &ws_endpoint,
+            api_key.as_str(),
+            self.uses_chat_compatible_request_fields()
+                .then(|| request.prompt_cache_key.as_deref())
+                .flatten(),
+        )?;
+        let handshake_headers = handshake
+            .headers()
+            .iter()
+            .filter_map(|(key, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|text| (key.as_str().to_owned(), text.to_owned()))
+            })
+            .collect::<Vec<_>>();
+        utils::adapter_log_http_request_json(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete_stream.realtime_ws.handshake",
+            "GET",
+            ws_endpoint.as_str(),
+            handshake_headers
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+            None,
+        );
+        let (ws_stream, handshake_response) = tokio_tungstenite::connect_async(handshake)
             .await
             .map_err(|err| {
                 AppError::Provider(format!("openai realtime websocket connect failed: {err}"))
             })?;
+        utils::adapter_log_http_response_open(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete_stream.realtime_ws.handshake",
+            handshake_response.status(),
+            handshake_response.headers(),
+        );
 
         let provider_name = self.id.clone();
         let provider_id = ProviderId::new(provider_name.as_str());
@@ -710,6 +1047,12 @@ impl OpenAiProvider {
                         "instructions": instructions,
                     }
                 });
+                utils::adapter_log_stream_event(
+                    provider_name.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.realtime_ws.outbound",
+                    &event,
+                );
                 ws_writer
                     .send(tokio_tungstenite::tungstenite::Message::Text(event.to_string().into()))
                     .await
@@ -732,6 +1075,12 @@ impl OpenAiProvider {
                         }],
                     }
                 });
+                utils::adapter_log_stream_event(
+                    provider_name.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.realtime_ws.outbound",
+                    &event,
+                );
 
                 ws_writer
                     .send(tokio_tungstenite::tungstenite::Message::Text(event.to_string().into()))
@@ -760,6 +1109,12 @@ impl OpenAiProvider {
                 "type": "response.create",
                 "response": response,
             });
+            utils::adapter_log_stream_event(
+                provider_name.as_str(),
+                ADAPTER_KIND,
+                "complete_stream.realtime_ws.outbound",
+                &create_event,
+            );
 
             ws_writer
                 .send(tokio_tungstenite::tungstenite::Message::Text(create_event.to_string().into()))
@@ -775,6 +1130,7 @@ impl OpenAiProvider {
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_has_content = false;
             let mut completed_emitted = false;
+            let mut response_id: Option<String> = None;
 
             while let Some(message) = ws_reader.next().await {
                 let message = message.map_err(|err| {
@@ -799,6 +1155,12 @@ impl OpenAiProvider {
                 let event: serde_json::Value = serde_json::from_str(payload.as_str()).map_err(|err| {
                     AppError::Provider(format!("openai realtime websocket event decode failed: {err}"))
                 })?;
+                utils::adapter_log_stream_event(
+                    provider_name.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.realtime_ws.inbound",
+                    &event,
+                );
 
                 if let Some(err) = utils::responses_stream_error(provider_name.as_str(), &event)? {
                     Err(err)?;
@@ -936,6 +1298,10 @@ impl OpenAiProvider {
                     stream_finish_reason = utils::responses_finish_reason(&event);
                 }
 
+                if let Some(next_response_id) = utils::responses_response_id(&event) {
+                    response_id = Some(next_response_id);
+                }
+
                 if utils::responses_is_completed(&event) {
                     yield CompletionStreamEvent::Completed {
                         provider_id: provider_id.clone(),
@@ -944,7 +1310,7 @@ impl OpenAiProvider {
                             stream_finish_reason.as_deref(),
                         ),
                         usage: stream_usage.clone(),
-                        provider_metadata: None,
+                        provider_metadata: response_id_metadata(response_id.clone()),
                     };
                     completed_emitted = true;
                     break;
@@ -1023,7 +1389,7 @@ impl OpenAiProvider {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
-        let stream = ModelProvider::complete_stream(self, request).await?;
+        let stream = ModelRuntime::complete_stream(self, request).await?;
         utils::aggregate_stream(self.id.as_str(), fallback_model, stream).await
     }
 
@@ -1092,8 +1458,12 @@ impl OpenAiProvider {
     fn chat_messages_for_request(
         &self,
         request: &CompletionRequest,
+        assistant_reasoning_field: Option<&str>,
     ) -> Vec<chat_wire::ChatMessage> {
-        let mut messages = request_to_chat_messages(request);
+        let mut messages = chat_wire::request_to_chat_messages_with_assistant_reasoning_field(
+            request,
+            assistant_reasoning_field,
+        );
         if matches!(self.profile, OpenAiProfile::GithubCopilot) {
             apply_chat_prompt_cache_hints(messages.as_mut_slice());
         }
@@ -1407,22 +1777,31 @@ impl OpenAiProvider {
 
     async fn send_json<R>(
         &self,
+        operation: &str,
         endpoint: String,
-        body: Option<&impl Serialize>,
+        body: Option<&serde_json::Value>,
         context: RequestHeaderContext<'_>,
     ) -> Result<R, AppError>
     where
         R: for<'de> Deserialize<'de>,
     {
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
-            let mut request = self.apply_headers(
-                self.client
-                    .post(endpoint.clone())
-                    .header(self.auth_header.as_str(), auth_value)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                context,
+            let mut headers = self.auth_headers(context, api_key);
+            headers.insert(
+                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                "application/json".to_owned(),
             );
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                operation,
+                "POST",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                body,
+            );
+            let mut request =
+                utils::apply_resolved_request_headers(self.client.post(endpoint.clone()), &headers);
 
             if let Some(body) = body {
                 request = request.json(body);
@@ -1431,14 +1810,10 @@ impl OpenAiProvider {
             request
         })
         .await?;
-        utils::parse_json_response(self.id.as_str(), response).await
+        utils::parse_json_response_logged(self.id.as_str(), ADAPTER_KIND, operation, response).await
     }
 
-    fn apply_headers(
-        &self,
-        req: reqwest::RequestBuilder,
-        context: RequestHeaderContext<'_>,
-    ) -> reqwest::RequestBuilder {
+    fn resolved_headers(&self, context: RequestHeaderContext<'_>) -> BTreeMap<String, String> {
         let mut headers = self.extra_headers.clone();
 
         if matches!(self.backend, OpenAiBackend::ChatgptCodex) {
@@ -1474,11 +1849,28 @@ impl OpenAiProvider {
             }
         }
 
+        if let Some(session_affinity) = context.session_affinity_header() {
+            headers.insert("x-session-affinity".to_owned(), session_affinity.to_owned());
+        }
+
         if let Some(request_headers) = context.request_headers {
             headers = utils::merged_request_headers(&headers, request_headers);
         }
 
-        utils::apply_request_headers(self.id.as_str(), req, &headers)
+        utils::resolved_request_headers(self.id.as_str(), &headers)
+    }
+
+    fn auth_headers(
+        &self,
+        context: RequestHeaderContext<'_>,
+        api_key: &str,
+    ) -> BTreeMap<String, String> {
+        let mut headers = self.resolved_headers(context);
+        headers.insert(
+            self.auth_header.clone(),
+            utils::auth_header_value(self.auth_scheme.as_deref(), api_key),
+        );
+        headers
     }
 }
 
@@ -1489,6 +1881,7 @@ fn response_id_metadata(response_id: Option<String>) -> Option<serde_json::Value
 #[derive(Clone, Copy, Default)]
 struct RequestHeaderContext<'a> {
     prompt_cache_key: Option<&'a str>,
+    session_affinity: Option<&'a str>,
     prompt_window_generation: Option<u64>,
     initiator: Option<&'a str>,
     vision_request: bool,
@@ -1499,10 +1892,21 @@ impl<'a> RequestHeaderContext<'a> {
     fn from_request(request: &'a CompletionRequest) -> Self {
         Self {
             prompt_cache_key: request.prompt_cache_key.as_deref(),
+            session_affinity: None,
             prompt_window_generation: request.prompt_window_generation,
-            initiator: Some(OpenAiProvider::initiator(request)),
-            vision_request: OpenAiProvider::is_vision_request(request),
+            initiator: Some(OpenAiAdapter::initiator(request)),
+            vision_request: OpenAiAdapter::is_vision_request(request),
             request_headers: Some(&request.request_override.headers),
+        }
+    }
+
+    fn from_chat_request(
+        request: &'a CompletionRequest,
+        session_affinity: Option<&'a str>,
+    ) -> Self {
+        Self {
+            session_affinity,
+            ..Self::from_request(request)
         }
     }
 
@@ -1520,13 +1924,18 @@ impl<'a> RequestHeaderContext<'a> {
         })
     }
 
+    fn session_affinity_header(&self) -> Option<&str> {
+        self.session_affinity
+            .filter(|value| !value.trim().is_empty())
+    }
+
     fn initiator_header(&self) -> &str {
         self.initiator.unwrap_or("agent")
     }
 }
 
 #[async_trait]
-impl ModelProvider for OpenAiProvider {
+impl ModelRuntime for OpenAiAdapter {
     fn id(&self) -> &str {
         self.id.as_str()
     }
@@ -1537,6 +1946,37 @@ impl ModelProvider for OpenAiProvider {
 
     fn capability_family(&self) -> Option<crate::provider::CapabilityFamily> {
         Some(self.capability_family)
+    }
+
+    fn model_capabilities_for_adapter(
+        &self,
+        adapter_id: Option<&crate::model::AdapterId>,
+        model: &ModelId,
+    ) -> ModelCapabilities {
+        let mut capabilities = crate::provider::default_capability_registry()
+            .capabilities_for_family(self.capability_family, model.as_str());
+        let _ = adapter_id;
+        if self.is_dashscope_reasoning_model(model) {
+            capabilities.reasoning = CapabilitySupport::Supported;
+        }
+        capabilities
+    }
+
+    fn model_thinking_modes_for_adapter(
+        &self,
+        adapter_id: Option<&crate::model::AdapterId>,
+        model: &ModelId,
+    ) -> BTreeMap<String, ModelThinkingMode> {
+        let modes = crate::provider::default_model_mode_registry().thinking_modes_for_family(
+            self.capability_family,
+            adapter_id,
+            model.as_str(),
+            &self.model_metadata_for_adapter(adapter_id, model),
+        );
+        if modes.is_empty() && self.is_dashscope_reasoning_model(model) {
+            return Self::dashscope_thinking_modes(model);
+        }
+        modes
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -1580,6 +2020,10 @@ impl ModelProvider for OpenAiProvider {
                 .with_optional_string("auth_account_id", self.chatgpt_account_id())
                 .with_bool("uses_responses", self.should_use_responses(model.as_str()))
                 .with_optional_string("realtime_ws_url", self.realtime_ws_url.as_deref())
+                .with_bool(
+                    "supports_top_level_prompt_cache",
+                    self.supports_top_level_prompt_cache(),
+                )
                 .with_json(
                     "extra_headers",
                     &utils::prompt_cache_header_entries(&self.extra_headers),
@@ -1590,18 +2034,27 @@ impl ModelProvider for OpenAiProvider {
     async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
         let endpoint = self.model_endpoint()?;
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
-            self.apply_headers(
-                self.client
-                    .get(endpoint.as_str())
-                    .header(self.auth_header.as_str(), auth_value),
-                RequestHeaderContext::none(),
-            )
+            let headers = self.auth_headers(RequestHeaderContext::none(), api_key);
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "list_models",
+                "GET",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                None,
+            );
+            utils::apply_resolved_request_headers(self.client.get(endpoint.as_str()), &headers)
         })
         .await?;
 
-        let payload: OpenAiModelListResponse =
-            utils::parse_json_response(self.id.as_str(), response).await?;
+        let payload: OpenAiModelListResponse = utils::parse_json_response_logged(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "list_models",
+            response,
+        )
+        .await?;
         Ok(payload
             .into_items()
             .into_iter()
@@ -1609,7 +2062,7 @@ impl ModelProvider for OpenAiProvider {
                 let model = ProviderModel::new(self.id.as_str(), m.id);
                 let capabilities = self.model_capabilities(&model.id);
                 let model = model.with_capabilities(capabilities);
-                if let Some(name) = m.name {
+                if let Some(name) = m.display_name.or(m.name) {
                     model.with_display_name(name)
                 } else {
                     model
@@ -1623,7 +2076,7 @@ impl ModelProvider for OpenAiProvider {
         fields(provider = tracing::field::Empty, model = %request.model)
     )]
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        tracing::Span::current().record("provider", &tracing::field::display(self.id.as_str()));
+        tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
 
         if !self.should_use_responses(model.as_str()) {
@@ -1664,6 +2117,7 @@ impl ModelProvider for OpenAiProvider {
 
         let response: OpenAiResponsesResponse = match self
             .send_json(
+                "complete.responses",
                 self.responses_endpoint()?,
                 Some(&body_json),
                 RequestHeaderContext::from_request(&request),
@@ -1717,7 +2171,7 @@ impl ModelProvider for OpenAiProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        tracing::Span::current().record("provider", &tracing::field::display(self.id.as_str()));
+        tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
 
         if matches!(self.stream_mode, OpenAiStreamMode::RealtimeWebSocket) {
@@ -1763,18 +2217,26 @@ impl ModelProvider for OpenAiProvider {
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
 
         let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let auth_value = utils::auth_header_value(self.auth_scheme.as_deref(), api_key);
-            self.apply_headers(
-                self.client
-                    .post(
-                        self.responses_endpoint()
-                            .expect("responses endpoint should resolve"),
-                    )
-                    .header(self.auth_header.as_str(), auth_value)
-                    .header(reqwest::header::CONTENT_TYPE, "application/json"),
-                RequestHeaderContext::from_request(&request),
-            )
-            .json(&body_json)
+            let endpoint = self
+                .responses_endpoint()
+                .expect("responses endpoint should resolve");
+            let mut headers =
+                self.auth_headers(RequestHeaderContext::from_request(&request), api_key);
+            headers.insert(
+                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                "application/json".to_owned(),
+            );
+            utils::adapter_log_http_request_json(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "complete_stream.responses",
+                "POST",
+                endpoint.as_str(),
+                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                Some(&body_json),
+            );
+            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                .json(&body_json)
         })
         .await?;
 
@@ -1786,10 +2248,23 @@ impl ModelProvider for OpenAiProvider {
                     .complete_stream_with_chat_api(&request, model.to_string())
                     .await;
             }
-            return Err(utils::http_status_error_from_response(self.id.as_str(), response).await);
+            return Err(utils::http_status_error_from_response_logged(
+                self.id.as_str(),
+                ADAPTER_KIND,
+                "complete_stream.responses",
+                response,
+            )
+            .await);
         }
 
         utils::ensure_response_content_type(self.id.as_str(), &response, "text/event-stream")?;
+        utils::adapter_log_http_response_open(
+            self.id.as_str(),
+            ADAPTER_KIND,
+            "complete_stream.responses",
+            response.status(),
+            response.headers(),
+        );
         let provider_name = self.id.clone();
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(provider_name.as_str());
@@ -1805,6 +2280,12 @@ impl ModelProvider for OpenAiProvider {
 
             while let Some(event) = events.next().await {
                 let event = event?;
+                utils::adapter_log_stream_event(
+                    provider_name.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.responses",
+                    &event,
+                );
 
                 if let Some(err) = utils::responses_stream_error(provider_name.as_str(), &event)? {
                     Err(err)?;
@@ -2131,10 +2612,17 @@ struct ResponsesToolState {
     arguments: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DashscopeReasoningProfile {
+    Toggleable,
+    AlwaysOn,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum OpenAiModelListResponse {
     Wrapped { data: Vec<OpenAiModel> },
+    AtomGitCodingPlan(Vec<AtomGitCodingPlanModel>),
     Bare(Vec<OpenAiModel>),
 }
 
@@ -2142,6 +2630,10 @@ impl OpenAiModelListResponse {
     fn into_items(self) -> Vec<OpenAiModel> {
         match self {
             Self::Wrapped { data } => data,
+            Self::AtomGitCodingPlan(data) => data
+                .into_iter()
+                .filter_map(AtomGitCodingPlanModel::into_openai_model)
+                .collect(),
             Self::Bare(data) => data,
         }
     }
@@ -2151,7 +2643,31 @@ impl OpenAiModelListResponse {
 struct OpenAiModel {
     id: String,
     #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
     name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AtomGitCodingPlanModel {
+    display_model_name: String,
+    #[serde(default)]
+    plan_available: bool,
+}
+
+impl AtomGitCodingPlanModel {
+    fn into_openai_model(self) -> Option<OpenAiModel> {
+        let model_name = self.display_model_name.trim();
+        if !self.plan_available || model_name.is_empty() {
+            return None;
+        }
+
+        Some(OpenAiModel {
+            id: model_name.to_owned(),
+            display_name: Some(model_name.to_owned()),
+            name: Some(model_name.to_owned()),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2363,6 +2879,30 @@ mod tests {
         "data:application/pdf;base64,JVBERi0xLjQKJcOkw7zDtsOCCjEgMCBvYmoKPDwvVHlwZS9DYXRhbG9nPj4KZW5kb2JqCnRyYWlsZXIKPDwvUm9vdCAxIDAgUj4+CiUlRU9G"
     }
 
+    fn assistant_message_with_reasoning(reasoning: &str, answer: &str) -> Message {
+        Message::prompt_parts(
+            crate::role::Role::Assistant,
+            vec![
+                PartContent::Reasoning(crate::message::ReasoningPart {
+                    summary: vec![reasoning.to_owned()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                }),
+                PartContent::text(answer),
+            ],
+        )
+    }
+
+    fn openai_compatible_provider(
+        id: &str,
+        base_url: impl Into<String>,
+        model: &str,
+    ) -> OpenAiAdapter {
+        OpenAiAdapter::new_with_id(id, reqwest::Client::new(), "sk-test", base_url, model)
+            .with_api_mode(OpenAiApiMode::Chat)
+            .with_capability_family(CapabilityFamily::OpenAiCompatible)
+    }
+
     fn tool_result_message_with_image(tool_call_id: &str) -> Message {
         let mut message = Message::prompt_parts(
             crate::role::Role::Assistant,
@@ -2508,8 +3048,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let response = provider
             .complete(CompletionRequest {
@@ -2561,7 +3100,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = OpenAiProvider::new(
+        let provider = OpenAiAdapter::new(
             reqwest::Client::new(),
             "sk-test",
             server.url(),
@@ -2625,7 +3164,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = OpenAiProvider::new(
+        let provider = OpenAiAdapter::new(
             reqwest::Client::new(),
             "sk-test",
             server.url(),
@@ -2683,8 +3222,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let response = provider
             .complete(CompletionRequest {
@@ -2753,8 +3291,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let response = provider
             .complete(CompletionRequest {
@@ -2871,14 +3408,14 @@ mod tests {
         };
 
         assert_eq!(
-            OpenAiProvider::extract_reasoning_text(&response).as_deref(),
+            OpenAiAdapter::extract_reasoning_text(&response).as_deref(),
             Some("summary text")
         );
     }
 
     #[test]
     fn github_copilot_profile_defaults_to_model_based_responses_selection() {
-        let provider = OpenAiProvider::new_managed_with_id(
+        let provider = OpenAiAdapter::new_managed_with_id(
             "github-copilot::openai",
             reqwest::Client::new(),
             crate::provider::ManagedCredential::static_value("copilot bearer", "token"),
@@ -2916,7 +3453,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = OpenAiProvider::new_managed_with_id(
+        let provider = OpenAiAdapter::new_managed_with_id(
             "github-copilot::openai",
             reqwest::Client::new(),
             crate::provider::ManagedCredential::static_value("copilot bearer", "token"),
@@ -3007,7 +3544,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = OpenAiProvider::new_managed_with_id(
+        let provider = OpenAiAdapter::new_managed_with_id(
             "openai_chatgpt",
             reqwest::Client::new(),
             crate::provider::ManagedCredential::auth_data_shared(
@@ -3088,8 +3625,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let response = provider
             .complete(CompletionRequest {
@@ -3144,8 +3680,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let err = provider
             .complete(CompletionRequest {
@@ -3191,8 +3726,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let err = match provider
             .complete_stream(CompletionRequest {
@@ -3246,7 +3780,7 @@ mod tests {
             .create_async()
             .await;
 
-        let mut provider = OpenAiProvider::new(
+        let mut provider = OpenAiAdapter::new(
             reqwest::Client::new(),
             "sk-test",
             server.url(),
@@ -3297,6 +3831,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_stream_chat_emits_thinking_delta_for_reasoning_content() {
+        let mut server = mockito::Server::new_async().await;
+        let _chat = server
+            .mock("POST", "/chat/completions")
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(concat!(
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Reasoned \"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Answer\"}}]}\n\n",
+                "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n"
+            ))
+            .create_async()
+            .await;
+
+        let mut provider = OpenAiAdapter::new(
+            reqwest::Client::new(),
+            "sk-test",
+            server.url(),
+            "deepseek-v4-flash",
+        );
+        provider.api_mode = OpenAiApiMode::Chat;
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("deepseek-v4-flash"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("chat stream should start");
+
+        let mut reasoning = String::new();
+        let mut text = String::new();
+        let mut saw_completed = false;
+        while let Some(item) = stream.next().await {
+            match item.expect("event should parse") {
+                CompletionStreamEvent::ThinkingDelta { delta, .. } => {
+                    reasoning.push_str(delta.as_str());
+                }
+                CompletionStreamEvent::TextDelta { delta, .. } => {
+                    text.push_str(delta.as_str());
+                }
+                CompletionStreamEvent::Completed { finish_reason, .. } => {
+                    assert!(matches!(finish_reason, Some(CompletionFinishReason::Stop)));
+                    saw_completed = true;
+                }
+                CompletionStreamEvent::ToolCallDelta { .. } => {}
+            }
+        }
+
+        assert_eq!(reasoning, "Reasoned ");
+        assert_eq!(text, "Answer");
+        assert!(saw_completed);
+    }
+
+    #[tokio::test]
     async fn complete_stream_chat_records_parameterless_tool_call() {
         // Chat Completions tool_calls deltas may contain only id+name
         // with empty arguments. Without a registration delta the
@@ -3316,7 +3922,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = OpenAiProvider::new(
+        let provider = OpenAiAdapter::new(
             reqwest::Client::new(),
             "sk-test",
             server.url(),
@@ -3406,8 +4012,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let response = provider
             .complete(CompletionRequest {
@@ -3465,7 +4070,7 @@ mod tests {
             response_format: None,
         };
 
-        let input = OpenAiProvider::to_responses_input(&request);
+        let input = OpenAiAdapter::to_responses_input(&request);
         let json = serde_json::to_value(&input).expect("responses input should serialize");
         let items = json.as_array().expect("responses input should be an array");
 
@@ -3511,7 +4116,7 @@ mod tests {
             response_format: None,
         };
 
-        let input = OpenAiProvider::to_responses_input(&request);
+        let input = OpenAiAdapter::to_responses_input(&request);
         let json = serde_json::to_value(&input).expect("responses input should serialize");
         let items = json.as_array().expect("responses input should be an array");
 
@@ -3589,7 +4194,7 @@ mod tests {
             response_format: None,
         };
 
-        let input = OpenAiProvider::to_responses_input(&request);
+        let input = OpenAiAdapter::to_responses_input(&request);
         let json = serde_json::to_value(&input).expect("responses input should serialize");
         let items = json.as_array().expect("responses input should be an array");
 
@@ -3645,33 +4250,36 @@ mod tests {
         message.parts[1].operation_id = Some("call_1".to_owned());
         message.parts[3].operation_id = Some("call_2".to_owned());
 
-        let messages = request_to_chat_messages(&CompletionRequest {
-            model: ModelId::new("gpt-4o"),
-            system: None,
-            messages: vec![message],
-            tools: Vec::new(),
-            temperature: None,
-            max_output_tokens: None,
-            prompt_cache_key: None,
-            previous_response_id: None,
-            prompt_window_generation: None,
+        let messages = chat_wire::request_to_chat_messages_with_assistant_reasoning_field(
+            &CompletionRequest {
+                model: ModelId::new("gpt-4o"),
+                system: None,
+                messages: vec![message],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
 
-            stop_sequences: Vec::new(),
+                stop_sequences: Vec::new(),
 
-            top_p: None,
+                top_p: None,
 
-            top_k: None,
+                top_k: None,
 
-            seed: None,
+                seed: None,
 
-            thinking: None,
+                thinking: None,
 
-            verbosity: None,
+                verbosity: None,
 
-            request_override: Default::default(),
+                request_override: Default::default(),
 
-            response_format: None,
-        });
+                response_format: None,
+            },
+            None,
+        );
         let json = serde_json::to_value(&messages).expect("chat messages should serialize");
         let items = json.as_array().expect("chat messages should be an array");
 
@@ -3720,7 +4328,7 @@ mod tests {
             response_format: None,
         };
 
-        let input = OpenAiProvider::to_responses_input(&request);
+        let input = OpenAiAdapter::to_responses_input(&request);
         let json = serde_json::to_value(&input).expect("responses input should serialize");
         let items = json.as_array().expect("responses input should be an array");
 
@@ -3739,7 +4347,7 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_changes_when_auth_scope_changes() {
-        let provider_a = OpenAiProvider::new_managed(
+        let provider_a = OpenAiAdapter::new_managed(
             reqwest::Client::new(),
             crate::provider::ManagedCredential::environment(
                 "openai env",
@@ -3750,7 +4358,7 @@ mod tests {
             "https://api.openai.com/v1",
             "gpt-5",
         );
-        let provider_b = OpenAiProvider::new_managed(
+        let provider_b = OpenAiAdapter::new_managed(
             reqwest::Client::new(),
             crate::provider::ManagedCredential::environment(
                 "openai env",
@@ -3785,7 +4393,7 @@ mod tests {
                 user: None,
             },
         ));
-        let provider_a = OpenAiProvider::new_managed_with_id(
+        let provider_a = OpenAiAdapter::new_managed_with_id(
             "openai_chatgpt",
             reqwest::Client::new(),
             crate::provider::ManagedCredential::auth_data_shared(
@@ -3812,7 +4420,7 @@ mod tests {
                 user: None,
             },
         ));
-        let provider_b = OpenAiProvider::new_managed_with_id(
+        let provider_b = OpenAiAdapter::new_managed_with_id(
             "openai_chatgpt",
             reqwest::Client::new(),
             crate::provider::ManagedCredential::auth_data_shared(
@@ -3859,8 +4467,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
@@ -3946,8 +4553,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
@@ -4025,8 +4631,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
 
         let mut stream = provider
             .complete_stream(CompletionRequest {
@@ -4072,7 +4677,7 @@ mod tests {
 
     #[test]
     fn realtime_ws_endpoint_uses_ws_scheme_and_model_query() {
-        let provider = OpenAiProvider::new(
+        let provider = OpenAiAdapter::new(
             reqwest::Client::new(),
             "sk-test",
             "https://api.openai.com/v1",
@@ -4215,7 +4820,7 @@ mod tests {
                 .expect("response done should send");
         });
 
-        let provider = OpenAiProvider::new(
+        let provider = OpenAiAdapter::new(
             reqwest::Client::new(),
             "sk-test",
             format!("http://{addr}"),
@@ -4318,8 +4923,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
         let models = provider
             .list_models()
             .await
@@ -4327,14 +4931,73 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id.as_str(), "gpt-5");
 
-        let provider =
-            OpenAiProvider::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
         let models = provider
             .list_models()
             .await
             .expect("second live list_models should succeed");
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id.as_str(), "gpt-5");
+    }
+
+    #[tokio::test]
+    async fn list_models_accepts_atomgit_coding_plan_payload() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/coding-plan/models-v2")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "plan_type".to_owned(),
+                "Max".to_owned(),
+            ))
+            .match_header("authorization", "Bearer atomgit-token")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!([
+                    {
+                        "id": 2052994857682014210i64,
+                        "display_model_name": "GLM-5.1",
+                        "base_url": "https://api-ai.gitcode.com/v1",
+                        "type": "openai",
+                        "context_window": 64000,
+                        "plan_available": true
+                    },
+                    {
+                        "id": 2052994857682014211i64,
+                        "display_model_name": "GLM-locked",
+                        "plan_available": false
+                    },
+                    {
+                        "id": 2052994857682014212i64,
+                        "display_model_name": "   ",
+                        "plan_available": true
+                    }
+                ])
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let provider = OpenAiAdapter::new(
+            reqwest::Client::new(),
+            "atomgit-token",
+            "https://unused.example/v1",
+            "GLM-5.1",
+        )
+        .with_models_url(Some(format!(
+            "{}/coding-plan/models-v2?plan_type=Max",
+            server.url()
+        )));
+
+        let models = provider
+            .list_models()
+            .await
+            .expect("atomgit coding plan models should parse");
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id.as_str(), "GLM-5.1");
+        assert_eq!(models[0].display_name.as_deref(), Some("GLM-5.1"));
     }
 
     #[tokio::test]
@@ -4372,7 +5035,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = OpenAiProvider::new_managed_with_id(
+        let provider = OpenAiAdapter::new_managed_with_id(
             "openai_chatgpt",
             reqwest::Client::new(),
             crate::provider::ManagedCredential::auth_data_shared(
@@ -4398,5 +5061,397 @@ mod tests {
         assert_eq!(models[0].display_name.as_deref(), Some("GPT-5.3 Codex"));
         assert_eq!(models[1].id.as_str(), "gpt-5-codex-mini");
         assert_eq!(models[1].display_name.as_deref(), Some("GPT-5 Codex Mini"));
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_chat_requests_include_prompt_cache_aliases_and_session_affinity() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .match_header("x-session-affinity", "session-42")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"prompt_cache_key\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"promptCacheKey\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = openai_compatible_provider("mock-provider", server.url(), "gpt-4o-mini");
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("gpt-4o-mini"),
+                system: Some("system".to_owned()),
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: Some("session-42".to_owned()),
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_chat_requests_include_top_level_cache_control_when_enabled() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .match_header("x-session-affinity", "session-42")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"cache_control\\\":\\{\\\"type\\\":\\\"ephemeral\\\"\\}".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"prompt_cache_key\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"promptCacheKey\\\":\\\"session-42\\\"".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "id": "resp_next",
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = openai_compatible_provider("openrouter", server.url(), "gpt-4o-mini");
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("gpt-4o-mini"),
+                system: Some("system".to_owned()),
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: Some("session-42".to_owned()),
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+        assert_eq!(
+            response
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("resp_next")
+        );
+    }
+
+    #[test]
+    fn openai_compatible_dashscope_reasoning_models_enable_reasoning_and_expose_modes() {
+        let provider = openai_compatible_provider(
+            "custom-dashscope",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen-plus",
+        );
+        let model = ModelId::new("qwen-plus");
+
+        let capabilities = provider.model_capabilities_for_adapter(None, &model);
+        assert_eq!(capabilities.reasoning, CapabilitySupport::Supported);
+
+        let modes = provider.model_thinking_modes_for_adapter(None, &model);
+        assert!(modes.contains_key("no-thinking"));
+        assert!(modes.contains_key("thinking-enabled"));
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_complete_parses_reasoning_details_and_persists_field_metadata() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "id": "chatcmpl_reasoning_details",
+                    "choices": [{
+                        "message": {
+                            "content": "Answer",
+                            "reasoning_details": "Hidden path"
+                        },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = openai_compatible_provider("mock-provider", server.url(), "custom-model");
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("custom-model"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "Answer");
+        assert_eq!(response.reasoning_text.as_deref(), Some("Hidden path"));
+        assert_eq!(
+            response
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("chatcmpl_reasoning_details")
+        );
+        assert_eq!(
+            response
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("assistant_reasoning_field"))
+                .and_then(|value| value.as_str()),
+            Some("reasoning_details")
+        );
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_complete_round_trips_assistant_reasoning_field_from_message_metadata()
+     {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("POST", "/chat/completions")
+            .match_body(mockito::Matcher::Regex(
+                "\\\"reasoning_details\\\":\\\"Plan carefully\\\"".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "model": "custom-model",
+                    "choices": [{
+                        "message": { "content": "ok" },
+                        "finish_reason": "stop"
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = openai_compatible_provider("mock-provider", server.url(), "custom-model");
+        let mut assistant =
+            assistant_message_with_reasoning("Plan carefully", "Intermediate answer");
+        assistant.metadata.provider_metadata = Some(serde_json::json!({
+            "assistant_reasoning_field": "reasoning_details"
+        }));
+
+        let response = provider
+            .complete(CompletionRequest {
+                model: ModelId::new("custom-model"),
+                system: None,
+                messages: vec![
+                    assistant,
+                    Message::prompt_text(crate::role::Role::User, "continue"),
+                ],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(64),
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("completion should succeed");
+
+        assert_eq!(response.text, "ok");
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_realtime_ws_uses_session_affinity_header() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+
+        let session_affinity_header = Arc::new(Mutex::new(None::<String>));
+        let session_affinity_header_server = session_affinity_header.clone();
+
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener
+                .accept()
+                .await
+                .expect("connection should be accepted");
+
+            let ws_stream = tokio_tungstenite::accept_hdr_async(
+                tcp,
+                move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                      response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    let session_affinity = request
+                        .headers()
+                        .get("x-session-affinity")
+                        .and_then(|v| v.to_str().ok())
+                        .map(ToOwned::to_owned);
+                    *session_affinity_header_server
+                        .lock()
+                        .expect("session affinity header lock should succeed") = session_affinity;
+                    Ok(response)
+                },
+            )
+            .await
+            .expect("websocket upgrade should succeed");
+
+            let (mut writer, mut reader) = ws_stream.split();
+
+            while let Some(message) = reader.next().await {
+                let message = message.expect("request message should parse");
+                let tokio_tungstenite::tungstenite::Message::Text(text) = message else {
+                    continue;
+                };
+                let value: serde_json::Value =
+                    serde_json::from_str(text.as_str()).expect("request event should be json");
+                if value.get("type").and_then(|v| v.as_str()) == Some("response.create") {
+                    break;
+                }
+            }
+
+            writer
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({
+                        "type": "response.done",
+                        "response": {
+                            "id": "resp_stream",
+                            "status": "completed",
+                            "usage": {
+                                "input_tokens": 1,
+                                "output_tokens": 1
+                            }
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("response done should send");
+        });
+
+        let provider =
+            openai_compatible_provider("mock-provider", format!("http://{addr}"), "gpt-4o-mini")
+                .with_stream_mode(OpenAiStreamMode::RealtimeWebSocket)
+                .with_realtime_ws_url(Some(format!("ws://{addr}/realtime")));
+
+        let mut stream = provider
+            .complete_stream(CompletionRequest {
+                model: ModelId::new("gpt-4o-mini"),
+                system: None,
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: Some(32),
+                prompt_cache_key: Some("session-42".to_owned()),
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("stream should start");
+
+        let mut completed_metadata = None;
+        while let Some(item) = stream.next().await {
+            if let CompletionStreamEvent::Completed {
+                provider_metadata, ..
+            } = item.expect("event should parse")
+            {
+                completed_metadata = provider_metadata;
+            }
+        }
+
+        server.await.expect("server task should finish");
+        assert_eq!(
+            session_affinity_header
+                .lock()
+                .expect("session affinity header lock should succeed")
+                .as_deref(),
+            Some("session-42")
+        );
+        assert_eq!(
+            completed_metadata
+                .as_ref()
+                .and_then(|value| value.get("response_id"))
+                .and_then(|value| value.as_str()),
+            Some("resp_stream")
+        );
     }
 }

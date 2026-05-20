@@ -554,7 +554,7 @@ mod tests {
                 last_used_at: Some(42),
             }
         );
-        assert!(payload.session_meta_by_id.get("ignored").is_none());
+        assert!(!payload.session_meta_by_id.contains_key("ignored"));
         assert_eq!(
             payload.folders,
             vec![

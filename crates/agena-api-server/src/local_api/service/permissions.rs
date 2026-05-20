@@ -436,8 +436,6 @@ fn permission_action_from_write_request(
     }
 }
 
-/// Project a `Message` into the HTTP API `MessageResource` shape.
-
 fn permission_mode_to_string(mode: PermissionMode) -> String {
     match mode {
         PermissionMode::Allow => "allow".to_string(),

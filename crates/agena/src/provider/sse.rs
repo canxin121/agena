@@ -33,6 +33,64 @@ fn decode_utf8_prefix(bytes: &[u8]) -> (String, Vec<u8>) {
     }
 }
 
+fn parse_json_event_payload(payload: &str) -> Result<Option<Value>, AppError> {
+    let payload = payload.trim();
+    if payload == "[DONE]" {
+        return Ok(None);
+    }
+
+    let value = serde_json::from_str::<Value>(payload)
+        .map_err(|e| AppError::Provider(format!("invalid sse json payload: {e}")))?;
+    Ok(Some(value))
+}
+
+fn flush_json_event_data_lines(data_lines: &mut Vec<String>) -> Result<Option<Value>, AppError> {
+    if data_lines.is_empty() {
+        return Ok(None);
+    }
+
+    let payload = data_lines.join("\n");
+    data_lines.clear();
+    parse_json_event_payload(payload.as_str())
+}
+
+fn payload_is_complete_json_or_done(payload: &str) -> bool {
+    let payload = payload.trim();
+    payload == "[DONE]" || serde_json::from_str::<Value>(payload).is_ok()
+}
+
+fn starts_new_json_event(data: &str) -> bool {
+    let data = data.trim_start();
+    data == "[DONE]" || data.starts_with('{') || data.starts_with('[')
+}
+
+fn consume_json_event_line(
+    line: &str,
+    data_lines: &mut Vec<String>,
+) -> Result<Option<Value>, AppError> {
+    if line.is_empty() {
+        return flush_json_event_data_lines(data_lines);
+    }
+
+    if let Some(data) = line.strip_prefix("data:") {
+        let data = data.trim_start();
+        let current_payload = data_lines.join("\n");
+        let should_flush = !current_payload.is_empty()
+            && payload_is_complete_json_or_done(current_payload.as_str())
+            && starts_new_json_event(data);
+        let flushed = if should_flush {
+            flush_json_event_data_lines(data_lines)?
+        } else {
+            None
+        };
+
+        data_lines.push(data.to_owned());
+        return Ok(flushed);
+    }
+
+    Ok(None)
+}
+
 pub fn json_events(
     response: reqwest::Response,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<Value, AppError>> + Send>> {
@@ -63,37 +121,24 @@ pub fn json_events(
                     line = stripped.to_owned();
                 }
 
-                if line.is_empty() {
-                    if data_lines.is_empty() {
-                        continue;
-                    }
-
-                    let payload = data_lines.join("\n");
-                    data_lines.clear();
-
-                    if payload.trim() == "[DONE]" {
-                        continue;
-                    }
-
-                    let value: Value = serde_json::from_str(payload.as_str())
-                        .map_err(|e| AppError::Provider(format!("invalid sse json payload: {e}")))?;
+                if let Some(value) = consume_json_event_line(line.as_str(), &mut data_lines)? {
                     yield value;
-                    continue;
-                }
-
-                if let Some(data) = line.strip_prefix("data:") {
-                    data_lines.push(data.trim_start().to_owned());
                 }
             }
         }
 
-        if !data_lines.is_empty() {
-            let payload = data_lines.join("\n");
-            if payload.trim() != "[DONE]" {
-                let value: Value = serde_json::from_str(payload.as_str())
-                    .map_err(|e| AppError::Provider(format!("invalid sse json payload: {e}")))?;
+        if !buffer.is_empty() {
+            if let Some(stripped) = buffer.strip_suffix('\r') {
+                buffer = stripped.to_owned();
+            }
+
+            if let Some(value) = consume_json_event_line(buffer.as_str(), &mut data_lines)? {
                 yield value;
             }
+        }
+
+        if let Some(value) = flush_json_event_data_lines(&mut data_lines)? {
+            yield value;
         }
     })
 }
@@ -151,6 +196,7 @@ pub fn json_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn decode_utf8_prefix_holds_back_partial_multibyte_tail() {
@@ -174,5 +220,78 @@ mod tests {
         let (text, carry) = decode_utf8_prefix(bytes);
         assert_eq!(text, "a\u{FFFD}b");
         assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn consume_json_event_line_splits_nonstandard_consecutive_data_frames() {
+        let mut data_lines = Vec::new();
+
+        assert!(
+            consume_json_event_line(
+                r#"data: {"choices":[{"delta":{"content":"hi"}}]}"#,
+                &mut data_lines
+            )
+            .expect("first data line should parse")
+            .is_none()
+        );
+
+        let value = consume_json_event_line("data: [DONE]", &mut data_lines)
+            .expect("second data line should implicitly flush")
+            .expect("json payload should be yielded");
+        assert_eq!(value, json!({"choices":[{"delta":{"content":"hi"}}]}));
+
+        assert!(
+            flush_json_event_data_lines(&mut data_lines)
+                .expect("done frame should flush cleanly")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn consume_json_event_line_preserves_multiline_json_payloads() {
+        let mut data_lines = Vec::new();
+
+        assert!(
+            consume_json_event_line(r#"data: {"choices":["#, &mut data_lines)
+                .expect("first line should be buffered")
+                .is_none()
+        );
+        assert!(
+            consume_json_event_line(r#"data: {"delta":{"content":"hi"}}]}"#, &mut data_lines)
+                .expect("second line should remain in same event")
+                .is_none()
+        );
+
+        let value = consume_json_event_line("", &mut data_lines)
+            .expect("blank line should flush event")
+            .expect("json payload should parse");
+        assert_eq!(value, json!({"choices":[{"delta":{"content":"hi"}}]}));
+    }
+
+    #[test]
+    fn consume_json_event_line_splits_multiple_json_events_without_blank_lines() {
+        let mut data_lines = Vec::new();
+
+        assert!(
+            consume_json_event_line(r#"data: {"index":1}"#, &mut data_lines)
+                .expect("first event should buffer")
+                .is_none()
+        );
+
+        let first = consume_json_event_line(r#"data: {"index":2}"#, &mut data_lines)
+            .expect("second event should flush first")
+            .expect("first value should be yielded");
+        assert_eq!(first, json!({"index": 1}));
+
+        let second = consume_json_event_line("data: [DONE]", &mut data_lines)
+            .expect("done should flush second")
+            .expect("second value should be yielded");
+        assert_eq!(second, json!({"index": 2}));
+
+        assert!(
+            consume_json_event_line("", &mut data_lines)
+                .expect("blank line after done should be ignored")
+                .is_none()
+        );
     }
 }

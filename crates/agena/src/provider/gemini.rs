@@ -10,16 +10,17 @@ use crate::{
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-        ManagedCredential, ModelProvider, ProviderModel, ReasoningEffort, ResponseFormat,
+        ManagedCredential, ModelRuntime, ProviderModel, ReasoningEffort, ResponseFormat,
         ThinkingRequest, should_retry_credential, sse, utils, wire_message,
     },
     role::Role,
 };
 
 const PROVIDER_ID: &str = "google";
+const ADAPTER_KIND: &str = "gemini";
 
 #[derive(Clone)]
-pub struct GeminiProvider {
+pub struct GeminiAdapter {
     client: reqwest::Client,
     api_key: ManagedCredential,
     base_url: String,
@@ -39,7 +40,7 @@ enum GeminiAuthMode {
     },
 }
 
-impl GeminiProvider {
+impl GeminiAdapter {
     pub fn new(
         client: reqwest::Client,
         api_key: impl Into<String>,
@@ -141,20 +142,6 @@ impl GeminiProvider {
                 format!("{endpoint}{separator}{query}")
             }
             GeminiAuthMode::Header { .. } => endpoint,
-        }
-    }
-
-    fn apply_auth(
-        &self,
-        request: reqwest::RequestBuilder,
-        api_key: &str,
-    ) -> reqwest::RequestBuilder {
-        match &self.auth_mode {
-            GeminiAuthMode::QueryParameter { .. } => request,
-            GeminiAuthMode::Header { name, scheme } => request.header(
-                name.as_str(),
-                utils::auth_header_value(scheme.as_deref(), api_key),
-            ),
         }
     }
 
@@ -300,13 +287,13 @@ impl GeminiProvider {
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
         let fallback_model = request.model.clone();
-        let stream = ModelProvider::complete_stream(self, request).await?;
+        let stream = ModelRuntime::complete_stream(self, request).await?;
         utils::aggregate_stream(PROVIDER_ID, fallback_model, stream).await
     }
 }
 
 #[async_trait]
-impl ModelProvider for GeminiProvider {
+impl ModelRuntime for GeminiAdapter {
     fn id(&self) -> &str {
         PROVIDER_ID
     }
@@ -359,16 +346,29 @@ impl ModelProvider for GeminiProvider {
         let response = self
             .send_request(|api_key| {
                 let endpoint = self.endpoint_with_auth(endpoint.clone(), api_key);
-                utils::apply_request_headers(
+                let mut headers = utils::resolved_request_headers(PROVIDER_ID, &self.extra_headers);
+                if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
+                    headers.insert(
+                        name.clone(),
+                        utils::auth_header_value(scheme.as_deref(), api_key),
+                    );
+                }
+                utils::adapter_log_http_request_json(
                     PROVIDER_ID,
-                    self.apply_auth(self.client.get(endpoint), api_key),
-                    &self.extra_headers,
-                )
+                    ADAPTER_KIND,
+                    "list_models",
+                    "GET",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    None,
+                );
+                utils::apply_resolved_request_headers(self.client.get(endpoint), &headers)
             })
             .await?;
 
         let payload: GeminiModelListResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+            utils::parse_json_response_logged(PROVIDER_ID, ADAPTER_KIND, "list_models", response)
+                .await?;
         Ok(payload
             .models
             .into_iter()
@@ -440,22 +440,38 @@ impl ModelProvider for GeminiProvider {
             .send_request(|api_key| {
                 let endpoint =
                     self.endpoint_with_auth(self.generate_endpoint(model.as_str()), api_key);
-                utils::apply_request_headers(
+                let mut headers = utils::resolved_request_headers(PROVIDER_ID, &request_headers);
+                if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
+                    headers.insert(
+                        name.clone(),
+                        utils::auth_header_value(scheme.as_deref(), api_key),
+                    );
+                }
+                headers.insert(
+                    reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                    "application/json".to_owned(),
+                );
+                utils::adapter_log_http_request_json(
                     PROVIDER_ID,
-                    self.apply_auth(
-                        self.client
-                            .post(endpoint)
-                            .header(reqwest::header::CONTENT_TYPE, "application/json")
-                            .json(&body_json),
-                        api_key,
-                    ),
-                    &request_headers,
-                )
+                    ADAPTER_KIND,
+                    "complete.generate_content",
+                    "POST",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    Some(&body_json),
+                );
+                utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                    .json(&body_json)
             })
             .await?;
 
-        let payload: GeminiGenerateResponse =
-            utils::parse_json_response(PROVIDER_ID, response).await?;
+        let payload: GeminiGenerateResponse = utils::parse_json_response_logged(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "complete.generate_content",
+            response,
+        )
+        .await?;
         let candidate = payload.candidates.first();
         let text = candidate.map(GeminiCandidate::text).unwrap_or_default();
         let reasoning_text = candidate.and_then(GeminiCandidate::reasoning_text);
@@ -549,24 +565,48 @@ impl ModelProvider for GeminiProvider {
             .send_request(|api_key| {
                 let endpoint =
                     self.endpoint_with_auth(self.stream_generate_endpoint(model.as_str()), api_key);
-                utils::apply_request_headers(
+                let mut headers = utils::resolved_request_headers(PROVIDER_ID, &request_headers);
+                if let GeminiAuthMode::Header { name, scheme } = &self.auth_mode {
+                    headers.insert(
+                        name.clone(),
+                        utils::auth_header_value(scheme.as_deref(), api_key),
+                    );
+                }
+                headers.insert(
+                    reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                    "application/json".to_owned(),
+                );
+                utils::adapter_log_http_request_json(
                     PROVIDER_ID,
-                    self.apply_auth(
-                        self.client
-                            .post(endpoint)
-                            .header(reqwest::header::CONTENT_TYPE, "application/json")
-                            .json(&body_json),
-                        api_key,
-                    ),
-                    &request_headers,
-                )
+                    ADAPTER_KIND,
+                    "complete_stream.generate_content",
+                    "POST",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    Some(&body_json),
+                );
+                utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                    .json(&body_json)
             })
             .await?;
 
         if !response.status().is_success() {
-            return Err(utils::http_status_error_from_response(PROVIDER_ID, response).await);
+            return Err(utils::http_status_error_from_response_logged(
+                PROVIDER_ID,
+                ADAPTER_KIND,
+                "complete_stream.generate_content",
+                response,
+            )
+            .await);
         }
 
+        utils::adapter_log_http_response_open(
+            PROVIDER_ID,
+            ADAPTER_KIND,
+            "complete_stream.generate_content",
+            response.status(),
+            response.headers(),
+        );
         let mut events = sse::json_events(response);
         let provider_id = ProviderId::new(PROVIDER_ID);
         let model_name = model;
@@ -583,6 +623,12 @@ impl ModelProvider for GeminiProvider {
 
             while let Some(event) = events.next().await {
                 let event = event?;
+                utils::adapter_log_stream_event(
+                    provider_id.as_str(),
+                    ADAPTER_KIND,
+                    "complete_stream.generate_content",
+                    &event,
+                );
 
                 let chunk: GeminiGenerateResponse =
                     utils::parse_json_value(provider_id.as_str(), "stream chunk", event)?;
@@ -1261,13 +1307,13 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_changes_when_auth_scope_changes() {
-        let provider_a = GeminiProvider::new_managed(
+        let provider_a = GeminiAdapter::new_managed(
             reqwest::Client::new(),
             ManagedCredential::environment("gemini env", "google", "api_key", "GEMINI_API_KEY_A"),
             "https://generativelanguage.googleapis.com/v1beta",
             "gemini-2.5-flash",
         );
-        let provider_b = GeminiProvider::new_managed(
+        let provider_b = GeminiAdapter::new_managed(
             reqwest::Client::new(),
             ManagedCredential::environment("gemini env", "google", "api_key", "GEMINI_API_KEY_B"),
             "https://generativelanguage.googleapis.com/v1beta",
@@ -1286,7 +1332,7 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_ignores_volatile_or_secret_extra_headers() {
-        let provider_a = GeminiProvider::new(
+        let provider_a = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             "https://generativelanguage.googleapis.com/v1beta",
@@ -1298,7 +1344,7 @@ mod tests {
             ("traceparent".to_owned(), "trace-a".to_owned()),
             ("authorization".to_owned(), "Bearer secret-a".to_owned()),
         ]));
-        let provider_b = GeminiProvider::new(
+        let provider_b = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             "https://generativelanguage.googleapis.com/v1beta",
@@ -1323,13 +1369,13 @@ mod tests {
 
     #[test]
     fn prompt_cache_shape_changes_when_auth_transport_changes() {
-        let query_provider = GeminiProvider::new(
+        let query_provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             "https://generativelanguage.googleapis.com/v1beta",
             "gemini-2.5-flash",
         );
-        let header_provider = GeminiProvider::new(
+        let header_provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             "https://generativelanguage.googleapis.com/v1beta",
@@ -1371,7 +1417,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1428,7 +1474,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1491,7 +1537,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1559,7 +1605,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1621,7 +1667,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1635,7 +1681,7 @@ mod tests {
         assert_eq!(models[0].id.as_str(), "gemini-2.5-flash");
         assert_eq!(models[0].display_name.as_deref(), Some("Gemini 2.5 Flash"));
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1693,7 +1739,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1759,7 +1805,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1843,7 +1889,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -1914,7 +1960,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -2045,7 +2091,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -2107,7 +2153,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::new(
+        let provider = GeminiAdapter::new(
             reqwest::Client::new(),
             "test-key",
             server.url(),
@@ -2201,7 +2247,7 @@ mod tests {
             usage: None,
             finish: None,
         };
-        let parts = GeminiProvider::message_parts(&assistant_msg);
+        let parts = GeminiAdapter::message_parts(&assistant_msg);
         assert_eq!(parts.len(), 1);
         let call = parts[0]
             .function_call
@@ -2240,7 +2286,7 @@ mod tests {
             usage: None,
             finish: None,
         };
-        let parts = GeminiProvider::message_parts(&tool_msg);
+        let parts = GeminiAdapter::message_parts(&tool_msg);
         assert_eq!(parts.len(), 2);
         let resp = parts[1]
             .function_response
@@ -2278,7 +2324,7 @@ mod tests {
         );
         message.parts[1].operation_id = Some("call_lookup".to_owned());
 
-        let contents = GeminiProvider::assistant_contents(&message);
+        let contents = GeminiAdapter::assistant_contents(&message);
 
         assert_eq!(contents.len(), 3);
         assert_eq!(contents[0].role.as_deref(), Some("model"));

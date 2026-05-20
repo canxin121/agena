@@ -355,7 +355,11 @@ pub(super) fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostA
         steps: profile.frontmatter.steps.map(|value| value as u32),
         allowed_tools: profile.frontmatter.allowed_tools,
         permission: sdk_agent_permission_from_core(profile.frontmatter.permission),
-        model: profile.frontmatter.model,
+        default: HostAgentDefaultModelConfig {
+            provider: profile.frontmatter.default.provider,
+            adapter: profile.frontmatter.default.adapter,
+            model: profile.frontmatter.default.model,
+        },
         aliases: profile.frontmatter.aliases,
         prompt: profile.prompt,
         scope: match profile.scope {

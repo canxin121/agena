@@ -121,7 +121,7 @@ fn sample_pricing() -> ModelPricing {
 }
 
 #[async_trait]
-impl ModelProvider for ModeSynthProvider {
+impl ModelRuntime for ModeSynthProvider {
     fn id(&self) -> &str {
         self.provider_id
     }
@@ -146,7 +146,7 @@ impl ModelProvider for ModeSynthProvider {
 }
 
 #[async_trait::async_trait]
-impl ModelProvider for PricedUsageProvider {
+impl ModelRuntime for PricedUsageProvider {
     fn id(&self) -> &str {
         self.provider_id
     }
@@ -186,7 +186,7 @@ impl ModelProvider for PricedUsageProvider {
 }
 
 #[async_trait::async_trait]
-impl ModelProvider for FlakyProvider {
+impl ModelRuntime for FlakyProvider {
     fn id(&self) -> &str {
         self.provider_id
     }
@@ -232,7 +232,7 @@ impl ModelProvider for FlakyProvider {
 }
 
 #[async_trait::async_trait]
-impl ModelProvider for FlakyStreamProvider {
+impl ModelRuntime for FlakyStreamProvider {
     fn id(&self) -> &str {
         self.provider_id
     }
@@ -380,7 +380,7 @@ impl ModelProvider for FlakyStreamProvider {
 }
 
 #[async_trait::async_trait]
-impl ModelProvider for MultiStartupFailureProvider {
+impl ModelRuntime for MultiStartupFailureProvider {
     fn id(&self) -> &str {
         self.provider_id
     }
@@ -452,7 +452,7 @@ struct UnsupportedImageProvider {
 }
 
 #[async_trait::async_trait]
-impl ModelProvider for UnsupportedImageProvider {
+impl ModelRuntime for UnsupportedImageProvider {
     fn id(&self) -> &str {
         "unsupported-image"
     }

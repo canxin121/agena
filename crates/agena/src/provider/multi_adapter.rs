@@ -16,7 +16,7 @@ use crate::{
 
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
-    ModelCapabilities, ModelProvider, PromptCacheShape, StreamResumePolicy, chat_wire,
+    ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy, chat_wire,
 };
 
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ pub struct MultiAdapterProvider {
     id: String,
     default_adapter: AdapterId,
     default_model: ModelId,
-    adapters: BTreeMap<String, Arc<dyn ModelProvider>>,
+    adapters: BTreeMap<String, Arc<dyn ModelRuntime>>,
     routes: BTreeMap<ProviderModelRouteKey, ProviderModelRoute>,
     configured_only_adapters: BTreeSet<String>,
 }
@@ -42,7 +42,7 @@ impl MultiAdapterProvider {
         id: impl Into<String>,
         default_adapter: impl Into<String>,
         default_model: impl Into<String>,
-        adapters: BTreeMap<String, Arc<dyn ModelProvider>>,
+        adapters: BTreeMap<String, Arc<dyn ModelRuntime>>,
         routes: BTreeMap<ProviderModelRouteKey, ProviderModelRoute>,
     ) -> Self {
         Self {
@@ -60,7 +60,7 @@ impl MultiAdapterProvider {
         self
     }
 
-    fn adapter(&self, adapter_id: &str) -> Result<Arc<dyn ModelProvider>, AppError> {
+    fn adapter(&self, adapter_id: &str) -> Result<Arc<dyn ModelRuntime>, AppError> {
         self.adapters.get(adapter_id).cloned().ok_or_else(|| {
             AppError::Config(format!(
                 "provider `{}` has no enabled adapter `{adapter_id}`",
@@ -106,7 +106,7 @@ impl MultiAdapterProvider {
         target_model: &ModelId,
         mut model: Model,
         adapter_id: &AdapterId,
-        adapter: &dyn ModelProvider,
+        adapter: &dyn ModelRuntime,
         definition: &ConfiguredModelDefinition,
     ) -> Model {
         model.provider_id = ProviderId::new(self.id.clone());
@@ -123,7 +123,7 @@ impl MultiAdapterProvider {
         &self,
         target_model: &ModelId,
         adapter_id: &AdapterId,
-        adapter: &dyn ModelProvider,
+        adapter: &dyn ModelRuntime,
         definition: &ConfiguredModelDefinition,
     ) -> Model {
         definition.apply_to_model(
@@ -149,7 +149,7 @@ impl MultiAdapterProvider {
 }
 
 #[async_trait]
-impl ModelProvider for MultiAdapterProvider {
+impl ModelRuntime for MultiAdapterProvider {
     fn id(&self) -> &str {
         self.id.as_str()
     }
@@ -482,7 +482,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl ModelProvider for StaticProvider {
+    impl ModelRuntime for StaticProvider {
         fn id(&self) -> &str {
             self.id.as_str()
         }
@@ -538,7 +538,7 @@ mod tests {
                         default_model: ModelId::new("gpt-4.1"),
                         models: vec![Model::new("shared::api", "gpt-4.1-mini")],
                         list_models_error: None,
-                    }) as Arc<dyn ModelProvider>,
+                    }) as Arc<dyn ModelRuntime>,
                 ),
                 (
                     "codex".to_owned(),
@@ -547,7 +547,7 @@ mod tests {
                         default_model: ModelId::new("gpt-5-codex"),
                         models: vec![Model::new("shared::codex", "gpt-5-codex")],
                         list_models_error: None,
-                    }) as Arc<dyn ModelProvider>,
+                    }) as Arc<dyn ModelRuntime>,
                 ),
             ]),
             BTreeMap::from([
@@ -634,7 +634,7 @@ mod tests {
                     default_model: ModelId::new("gpt-4.1"),
                     models: vec![Model::new("openai", "gpt-4.1")],
                     list_models_error: None,
-                }) as Arc<dyn ModelProvider>,
+                }) as Arc<dyn ModelRuntime>,
             )]),
             BTreeMap::new(),
         );
@@ -688,7 +688,7 @@ mod tests {
                     default_model: ModelId::new("claude-sonnet-4-5"),
                     models: Vec::new(),
                     list_models_error: Some("401 Unauthorized".to_owned()),
-                }) as Arc<dyn ModelProvider>,
+                }) as Arc<dyn ModelRuntime>,
             )]),
             BTreeMap::from([(
                 ("gitlab".to_owned(), "claude-sonnet-4-5".to_owned()),
@@ -728,7 +728,7 @@ mod tests {
                         Model::new("opencode-free::openai", "deepseek-v4-flash-free"),
                     ],
                     list_models_error: None,
-                }) as Arc<dyn ModelProvider>,
+                }) as Arc<dyn ModelRuntime>,
             )]),
             BTreeMap::from([(
                 ("openai".to_owned(), "deepseek-v4-flash-free".to_owned()),

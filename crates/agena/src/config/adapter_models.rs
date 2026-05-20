@@ -5,10 +5,12 @@ use crate::error::AppError;
 use super::{
     AnthropicProviderOptions, ConfigEnvironment, ConfigError, HttpProviderAdapterConfig,
     OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderProtocolPathsConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, SimpleHttpProviderOptions,
-    StreamTransportMode, list_provider_adapter_models,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCredentialAuthConfig,
+    ProviderGitlabAuthConfig, ProviderProtocolPathsConfig, ResolvedProviderAdapterConfig,
+    ResolvedProviderConfig, SimpleHttpProviderOptions, StreamTransportMode,
+    list_provider_adapter_models,
 };
+use crate::provider::auth::{AuthData, CredentialIssuer};
 
 pub const HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS: [&str; 3] = ["openai", "anthropic", "gemini"];
 
@@ -35,10 +37,68 @@ pub fn draft_provider_adapter_models_target(
     Ok(ProviderAdapterModelsTarget {
         provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
         auth: ProviderAuthConfig::Api(ProviderApiAuthConfig {
-            base_url: base_url.to_owned(),
+            base_url: Some(base_url.to_owned()),
             protocol_paths,
             api_key: optional_trimmed(api_key).map(ToOwned::to_owned),
             api_key_env: optional_trimmed(api_key_env).map(ToOwned::to_owned),
+        }),
+        adapters: default_http_adapter_model_list_adapters(adapter_ids.as_slice())?,
+    })
+}
+
+pub fn draft_gitlab_provider_adapter_models_target(
+    provider_id: Option<&str>,
+    api_key: Option<&str>,
+    api_key_env: Option<&str>,
+    adapter_ids: &[String],
+) -> Result<ProviderAdapterModelsTarget, ConfigError> {
+    let adapter_ids = required_adapter_ids(
+        adapter_ids,
+        "draft adapter model listing requires explicit adapter_ids",
+    )?;
+    Ok(ProviderAdapterModelsTarget {
+        provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
+        auth: ProviderAuthConfig::Gitlab(ProviderGitlabAuthConfig {
+            api_key: optional_trimmed(api_key).map(ToOwned::to_owned),
+            api_key_env: optional_trimmed(api_key_env).map(ToOwned::to_owned),
+            credential: None,
+            instance_url: None,
+            ai_gateway_url: None,
+            ai_gateway_headers: BTreeMap::new(),
+            feature_flags: BTreeMap::new(),
+        }),
+        adapters: default_http_adapter_model_list_adapters(adapter_ids.as_slice())?,
+    })
+}
+
+pub fn draft_atomgit_provider_adapter_models_target(
+    provider_id: Option<&str>,
+    credential: AuthData,
+    adapter_ids: &[String],
+) -> Result<ProviderAdapterModelsTarget, ConfigError> {
+    let adapter_ids = required_adapter_ids(
+        adapter_ids,
+        "draft atomgit adapter model listing requires explicit adapter_ids",
+    )?;
+    for adapter_id in &adapter_ids {
+        if adapter_id != "openai" {
+            return Err(ConfigError::Validation(format!(
+                "draft atomgit adapter model listing only supports `openai`; unsupported `{adapter_id}`"
+            )));
+        }
+    }
+    Ok(ProviderAdapterModelsTarget {
+        provider_id: optional_trimmed(provider_id).unwrap_or("draft").to_owned(),
+        auth: ProviderAuthConfig::Credential(ProviderCredentialAuthConfig {
+            issuer: CredentialIssuer::AtomGit,
+            credential: Some(credential.with_issuer(CredentialIssuer::AtomGit)),
+            base_url: None,
+            protocol_paths: ProviderProtocolPathsConfig::default(),
+            service_key_env: None,
+            instance_url: None,
+            ai_gateway_url: None,
+            ai_gateway_headers: BTreeMap::new(),
+            feature_flags: BTreeMap::new(),
         }),
         adapters: default_http_adapter_model_list_adapters(adapter_ids.as_slice())?,
     })
@@ -257,6 +317,67 @@ mod tests {
     }
 
     #[test]
+    fn draft_atomgit_target_uses_inline_credential_and_openai_adapter() {
+        let credential = AuthData::OAuth {
+            issuer: None,
+            refresh: "refresh-token".to_owned(),
+            access: "access-token".to_owned(),
+            expires_at_ms: 4102444800000,
+            account_id: Some("atomgit-user".to_owned()),
+            enterprise_url: None,
+            user: None,
+        };
+
+        let target = draft_atomgit_provider_adapter_models_target(
+            Some("atomgit"),
+            credential,
+            &["openai".to_owned()],
+        )
+        .expect("draft atomgit target should build");
+
+        assert_eq!(target.provider_id, "atomgit");
+        assert_eq!(
+            target.adapters.keys().cloned().collect::<Vec<_>>(),
+            vec!["openai".to_owned()]
+        );
+        let ProviderAuthConfig::Credential(config) = target.auth else {
+            panic!("atomgit target should use credential auth");
+        };
+        assert_eq!(config.issuer, CredentialIssuer::AtomGit);
+        assert_eq!(
+            config.credential.and_then(|credential| credential.issuer()),
+            Some(CredentialIssuer::AtomGit)
+        );
+        assert!(config.base_url.is_none());
+    }
+
+    #[test]
+    fn draft_atomgit_target_rejects_non_openai_adapter() {
+        let credential = AuthData::OAuth {
+            issuer: Some(CredentialIssuer::AtomGit),
+            refresh: "refresh-token".to_owned(),
+            access: "access-token".to_owned(),
+            expires_at_ms: 4102444800000,
+            account_id: None,
+            enterprise_url: None,
+            user: None,
+        };
+
+        let error = draft_atomgit_provider_adapter_models_target(
+            Some("atomgit"),
+            credential,
+            &["anthropic".to_owned()],
+        )
+        .expect_err("atomgit target should reject anthropic");
+
+        assert!(
+            error
+                .to_string()
+                .contains("draft atomgit adapter model listing only supports `openai`")
+        );
+    }
+
+    #[test]
     fn saved_target_requires_explicit_adapter_ids() {
         let mut adapters = BTreeMap::new();
         adapters.insert("openai".to_owned(), configured_openai_adapter());
@@ -265,7 +386,7 @@ mod tests {
             default_adapter: "openai".to_owned(),
             default_model: "gpt-5".to_owned(),
             auth: ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: "https://example.com".to_owned(),
+                base_url: Some("https://example.com".to_owned()),
                 protocol_paths: ProviderProtocolPathsConfig::default(),
                 api_key: None,
                 api_key_env: Some("OPENAI_API_KEY".to_owned()),
@@ -293,7 +414,7 @@ mod tests {
             default_adapter: "openai".to_owned(),
             default_model: "gpt-5".to_owned(),
             auth: ProviderAuthConfig::Api(ProviderApiAuthConfig {
-                base_url: "https://example.com".to_owned(),
+                base_url: Some("https://example.com".to_owned()),
                 protocol_paths: ProviderProtocolPathsConfig::default(),
                 api_key: None,
                 api_key_env: Some("OPENAI_API_KEY".to_owned()),

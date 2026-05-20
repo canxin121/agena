@@ -130,12 +130,11 @@ impl ModelCatalogEntryResource {
                 ModelCatalogEntrySourceKind::Cache => ModelCatalogSourceKind::Cache,
             }
         };
-        let source_label = Some(match source {
+        let source_label = Some(str::to_owned(match source {
             ModelCatalogSourceKind::Generated => "generated catalog",
             ModelCatalogSourceKind::Cache => "cached catalog",
             ModelCatalogSourceKind::Custom => "workspace override",
-        })
-        .map(str::to_owned);
+        }));
 
         Self {
             model_id: value.model_id,

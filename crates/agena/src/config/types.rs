@@ -56,6 +56,7 @@ pub struct ResolvedConfig {
     pub telemetry: agena_otel::TelemetryConfig,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
+    pub session: SessionConfig,
     #[serde(
         default,
         skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
@@ -216,6 +217,29 @@ pub struct RuntimeConfig {
     pub reload: RuntimeReloadConfig,
     pub janitor: RuntimeJanitorConfig,
     pub session_cache: SessionCacheConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SessionConfig {
+    pub compaction: SessionCompactionConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionCompactionConfig {
+    pub auto: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reserved_tokens: Option<u32>,
+}
+
+impl Default for SessionCompactionConfig {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            reserved_tokens: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

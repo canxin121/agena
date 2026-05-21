@@ -317,11 +317,6 @@ impl RecordingProvider {
         self
     }
 
-    fn with_response_delay(mut self, delay: Duration) -> Self {
-        self.response_delay = Some(delay);
-        self
-    }
-
     fn with_dynamic_prompt_cache_shape(mut self, shape: crate::provider::PromptCacheShape) -> Self {
         self.dynamic_prompt_cache_shape = Some(shape);
         self
@@ -1358,17 +1353,12 @@ async fn persist_goal_without_auto_run(
     manager: &SessionManager,
     session_id: i64,
     objective: &str,
-    token_budget: Option<u64>,
+    _ignored_goal_limit: Option<u64>,
 ) -> SessionGoal {
     let state = manager.execution_state();
     let mut updated = manager
         .store
-        .upsert_goal(
-            session_id,
-            objective.to_string(),
-            token_budget,
-            state.cache_policy(),
-        )
+        .upsert_goal(session_id, objective.to_string(), state.cache_policy())
         .await
         .expect("upsert goal without auto run");
     let goal = updated
@@ -2397,6 +2387,7 @@ async fn cache_eviction_falls_back_to_db_reload() {
             doom_loop: crate::session::DoomLoopPolicy::default(),
             default_agent: None,
             permission: crate::agent::PermissionConfig::default(),
+            auto_compaction: SessionAutoCompactionConfig::default(),
         },
     )
     .await;
@@ -3854,6 +3845,241 @@ async fn compact_session_falls_back_to_local_agent_when_remote_compact_fails() {
 }
 
 #[tokio::test]
+async fn auto_compaction_runs_before_turn_when_session_context_is_full() {
+    let workspace = TempWorkspace::new();
+    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+    let service = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig {
+            auto_compaction: SessionAutoCompactionConfig {
+                enabled: true,
+                reserved_tokens: Some(256),
+            },
+            ..SessionManagerConfig::default()
+        },
+        ContextPolicy::default(),
+        RecordingProvider::new(requests.clone())
+            .with_metadata(
+                crate::provider::ModelMetadata::default()
+                    .with_context_window_tokens(4_096)
+                    .with_max_input_tokens(1_200)
+                    .with_max_output_tokens(256),
+            )
+            .with_usage(CompletionUsage {
+                input_tokens: 800,
+                output_tokens: 32,
+                reasoning_tokens: 0,
+                cache_write_tokens: 0,
+                cache_read_tokens: 0,
+                total_cost: 0.0,
+            }),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "auto compact".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let first = "first-turn-alpha";
+    let second = format!("second-turn-beta {}", "b".repeat(200));
+    let third = format!("third-turn-gamma {}", "c".repeat(6_000));
+
+    let _ = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text(first)],
+        })
+        .await
+        .expect("submit first turn");
+    let _ = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text(second.clone())],
+        })
+        .await
+        .expect("submit second turn");
+    let mut synthetic = service
+        .get_session(created.id)
+        .await
+        .expect("load session before synthetic third turn");
+    let ids = service
+        .store
+        .reserve_message_ids(1)
+        .await
+        .expect("reserve synthetic message ids");
+    synthetic.messages.push(build_message(
+        ids,
+        Role::User,
+        MessageStatus::Completed,
+        vec![PartContent::text(third.clone())],
+        MessageMetadata {
+            source: MessageSource::User,
+            parent_message_id: synthetic
+                .last_conversation_message()
+                .map(|message| message.id),
+            generated_by_call_id: None,
+            model_provider_id: "recording".to_string(),
+            model_adapter_id: None,
+            model_id: "recording-model".to_string(),
+            model_thinking_mode: None,
+            model_speed_mode: None,
+            model_verbosity: None,
+            model_parallel_tool_calls: None,
+            provider_metadata: None,
+            tags: Vec::new(),
+        },
+    ));
+    let synthetic_usage = service
+        .session_usage(&synthetic)
+        .expect("session usage should compute");
+    let projected_tokens = synthetic_usage
+        .projected_tokens
+        .unwrap_or(synthetic_usage.current_tokens);
+    assert!(
+        synthetic_usage.limit_basis == Some(SessionUsageLimitBasis::ContextWindow)
+            && projected_tokens >= synthetic_usage.limit_tokens.unwrap_or_default(),
+        "synthetic third turn should exceed usable context: {:?}",
+        synthetic_usage
+    );
+    let session = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text(third.clone())],
+        })
+        .await
+        .expect("submit third turn");
+
+    let compaction = session
+        .runtime
+        .prompt_window
+        .compaction
+        .as_ref()
+        .expect("auto compaction should install runtime");
+    assert_eq!(compaction.summary, "recorded");
+    assert_eq!(compaction.strategy, PromptCompactionStrategy::LocalAgent);
+
+    let recorded = requests
+        .lock()
+        .expect("recording provider request lock should succeed")
+        .clone();
+    assert_eq!(recorded.len(), 4);
+    let final_prompt = recorded
+        .last()
+        .expect("final request should exist")
+        .messages
+        .iter()
+        .map(Message::as_text_lossy)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(final_prompt.contains("Conversation summary before the current active context"));
+    assert!(final_prompt.contains("recorded"));
+    assert!(final_prompt.contains("second-turn-beta"));
+    assert!(final_prompt.contains("third-turn-gamma"));
+    assert!(!final_prompt.contains(first));
+}
+
+#[tokio::test]
+async fn auto_compaction_can_be_disabled_per_session_config() {
+    let workspace = TempWorkspace::new();
+    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+    let service = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig {
+            auto_compaction: SessionAutoCompactionConfig {
+                enabled: false,
+                reserved_tokens: Some(256),
+            },
+            ..SessionManagerConfig::default()
+        },
+        ContextPolicy::default(),
+        RecordingProvider::new(requests.clone())
+            .with_metadata(
+                crate::provider::ModelMetadata::default()
+                    .with_context_window_tokens(4_096)
+                    .with_max_input_tokens(1_200)
+                    .with_max_output_tokens(256),
+            )
+            .with_usage(CompletionUsage {
+                input_tokens: 800,
+                output_tokens: 32,
+                reasoning_tokens: 0,
+                cache_write_tokens: 0,
+                cache_read_tokens: 0,
+                total_cost: 0.0,
+            }),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "auto compact off".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let _ = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text("first-turn-alpha")],
+        })
+        .await
+        .expect("submit first turn");
+    let _ = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text(format!(
+                "second-turn-beta {}",
+                "b".repeat(200)
+            ))],
+        })
+        .await
+        .expect("submit second turn");
+    let session = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text(format!(
+                "third-turn-gamma {}",
+                "c".repeat(6_000)
+            ))],
+        })
+        .await
+        .expect("submit third turn without auto compaction");
+
+    assert!(session.runtime.prompt_window.compaction.is_none());
+
+    let recorded = requests
+        .lock()
+        .expect("recording provider request lock should succeed")
+        .clone();
+    assert_eq!(recorded.len(), 3);
+    let final_prompt = recorded
+        .last()
+        .expect("final request should exist")
+        .messages
+        .iter()
+        .map(Message::as_text_lossy)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!final_prompt.contains("Conversation summary before the current active context"));
+    assert!(final_prompt.contains("first-turn-alpha"));
+    assert!(final_prompt.contains("second-turn-beta"));
+    assert!(final_prompt.contains("third-turn-gamma"));
+}
+
+#[tokio::test]
 async fn persisted_runtime_anchor_survives_cache_eviction() {
     let workspace = TempWorkspace::new();
     let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
@@ -3868,6 +4094,7 @@ async fn persisted_runtime_anchor_survives_cache_eviction() {
             doom_loop: crate::session::DoomLoopPolicy::default(),
             default_agent: None,
             permission: crate::agent::PermissionConfig::default(),
+            auto_compaction: SessionAutoCompactionConfig::default(),
         },
         ContextPolicy::default(),
         RecordingProvider::new(requests.clone()),
@@ -4949,12 +5176,10 @@ async fn goal_lifecycle_persists_and_publishes_updates() {
         .create_goal(SessionGoalCreateRequest {
             session_id: created.id,
             objective: "ship goal system".to_string(),
-            token_budget: Some(2048),
         })
         .await
         .expect("create goal");
     assert_eq!(created_goal.objective, "ship goal system");
-    assert_eq!(created_goal.token_budget, Some(2048));
     assert_eq!(created_goal.status, GoalStatus::Active);
 
     let loaded_goal = service
@@ -5010,160 +5235,6 @@ async fn goal_lifecycle_persists_and_publishes_updates() {
 }
 
 #[tokio::test]
-async fn goal_accounting_persists_usage_and_budget_limits_turns() {
-    let workspace = TempWorkspace::new();
-    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
-    let service = build_manager_with_provider(
-        &workspace.root,
-        PermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        RecordingProvider::new(Arc::clone(&requests)).with_usage(CompletionUsage {
-            input_tokens: 7,
-            output_tokens: 5,
-            reasoning_tokens: 1,
-            cache_write_tokens: 0,
-            cache_read_tokens: 0,
-            total_cost: 0.0,
-        }),
-    )
-    .await;
-
-    let created = service
-        .create_session(SessionCreateRequest {
-            title: "goal-accounting".to_string(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create session");
-
-    service
-        .create_goal(SessionGoalCreateRequest {
-            session_id: created.id,
-            objective: "stay under budget".to_string(),
-            token_budget: Some(13),
-        })
-        .await
-        .expect("create goal");
-
-    let completed = service
-        .submit_user_turn(SessionUserTurnRequest {
-            session_id: created.id,
-            options: recording_run_options(),
-            parts: vec![PartContent::text("hello budget")],
-        })
-        .await
-        .expect("submit turn");
-
-    let goal = completed.goal.expect("goal should still exist");
-    assert_eq!(goal.tokens_used, 26);
-    assert_eq!(goal.time_used_seconds, 0);
-    assert_eq!(goal.status, GoalStatus::BudgetLimited);
-
-    let request_count_after_first_turn = requests
-        .lock()
-        .expect("recording requests lock should succeed")
-        .len();
-    assert_eq!(
-        request_count_after_first_turn, 2,
-        "budget-limited goals should receive one hidden wrap-up turn in the same run"
-    );
-
-    let resumed = service
-        .continue_session(SessionContinueRequest {
-            session_id: created.id,
-            options: recording_run_options(),
-        })
-        .await
-        .expect("continue session");
-    let resumed_goal = resumed.goal.expect("goal should remain present");
-    assert_eq!(resumed_goal.status, GoalStatus::BudgetLimited);
-    assert_eq!(resumed_goal.tokens_used, 26);
-    assert_eq!(
-        requests
-            .lock()
-            .expect("recording requests lock should succeed")
-            .len(),
-        2,
-        "once the hidden wrap-up turn has been used, later continue calls should stop"
-    );
-
-    let completed_goal = service
-        .complete_goal(created.id)
-        .await
-        .expect("budget-limited goal should still be completable");
-    assert_eq!(completed_goal.status, GoalStatus::Completed);
-    assert_eq!(completed_goal.tokens_used, 26);
-    assert_eq!(completed_goal.time_used_seconds, 0);
-    assert!(completed_goal.completed_at.is_some());
-}
-
-#[tokio::test]
-async fn goal_accounting_tracks_turn_runtime_seconds() {
-    let workspace = TempWorkspace::new();
-    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
-    let service = build_manager_with_provider(
-        &workspace.root,
-        PermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        RecordingProvider::new(Arc::clone(&requests))
-            .with_usage(CompletionUsage {
-                input_tokens: 3,
-                output_tokens: 2,
-                reasoning_tokens: 0,
-                cache_write_tokens: 0,
-                cache_read_tokens: 0,
-                total_cost: 0.0,
-            })
-            .with_response_delay(Duration::from_millis(1_200)),
-    )
-    .await;
-
-    let created = service
-        .create_session(SessionCreateRequest {
-            title: "goal-runtime-accounting".to_string(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create session");
-
-    service
-        .create_goal(SessionGoalCreateRequest {
-            session_id: created.id,
-            objective: "measure real runtime".to_string(),
-            token_budget: None,
-        })
-        .await
-        .expect("create goal");
-
-    let completed = service
-        .submit_user_turn(SessionUserTurnRequest {
-            session_id: created.id,
-            options: recording_run_options(),
-            parts: vec![PartContent::text("measure elapsed runtime")],
-        })
-        .await
-        .expect("submit turn");
-
-    let goal = completed.goal.expect("goal should still exist");
-    assert_eq!(goal.tokens_used, 5);
-    assert!(
-        goal.time_used_seconds >= 1,
-        "expected at least one second of recorded turn time, got {}",
-        goal.time_used_seconds
-    );
-
-    let persisted = service
-        .get_goal(created.id)
-        .await
-        .expect("load goal")
-        .expect("goal should persist");
-    assert_eq!(persisted.tokens_used, 5);
-    assert_eq!(persisted.time_used_seconds, goal.time_used_seconds);
-}
-
-#[tokio::test]
 async fn create_goal_persists_objective_updated_runtime_state() {
     let workspace = TempWorkspace::new();
     let service = build_manager(
@@ -5184,7 +5255,6 @@ async fn create_goal_persists_objective_updated_runtime_state() {
         .create_goal(SessionGoalCreateRequest {
             session_id: created.id,
             objective: "ship the feature".to_string(),
-            token_budget: Some(42),
         })
         .await
         .expect("create goal");
@@ -5223,7 +5293,6 @@ async fn goal_turn_directive_only_allows_hidden_continuation_when_enabled() {
         .create_goal(SessionGoalCreateRequest {
             session_id: created.id,
             objective: "keep going".to_string(),
-            token_budget: None,
         })
         .await
         .expect("create goal");
@@ -5273,7 +5342,6 @@ async fn run_model_turn_uses_persisted_goal_context_message() {
         .create_goal(SessionGoalCreateRequest {
             session_id: created.id,
             objective: "finish the migration".to_string(),
-            token_budget: None,
         })
         .await
         .expect("create goal");
@@ -5385,7 +5453,6 @@ async fn canceling_a_running_turn_pauses_an_active_goal() {
         .create_goal(SessionGoalCreateRequest {
             session_id: created.id,
             objective: "keep working".to_string(),
-            token_budget: None,
         })
         .await
         .expect("create goal");
@@ -5428,7 +5495,6 @@ async fn continue_session_resumes_a_paused_goal_to_active() {
         .create_goal(SessionGoalCreateRequest {
             session_id: created.id,
             objective: "keep working".to_string(),
-            token_budget: None,
         })
         .await
         .expect("create goal");
@@ -5499,7 +5565,6 @@ async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
         .create_goal(SessionGoalCreateRequest {
             session_id: created.id,
             objective: "keep shipping".to_string(),
-            token_budget: None,
         })
         .await
         .expect("create goal");

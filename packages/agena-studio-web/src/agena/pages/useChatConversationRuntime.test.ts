@@ -40,6 +40,7 @@ function sessionState(sessionId: number, overrides?: Partial<SessionExecutionRes
     pending_permission_requests: [],
     pending_user_input_requests: [],
     ...overrides,
+    usage: overrides?.usage ?? { current_tokens: 0 },
   }
 }
 

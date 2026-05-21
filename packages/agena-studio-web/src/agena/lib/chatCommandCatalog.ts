@@ -38,7 +38,7 @@ export type ChatCommandCatalogActions = {
   resolveWorkspaceAction: (createIfMissing: boolean) => void | Promise<void>
   setWorkspacePath: (value: string) => void
   showSessionGoalAction: () => void | Promise<void>
-  setSessionGoalAction: (objective: string, tokenBudget?: number | null) => void | Promise<void>
+  setSessionGoalAction: (objective: string) => void | Promise<void>
   completeSessionGoalAction: () => void | Promise<void>
   clearSessionGoalAction: () => void | Promise<void>
   loadSessionTree: (rootId: number) => void | Promise<void>
@@ -52,15 +52,10 @@ function readCommandArgument(context: CommandContext | undefined): string {
 
 type GoalCommandPlan =
   | { kind: 'show' }
-  | { kind: 'set'; objective: string; tokenBudget?: number | null }
+  | { kind: 'set'; objective: string }
   | { kind: 'complete' }
   | { kind: 'clear' }
   | { kind: 'error'; message: string }
-
-function readPositiveInteger(value: string): number | null {
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
-}
 
 function readGoalCommandPlan(context: CommandContext | undefined): GoalCommandPlan {
   const args = context?.args ?? []
@@ -71,41 +66,11 @@ function readGoalCommandPlan(context: CommandContext | undefined): GoalCommandPl
   if (first === 'done' || first === 'complete' || first === 'completed') return { kind: 'complete' }
   if (first === 'clear' || first === 'unset' || first === 'remove') return { kind: 'clear' }
 
-  const objectiveParts: string[] = []
-  let tokenBudget: number | null | undefined
-
-  for (let index = 0; index < args.length; index += 1) {
-    const token = args[index] || ''
-    const [flag, inlineValue] = token.split('=', 2)
-    const normalizedFlag = flag.toLowerCase()
-
-    if (normalizedFlag === '--tokens' || normalizedFlag === '--budget' || normalizedFlag === '--token-budget') {
-      const rawValue = inlineValue ?? args[index + 1]
-      if (!rawValue) {
-        return { kind: 'error', message: 'Usage: /goal <objective> [--tokens <budget>]' }
-      }
-      const parsedBudget = readPositiveInteger(rawValue)
-      if (parsedBudget === null) {
-        return { kind: 'error', message: 'Goal token budget must be a positive integer.' }
-      }
-      tokenBudget = parsedBudget
-      if (inlineValue === undefined) index += 1
-      continue
-    }
-
-    if (normalizedFlag === '--no-budget') {
-      tokenBudget = null
-      continue
-    }
-
-    objectiveParts.push(token)
-  }
-
-  const objective = objectiveParts.join(' ').trim()
+  const objective = args.join(' ').trim()
   if (!objective) {
-    return { kind: 'error', message: 'Usage: /goal <objective> [--tokens <budget>]' }
+    return { kind: 'error', message: 'Usage: /goal <objective>' }
   }
-  return { kind: 'set', objective, tokenBudget }
+  return { kind: 'set', objective }
 }
 
 function createWorkspaceShortcutCommand(shortcut: WorkspaceShortcut, actions: ChatCommandCatalogActions): CommandItem {
@@ -175,8 +140,8 @@ function createParameterizedChatCommands(
       category: 'Chat Actions',
       source: 'chat-action',
       slash: '/goal',
-      usage: '/goal [objective] [--tokens <budget>]',
-      aliases: ['objective', 'active goal', 'token budget'],
+      usage: '/goal [objective]',
+      aliases: ['objective', 'active goal'],
       run: async (context) => {
         if (!state.selectedSessionId.value) {
           actions.setLocalCommandNotice('Select a session before running /goal.')
@@ -199,7 +164,7 @@ function createParameterizedChatCommands(
           await actions.clearSessionGoalAction()
           return
         }
-        await actions.setSessionGoalAction(plan.objective, plan.tokenBudget)
+        await actions.setSessionGoalAction(plan.objective)
       },
     },
     {

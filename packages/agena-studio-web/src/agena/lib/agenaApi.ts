@@ -568,16 +568,13 @@ export type WorkspaceResource = {
   session_count?: number | null
 }
 
-export type SessionGoalStatus = 'active' | 'paused' | 'budget_limited' | 'completed' | string
+export type SessionGoalStatus = 'active' | 'paused' | 'completed' | string
 
 export type SessionGoalResource = {
   id: number
   session_id: number
   objective: string
   status: SessionGoalStatus
-  token_budget?: number | null
-  tokens_used: number
-  time_used_seconds: number
   created_at: string
   updated_at: string
   completed_at?: string | null
@@ -814,10 +811,18 @@ export type SessionExecutionContextResource = {
   task_id?: string | null
 }
 
-export type SessionPromptUsageResource = {
+export type SessionUsageLimitBasis = 'context_window' | 'prompt_threshold'
+
+export type SessionUsageResource = {
+  measured_prompt_tokens?: number | null
   current_tokens: number
-  budget_tokens?: number | null
+  projected_tokens?: number | null
+  limit_tokens?: number | null
+  limit_basis?: SessionUsageLimitBasis | null
+  reserved_tokens?: number | null
   model_context_window_tokens?: number | null
+  model_max_input_tokens?: number | null
+  model_max_output_tokens?: number | null
 }
 
 export type SessionExecutionResource = {
@@ -830,7 +835,7 @@ export type SessionExecutionResource = {
   pending_permission_requests: PermissionRequest[]
   pending_user_input_requests: UserInputRequest[]
   goal?: SessionGoalResource | null
-  prompt_usage?: SessionPromptUsageResource | null
+  usage: SessionUsageResource
 }
 
 export type SessionEventRecord = {
@@ -1621,7 +1626,6 @@ export async function setSessionGoal(input: {
   sessionId: number
   objective?: string
   status?: SessionGoalStatus
-  tokenBudget?: number | null
 }): Promise<SessionGoalResource> {
   return await apiJson<SessionGoalResource>(`/api/v1/sessions/${input.sessionId}/goal`, {
     method: 'PUT',
@@ -1629,7 +1633,6 @@ export async function setSessionGoal(input: {
     body: JSON.stringify({
       ...(input.objective?.trim() ? { objective: input.objective.trim() } : {}),
       ...(input.status ? { status: input.status } : {}),
-      ...(input.tokenBudget !== undefined ? { token_budget: input.tokenBudget } : {}),
     }),
   })
 }

@@ -261,8 +261,8 @@ describe('chatCommandCatalog', () => {
       showSessionGoalAction: async () => {
         goalCalls.push('show-goal')
       },
-      setSessionGoalAction: async (objective, tokenBudget) => {
-        goalCalls.push(`set-goal:${objective}:${tokenBudget ?? ''}`)
+      setSessionGoalAction: async (objective) => {
+        goalCalls.push(`set-goal:${objective}`)
       },
       completeSessionGoalAction: async () => {
         goalCalls.push('complete-goal')
@@ -281,17 +281,16 @@ describe('chatCommandCatalog', () => {
     await commands
       .find((item) => item.id === 'chat.session-goal')
       ?.run({
-        input: '/goal Finish slash commands --tokens 2048',
-        args: ['Finish', 'slash', 'commands', '--tokens', '2048'],
+        input: '/goal Finish slash commands',
+        args: ['Finish', 'slash', 'commands'],
       })
     await commands.find((item) => item.id === 'chat.session-goal')?.run({ input: '/goal', args: [] })
     await commands.find((item) => item.id === 'chat.session-goal')?.run({ input: '/goal done', args: ['done'] })
     await commands
       .find((item) => item.id === 'chat.session-goal')
-      ?.run({ input: '/goal --tokens nope', args: ['--tokens', 'nope'] })
+      ?.run({ input: '/goal', args: [''] })
 
     expect(newTitles).toEqual(['Fix bug'])
-    expect(goalCalls).toEqual(['create-session', 'set-goal:Finish slash commands:2048', 'show-goal', 'complete-goal'])
-    expect(notices.at(-1)).toBe('Goal token budget must be a positive integer.')
+    expect(goalCalls).toEqual(['create-session', 'set-goal:Finish slash commands', 'show-goal', 'complete-goal'])
   })
 })

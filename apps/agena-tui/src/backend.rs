@@ -1458,6 +1458,34 @@ impl Backend {
         .context("failed to list workspace sessions")
     }
 
+    pub async fn list_workspace_sessions_page(
+        &self,
+        roots_only: bool,
+        search: Option<&str>,
+        cursor: Option<String>,
+        limit: u64,
+    ) -> Result<PaginatedResponse<SessionResource>> {
+        let workspace_id = self.current_workspace_id().await?;
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::ListSessions(ListSessionsParams {
+                cursor,
+                limit: Some(limit),
+                workspace_id: Some(workspace_id),
+                parent_id: None,
+                roots: roots_only,
+                search: search.map(str::to_string),
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::Sessions(page) => Ok(page),
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to list workspace sessions page")
+    }
+
     pub async fn create_session(
         &self,
         title: String,
@@ -4231,33 +4259,33 @@ fn catalog_entry_to_provider_model_overlay(
 fn catalog_entry_to_catalog_definition(
     entry: &ModelCatalogEntryResource,
 ) -> CatalogModelDefinition {
-    CatalogModelDefinition {
-        lifecycle: entry.lifecycle,
-        context_window_tokens: entry.context_window_tokens,
-        max_input_tokens: entry.max_input_tokens,
-        max_output_tokens: entry.max_output_tokens,
-        description: entry.description.clone(),
-        knowledge_cutoff: entry.knowledge_cutoff.clone(),
-        release_date: entry.release_date.clone(),
-        last_updated: entry.last_updated.clone(),
-        open_weights: entry.open_weights,
-        default_thinking_mode: entry.default_thinking_mode.clone(),
-        supports_parallel_tool_calls: entry.supports_parallel_tool_calls,
-        supports_verbosity: entry.supports_verbosity,
-        default_verbosity: entry.default_verbosity.clone(),
-        default_temperature: entry.default_temperature.clone(),
-        default_top_p: entry.default_top_p.clone(),
-        default_top_k: entry.default_top_k,
-        assistant_reasoning_interleaved: entry.assistant_reasoning_interleaved,
-        assistant_reasoning_field: entry.assistant_reasoning_field.clone(),
-        output_modalities: entry.output_modalities.clone(),
-        pricing: entry.pricing.clone(),
-        display_name: entry.display_name.clone(),
-        origin: entry.origin.clone(),
-        thinking_modes: entry.thinking_modes.clone(),
-        speed_modes: entry.speed_modes.clone(),
-        capabilities: sanitized_catalog_capability_patch(&entry.capabilities),
-    }
+    let mut definition = CatalogModelDefinition::default();
+    definition.lifecycle = entry.lifecycle;
+    definition.context_window_tokens = entry.context_window_tokens;
+    definition.max_input_tokens = entry.max_input_tokens;
+    definition.max_output_tokens = entry.max_output_tokens;
+    definition.description = entry.description.clone();
+    definition.knowledge_cutoff = entry.knowledge_cutoff.clone();
+    definition.release_date = entry.release_date.clone();
+    definition.last_updated = entry.last_updated.clone();
+    definition.open_weights = entry.open_weights;
+    definition.default_thinking_mode = entry.default_thinking_mode.clone();
+    definition.supports_parallel_tool_calls = entry.supports_parallel_tool_calls;
+    definition.supports_verbosity = entry.supports_verbosity;
+    definition.default_verbosity = entry.default_verbosity.clone();
+    definition.default_temperature = entry.default_temperature.clone();
+    definition.default_top_p = entry.default_top_p.clone();
+    definition.default_top_k = entry.default_top_k;
+    definition.assistant_reasoning_interleaved = entry.assistant_reasoning_interleaved;
+    definition.assistant_reasoning_field = entry.assistant_reasoning_field.clone();
+    definition.output_modalities = entry.output_modalities.clone();
+    definition.pricing = entry.pricing.clone();
+    definition.display_name = entry.display_name.clone();
+    definition.origin = entry.origin.clone();
+    definition.thinking_modes = entry.thinking_modes.clone();
+    definition.speed_modes = entry.speed_modes.clone();
+    definition.capabilities = sanitized_catalog_capability_patch(&entry.capabilities);
+    definition
 }
 
 fn sanitized_catalog_capability_patch(

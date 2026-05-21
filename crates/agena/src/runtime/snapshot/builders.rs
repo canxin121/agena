@@ -290,6 +290,10 @@ pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionMa
         doom_loop: defaults.doom_loop,
         default_agent: Some(resolution.config.default.agent.clone()),
         permission: resolution.config.permission.clone(),
+        auto_compaction: crate::session::SessionAutoCompactionConfig {
+            enabled: resolution.config.session.compaction.auto,
+            reserved_tokens: resolution.config.session.compaction.reserved_tokens,
+        },
     }
 }
 

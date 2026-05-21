@@ -18,8 +18,8 @@ use super::{
     ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
     ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    RuntimeConfig, RuntimeModelCatalogConfig, StreamTransportMode, TelemetryConfig, TracingConfig,
-    UiConfig, WebToolsConfig,
+    RuntimeConfig, RuntimeModelCatalogConfig, SessionCompactionConfig, SessionConfig,
+    StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -147,6 +147,7 @@ pub(crate) struct RawConfig {
     pub(crate) telemetry: Option<RawTelemetryConfig>,
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
+    pub(crate) session: Option<RawSessionConfig>,
     pub(crate) permission: Option<crate::agent::PermissionConfig>,
     pub(crate) agents: BTreeMap<String, AgentConfig>,
     pub(crate) plugins: Option<PluginConfig>,
@@ -164,6 +165,7 @@ impl RawConfig {
         merge_option_struct(&mut self.telemetry, overlay.telemetry);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
+        merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_map(&mut self.agents, overlay.agents);
         merge_option_struct(&mut self.plugins, overlay.plugins);
@@ -180,6 +182,7 @@ impl RawConfig {
             && self.telemetry.is_none()
             && self.ui.is_none()
             && self.runtime.is_none()
+            && self.session.is_none()
             && self.permission.is_none()
             && self.agents.is_empty()
             && self.plugins.is_none()
@@ -309,6 +312,25 @@ impl RawConfig {
                 .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
                 .cache_max_age_secs = Some(value);
         })?;
+        if let Some(enabled) = env.var("AGENA_SESSION_COMPACTION_AUTO") {
+            config
+                .session
+                .get_or_insert_with(RawSessionConfig::default)
+                .compaction
+                .get_or_insert_with(RawSessionCompactionConfig::default)
+                .auto = Some(parse_bool(
+                "AGENA_SESSION_COMPACTION_AUTO",
+                enabled.as_str(),
+            )?);
+        }
+        apply_env_number(env, "AGENA_SESSION_COMPACTION_RESERVED_TOKENS", |value| {
+            config
+                .session
+                .get_or_insert_with(RawSessionConfig::default)
+                .compaction
+                .get_or_insert_with(RawSessionCompactionConfig::default)
+                .reserved_tokens = Some(value);
+        })?;
 
         Ok(config)
     }
@@ -363,8 +385,10 @@ impl RawConfig {
 
         let raw_default = self.default.unwrap_or_default();
         let raw_runtime = self.runtime.unwrap_or_default();
+        let raw_session = self.session.unwrap_or_default();
         let default = raw_default.clone().resolve();
         let runtime = RuntimeConfig::from_raw(raw_runtime)?;
+        let session = SessionConfig::from_raw(raw_session)?;
         let permission = self.permission.unwrap_or_default();
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         let plugin_options = PluginRuntimeOptions::from_plugins(&plugins)?;
@@ -396,6 +420,7 @@ impl RawConfig {
             telemetry,
             ui,
             runtime,
+            session,
             permission,
             agents: self.agents,
             plugins,
@@ -510,7 +535,7 @@ where
 mod tests {
     use std::path::Path;
 
-    use super::validate_config_text;
+    use super::{RawConfig, validate_config_text};
     use crate::config::{ConfigError, ProcessEnvironment};
 
     #[test]
@@ -545,6 +570,21 @@ mod tests {
             }
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    #[test]
+    fn resolve_config_supports_top_level_session_compaction() {
+        let raw = serde_json::from_str::<RawConfig>(
+            r#"{"session":{"compaction":{"auto":false,"reserved_tokens":512}}}"#,
+        )
+        .expect("raw config should parse");
+
+        let resolved = raw
+            .resolve_with_env(&ProcessEnvironment)
+            .expect("config should resolve");
+
+        assert!(!resolved.session.compaction.auto);
+        assert_eq!(resolved.session.compaction.reserved_tokens, Some(512));
     }
 }
 
@@ -882,6 +922,34 @@ impl RuntimeConfig {
                 max_sessions: session_cache_max_sessions,
                 ttl_secs: session_cache_ttl_secs,
                 max_bytes: session_cache_max_bytes,
+            },
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawSessionConfig {
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) compaction: Option<RawSessionCompactionConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawSessionCompactionConfig {
+    #[merge(strategy = option_override)]
+    pub(crate) auto: Option<bool>,
+    #[merge(strategy = option_override)]
+    pub(crate) reserved_tokens: Option<u32>,
+}
+
+impl SessionConfig {
+    pub(crate) fn from_raw(raw: RawSessionConfig) -> Result<Self, ConfigError> {
+        let compaction = raw.compaction.unwrap_or_default();
+        Ok(Self {
+            compaction: SessionCompactionConfig {
+                auto: compaction.auto.unwrap_or(true),
+                reserved_tokens: compaction.reserved_tokens,
             },
         })
     }
@@ -1903,6 +1971,8 @@ impl_local_merge_via_crate!(
     RawUiConfig,
     RawDefaultConfig,
     RawRuntimeConfig,
+    RawSessionConfig,
+    RawSessionCompactionConfig,
     RawProviderHttpConfig,
     RawRequestRetryConfig,
     RawStreamReplayConfig,

@@ -135,8 +135,6 @@ pub struct DeleteSessionParams {
 pub struct CreateSessionGoalParams {
     pub session_id: i64,
     pub objective: String,
-    #[serde(default)]
-    pub token_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -146,8 +144,6 @@ pub struct SetSessionGoalParams {
     pub objective: Option<String>,
     #[serde(default)]
     pub status: Option<GoalStatus>,
-    #[serde(default)]
-    pub token_budget: Option<Option<u64>>,
     #[serde(default)]
     pub clear: bool,
 }

@@ -344,10 +344,6 @@ pub struct SessionGoalResource {
     pub session_id: i64,
     pub objective: String,
     pub status: GoalStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<u64>,
-    pub tokens_used: u64,
-    pub time_used_seconds: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -396,9 +392,6 @@ impl From<SessionSummary> for SessionResource {
                 session_id: goal.session_id,
                 objective: goal.objective,
                 status: goal.status,
-                token_budget: goal.token_budget,
-                tokens_used: goal.tokens_used,
-                time_used_seconds: goal.time_used_seconds,
                 created_at: goal.created_at,
                 updated_at: goal.updated_at,
                 completed_at: goal.completed_at,
@@ -462,13 +455,32 @@ pub struct SessionExecutionContextResource {
     pub task_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionUsageLimitBasis {
+    ContextWindow,
+    PromptThreshold,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionPromptUsageResource {
+pub struct SessionUsageResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measured_prompt_tokens: Option<u64>,
     pub current_tokens: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub budget_tokens: Option<u64>,
+    pub projected_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit_basis: Option<SessionUsageLimitBasis>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reserved_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_context_window_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_max_input_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_max_output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -485,8 +497,7 @@ pub struct SessionExecutionResource {
     pub pending_user_input_requests: Vec<UserInputRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub goal: Option<SessionGoalResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_usage: Option<SessionPromptUsageResource>,
+    pub usage: SessionUsageResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -123,8 +123,7 @@ const defaultDeps: ChatSessionActionsDeps = {
 }
 
 function formatGoalNotice(goal: SessionGoalResource): string {
-  const budgetLabel = goal.token_budget ? `${goal.tokens_used}/${goal.token_budget}` : `${goal.tokens_used}`
-  return `Goal #${goal.id} ${goal.status}: ${goal.objective} · tokens=${budgetLabel} · time=${goal.time_used_seconds}s`
+  return `Goal #${goal.id} ${goal.status}: ${goal.objective}`
 }
 
 export function useChatSessionActions(input: ChatSessionActionsInput, deps: ChatSessionActionsDeps = defaultDeps) {
@@ -228,7 +227,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
   }
 
-  async function setSessionGoalAction(objective: string, tokenBudget?: number | null) {
+  async function setSessionGoalAction(objective: string) {
     const sessionId = input.selectedSessionId.value
     const trimmedObjective = objective.trim()
     if (!sessionId || !trimmedObjective) return
@@ -236,11 +235,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.loading.value = true
     input.errorMessage.value = ''
     try {
-      const goal = await deps.setSessionGoal({
-        sessionId,
-        objective: trimmedObjective,
-        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
-      })
+      const goal = await deps.setSessionGoal({ sessionId, objective: trimmedObjective })
       patchCurrentGoal(goal)
       input.localCommandNotice.value = `Set ${formatGoalNotice(goal)}`
       input.syncEventStream()

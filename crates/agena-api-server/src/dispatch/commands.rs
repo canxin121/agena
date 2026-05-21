@@ -67,13 +67,11 @@ pub async fn dispatch_command(
         Command::CreateSessionGoal(CreateSessionGoalParams {
             session_id,
             objective,
-            token_budget,
         }) => {
             let goal = manager
                 .create_goal(agena::session::SessionGoalCreateRequest {
                     session_id,
                     objective,
-                    token_budget,
                 })
                 .await?;
             let session = manager.get_session(session_id).await?;
@@ -88,7 +86,6 @@ pub async fn dispatch_command(
             session_id,
             objective,
             status,
-            token_budget,
             clear,
         }) => {
             if clear {
@@ -107,7 +104,6 @@ pub async fn dispatch_command(
                         session_id,
                         objective,
                         status,
-                        token_budget,
                         expected_goal_id: None,
                     })
                     .await?
@@ -126,7 +122,6 @@ pub async fn dispatch_command(
                     .create_goal(agena::session::SessionGoalCreateRequest {
                         session_id,
                         objective,
-                        token_budget: token_budget.flatten(),
                     })
                     .await?
             };

@@ -512,22 +512,21 @@ pub(crate) fn approximate_request_overhead_chars(
         .saturating_add(tools_chars)
 }
 
-pub(crate) fn prompt_char_budget(
-    context_window_tokens: Option<u32>,
-    max_output_tokens: Option<u32>,
-    fallback_max_prompt_chars: usize,
+pub(crate) fn approximate_total_request_tokens(
+    messages: &[Message],
     system: Option<&str>,
     tools: &[RegistryPluginEntry],
-) -> usize {
-    let overhead_chars = approximate_request_overhead_chars(system, tools);
-    let fallback_budget = fallback_max_prompt_chars
-        .saturating_sub(overhead_chars)
-        .max(APPROX_CHARS_PER_TOKEN * MIN_PROMPT_BUDGET_TOKENS as usize);
+) -> u64 {
+    let total_chars = approximate_prompt_payload_chars(messages)
+        .saturating_add(approximate_request_overhead_chars(system, tools));
+    approximate_tokens_from_chars(total_chars)
+}
 
-    let Some(context_window_tokens) = context_window_tokens.filter(|value| *value > 0) else {
-        return fallback_budget;
-    };
-
+pub(crate) fn prompt_token_budget(
+    context_window_tokens: Option<u32>,
+    max_output_tokens: Option<u32>,
+) -> Option<u32> {
+    let context_window_tokens = context_window_tokens.filter(|value| *value > 0)?;
     let min_prompt_tokens = MIN_PROMPT_BUDGET_TOKENS.min(context_window_tokens);
     let max_reserve_tokens = context_window_tokens
         .saturating_sub(min_prompt_tokens)
@@ -540,9 +539,28 @@ pub(crate) fn prompt_char_budget(
         .max(min_reserve_tokens)
         .min(MAX_CONTEXT_RESERVE_TOKENS)
         .min(max_reserve_tokens);
-    let prompt_tokens = context_window_tokens
-        .saturating_sub(reserve_tokens)
-        .max(min_prompt_tokens);
+    Some(
+        context_window_tokens
+            .saturating_sub(reserve_tokens)
+            .max(min_prompt_tokens),
+    )
+}
+
+pub(crate) fn prompt_char_budget(
+    context_window_tokens: Option<u32>,
+    max_output_tokens: Option<u32>,
+    fallback_max_prompt_chars: usize,
+    system: Option<&str>,
+    tools: &[RegistryPluginEntry],
+) -> usize {
+    let overhead_chars = approximate_request_overhead_chars(system, tools);
+    let fallback_budget = fallback_max_prompt_chars
+        .saturating_sub(overhead_chars)
+        .max(APPROX_CHARS_PER_TOKEN * MIN_PROMPT_BUDGET_TOKENS as usize);
+
+    let Some(prompt_tokens) = prompt_token_budget(context_window_tokens, max_output_tokens) else {
+        return fallback_budget;
+    };
     let prompt_chars = prompt_tokens as usize * APPROX_CHARS_PER_TOKEN;
     prompt_chars
         .saturating_sub(overhead_chars)

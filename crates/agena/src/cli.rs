@@ -591,8 +591,6 @@ pub struct SessionGoalGetArgs {
 pub struct SessionGoalCreateArgs {
     pub session_id: i64,
     pub objective: String,
-    #[arg(long)]
-    pub token_budget: Option<u64>,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
@@ -2070,7 +2068,6 @@ impl AgenaCli {
                         .create_goal(crate::session::SessionGoalCreateRequest {
                             session_id: args.session_id,
                             objective: args.objective,
-                            token_budget: args.token_budget,
                         })
                         .await?;
                     render_serialized(
@@ -4372,7 +4369,6 @@ mod tests {
                     command: SessionGoalSubcommand::Create(SessionGoalCreateArgs {
                         session_id: created.id,
                         objective: "cli goal".to_owned(),
-                        token_budget: Some(321),
                         format: ConfigOutputFormat::Json,
                     }),
                 })),
@@ -4384,7 +4380,6 @@ mod tests {
         assert_eq!(created_value["session_id"], created.id);
         assert_eq!(created_value["goal"]["objective"], "cli goal");
         assert_eq!(created_value["goal"]["status"], "active");
-        assert_eq!(created_value["goal"]["token_budget"], 321);
 
         let completed_output = cli
             .render_sessions_command(SessionsCommand {

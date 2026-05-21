@@ -30,8 +30,8 @@ impl Plugin for EchoPlugin {
                     | HookSubscription::PRE_TURN
                     | HookSubscription::POST_TURN
                     | HookSubscription::PERMISSION_ASK
-                    | HookSubscription::SESSION_COMPACTING
-                    | HookSubscription::SESSION_COMPACTED
+                    | HookSubscription::SESSION_START
+                    | HookSubscription::SESSION_END
                     | HookSubscription::PROVIDER_LIST,
             )
             .tool(
@@ -139,17 +139,17 @@ impl Plugin for EchoPlugin {
         Ok(None)
     }
 
-    async fn session_compacting(
-        &self,
-        input: SessionCompactingInput,
-    ) -> Result<Option<SessionCompactingPatch>> {
-        Ok(Some(SessionCompactingPatch {
-            messages: Some(input.messages),
-            summary: None,
+    async fn session_start(&self, input: SessionStartInput) -> Result<Option<SessionStartPatch>> {
+        Ok(Some(SessionStartPatch {
+            additional_context: Some(format!(
+                "Echo plugin attached to session {}",
+                input.session_id
+            )),
+            initial_user_message: None,
         }))
     }
 
-    async fn session_compacted(&self, _input: SessionCompactedInput) -> Result<()> {
+    async fn session_end(&self, _input: SessionEndInput) -> Result<()> {
         Ok(())
     }
 

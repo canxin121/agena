@@ -15,9 +15,6 @@ function goal(overrides?: Partial<SessionGoalResource>): SessionGoalResource {
     session_id: 3,
     objective: 'ship refactor',
     status: 'active',
-    token_budget: null,
-    tokens_used: 0,
-    time_used_seconds: 0,
     created_at: '2026-05-10T00:00:00Z',
     updated_at: '2026-05-10T00:00:00Z',
     completed_at: null,
@@ -44,6 +41,7 @@ function sessionState(overrides?: Partial<SessionExecutionResource>): SessionExe
     pending_permission_requests: [],
     pending_user_input_requests: [],
     ...overrides,
+    usage: overrides?.usage ?? { current_tokens: 0 },
   }
 }
 
@@ -201,9 +199,9 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       calls.push(`rewindSession:${sessionId}:${messageId}`)
       return sessionState()
     },
-    setSessionGoal: async ({ sessionId, objective, tokenBudget }) => {
-      calls.push(`setSessionGoal:${sessionId}:${objective || ''}:${tokenBudget ?? ''}`)
-      return goal({ objective: objective || 'ship refactor', token_budget: tokenBudget })
+    setSessionGoal: async ({ sessionId, objective }) => {
+      calls.push(`setSessionGoal:${sessionId}:${objective || ''}`)
+      return goal({ objective: objective || 'ship refactor' })
     },
     submitTurn: async ({ sessionId, text, providerId, adapterId, modelId, thinkingMode, speedMode }) => {
       calls.push(
@@ -426,11 +424,11 @@ describe('useChatSessionActions', () => {
     const { input, refreshCalls, syncCalls } = createInput()
 
     const actions = useChatSessionActions(input, deps)
-    await actions.setSessionGoalAction('finish slash commands', 2048)
+    await actions.setSessionGoalAction('finish slash commands')
 
-    expect(deps.calls.includes('setSessionGoal:3:finish slash commands:2048')).toBe(true)
+    expect(deps.calls.includes('setSessionGoal:3:finish slash commands')).toBe(true)
     expect(input.sessionState.value?.goal?.objective).toBe('finish slash commands')
-    expect(input.sessionState.value?.session.goal?.token_budget).toBe(2048)
+    expect(input.sessionState.value?.session.goal?.objective).toBe('finish slash commands')
     expect(input.localCommandNotice.value.includes('finish slash commands')).toBe(true)
     expect(syncCalls).toEqual(['sync'])
     expect(refreshCalls).toEqual([false])

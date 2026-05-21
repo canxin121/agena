@@ -50,10 +50,6 @@ const activeGoal = computed(
         <div class="page-header" style="align-items: flex-start">
           <div>
             <strong>{{ activeGoal.objective }}</strong>
-            <div class="muted mono">
-              tokens={{ activeGoal.tokens_used }}{{ activeGoal.token_budget ? `/${activeGoal.token_budget}` : '' }} ·
-              time={{ activeGoal.time_used_seconds }}s
-            </div>
           </div>
           <span class="badge">goal={{ activeGoal.status }}</span>
         </div>

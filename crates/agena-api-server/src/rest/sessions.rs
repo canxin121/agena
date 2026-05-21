@@ -95,7 +95,6 @@ pub async fn set_session_goal(
                 session_id,
                 objective: request.objective,
                 status: request.status,
-                token_budget: request.token_budget,
                 expected_goal_id: None,
             })
             .await
@@ -118,7 +117,6 @@ pub async fn set_session_goal(
             .create_goal(agena::session::SessionGoalCreateRequest {
                 session_id,
                 objective,
-                token_budget: request.token_budget.flatten(),
             })
             .await
             .map_err(ServerError::Core)?

@@ -141,6 +141,7 @@ function createState(section: RuntimeRouteSection = 'runtime') {
       execution: { allowed_tools: [] },
       pending_permission_requests: [],
       pending_user_input_requests: [],
+      usage: { current_tokens: 0 },
     }),
     sessionTimeline: ref<TimelineEventRecord[]>([{ seq_global: 1, kind: 'old', payload: {} }]),
     sessions: ref<SessionResource[]>([]),

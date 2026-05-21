@@ -26,7 +26,7 @@ pub use tool::{
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ModelVisibleOutput,
     MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput, NotebookCellType,
     NotebookEditMode, NotebookEditToolInput, OperationBlock, OperationError, OperationPart,
-    PluginInvocation, PowerShellToolInput, ReadToolInput, RequestUserInputToolInput,
+    PluginInvocation, PowerShellToolInput, ReadMode, ReadToolInput, RequestUserInputToolInput,
     ScheduleWakeupToolInput, SearchResultItem, TableColumn, TaskSubagentType, TaskToolInput,
     TodoWriteToolInput, ToolAttachment, ToolInvocation, ToolOutput, ToolSearchToolInput,
     UpdateGoalStatus, UpdateGoalToolInput, ViewFileToolInput, WebFetchToolInput,

@@ -1544,6 +1544,7 @@ mod tests {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
+            mode: crate::message::ReadMode::Auto,
         });
 
         match policy.check_tool_input(&input) {
@@ -1564,6 +1565,7 @@ mod tests {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
+            mode: crate::message::ReadMode::Auto,
         });
         let apply_patch = ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
             patch: "*** Begin Patch\n*** Add File: README.md\n+hello\n*** End Patch".to_string(),
@@ -1631,6 +1633,7 @@ mod tests {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
+            mode: crate::message::ReadMode::Auto,
         });
         assert_eq!(policy.check_tool_input(&read), PermissionDecision::Allow);
     }

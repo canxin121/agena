@@ -116,6 +116,7 @@ version = "0.1.0"
 dependencies = [
  "agena-keyring-store",
  "agena-lsp",
+ "agena-macros",
  "agena-mcp-client",
  "agena-mcp-server",
  "agena-otel",
@@ -312,6 +313,15 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "agena-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

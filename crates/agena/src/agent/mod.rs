@@ -802,6 +802,7 @@ mod tests {
             file_path: "README.md".to_string(),
             offset: None,
             limit: None,
+            mode: crate::message::ReadMode::Auto,
         });
 
         match authorize_tool_payload(&agent, &input) {

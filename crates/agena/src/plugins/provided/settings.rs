@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -13,9 +14,9 @@ use serde_json::Value as JsonValue;
 use crate::config::{
     ConfigError, ConfigSettingsDeleteInput, ConfigSettingsGetInput, ConfigSettingsListInput,
     ConfigSettingsPatchInput, ConfigSettingsReadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateInput, ConfigSettingsValidateResponse,
-    delete_file_setting, list_file_settings, list_json_path, patch_file_settings,
-    read_file_setting, set_file_setting, validate_file_settings,
+    ConfigSettingsSource, ConfigSettingsValidateResponse, delete_file_setting, list_file_settings,
+    list_json_path, patch_file_settings, read_file_setting, set_file_setting,
+    validate_file_settings,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostConfigReloadResponse};
@@ -30,17 +31,95 @@ pub(crate) struct SettingsPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum SettingsToolInput {
-    Get(ConfigSettingsGetInput),
-    List(ConfigSettingsListInput),
-    Validate(ConfigSettingsValidateInput),
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum SettingsScope {
+    Config,
+    Meta,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(default)]
+struct SettingsGetToolInput {
+    path: Option<String>,
+    scope: Option<SettingsScope>,
+    source: ConfigSettingsSource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(default)]
+struct SettingsListToolInput {
+    path: Option<String>,
+    scope: Option<SettingsScope>,
+    source: ConfigSettingsSource,
+    recursive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(default)]
+struct SettingsValidateToolInput {}
+
+#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "settings",
+    description = "Settings command. Set action to get, list, validate, set, delete, or patch. Edits validate config.json and reload by default.",
+    summary = "Read, validate, or edit runtime settings.",
+    help = "Use action `get` to inspect one setting path, `list` to enumerate settings, `validate` to validate config text without applying it, and `set`, `delete`, or `patch` to mutate config.json. For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`. Legacy `command/args` inputs are still accepted for compatibility.",
+    tags(
+        ToolTag::ReadOnly,
+        ToolTag::Mutating,
+        ToolTag::FilesystemWrite,
+        ToolTag::Discovery,
+        settings_tag()
+    ),
+    host_capabilities(
+        crate::plugin::sdk::HostCapability::ReadConfig,
+        crate::plugin::sdk::HostCapability::ReloadConfig
+    ),
+    concurrency_safe = false,
+    load = "always",
+    fallback = parse_legacy_settings_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum SettingsToolInput {
+    #[tool(exec = "get")]
+    Get {
+        #[serde(flatten)]
+        args: SettingsGetToolInput,
+    },
+    #[tool(exec = "list")]
+    List {
+        #[serde(flatten)]
+        args: SettingsListToolInput,
+    },
+    #[tool(exec = "validate")]
+    Validate {
+        #[serde(flatten)]
+        args: SettingsValidateToolInput,
+    },
+    #[tool(exec = "set")]
+    Set {
+        #[serde(flatten)]
+        args: ConfigSettingsSetInput,
+    },
+    #[tool(exec = "delete")]
+    Delete {
+        #[serde(flatten)]
+        args: ConfigSettingsDeleteInput,
+    },
+    #[tool(exec = "patch")]
+    Patch {
+        #[serde(flatten)]
+        args: ConfigSettingsPatchInput,
+    },
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum SettingsEditToolInput {
+enum LegacySettingsToolInput {
+    Get(SettingsGetToolInput),
+    List(SettingsListToolInput),
+    Validate(SettingsValidateToolInput),
     Set(ConfigSettingsSetInput),
     Delete(ConfigSettingsDeleteInput),
     Patch(ConfigSettingsPatchInput),
@@ -80,12 +159,31 @@ impl SettingsPlugin {
         host.read_config(effective_host_path(path)).await
     }
 
-    async fn get(&self, input: ConfigSettingsGetInput) -> SdkResult<ToolInvokeOutput> {
+    async fn get(&self, input: SettingsGetToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, config_found) = self.config_meta().await?;
         let response = match input.source {
-            ConfigSettingsSource::File => read_file_setting(config_path, input).map_err(map_err)?,
+            ConfigSettingsSource::File => {
+                if input.scope == Some(SettingsScope::Meta) {
+                    return Err(PluginError::invalid_params(
+                        "settings get with source=file does not support scope=meta",
+                    ));
+                }
+                read_file_setting(
+                    config_path,
+                    ConfigSettingsGetInput {
+                        path: input.path.clone(),
+                        source: input.source,
+                    },
+                )
+                .map_err(map_err)?
+            }
             ConfigSettingsSource::Effective => ConfigSettingsReadResponse {
-                value: self.effective_config_value(input.path.as_deref()).await?,
+                value: self
+                    .effective_config_value(
+                        resolve_effective_settings_path(input.scope, input.path.as_deref())?
+                            .as_deref(),
+                    )
+                    .await?,
                 config_path,
                 config_found,
                 source: ConfigSettingsSource::Effective,
@@ -95,17 +193,30 @@ impl SettingsPlugin {
         output("Settings value", "Read settings value.", &response)
     }
 
-    async fn list(&self, input: ConfigSettingsListInput) -> SdkResult<ToolInvokeOutput> {
+    async fn list(&self, input: SettingsListToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, config_found) = self.config_meta().await?;
         let response = match input.source {
             ConfigSettingsSource::File => {
-                list_file_settings(config_path, input).map_err(map_err)?
+                if input.scope == Some(SettingsScope::Meta) {
+                    return Err(PluginError::invalid_params(
+                        "settings list with source=file does not support scope=meta",
+                    ));
+                }
+                list_file_settings(
+                    config_path,
+                    ConfigSettingsListInput {
+                        path: input.path.clone(),
+                        source: input.source,
+                        recursive: input.recursive,
+                    },
+                )
+                .map_err(map_err)?
             }
             ConfigSettingsSource::Effective => {
                 let value = self.host()?.read_config(None).await?;
                 let entries = list_json_path(
                     &value,
-                    effective_host_path(input.path.as_deref()).as_deref(),
+                    resolve_effective_settings_path(input.scope, input.path.as_deref())?.as_deref(),
                     input.recursive,
                 )
                 .map_err(map_err)?;
@@ -163,7 +274,7 @@ impl SettingsPlugin {
             .await
     }
 
-    async fn validate(&self, _input: ConfigSettingsValidateInput) -> SdkResult<ToolInvokeOutput> {
+    async fn validate(&self, _input: SettingsValidateToolInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
         let response: ConfigSettingsValidateResponse =
             validate_file_settings(config_path).map_err(map_err)?;
@@ -221,18 +332,14 @@ impl Plugin for SettingsPlugin {
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         match input.tool_name.as_str() {
-            "settings" => match serde_json::from_value::<SettingsToolInput>(input.input)? {
-                SettingsToolInput::Get(args) => self.get(args).await,
-                SettingsToolInput::List(args) => self.list(args).await,
-                SettingsToolInput::Validate(args) => self.validate(args).await,
+            "settings" | "settings_edit" => match parse_settings_input(input.input)? {
+                SettingsToolInput::Get { args } => self.get(args).await,
+                SettingsToolInput::List { args } => self.list(args).await,
+                SettingsToolInput::Validate { args } => self.validate(args).await,
+                SettingsToolInput::Set { args } => self.set(args).await,
+                SettingsToolInput::Delete { args } => self.delete(args).await,
+                SettingsToolInput::Patch { args } => self.patch(args).await,
             },
-            "settings_edit" => {
-                match serde_json::from_value::<SettingsEditToolInput>(input.input)? {
-                    SettingsEditToolInput::Set(args) => self.set(args).await,
-                    SettingsEditToolInput::Delete(args) => self.delete(args).await,
-                    SettingsEditToolInput::Patch(args) => self.patch(args).await,
-                }
-            }
             other => Err(PluginError::invalid_params(format!(
                 "unknown settings tool '{other}'"
             ))),
@@ -248,48 +355,69 @@ impl Plugin for SettingsPlugin {
         let path = config_path.display().to_string();
         match tool {
             "settings_edit" => Ok(vec![PathRequest::write(path)]),
-            "settings" => Ok(vec![PathRequest::read(path)]),
+            "settings" => match parse_settings_input(_input.clone())? {
+                SettingsToolInput::Get { .. }
+                | SettingsToolInput::List { .. }
+                | SettingsToolInput::Validate { .. } => Ok(vec![PathRequest::read(path)]),
+                SettingsToolInput::Set { .. }
+                | SettingsToolInput::Delete { .. }
+                | SettingsToolInput::Patch { .. } => Ok(vec![PathRequest::write(path)]),
+            },
             _ => Ok(Vec::new()),
         }
     }
 }
 
 fn entries() -> Vec<PluginToolDecl> {
-    vec![
-        PluginToolDecl::new(
-            "settings",
-            crate::entry::definition::json_schema_for::<SettingsToolInput>(),
-        )
-        .description(
-            "Settings read command. Set command to get, list, or validate; pass that command's payload in args.",
-        )
-        .summary("Read, list, or validate runtime settings.")
-        .help("Use command `get` to inspect one setting path, `list` to enumerate settings, and `validate` to validate config text without applying it.")
-        .tags([ToolTag::ReadOnly, ToolTag::Discovery, settings_tag()])
-        .host_capability(crate::plugin::sdk::HostCapability::ReadConfig)
-        .concurrency_safe(true)
-        .always_load(),
-        PluginToolDecl::new(
-            "settings_edit",
-            crate::entry::definition::json_schema_for::<SettingsEditToolInput>(),
-        )
-        .description(
-            "Settings edit command. Set command to set, delete, or patch; pass that command's payload in args. Edits validate config.json and reload by default.",
-        )
-        .summary("Edit config.json settings.")
-        .help("Use command `set`, `delete`, or `patch` to mutate config.json. Edits validate the file and reload the runtime by default. This tool is deferred because it writes configuration.")
-        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, settings_tag()])
-        .host_capabilities([
-            crate::plugin::sdk::HostCapability::ReadConfig,
-            crate::plugin::sdk::HostCapability::ReloadConfig,
-        ])
-        .concurrency_safe(false)
-        .deferred_load(),
-    ]
+    vec![SettingsToolInput::tool_decl()]
 }
 
 fn settings_tag() -> ToolTag {
     ToolTag::custom("settings").expect("settings tag is valid")
+}
+
+fn parse_settings_input(input: JsonValue) -> SdkResult<SettingsToolInput> {
+    match serde_json::from_value::<SettingsToolInput>(input.clone()) {
+        Ok(parsed) => Ok(parsed),
+        Err(primary) => {
+            let primary = PluginError::invalid_params(primary.to_string());
+            match serde_json::from_value::<LegacySettingsToolInput>(input) {
+                Ok(LegacySettingsToolInput::Get(args)) => Ok(SettingsToolInput::Get { args }),
+                Ok(LegacySettingsToolInput::List(args)) => Ok(SettingsToolInput::List { args }),
+                Ok(LegacySettingsToolInput::Validate(args)) => {
+                    Ok(SettingsToolInput::Validate { args })
+                }
+                Ok(LegacySettingsToolInput::Set(args)) => Ok(SettingsToolInput::Set { args }),
+                Ok(LegacySettingsToolInput::Delete(args)) => Ok(SettingsToolInput::Delete { args }),
+                Ok(LegacySettingsToolInput::Patch(args)) => Ok(SettingsToolInput::Patch { args }),
+                Err(_) => Err(primary),
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn parse_legacy_settings_entry(
+    input: JsonValue,
+    primary: PluginError,
+) -> crate::plugin::sdk::Result<(String, JsonValue)> {
+    match serde_json::from_value::<LegacySettingsToolInput>(input) {
+        Ok(LegacySettingsToolInput::Get(args)) => tool_args("get", args),
+        Ok(LegacySettingsToolInput::List(args)) => tool_args("list", args),
+        Ok(LegacySettingsToolInput::Validate(args)) => tool_args("validate", args),
+        Ok(LegacySettingsToolInput::Set(args)) => tool_args("set", args),
+        Ok(LegacySettingsToolInput::Delete(args)) => tool_args("delete", args),
+        Ok(LegacySettingsToolInput::Patch(args)) => tool_args("patch", args),
+        Err(_) => Err(primary),
+    }
+}
+
+#[allow(dead_code)]
+fn tool_args<T: Serialize>(tool: &str, args: T) -> crate::plugin::sdk::Result<(String, JsonValue)> {
+    Ok((
+        tool.to_string(),
+        serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
+    ))
 }
 
 fn effective_host_path(path: Option<&str>) -> Option<String> {
@@ -300,6 +428,36 @@ fn effective_host_path(path: Option<&str>) -> Option<String> {
             Some(path.to_string())
         }
         Some(path) => Some(format!("config.{path}")),
+    }
+}
+
+fn resolve_effective_settings_path(
+    scope: Option<SettingsScope>,
+    path: Option<&str>,
+) -> SdkResult<Option<String>> {
+    match scope {
+        None => Ok(effective_host_path(path)),
+        Some(scope) => {
+            let trimmed = path.map(str::trim).filter(|value| !value.is_empty());
+            if let Some(path) = trimmed
+                && (path == "config"
+                    || path == "meta"
+                    || path.starts_with("config.")
+                    || path.starts_with("meta."))
+            {
+                return Err(PluginError::invalid_params(
+                    "explicit settings scope expects a relative path without `config.` or `meta.` prefix",
+                ));
+            }
+            let root = match scope {
+                SettingsScope::Config => "config",
+                SettingsScope::Meta => "meta",
+            };
+            Ok(match trimmed {
+                None => Some(root.to_string()),
+                Some(path) => Some(format!("{root}.{path}")),
+            })
+        }
     }
 }
 
@@ -350,15 +508,16 @@ mod tests {
             .iter()
             .map(|entry| entry.name.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["settings", "settings_edit"]);
-        let set = manifest
+        assert_eq!(names, vec!["settings"]);
+        let settings = manifest
             .entries
             .iter()
-            .find(|entry| entry.name == "settings_edit")
-            .expect("settings_edit should exist");
-        assert!(set.has_tag(ToolTag::Mutating));
+            .find(|entry| entry.name == "settings")
+            .expect("settings should exist");
+        assert!(settings.has_tag(ToolTag::Mutating));
         assert!(
-            set.host_capabilities
+            settings
+                .host_capabilities
                 .contains(&crate::plugin::sdk::HostCapability::ReloadConfig)
         );
     }

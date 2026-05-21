@@ -1,6 +1,7 @@
 ---
-name: security-review
+name: security_review
 description: Audit the current branch for security regressions
+aliases: ["security-review"]
 allowed_tools: ["read", "glob", "grep"]
 ---
 Audit the changes on this branch for security regressions.  Focus on:

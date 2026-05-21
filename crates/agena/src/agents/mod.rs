@@ -516,7 +516,7 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "implement",
             "Editing agent for making targeted code changes.",
-            &["fs", "shell", "fs_edit", "todo", "agent"],
+            &["fs", "shell", "todo", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Ask,
                 crate::permission::PermissionMode::Ask,

@@ -4954,6 +4954,9 @@ mod tests {
             .expect("time should move forward")
             .as_nanos();
         let workspace = std::env::temp_dir().join(format!("agena-cli-apply-{suffix}"));
+        if workspace.exists() {
+            fs::remove_dir_all(&workspace).expect("stale workspace should be removable");
+        }
         fs::create_dir_all(&workspace).expect("workspace should be created");
         let patch_file = workspace.join("change.patch");
         fs::write(

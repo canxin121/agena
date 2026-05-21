@@ -2,8 +2,9 @@
 
 use crate::message::{WebFetchToolInput, WebSearchToolInput};
 use crate::plugin::PluginError;
-use crate::plugin::sdk::{PluginToolDecl, ToolTag};
+use crate::plugin::sdk::ToolTag;
 use crate::plugins::provided::router::InProcessToolPlugin;
+use agena_macros::StaticToolSurface;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -14,44 +15,51 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
     InProcessToolPlugin::new_with_resolver(
         "agena-web",
         "Web fetch/search command tool backed by the in-process executor bridge.",
-        entries(),
-        resolve_entry,
+        vec![WebToolInput::tool_decl()],
+        WebToolInput::resolve_entry,
     )
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "web",
+    description = "Web command dispatcher. Set action to fetch or search. Fetch upgrades HTTP to HTTPS and caches for 15 minutes.",
+    summary = "Search the web or fetch web pages.",
+    help = "Use action `search` for web search and `fetch` to retrieve a URL. Fetch upgrades HTTP URLs to HTTPS where possible and caches successful fetches for 15 minutes. Legacy `command/args` inputs are still accepted for compatibility.",
+    tags(ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet),
+    concurrency_safe = true,
+    load = "deferred",
+    fallback = parse_legacy_web_input
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum WebToolInput {
+    #[tool(exec = "web_fetch")]
+    Fetch {
+        #[serde(flatten)]
+        args: WebFetchToolInput,
+    },
+    #[tool(exec = "web_search")]
+    Search {
+        #[serde(flatten)]
+        args: WebSearchToolInput,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum LegacyWebToolInput {
     Fetch(WebFetchToolInput),
     Search(WebSearchToolInput),
 }
 
-fn entries() -> Vec<PluginToolDecl> {
-    vec![
-        PluginToolDecl::new(
-            "web",
-            crate::entry::definition::json_schema_for::<WebToolInput>(),
-        )
-        .description(
-            "Web command dispatcher. Set command to fetch or search; pass that command's payload in args. Fetch upgrades HTTP to HTTPS and caches for 15 minutes.",
-        )
-        .summary("Search the web or fetch web pages.")
-        .help("Use command `search` for web search and `fetch` to retrieve a URL. Fetch upgrades HTTP URLs to HTTPS where possible and caches successful fetches for 15 minutes.")
-        .tags([ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet])
-        .concurrency_safe(true)
-        .deferred_load(),
-    ]
-}
-
-fn resolve_entry(entry: &str, input: JsonValue) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    if entry != "web" {
-        return Err(PluginError::invalid_params(format!(
-            "unknown web entry '{entry}'"
-        )));
-    }
-    match serde_json::from_value::<WebToolInput>(input)? {
-        WebToolInput::Fetch(args) => tool_args("web_fetch", args),
-        WebToolInput::Search(args) => tool_args("web_search", args),
+fn parse_legacy_web_input(
+    input: JsonValue,
+    primary: PluginError,
+) -> crate::plugin::sdk::Result<(String, JsonValue)> {
+    match serde_json::from_value::<LegacyWebToolInput>(input) {
+        Ok(LegacyWebToolInput::Fetch(args)) => tool_args("web_fetch", args),
+        Ok(LegacyWebToolInput::Search(args)) => tool_args("web_search", args),
+        Err(_) => Err(primary),
     }
 }
 

@@ -1220,7 +1220,7 @@ impl App {
     }
 
     fn render_user_input_overlay(&self, frame: &mut Frame, area: Rect, dialog: &UserInputOverlay) {
-        let height = min(20, area.height.saturating_sub(4));
+        let height = min(24, area.height.saturating_sub(4));
         let area = centered_rect(area, 92, height);
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -1232,114 +1232,176 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(10), Constraint::Length(2)])
-            .split(inner);
-
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(34), Constraint::Min(32)])
-            .split(rows[0]);
-
-        let mut question_lines = vec![Line::from(Span::styled(
-            sanitize_display_text(self.i18n.text_args(
-                "overlay-user-input-request-id",
-                &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
-            )),
-            Style::default().fg(Color::DarkGray),
-        ))];
-        question_lines.push(Line::from(""));
-        for (index, question) in dialog.request.questions.iter().enumerate() {
-            let values = dialog
-                .answers
-                .get(&question.id)
-                .map(|draft| user_input_answer_values(question, draft))
-                .unwrap_or_default();
-            let summary = if values.is_empty() {
-                "unanswered".to_string()
-            } else {
-                truncate_display_text(values.join(", ").as_str(), 22)
-            };
-            let marker = if index == dialog.selected_question {
-                "> "
-            } else {
-                "  "
-            };
-            let style = if index == dialog.selected_question {
-                selection_highlight_style()
-            } else {
-                Style::default()
-            };
-            question_lines.push(Line::from(vec![
-                Span::styled(marker, style),
-                Span::styled(
-                    sanitize_display_text(user_input_question_label(question)),
-                    style.add_modifier(Modifier::BOLD),
-                ),
-            ]));
-            question_lines.push(Line::from(Span::styled(
-                format!("    {summary}"),
-                if values.is_empty() {
-                    Style::default().fg(Color::DarkGray)
-                } else {
-                    Style::default().fg(self.theme_color("flash_info", Color::Cyan))
-                },
-            )));
-        }
-
-        frame.render_widget(
-            Paragraph::new(Text::from(question_lines))
-                .wrap(Wrap { trim: false })
+        let nav_color = self.theme_color("flash_info", Color::Cyan);
+        if dialog.screen == UserInputOverlayScreen::Review {
+            let rows = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3),
+                    Constraint::Min(10),
+                    Constraint::Length(2),
+                ])
+                .split(inner);
+            frame.render_widget(
+                Paragraph::new(Text::from(vec![
+                    Line::from(Span::styled(
+                        sanitize_display_text(self.i18n.text_args(
+                            "overlay-user-input-request-id",
+                            &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
+                        )),
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                    user_input_nav_line(dialog, nav_color),
+                ]))
                 .block(Block::default().borders(Borders::ALL).title(" Questions ")),
-            columns[0],
-        );
+                rows[0],
+            );
+
+            let mut review_lines = vec![Line::from(Span::styled(
+                "Review your answers before submitting.",
+                Style::default().add_modifier(Modifier::BOLD),
+            ))];
+            review_lines.push(Line::from(""));
+            for (index, question) in dialog.request.questions.iter().enumerate() {
+                let values = dialog
+                    .answers
+                    .get(&question.id)
+                    .map(|draft| user_input_answer_values(question, draft))
+                    .unwrap_or_default();
+                let answered = !values.is_empty();
+                let style = if index == dialog.selected_question {
+                    selection_highlight_style()
+                } else {
+                    Style::default()
+                };
+                review_lines.push(Line::from(vec![
+                    Span::styled(format!("{} ", if answered { "[x]" } else { "[ ]" }), style),
+                    Span::styled(
+                        sanitize_display_text(user_input_question_label(question)),
+                        style.add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                review_lines.push(Line::from(Span::styled(
+                    format!(
+                        "    {}",
+                        if answered {
+                            truncate_display_text(values.join(", ").as_str(), 72)
+                        } else {
+                            "unanswered".to_string()
+                        }
+                    ),
+                    if answered {
+                        Style::default().fg(nav_color)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                )));
+            }
+            frame.render_widget(
+                Paragraph::new(Text::from(review_lines))
+                    .wrap(Wrap { trim: false })
+                    .block(Block::default().borders(Borders::ALL).title(" Summary ")),
+                rows[1],
+            );
+            frame.render_widget(
+                Paragraph::new(
+                    "j/k choose question  e edit  enter submit  esc close  ctrl+d cancel",
+                )
+                .wrap(Wrap { trim: false }),
+                rows[2],
+            );
+            return;
+        }
 
         let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
             frame.render_widget(
                 Paragraph::new("No questions.")
                     .block(Block::default().borders(Borders::ALL).title(" Detail ")),
-                columns[1],
+                inner,
             );
             return;
         };
-
-        let detail_rows = Layout::default()
+        let custom_height = if question.allow_custom { 3 } else { 0 };
+        let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(8),
                 Constraint::Length(3),
+                Constraint::Length(5),
+                Constraint::Min(6),
+                Constraint::Length(custom_height),
                 Constraint::Length(2),
             ])
-            .split(columns[1]);
+            .split(inner);
+
+        frame.render_widget(
+            Paragraph::new(Text::from(vec![
+                Line::from(Span::styled(
+                    sanitize_display_text(self.i18n.text_args(
+                        "overlay-user-input-request-id",
+                        &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
+                    )),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                user_input_nav_line(dialog, nav_color),
+            ]))
+            .block(Block::default().borders(Borders::ALL).title(" Questions ")),
+            rows[0],
+        );
 
         let draft = dialog
             .answers
             .get(&question.id)
             .cloned()
             .unwrap_or_default();
-        let mut detail_lines = vec![
-            Line::from(Span::styled(
-                sanitize_display_text(question.question.as_str()),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                sanitize_display_text(format!(
-                    "id={}{}",
-                    question.id,
-                    if question.multiple {
-                        " · multiple"
-                    } else {
-                        ""
-                    }
+        let answer_summary = user_input_answer_summary(question, &draft);
+        frame.render_widget(
+            Paragraph::new(Text::from(vec![
+                Line::from(Span::styled(
+                    sanitize_display_text(question.question.as_str()),
+                    Style::default().add_modifier(Modifier::BOLD),
                 )),
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::from(""),
-        ];
+                Line::from(Span::styled(
+                    sanitize_display_text(format!(
+                        "{} · id={}",
+                        if question.multiple {
+                            "Choose one or more"
+                        } else {
+                            "Choose one"
+                        },
+                        question.id
+                    )),
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        "Current answer: ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        sanitize_display_text(answer_summary.as_str()),
+                        if answer_summary == "unanswered" {
+                            Style::default().fg(Color::DarkGray)
+                        } else {
+                            Style::default().fg(nav_color)
+                        },
+                    ),
+                ]),
+            ]))
+            .wrap(Wrap { trim: false })
+            .block(Block::default().borders(Borders::ALL).title(" Prompt ")),
+            rows[1],
+        );
+
+        let mut option_lines = Vec::new();
         for (index, option) in question.options.iter().enumerate() {
             let picked = draft.option_indexes.contains(&index);
             let focused = index == dialog.selected_option && !dialog.editing_custom;
+            let style = if focused {
+                selection_highlight_style()
+            } else {
+                Style::default()
+            };
             let prefix = if question.multiple {
                 if picked { "[x]" } else { "[ ]" }
             } else if picked {
@@ -1347,95 +1409,121 @@ impl App {
             } else {
                 "( )"
             };
-            let style = if focused {
-                selection_highlight_style()
-            } else {
-                Style::default()
-            };
-            let mut line = vec![
+            option_lines.push(Line::from(vec![
                 Span::styled(format!("{prefix} "), style),
                 Span::styled(
                     sanitize_display_text(option.label.as_str()),
                     style.add_modifier(Modifier::BOLD),
                 ),
-            ];
+            ]));
             if !option.description.trim().is_empty() {
-                line.push(Span::styled("  ", style));
-                line.push(Span::styled(
-                    truncate_display_text(
-                        sanitize_display_text(option.description.as_str()).as_str(),
-                        detail_rows[0].width.saturating_sub(10) as usize,
+                option_lines.push(Line::from(Span::styled(
+                    format!(
+                        "    {}",
+                        truncate_display_text(
+                            sanitize_display_text(option.description.as_str()).as_str(),
+                            rows[2].width.saturating_sub(6) as usize,
+                        )
                     ),
                     if focused {
                         style
                     } else {
                         Style::default().fg(Color::DarkGray)
                     },
-                ));
+                )));
             }
-            detail_lines.push(Line::from(line));
         }
         if question.allow_custom {
-            detail_lines.push(Line::from(""));
-            detail_lines.push(Line::from(Span::styled(
-                "Custom",
-                Style::default().add_modifier(Modifier::BOLD),
-            )));
-            detail_lines.push(Line::from(Span::styled(
-                sanitize_display_text(if draft.custom_values.is_empty() {
-                    "custom answer not set".to_string()
-                } else {
-                    draft.custom_values.join(", ")
-                }),
+            let custom_row = question.options.len();
+            let custom_values = if draft.custom_values.is_empty() {
+                "Press Enter or e to type a custom answer".to_string()
+            } else {
+                draft.custom_values.join(", ")
+            };
+            let custom_selected = custom_row == dialog.selected_option && !dialog.editing_custom;
+            let custom_style = if custom_selected {
+                selection_highlight_style()
+            } else {
+                Style::default()
+            };
+            let custom_picked = !draft.custom_values.is_empty();
+            let prefix = if question.multiple {
+                if custom_picked { "[x]" } else { "[ ]" }
+            } else if custom_picked {
+                "(x)"
+            } else {
+                "( )"
+            };
+            option_lines.push(Line::from(""));
+            option_lines.push(Line::from(vec![
+                Span::styled(format!("{prefix} "), custom_style),
+                Span::styled("Other", custom_style.add_modifier(Modifier::BOLD)),
+            ]));
+            option_lines.push(Line::from(Span::styled(
+                format!(
+                    "    {}",
+                    truncate_display_text(
+                        sanitize_display_text(custom_values.as_str()).as_str(),
+                        rows[2].width.saturating_sub(6) as usize,
+                    )
+                ),
                 if draft.custom_values.is_empty() {
-                    Style::default().fg(Color::DarkGray)
+                    if custom_selected {
+                        custom_style
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    }
+                } else if custom_selected {
+                    custom_style
                 } else {
-                    Style::default().fg(self.theme_color("flash_info", Color::Cyan))
+                    Style::default().fg(nav_color)
                 },
             )));
         }
         frame.render_widget(
-            Paragraph::new(Text::from(detail_lines))
+            Paragraph::new(Text::from(option_lines))
                 .wrap(Wrap { trim: false })
-                .block(Block::default().borders(Borders::ALL).title(" Detail ")),
-            detail_rows[0],
+                .block(Block::default().borders(Borders::ALL).title(" Choices ")),
+            rows[2],
         );
 
-        let custom_view = dialog
-            .custom_input
-            .render_view(detail_rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(custom_view.lines.clone())).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(if dialog.editing_custom {
-                        " Custom Input "
-                    } else {
-                        " Custom Input (press e) "
-                    }),
-            ),
-            detail_rows[1],
-        );
+        if question.allow_custom {
+            let custom_view = dialog
+                .custom_input
+                .render_view(rows[3].width.saturating_sub(2), 1);
+            frame.render_widget(
+                Paragraph::new(Text::from(custom_view.lines.clone())).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(if dialog.editing_custom {
+                            " Custom Input "
+                        } else {
+                            " Custom Input (e / paste) "
+                        }),
+                ),
+                rows[3],
+            );
+            if dialog.editing_custom {
+                frame.set_cursor_position((
+                    rows[3]
+                        .x
+                        .saturating_add(1)
+                        .saturating_add(custom_view.cursor_x),
+                    rows[3]
+                        .y
+                        .saturating_add(1)
+                        .saturating_add(custom_view.cursor_y),
+                ));
+            }
+        }
+
         frame.render_widget(
             Paragraph::new(
-                "j/k question  h/l option  space select  e custom  c clear  enter submit  ctrl+d cancel",
+                "j/k move  tab next  shift+tab prev  space select/toggle  enter choose/next  ctrl+d cancel",
             )
             .wrap(Wrap { trim: false }),
-            rows[1],
+            rows[4],
         );
-
-        if dialog.editing_custom {
-            frame.set_cursor_position((
-                detail_rows[1]
-                    .x
-                    .saturating_add(1)
-                    .saturating_add(custom_view.cursor_x),
-                detail_rows[1]
-                    .y
-                    .saturating_add(1)
-                    .saturating_add(custom_view.cursor_y),
-            ));
-        }
     }
 
     fn render_confirm_overlay(&self, frame: &mut Frame, area: Rect, dialog: &ConfirmOverlay) {
@@ -2903,6 +2991,60 @@ impl App {
         let popup_rows = self.composer_popup_rows();
         let chrome_rows = 2_u16 + item_rows + popup_rows + status_rows;
         min(12, line_count as u16 + chrome_rows)
+    }
+}
+
+fn user_input_nav_line(dialog: &UserInputOverlay, answered_color: Color) -> Line<'static> {
+    let mut spans = Vec::new();
+    for (index, question) in dialog.request.questions.iter().enumerate() {
+        let answered = dialog
+            .answers
+            .get(&question.id)
+            .map(|draft| !user_input_answer_values(question, draft).is_empty())
+            .unwrap_or(false);
+        let label = if question.header.trim().is_empty() {
+            format!("Q{}", index + 1)
+        } else {
+            question.header.clone()
+        };
+        let text = format!(
+            " {} {} ",
+            if answered { "[x]" } else { "[ ]" },
+            truncate_display_text(sanitize_display_text(label.as_str()).as_str(), 12)
+        );
+        let selected =
+            dialog.selected_question == index && dialog.screen == UserInputOverlayScreen::Question;
+        let style = if selected {
+            selection_highlight_style()
+        } else if answered {
+            Style::default()
+                .fg(answered_color)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(text, style));
+        spans.push(Span::raw(" "));
+    }
+    if !App::user_input_review_hidden(dialog) {
+        spans.push(Span::styled(
+            " [>] Submit ",
+            if dialog.screen == UserInputOverlayScreen::Review {
+                selection_highlight_style()
+            } else {
+                Style::default()
+            },
+        ));
+    }
+    Line::from(spans)
+}
+
+fn user_input_answer_summary(question: &UserInputQuestion, draft: &UserInputAnswerDraft) -> String {
+    let values = user_input_answer_values(question, draft);
+    if values.is_empty() {
+        "unanswered".to_string()
+    } else {
+        values.join(", ")
     }
 }
 

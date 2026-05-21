@@ -122,11 +122,13 @@ fn git_timeout() -> Duration {
 // race on the index/worktree (and to reduce index.lock errors under rapid UI clicks).
 static REPO_LOCKS: OnceLock<DashMap<String, Arc<Mutex<()>>>> = OnceLock::new();
 
+pub(crate) type RepoLockGuard = tokio::sync::OwnedMutexGuard<()>;
+
 fn repo_lock_key(dir: &Path) -> String {
     dir.to_string_lossy().to_string()
 }
 
-pub(crate) async fn lock_repo(dir: &Path) -> Result<tokio::sync::OwnedMutexGuard<()>, Response> {
+pub(crate) async fn lock_repo(dir: &Path) -> Result<RepoLockGuard, Response> {
     let key = repo_lock_key(dir);
     let locks = REPO_LOCKS.get_or_init(DashMap::new);
     let m = if let Some(v) = locks.get(&key) {
@@ -149,6 +151,62 @@ pub(crate) async fn lock_repo(dir: &Path) -> Result<tokio::sync::OwnedMutexGuard
         )
             .into_response()),
     }
+}
+
+pub(crate) fn git_success_response() -> Response {
+    Json(serde_json::json!({"success": true})).into_response()
+}
+
+fn git_command_error_response(error: &str, code: Option<&str>) -> Response {
+    match code {
+        Some(code) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.trim(), "code": code})),
+        )
+            .into_response(),
+        None => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": error.trim()})),
+        )
+            .into_response(),
+    }
+}
+
+pub(crate) async fn run_git_checked(
+    directory: &Path,
+    args: &[&str],
+    failure_code: Option<&str>,
+) -> Result<(String, String), Response> {
+    let (code, out, err) =
+        run_git(directory, args)
+            .await
+            .unwrap_or((1, String::new(), String::new()));
+    if code == 0 {
+        return Ok((out, err));
+    }
+    if let Some(resp) = super::map_git_failure(code, &out, &err) {
+        return Err(resp);
+    }
+    Err(git_command_error_response(&err, failure_code))
+}
+
+pub(crate) async fn run_git_env_checked(
+    directory: &Path,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+    failure_code: Option<&str>,
+) -> Result<(String, String), Response> {
+    let (code, out, err) =
+        run_git_env(directory, args, extra_env)
+            .await
+            .unwrap_or((1, String::new(), String::new()));
+    if code == 0 {
+        return Ok((out, err));
+    }
+    if let Some(resp) = super::map_git_failure(code, &out, &err) {
+        return Err(resp);
+    }
+    Err(git_command_error_response(&err, failure_code))
 }
 
 pub(crate) async fn run_git_env(

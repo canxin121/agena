@@ -7,7 +7,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::super::{
-    DirectoryQuery, lock_repo, map_git_failure, require_directory, require_directory_raw, run_git,
+    DirectoryQuery, git_success_response, require_directory, require_directory_raw,
+    require_locked_directory, run_git_checked,
 };
 
 #[derive(Debug, Serialize)]
@@ -23,26 +24,43 @@ pub struct GitStashListResponse {
     pub stashes: Vec<GitStashEntry>,
 }
 
+fn invalid_stash_ref_response() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "Invalid stash ref", "code": "invalid_stash_ref"})),
+    )
+        .into_response()
+}
+
+async fn run_stash_ref_command(
+    q: &DirectoryQuery,
+    raw_ref: Option<&str>,
+    args_for: impl FnOnce(&str) -> Vec<&str>,
+) -> Response {
+    let (dir, _guard) = match require_locked_directory(q).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    let Some(stash_ref) = normalize_stash_ref(raw_ref) else {
+        return invalid_stash_ref_response();
+    };
+    let args = args_for(stash_ref.as_str());
+    if let Err(resp) = run_git_checked(&dir, &args, None).await {
+        return resp;
+    }
+    git_success_response()
+}
+
 pub async fn git_stash_list(Query(q): Query<DirectoryQuery>) -> Response {
     let dir = match require_directory(&q) {
         Ok(d) => d,
         Err(resp) => return *resp,
     };
 
-    let (code, out, err) =
-        run_git(&dir, &["stash", "list"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
+    let (out, _err) = match run_git_checked(&dir, &["stash", "list"], None).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     let mut stashes: Vec<GitStashEntry> = Vec::new();
     for line in out.lines() {
@@ -74,13 +92,8 @@ pub async fn git_stash_push(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitStashPushBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
@@ -116,21 +129,10 @@ pub async fn git_stash_push(
     }
 
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, out, err) =
-        run_git(&dir, &args_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked(&dir, &args_ref, None).await {
+        return resp;
     }
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,26 +154,13 @@ pub async fn git_stash_show(Query(q): Query<GitStashShowQuery>) -> Response {
         Err(resp) => return *resp,
     };
     let Some(r) = normalize_stash_ref(q.r#ref.as_deref()) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid stash ref", "code": "invalid_stash_ref"})),
-        )
-            .into_response();
+        return invalid_stash_ref_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["stash", "show", "-p", &r])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
+    let (out, _err) = match run_git_checked(&dir, &["stash", "show", "-p", &r], None).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     Json(GitStashShowResponse {
         r#ref: r,
@@ -205,156 +194,49 @@ pub async fn git_stash_apply(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitStashRefBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let Some(r) = normalize_stash_ref(body.r#ref.as_deref()) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid stash ref", "code": "invalid_stash_ref"})),
-        )
-            .into_response();
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-    let (code, out, err) =
-        run_git(&dir, &["stash", "apply", &r])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
-    Json(serde_json::json!({"success": true})).into_response()
+    run_stash_ref_command(&q, body.r#ref.as_deref(), |stash_ref| {
+        vec!["stash", "apply", stash_ref]
+    })
+    .await
 }
 
 pub async fn git_stash_pop(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitStashRefBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let Some(r) = normalize_stash_ref(body.r#ref.as_deref()) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid stash ref", "code": "invalid_stash_ref"})),
-        )
-            .into_response();
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-    let (code, out, err) =
-        run_git(&dir, &["stash", "pop", &r])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
-    Json(serde_json::json!({"success": true})).into_response()
+    run_stash_ref_command(&q, body.r#ref.as_deref(), |stash_ref| {
+        vec!["stash", "pop", stash_ref]
+    })
+    .await
 }
 
 pub async fn git_stash_drop(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitStashRefBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let Some(r) = normalize_stash_ref(body.r#ref.as_deref()) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid stash ref", "code": "invalid_stash_ref"})),
-        )
-            .into_response();
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-    let (code, out, err) =
-        run_git(&dir, &["stash", "drop", &r])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
-    Json(serde_json::json!({"success": true})).into_response()
+    run_stash_ref_command(&q, body.r#ref.as_deref(), |stash_ref| {
+        vec!["stash", "drop", stash_ref]
+    })
+    .await
 }
 
 pub async fn git_stash_drop_all(Query(q): Query<DirectoryQuery>) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
-    let (list_code, list_out, list_err) =
-        run_git(&dir, &["stash", "list"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if list_code != 0 {
-        if let Some(resp) = map_git_failure(list_code, &list_out, &list_err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": list_err.trim()})),
-        )
-            .into_response();
-    }
+    let (list_out, _list_err) = match run_git_checked(&dir, &["stash", "list"], None).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let cleared = list_out
         .lines()
         .filter(|line| !line.trim().is_empty())
         .count();
 
-    let (code, out, err) =
-        run_git(&dir, &["stash", "clear"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked(&dir, &["stash", "clear"], None).await {
+        return resp;
     }
 
     Json(serde_json::json!({"success": true, "cleared": cleared})).into_response()
@@ -371,9 +253,9 @@ pub async fn git_stash_branch(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitStashBranchBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
     };
     let Some(branch) = body
         .branch
@@ -388,29 +270,11 @@ pub async fn git_stash_branch(
             .into_response();
     };
     let Some(r) = normalize_stash_ref(body.r#ref.as_deref()) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid stash ref", "code": "invalid_stash_ref"})),
-        )
-            .into_response();
+        return invalid_stash_ref_response();
     };
 
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-    let (code, out, err) = run_git(&dir, &["stash", "branch", branch, &r])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked(&dir, &["stash", "branch", branch, &r], None).await {
+        return resp;
     }
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }

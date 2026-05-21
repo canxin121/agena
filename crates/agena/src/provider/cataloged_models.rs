@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ModelRuntime,
-    PromptCacheShape, StreamResumePolicy, chat_wire,
+    PromptCacheShape, StreamResumePolicy,
 };
 
 #[derive(Clone)]
@@ -94,19 +94,6 @@ impl CatalogedModelsProvider {
         } else {
             model
         }
-    }
-
-    fn backfill_assistant_reasoning_field(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: &mut CompletionRequest,
-    ) {
-        let metadata = self.model_metadata_for_adapter(adapter_id, &request.model);
-        chat_wire::backfill_assistant_reasoning_field_on_request(
-            request,
-            metadata.assistant_reasoning_field.as_deref(),
-            metadata.assistant_reasoning_interleaved.unwrap_or(false),
-        );
     }
 
     fn synthesize_thinking_modes_from_metadata(

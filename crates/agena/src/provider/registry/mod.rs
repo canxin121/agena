@@ -8,7 +8,6 @@ use std::{
 use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::StreamExt;
-use futures_util::stream::BoxStream;
 use tracing::Instrument;
 
 use crate::error::{AppError, ProviderErrorKind};
@@ -18,6 +17,7 @@ use crate::model::{
 };
 use crate::plugin::ProviderDescriptor;
 
+use super::core::remap_stream_event_provider_id;
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelRuntime,
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
@@ -228,6 +228,23 @@ impl NamedProvider {
             target,
         }
     }
+
+    fn rewrite_response_provider_id(&self, response: &mut CompletionResponse) {
+        response.provider_id = ProviderId::new(self.provider_id.clone());
+    }
+
+    fn remap_stream_provider_id(
+        &self,
+        stream: std::pin::Pin<
+            Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>,
+        >,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>> {
+        let provider_id = ProviderId::new(self.provider_id.clone());
+        Box::pin(stream.map(move |item| {
+            let provider_id = provider_id.clone();
+            item.map(|event| remap_stream_event_provider_id(&provider_id, event))
+        }))
+    }
 }
 
 #[async_trait]
@@ -360,7 +377,7 @@ impl ModelRuntime for NamedProvider {
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let mut response = self.target.complete(request).await?;
-        response.provider_id = ProviderId::new(self.provider_id.clone());
+        self.rewrite_response_provider_id(&mut response);
         Ok(response)
     }
 
@@ -373,7 +390,7 @@ impl ModelRuntime for NamedProvider {
             .target
             .complete_for_adapter(adapter_id, request)
             .await?;
-        response.provider_id = ProviderId::new(self.provider_id.clone());
+        self.rewrite_response_provider_id(&mut response);
         Ok(response)
     }
 
@@ -401,56 +418,8 @@ impl ModelRuntime for NamedProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let provider_id = self.provider_id.clone();
         let stream = self.target.complete_stream(request).await?;
-        let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
-            Box::pin(stream.map(move |item| {
-                item.map(|event| match event {
-                    CompletionStreamEvent::TextDelta { model, delta, .. } => {
-                        CompletionStreamEvent::TextDelta {
-                            provider_id: ProviderId::new(provider_id.clone()),
-                            model,
-                            delta,
-                        }
-                    }
-                    CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
-                        CompletionStreamEvent::ThinkingDelta {
-                            provider_id: ProviderId::new(provider_id.clone()),
-                            model,
-                            delta,
-                        }
-                    }
-                    CompletionStreamEvent::ToolCallDelta {
-                        model,
-                        stream_key,
-                        id,
-                        name,
-                        arguments_delta,
-                        ..
-                    } => CompletionStreamEvent::ToolCallDelta {
-                        provider_id: ProviderId::new(provider_id.clone()),
-                        model,
-                        stream_key,
-                        id,
-                        name,
-                        arguments_delta,
-                    },
-                    CompletionStreamEvent::Completed {
-                        model,
-                        finish_reason,
-                        usage,
-                        provider_metadata,
-                        ..
-                    } => CompletionStreamEvent::Completed {
-                        provider_id: ProviderId::new(provider_id.clone()),
-                        model,
-                        finish_reason,
-                        usage,
-                        provider_metadata,
-                    },
-                })
-            }));
-        Ok(Box::pin(stream))
+        Ok(self.remap_stream_provider_id(stream))
     }
 
     async fn complete_stream_for_adapter(
@@ -461,59 +430,11 @@ impl ModelRuntime for NamedProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let provider_id = self.provider_id.clone();
         let stream = self
             .target
             .complete_stream_for_adapter(adapter_id, request)
             .await?;
-        let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
-            Box::pin(stream.map(move |item| {
-                item.map(|event| match event {
-                    CompletionStreamEvent::TextDelta { model, delta, .. } => {
-                        CompletionStreamEvent::TextDelta {
-                            provider_id: ProviderId::new(provider_id.clone()),
-                            model,
-                            delta,
-                        }
-                    }
-                    CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
-                        CompletionStreamEvent::ThinkingDelta {
-                            provider_id: ProviderId::new(provider_id.clone()),
-                            model,
-                            delta,
-                        }
-                    }
-                    CompletionStreamEvent::ToolCallDelta {
-                        model,
-                        stream_key,
-                        id,
-                        name,
-                        arguments_delta,
-                        ..
-                    } => CompletionStreamEvent::ToolCallDelta {
-                        provider_id: ProviderId::new(provider_id.clone()),
-                        model,
-                        stream_key,
-                        id,
-                        name,
-                        arguments_delta,
-                    },
-                    CompletionStreamEvent::Completed {
-                        model,
-                        finish_reason,
-                        usage,
-                        provider_metadata,
-                        ..
-                    } => CompletionStreamEvent::Completed {
-                        provider_id: ProviderId::new(provider_id.clone()),
-                        model,
-                        finish_reason,
-                        usage,
-                        provider_metadata,
-                    },
-                })
-            }));
-        Ok(Box::pin(stream))
+        Ok(self.remap_stream_provider_id(stream))
     }
 }
 

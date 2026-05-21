@@ -7,8 +7,8 @@ use axum::{
 use serde::Deserialize;
 
 use super::super::{
-    DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, lock_repo, map_git_failure,
-    normalize_http_auth, require_directory, run_git_env,
+    DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, normalize_http_auth,
+    require_locked_directory, run_git_env_checked,
 };
 
 #[derive(Debug, Deserialize)]
@@ -29,13 +29,8 @@ pub async fn git_fetch(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitFetchBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
     let remote = body
@@ -124,19 +119,8 @@ pub async fn git_fetch(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let (code, out, err) =
-        run_git_env(&dir, &args_ref, &env_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_env_checked(&dir, &args_ref, &env_ref, None).await {
+        return resp;
     }
     Json(serde_json::json!({"success": true})).into_response()
 }

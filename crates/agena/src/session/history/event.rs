@@ -125,6 +125,13 @@ pub struct ToolCallCompleted {
     /// the placeholder `name: "tool"` it had to use when the field was
     /// missing.
     pub tool_name: SmolStr,
+    /// Authoritative completed operation part for this tool call when
+    /// available. New writers populate this so append-only history can
+    /// reconstruct the exact completed tool payload, including attachments and
+    /// provider-specific blocks, without relying on a prior mutable message
+    /// rewrite. Older logs omit it and fall back to `output`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<MessagePart>,
     pub output: TranscriptToolOutput,
     pub completed_at: DateTime<Utc>,
 }
@@ -141,13 +148,12 @@ pub struct SystemNoticeAppended {
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum SystemNoticeKind {
-    CompactionSummary,
     ContextInjection,
     ToolPolicyHint,
     /// Legacy audit marker emitted by older same-session rewind operations.
     /// The notice text is a JSON [`RewindCheckpoint`] payload describing the
-    /// messages that were dropped from the prompt window so a UI can show
-    /// "you rewound past these N messages — undo?" without re-folding.
+    /// messages that were removed by the rewind so a UI can show "you rewound
+    /// past these N messages — undo?" without re-folding.
     /// Projection drops these from the visible transcript.
     RewindCheckpoint,
     Other,
@@ -162,11 +168,10 @@ pub struct RewindCheckpoint {
     pub schema: u32,
     /// Millisecond UTC timestamp of when the rewind happened.
     pub at_ms: i64,
-    /// The message id the user rewound *to* (inclusive — this and everything
-    /// after it were compacted).
+    /// The message id the user rewound *to*.
     pub target_message_id: i64,
-    /// Per-message audit entries for every message that was compacted. Order
-    /// matches the original transcript order.
+    /// Per-message audit entries for every message skipped by the rewind.
+    /// Order matches the original transcript order.
     pub dropped: Vec<RewindCheckpointEntry>,
 }
 
@@ -177,65 +182,4 @@ pub struct RewindCheckpointEntry {
     /// Truncated preview of the message body (≤256 chars). Full content is
     /// still recoverable from the underlying event log if needed.
     pub preview: String,
-}
-
-/// Annotation that overlays a previously-appended message — used by prompt
-/// window management. Rebuilds of the transcript apply revisions in seq order
-/// to the matching `target_message_id`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MessageRevised {
-    pub target_message_id: i64,
-    pub kind: RevisionKind,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum RevisionKind {
-    /// The target message has been folded into a compaction summary and must
-    /// be dropped from the transcript. The summary itself arrives as a
-    /// `SystemNoticeAppended` with kind `CompactionSummary`.
-    Compacted,
-    /// Reverses a prior `Compacted` revision on the same target message,
-    /// re-admitting it into the transcript. Used by the un-rewind flow so a
-    /// rewind can be undone without losing the pre-existing event log.
-    Uncompacted,
-    /// A tool result on the target message has been pruned; the projection
-    /// substitutes `replacement` for the original output.
-    ToolResultPruned {
-        call_id: ToolCallId,
-        replacement: String,
-    },
-    /// An attachment payload on the target message was stripped to save
-    /// tokens. The projection replaces the attachment with a placeholder.
-    AttachmentStripped { part_id: i64 },
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rt<T: Serialize + for<'de> Deserialize<'de> + PartialEq + std::fmt::Debug>(value: &T) {
-        let json = serde_json::to_string(value).expect("encode");
-        let back: T = serde_json::from_str(&json).expect("decode");
-        assert_eq!(&back, value);
-    }
-
-    #[test]
-    fn message_revised_round_trip() {
-        for kind in [
-            RevisionKind::Compacted,
-            RevisionKind::Uncompacted,
-            RevisionKind::ToolResultPruned {
-                call_id: ToolCallId::new("call_x"),
-                replacement: "[pruned]".into(),
-            },
-            RevisionKind::AttachmentStripped { part_id: 7 },
-        ] {
-            let item = MessageRevised {
-                target_message_id: 42,
-                kind,
-            };
-            rt(&item);
-        }
-    }
 }

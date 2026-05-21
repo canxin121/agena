@@ -5,17 +5,21 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use futures_core::Stream;
 use futures_util::stream;
-use sea_orm::{Database, DatabaseConnection};
+use sea_orm::{
+    ColumnTrait, Database, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
+};
 use uuid::Uuid;
 
 use crate::agent::Agent;
+use crate::db::entities::{activity_message, activity_part};
 use crate::db::init_schema;
 use crate::entry::{ToolPayloadExecution, ToolPayloadOutput};
 use crate::event::EventKind;
 use crate::message::{
-    ApplyPatchToolInput, AskUserToolInput, AttachmentSource, TodoItem, TodoPriority, TodoStatus,
-    TodoWriteToolInput, ToolAttachment, ToolOutput, ToolSearchToolInput, UserInputOption,
-    UserInputQuestion, UserInputReply, UserInputReplyKind,
+    ApplyPatchToolInput, AskUserToolInput, AttachmentSource, ExecutionStatus, MessageMetadata,
+    MessagePart, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment,
+    ToolOutput, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
+    UserInputReplyKind,
 };
 use crate::model::{ModelId, ModelRef, ProviderId};
 use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
@@ -23,6 +27,11 @@ use crate::provider::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
     CompletionUsage, ModelRuntime, ProviderModel, ProviderRegistry,
 };
+use crate::role::Role;
+use crate::session::history::{
+    AssistantMessageCompleted, ToolCallCompleted, ToolCallIssued, TranscriptContent,
+};
+use crate::session::ids::ToolCallId;
 use crate::session::{ContextGovernor, ContextPolicy};
 
 use super::*;
@@ -246,6 +255,7 @@ struct RecordingProvider {
     response_delay: Option<Duration>,
     current_prompt_cache_shape: Arc<Mutex<Option<crate::provider::PromptCacheShape>>>,
     dynamic_prompt_cache_shape: Option<crate::provider::PromptCacheShape>,
+    remote_compact_error: Option<String>,
 }
 
 fn scripted_provider_id() -> ProviderId {
@@ -282,6 +292,7 @@ impl RecordingProvider {
             response_delay: None,
             current_prompt_cache_shape: Arc::new(Mutex::new(None)),
             dynamic_prompt_cache_shape: None,
+            remote_compact_error: None,
         }
     }
 
@@ -313,6 +324,11 @@ impl RecordingProvider {
 
     fn with_dynamic_prompt_cache_shape(mut self, shape: crate::provider::PromptCacheShape) -> Self {
         self.dynamic_prompt_cache_shape = Some(shape);
+        self
+    }
+
+    fn with_remote_compact_error(mut self, message: impl Into<String>) -> Self {
+        self.remote_compact_error = Some(message.into());
         self
     }
 }
@@ -1998,8 +2014,24 @@ fn operation_snapshot(
         .unwrap_or_else(|| panic!("operation {operation_id} should exist"))
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn tool_execution_error_is_returned_to_model_as_failed_tool_result() {
+#[test]
+fn tool_execution_error_is_returned_to_model_as_failed_tool_result() {
+    std::thread::Builder::new()
+        .name("tool-error-recovery".to_string())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime should build")
+                .block_on(tool_execution_error_is_returned_to_model_as_failed_tool_result_impl())
+        })
+        .expect("test thread should spawn")
+        .join()
+        .expect("test thread should complete");
+}
+
+async fn tool_execution_error_is_returned_to_model_as_failed_tool_result_impl() {
     let workspace = TempWorkspace::new();
     let manager = build_manager_with_provider(
         &workspace.root,
@@ -2039,8 +2071,27 @@ async fn tool_execution_error_is_returned_to_model_as_failed_tool_result() {
     }));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn concurrent_tool_execution_error_is_returned_without_dropping_other_results() {
+#[test]
+fn concurrent_tool_execution_error_is_returned_without_dropping_other_results() {
+    std::thread::Builder::new()
+        .name("concurrent-tool-error-recovery".to_string())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime should build")
+                .block_on(
+                    concurrent_tool_execution_error_is_returned_without_dropping_other_results_impl(
+                    ),
+                )
+        })
+        .expect("test thread should spawn")
+        .join()
+        .expect("test thread should complete");
+}
+
+async fn concurrent_tool_execution_error_is_returned_without_dropping_other_results_impl() {
     let workspace = TempWorkspace::new();
     let manager = build_manager_with_provider(
         &workspace.root,
@@ -2197,6 +2248,16 @@ impl ModelRuntime for RecordingProvider {
                 "response_id": self.next_response_id()
             })),
         })
+    }
+
+    async fn compact_conversation(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        if let Some(message) = self.remote_compact_error.as_ref() {
+            return Err(AppError::Provider(message.clone()));
+        }
+        Ok(None)
     }
 }
 
@@ -3487,62 +3548,6 @@ async fn rewind_session_forks_without_mutating_source() {
     );
 }
 
-#[tokio::test]
-async fn unrewind_session_is_noop_for_append_only_source() {
-    let workspace = TempWorkspace::new();
-    let service = build_manager(
-        &workspace.root,
-        PermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-    )
-    .await;
-
-    let source = service
-        .create_session(SessionCreateRequest {
-            title: "source".to_string(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create source session");
-    service
-        .submit_user_turn(SessionUserTurnRequest {
-            session_id: source.id,
-            options: run_options(),
-            parts: vec![PartContent::text("first")],
-        })
-        .await
-        .expect("submit first turn");
-    let before = service
-        .get_session(source.id)
-        .await
-        .expect("reload source before unrewind");
-    let target = before.messages.first().expect("message exists").id;
-
-    let after = service
-        .unrewind_session(SessionUnrewindRequest {
-            session_id: source.id,
-            message_id: target,
-            expected_version: Some(before.version),
-        })
-        .await
-        .expect("unrewind should be a no-op");
-
-    assert_eq!(after.id, before.id);
-    assert_eq!(after.version, before.version);
-    assert_eq!(
-        after
-            .messages
-            .iter()
-            .map(Message::as_text_lossy)
-            .collect::<Vec<_>>(),
-        before
-            .messages
-            .iter()
-            .map(Message::as_text_lossy)
-            .collect::<Vec<_>>()
-    );
-}
-
 #[test]
 fn cache_skips_entries_larger_than_byte_budget() {
     let state = cache_state(1, "x".repeat(256));
@@ -3699,6 +3704,153 @@ async fn follow_up_requests_send_full_prefix_when_shape_appears_after_first_resp
     assert_eq!(recorded[1].messages[0].as_text_lossy(), "first");
     assert_eq!(recorded[1].messages[1].as_text_lossy(), "recorded");
     assert_eq!(recorded[1].messages[2].as_text_lossy(), "second");
+}
+
+#[tokio::test]
+async fn compact_session_installs_summary_projection_and_restores_agent_context() {
+    let workspace = TempWorkspace::new();
+    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+    let service = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+        ContextPolicy::default(),
+        RecordingProvider::new(requests.clone()),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "compact".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let mut first_options = recording_run_options();
+    first_options.agent_profile = Some("explore".to_string());
+    let _ = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: first_options,
+            parts: vec![PartContent::text("old topic alpha")],
+        })
+        .await
+        .expect("submit first turn");
+    for text in ["recent topic beta", "latest topic gamma"] {
+        let _ = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text(text)],
+            })
+            .await
+            .expect("submit seeded turn");
+    }
+
+    let compacted = service
+        .compact_session(SessionCompactRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+        })
+        .await
+        .expect("compact session");
+    assert_eq!(
+        compacted.runtime.execution.agent_profile.as_deref(),
+        Some("explore")
+    );
+    assert_ne!(
+        compacted.runtime.execution.agent_profile.as_deref(),
+        Some("compaction")
+    );
+    let compaction = compacted
+        .runtime
+        .prompt_window
+        .compaction
+        .as_ref()
+        .expect("compaction runtime should be installed");
+    assert_eq!(compaction.summary, "recorded");
+    assert_eq!(compaction.strategy, PromptCompactionStrategy::LocalAgent);
+    assert!(compacted.runtime.provider_anchors.is_empty());
+    assert!(compacted.runtime.prompt_tokens.is_empty());
+
+    let _ = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text("after compact")],
+        })
+        .await
+        .expect("submit after compact");
+
+    let recorded = requests
+        .lock()
+        .expect("recording provider request lock should succeed")
+        .clone();
+    let after_compact = recorded.last().expect("recorded follow-up request");
+    let prompt_text = after_compact
+        .messages
+        .iter()
+        .map(Message::as_text_lossy)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(prompt_text.contains("Conversation summary before the current active context"));
+    assert!(prompt_text.contains("recorded"));
+    assert!(prompt_text.contains("recent topic beta"));
+    assert!(prompt_text.contains("latest topic gamma"));
+    assert!(prompt_text.contains("after compact"));
+    assert!(!prompt_text.contains("old topic alpha"));
+    assert!(!prompt_text.contains("Summarize the conversation so far"));
+}
+
+#[tokio::test]
+async fn compact_session_falls_back_to_local_agent_when_remote_compact_fails() {
+    let workspace = TempWorkspace::new();
+    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+    let service = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+        ContextPolicy::default(),
+        RecordingProvider::new(requests).with_remote_compact_error("remote compact failed"),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "compact fallback".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+    let _ = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text("seed history")],
+        })
+        .await
+        .expect("submit seeded turn");
+
+    let compacted = service
+        .compact_session(SessionCompactRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+        })
+        .await
+        .expect("compact should fall back to local agent");
+    let compaction = compacted
+        .runtime
+        .prompt_window
+        .compaction
+        .as_ref()
+        .expect("fallback compaction runtime should be installed");
+    assert_eq!(compaction.summary, "recorded");
+    assert_eq!(compaction.strategy, PromptCompactionStrategy::LocalAgent);
+    assert_ne!(
+        compacted.runtime.execution.agent_profile.as_deref(),
+        Some("compaction")
+    );
 }
 
 #[tokio::test]
@@ -3864,6 +4016,377 @@ async fn submit_user_turn_emits_append_only_user_message_event() {
 // ─── Phase 8: append-only integration tests ─────────────────────────────
 
 #[tokio::test]
+async fn assistant_projection_rebuilds_missing_parts_from_history() {
+    let workspace = TempWorkspace::new();
+    let service = build_manager(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "assistant-repair".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let session = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: run_options(),
+            parts: vec![PartContent::text("repair me")],
+        })
+        .await
+        .expect("submit turn");
+
+    let assistant = session
+        .messages
+        .iter()
+        .find(|message| message.role == Role::Assistant)
+        .cloned()
+        .expect("assistant message should exist");
+    assert_eq!(assistant.as_text_lossy(), "echo:repair me");
+
+    let history = service
+        .list_session_events(created.id)
+        .await
+        .expect("history should load");
+    let completed = history
+        .iter()
+        .find_map(|record| match &record.kind {
+            EventKind::AssistantMessageCompleted(payload) => Some(payload),
+            _ => None,
+        })
+        .expect("assistant completion history should exist");
+    assert_eq!(completed.parts.len(), 1);
+    assert_eq!(completed.parts[0].text(), Some("echo:repair me"));
+
+    activity_part::Entity::delete_many()
+        .filter(activity_part::Column::MessageId.eq(assistant.id))
+        .exec(service.store.db())
+        .await
+        .expect("delete projected assistant parts");
+
+    let repaired = service
+        .list_projected_messages(created.id, true)
+        .await
+        .expect("projected messages should reload");
+    let repaired_assistant = repaired
+        .iter()
+        .find(|message| message.id == assistant.id)
+        .expect("repaired assistant message should exist");
+    assert_eq!(repaired_assistant.as_text_lossy(), "echo:repair me");
+    assert_eq!(repaired_assistant.parts.len(), 1);
+
+    let repaired_part_count = activity_part::Entity::find()
+        .filter(activity_part::Column::MessageId.eq(assistant.id))
+        .count(service.store.db())
+        .await
+        .expect("count repaired assistant parts");
+    assert_eq!(repaired_part_count, 1);
+}
+
+#[tokio::test]
+async fn load_session_rebuilds_projection_when_history_is_published_directly() {
+    let workspace = TempWorkspace::new();
+    let service = build_manager(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "direct-history".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let turn_id = HistoryTurnId::new();
+    let message_id = 90_001;
+    let created_at = chrono::Utc::now();
+    let mut part = MessagePart::with_content(
+        90_101,
+        message_id,
+        created_at,
+        ExecutionStatus::Completed,
+        PartContent::text("published directly"),
+    );
+    part.part_index = 0;
+
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::TurnStarted(TurnStarted {
+                turn_id,
+                model_id: "direct-model".into(),
+                provider_id: "direct-provider".into(),
+                request_digest: None,
+            }),
+        )
+        .await
+        .expect("publish direct turn start");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::UserMessageAppended(UserMessageAppended {
+                message_id: HistoryMessageId(message_id),
+                turn_id,
+                created_at,
+                content: TranscriptContent::from_text("published directly"),
+                parts: vec![part.clone()],
+                metadata: MessageMetadata::default(),
+            }),
+        )
+        .await
+        .expect("publish direct user message");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::TurnCompleted(TurnCompleted {
+                turn_id,
+                finish_reason: FinishReason::Stop,
+            }),
+        )
+        .await
+        .expect("publish direct turn completion");
+
+    let projected_before = activity_message::Entity::find()
+        .filter(activity_message::Column::SessionId.eq(created.id))
+        .count(service.store.db())
+        .await
+        .expect("count projected messages before rebuild");
+    assert_eq!(
+        projected_before, 0,
+        "direct event-store publish should not bypass the explicit projection catch-up path"
+    );
+
+    service.store.prune_cache(SessionCachePolicy {
+        max_sessions: 0,
+        ttl: std::time::Duration::from_secs(0),
+        max_bytes: 0,
+    });
+    let cache_policy = SessionCachePolicy {
+        max_sessions: 8,
+        ttl: std::time::Duration::from_secs(60),
+        max_bytes: usize::MAX,
+    };
+
+    let reloaded = service
+        .store
+        .load_session(created.id, cache_policy)
+        .await
+        .expect("session should rebuild stale projection");
+
+    assert!(
+        reloaded
+            .messages
+            .iter()
+            .any(|message| message.id == message_id
+                && message.as_text_lossy() == "published directly"),
+        "load_session should catch the projection up to durable history"
+    );
+
+    let projected_after = activity_message::Entity::find()
+        .filter(activity_message::Column::SessionId.eq(created.id))
+        .count(service.store.db())
+        .await
+        .expect("count projected messages after rebuild");
+    assert_eq!(projected_after, 1);
+}
+
+#[tokio::test]
+async fn load_session_rebuilds_tool_completion_parts_from_history() {
+    let workspace = TempWorkspace::new();
+    let service = build_manager(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "direct-tool-history".to_string(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let turn_id = HistoryTurnId::new();
+    let message_id = 91_001;
+    let created_at = chrono::Utc::now();
+    let call_id = ToolCallId::new("call_attachment");
+
+    let mut text_part = MessagePart::with_content(
+        91_101,
+        message_id,
+        created_at,
+        ExecutionStatus::Completed,
+        PartContent::text("running"),
+    );
+    text_part.part_index = 0;
+
+    let mut completed_part = MessagePart::with_content(
+        91_102,
+        message_id,
+        created_at,
+        ExecutionStatus::Completed,
+        PartContent::Operation(crate::message::OperationPart::completed(
+            0,
+            crate::message::ToolInvocation {
+                name: "read_file".to_string(),
+                plugin_name: None,
+                input: crate::message::StructuredObject::try_from(
+                    serde_json::json!({ "path": "x" }),
+                )
+                .expect("tool input"),
+            },
+            "ok".to_string(),
+            Vec::new(),
+            vec![crate::message::AttachmentItem {
+                kind: crate::message::AttachmentKind::Image,
+                mime: "image/png".to_string(),
+                source: AttachmentSource::DataUrl {
+                    url: "data:image/png;base64,AAAA".to_string(),
+                },
+                filename: Some("preview.png".to_string()),
+                title: None,
+                size_bytes: None,
+                sha256: None,
+                width: Some(1),
+                height: Some(1),
+                duration_ms: None,
+                page_count: None,
+            }],
+            ToolOutput::default(),
+            crate::message::TimeRange::default(),
+        )),
+    );
+    completed_part.part_index = 1;
+    completed_part.operation_id = Some(call_id.as_str().to_string());
+
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::TurnStarted(TurnStarted {
+                turn_id,
+                model_id: "direct-model".into(),
+                provider_id: "direct-provider".into(),
+                request_digest: None,
+            }),
+        )
+        .await
+        .expect("publish direct turn start");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::AssistantMessageCompleted(AssistantMessageCompleted {
+                message_id: HistoryMessageId(message_id),
+                turn_id,
+                created_at,
+                content: TranscriptContent::from_text("running"),
+                parts: vec![text_part],
+                usage: None,
+                finish_reason: FinishReason::ToolCalls,
+                metadata: MessageMetadata::default(),
+            }),
+        )
+        .await
+        .expect("publish direct assistant message");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::ToolCallIssued(ToolCallIssued {
+                message_id: HistoryMessageId(message_id),
+                turn_id,
+                call_id: call_id.clone(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({ "path": "x" }),
+                created_at,
+            }),
+        )
+        .await
+        .expect("publish direct tool call");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::ToolCallCompleted(ToolCallCompleted {
+                message_id: HistoryMessageId(message_id),
+                call_id: call_id.clone(),
+                turn_id,
+                tool_name: "read_file".into(),
+                part: Some(completed_part),
+                output: crate::session::history::TranscriptToolOutput::Text { text: "ok".into() },
+                completed_at: created_at,
+            }),
+        )
+        .await
+        .expect("publish direct tool completion");
+    service
+        .event_publisher()
+        .publish(
+            crate::event::PublishContext::for_session(created.id),
+            EventKind::TurnCompleted(TurnCompleted {
+                turn_id,
+                finish_reason: FinishReason::ToolCalls,
+            }),
+        )
+        .await
+        .expect("publish direct turn completion");
+
+    service.store.prune_cache(SessionCachePolicy {
+        max_sessions: 0,
+        ttl: std::time::Duration::from_secs(0),
+        max_bytes: 0,
+    });
+    let reloaded = service
+        .store
+        .load_session(
+            created.id,
+            SessionCachePolicy {
+                max_sessions: 8,
+                ttl: std::time::Duration::from_secs(60),
+                max_bytes: usize::MAX,
+            },
+        )
+        .await
+        .expect("session should rebuild direct tool history");
+
+    let assistant = reloaded
+        .messages
+        .iter()
+        .find(|message| message.id == message_id)
+        .expect("assistant message should be reloaded");
+    let tool_part = assistant
+        .parts
+        .iter()
+        .find(|part| part.operation_id.as_deref() == Some(call_id.as_str()))
+        .expect("tool part should be reconstructed");
+    let Some(PartContent::Operation(operation)) = tool_part.content.as_ref() else {
+        panic!("expected reconstructed operation part");
+    };
+    assert_eq!(operation.output_text(), Some("ok"));
+    assert_eq!(operation.attachments.len(), 1);
+    assert_eq!(
+        operation.attachments[0].filename.as_deref(),
+        Some("preview.png")
+    );
+}
+
+#[tokio::test]
 async fn append_only_full_turn_writes_one_row_per_event_no_overwrites() {
     let workspace = TempWorkspace::new();
     let service = build_manager(
@@ -3959,8 +4482,7 @@ fn append_only_prefix_digest_stable_across_different_trailing_user_message() {
                     let _ = trailing;
                     let transcript =
                         fold_history::<ProviderTranscriptBuilder>(prefix_records.as_slice())
-                            .expect("fold")
-                            .expect("transcript");
+                            .expect("fold");
                     transcript.digest()
                 }
 
@@ -4300,7 +4822,12 @@ async fn blocked_permission_survives_restart_and_reply_continues() {
         .get_session(session_id)
         .await
         .expect("session should reload");
-    assert!(reloaded.blocked());
+    assert!(
+        reloaded.blocked(),
+        "reloaded session was not blocked: messages={:?}, runtime={:?}",
+        reloaded.messages,
+        reloaded.runtime()
+    );
 
     let completed = second
         .reply_permission(SessionPermissionReplyRequest {
@@ -4318,9 +4845,15 @@ async fn blocked_permission_survives_restart_and_reply_continues() {
         .expect("permission reply should continue session");
 
     assert!(!completed.blocked());
-    assert!(completed.messages.iter().any(|message| {
-        message.role == Role::Assistant && message.as_text_lossy().contains("permission todo done")
-    }));
+    assert!(
+        completed.messages.iter().any(|message| {
+            message.role == Role::Assistant
+                && message.as_text_lossy().contains("permission todo done")
+        }),
+        "completed session missing final assistant reply: messages={:?}, runtime={:?}",
+        completed.messages,
+        completed.runtime()
+    );
 }
 
 /// Phase 3 of the event-system refactor: every legacy `SessionEvent` and

@@ -368,63 +368,6 @@ async fn static_plugin_round_trips_every_hook() {
     assert_eq!(updated.params.get("temperature"), Some(&json!(0.5)));
 }
 
-#[derive(Default)]
-struct CompactionSummaryPlugin;
-
-#[async_trait]
-impl Plugin for CompactionSummaryPlugin {
-    fn manifest(&self) -> PluginManifest {
-        PluginManifest::builder("summary-replacer", "0.1.0")
-            .hooks(HookSubscription::SESSION_COMPACTING)
-            .build()
-    }
-
-    async fn session_compacting(
-        &self,
-        _input: SessionCompactingInput,
-    ) -> Result<Option<SessionCompactingPatch>> {
-        Ok(Some(SessionCompactingPatch {
-            summary: Some("plugin-supplied summary".into()),
-            ..Default::default()
-        }))
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn session_compacting_patch_can_replace_summary() {
-    let mut list = BTreeMap::new();
-    list.insert(
-        "summary-replacer".to_string(),
-        PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-        },
-    );
-    let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
-        .with_config(PluginsConfig {
-            list,
-            ..Default::default()
-        })
-        .register_static("summary-replacer", CompactionSummaryPlugin)
-        .build()
-        .await
-        .expect("host builds");
-
-    let outcome = host
-        .dispatch_session_compacting(SessionCompactingInput {
-            session_id: 7,
-            messages: vec![ChatMessage {
-                role: "user".into(),
-                content: json!({"text": "hi"}),
-            }],
-            strategy: "summarize".into(),
-        })
-        .await
-        .expect("dispatch");
-    assert_eq!(outcome.summary.as_deref(), Some("plugin-supplied summary"));
-    assert_eq!(outcome.messages.len(), 1);
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn entry_register_requires_capability() {
     let host = host_with_capability_plugin(Vec::new()).await;

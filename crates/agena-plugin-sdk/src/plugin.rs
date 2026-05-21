@@ -252,20 +252,8 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
-    // -------- session compacted notification --------
-    async fn session_compacted(&self, _input: SessionCompactedInput) -> Result<()> {
-        Ok(())
-    }
-
     // -------- config & session --------
     async fn config_resolved(&self, _input: ConfigInput) -> Result<Option<ConfigPatch>> {
-        Ok(None)
-    }
-
-    async fn session_compacting(
-        &self,
-        _input: SessionCompactingInput,
-    ) -> Result<Option<SessionCompactingPatch>> {
         Ok(None)
     }
 }

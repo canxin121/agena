@@ -23,7 +23,6 @@ import {
   setSessionGoal,
   submitTurn,
   updateSession,
-  unrewindSession,
   type MessagePart,
   type MessageResource,
   type SessionGoalResource,
@@ -95,7 +94,6 @@ export type ChatSessionActionsDeps = {
   rewindSession: typeof rewindSession
   setSessionGoal: typeof setSessionGoal
   submitTurn: typeof submitTurn
-  unrewindSession: typeof unrewindSession
   updateSession: typeof updateSession
 }
 
@@ -121,7 +119,6 @@ const defaultDeps: ChatSessionActionsDeps = {
   rewindSession,
   setSessionGoal,
   submitTurn,
-  unrewindSession,
   updateSession,
 }
 
@@ -598,28 +595,6 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
   }
 
-  async function unrewindToMessage(messageId: number) {
-    const sessionId = input.selectedSessionId.value
-    if (!sessionId) return
-    if (!input.confirm(`Undo rewind for session #${sessionId} at message #${messageId}?`)) {
-      return
-    }
-
-    input.loading.value = true
-    input.errorMessage.value = ''
-    try {
-      input.sessionState.value = await deps.unrewindSession({
-        sessionId,
-        messageId,
-      })
-      await input.refreshConversation(true)
-    } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
-    } finally {
-      input.loading.value = false
-    }
-  }
-
   async function exportCurrentSession() {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
@@ -674,6 +649,5 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     setSessionGoalAction,
     showSessionGoalAction,
     submitUserAnswers,
-    unrewindToMessage,
   }
 }

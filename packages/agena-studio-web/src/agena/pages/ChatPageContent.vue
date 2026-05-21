@@ -77,7 +77,6 @@ const props = defineProps<{
         :selected-session-id="props.state.sidebar.selectedSessionId.value"
         :rewind-checkpoint-facts="props.state.rewindCheckpointFacts.value"
         :load-rewind-checkpoints="props.state.loadRewindCheckpoints"
-        :unrewind-to-message="props.state.unrewindToMessage"
       />
 
       <ChatUsagePanel

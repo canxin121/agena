@@ -30,7 +30,6 @@ agena config validate
 - runtime reload、janitor、session cache。
 - permission path/network/tool rules。
 - `agena.memory` project instructions。
-- `agena.hooks` shell/HTTP hooks。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
 - provider model metadata，以及拆分后的 model thinking/speed modes。
 
@@ -132,7 +131,7 @@ agena \
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
 - `plugins` 的 `enabled` 和 `timeouts` 会被 overlay 替换；非空 plugin list 会替换嵌套 plugin tools。
-- MCP、LSP、web、memory 和 hooks 都作为 runtime-provided static plugin 的 `options` 解析。
+- MCP、LSP、web 和 memory 都作为 runtime-provided static plugin 的 `options` 解析。
 - static plugin options 的合并语义跟随对应 plugin 的配置结构，例如 server map 按名称合并，web options 整体替换。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
@@ -916,82 +915,18 @@ include_global = true
 
 默认两项都为 true。该配置会影响项目指令/记忆是否进入上下文。Memory 配置属于 `agena.memory` static plugin options。
 
-## Hooks
+## Removed: `agena.hooks`
 
-Hooks 用 `agena.hooks` static plugin options 配置。每个 hook 可以运行本地 command 或调用 HTTP URL：
+`agena.hooks` 这个配置驱动的 shell/HTTP hook bridge 已移除。旧的两种写法都会报配置错误：
 
-```toml
-[plugins.list."agena.hooks"]
-kind = "static"
+- 顶层 `hooks`
+- `plugins.list."agena.hooks"`
 
-[[plugins.list."agena.hooks".options.hooks]]
-event = "user_prompt_submit"
-command = "python3 .agena/hooks/enrich_prompt.py"
-timeout_ms = 3000
-
-[[plugins.list."agena.hooks".options.hooks]]
-event = "pre_tool_use"
-command = "python3 .agena/hooks/check_tool.py"
-matcher = { tool = "shell" }
-timeout_ms = 5000
-
-[[plugins.list."agena.hooks".options.hooks]]
-event = "post_tool_use"
-url = "http://127.0.0.1:8080/agena-hook"
-timeout_ms = 2000
-```
-
-Hook 字段：
-
-- `event`: hook 事件名。
-- `command`: 本地 shell command。
-- `url`: HTTP endpoint，hook input 会以 JSON POST 过去。
-- `matcher.tool`: 只匹配指定 tool 名，支持 glob。
-- `timeout_ms`: 单次调用超时；省略时使用 30000。
-
-支持事件：
-
-```text
-user_prompt_submit
-pre_tool_use
-post_tool_use
-post_tool_use_failure
-stop
-session_start
-session_end
-notification
-```
-
-以下事件名也可以写在 `event` 中：
-
-| 等价写法 | 对应事件 |
-| --- | --- |
-| `tool_before` | `pre_tool_use` |
-| `tool_after` | `post_tool_use` |
-| `tool_failure` | `post_tool_use_failure` |
-| `agent_stop` | `stop` |
-
-Hook command 会收到事件相关环境变量，例如：
-
-```text
-AGENA_HOOK_EVENT
-AGENA_SESSION_ID
-AGENA_PROMPT
-AGENA_TOOL_NAME
-AGENA_TOOL_INPUT
-AGENA_ERROR
-AGENA_NOTIFICATION_KIND
-AGENA_NOTIFICATION_TITLE
-AGENA_NOTIFICATION_MESSAGE
-AGENA_VERSION
-AGENA_CWD
-```
-
-如果同一个 hook 同时配置 `url` 和 `command`，实现会优先走 HTTP URL。
+如果还需要 turn、tool、provider 或 permission 相关 hook 行为，请改成常规 plugin，在 manifest 中声明对应 `hooks` 订阅并实现 plugin SDK 的 hook 接口。
 
 ## Plugins
 
-Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力、LSP、skills、memory、hooks 等都会通过 plugin 或 plugin tool 接入 runtime。完整体系说明见 [Plugin 体系](plugin.md)。
+Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力、LSP、skills、memory 等都会通过 plugin 或 plugin tool 接入 runtime。完整体系说明见 [Plugin 体系](plugin.md)。
 
 ```toml
 [plugins]
@@ -1164,7 +1099,7 @@ auth = { kind = "basic", username = "user", password = "..." }
 auth = { kind = "basic", username = "user", password_env = "PLUGIN_PASSWORD" }
 ```
 
-Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、hooks、MCP、settings 等。它们和用户配置的 plugin 一样进入 plugin host 与 tool registry。
+Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、MCP、settings 等。它们和用户配置的 plugin 一样进入 plugin host 与 tool registry。
 
 插件存储默认目录是 `~/.agena/plugin-storage`，可通过 `AGENA_PLUGIN_STORAGE_DIR` 覆盖。插件 secret 默认使用 `agena.plugin` keyring service，并可 fallback 到文件。
 

@@ -344,12 +344,6 @@ where
             .filter(crate::db::event_entity::Column::SessionId.is_in(subtree_ids.iter().copied()))
             .exec(db)
             .await?;
-        entities::session_snapshot::Entity::delete_many()
-            .filter(
-                entities::session_snapshot::Column::SessionId.is_in(subtree_ids.iter().copied()),
-            )
-            .exec(db)
-            .await?;
     }
 
     let deleted = entities::session::Entity::delete_by_id(session_id)
@@ -471,9 +465,7 @@ struct SessionEventStatsRow {
 
 /// Approximate per-session message stats computed from the unified event log
 /// in a single grouped query. `message_count` counts message-emitting event
-/// kinds; it does **not** subtract `MessageRevised{Compacted}` revisions, so
-/// rewound sessions appear slightly larger than `fold_session_view` would
-/// report. Use this for tree/list views; use the projection for exact counts.
+/// kinds; use the projection for exact visible-message counts.
 pub async fn session_event_stats_for_ids<C>(
     db: &C,
     session_ids: &[i64],

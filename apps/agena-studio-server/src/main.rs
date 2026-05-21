@@ -138,8 +138,18 @@ pub(crate) fn issue_token() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    let runtime = match agena::runtime::build_app_runtime() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    };
+    runtime.block_on(async_main());
+}
+
+async fn async_main() {
     let args = match runtime_config::parse_args_with_runtime_config() {
         Ok(args) => args,
         Err(err) => {

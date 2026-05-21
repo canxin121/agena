@@ -7,14 +7,13 @@ use super::super::super::sanitize::{
 };
 use super::super::utils::{normalize_string_array, resolve_directory_path_no_fs};
 
-const CHAT_ACTIVITY_DEFAULT_EXPANDED_ALLOWED: [&str; 9] = [
+const CHAT_ACTIVITY_DEFAULT_EXPANDED_ALLOWED: [&str; 8] = [
     "step-start",
     "step-finish",
     "snapshot",
     "patch",
     "agent",
     "retry",
-    "compaction",
     "thinking",
     "justification",
 ];

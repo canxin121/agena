@@ -23,20 +23,19 @@ pub use cost::{
 };
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
-    SessionCacheStats, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
-    SessionGoalCreateRequest, SessionGoalUpdateRequest, SessionManager, SessionManagerConfig,
-    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionSubtaskRequest,
-    SessionSubtaskResponse, SessionUnrewindRequest, SessionUserInputReplyRequest,
+    SessionCacheStats, SessionCompactRequest, SessionContinueRequest, SessionCreateRequest,
+    SessionForkRequest, SessionGoalCreateRequest, SessionGoalUpdateRequest, SessionManager,
+    SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
+    SessionSubtaskRequest, SessionSubtaskResponse, SessionUserInputReplyRequest,
     SessionUserTurnRequest,
 };
 pub use model::{
-    GoalStatus, MAX_SESSION_GOAL_OBJECTIVE_CHARS, PlanState, PromptTokenRuntime,
-    PromptTokenUsageSnapshot, PromptWindowRuntime, ProviderPromptAnchor, Session,
-    SessionExecutionContext, SessionGoal, SessionListRequest, SessionRuntimeState,
-    SessionRuntimeStatus, SessionStatus, SessionSummary, validate_session_goal_objective,
+    GoalStatus, MAX_SESSION_GOAL_OBJECTIVE_CHARS, PlanState, PromptCompactionRuntime,
+    PromptCompactionStrategy, PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime,
+    ProviderPromptAnchor, Session, SessionExecutionContext, SessionGoal, SessionListRequest,
+    SessionRuntimeState, SessionRuntimeStatus, SessionStatus, SessionSummary,
+    validate_session_goal_objective,
 };
-#[allow(unused_imports)]
-pub(crate) use model::{MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_TOOL_RESULT_PRUNED};
 pub use processor::SessionProcessor;
 
 pub use history::ProjectedMessageHeader;
@@ -44,3 +43,18 @@ pub use history::ProjectedMessageHeader;
 /// Exposed publicly so callers of `SessionManager::list_rewind_checkpoints`
 /// can name the return type.
 pub use history::{RewindCheckpoint, RewindCheckpointEntry};
+
+pub fn estimate_prompt_budget_threshold_tokens(
+    context_window_tokens: Option<u32>,
+    max_output_tokens: Option<u32>,
+) -> u64 {
+    let policy = ContextPolicy::default();
+    let max_prompt_chars = prompt_window::prompt_char_budget(
+        context_window_tokens,
+        max_output_tokens,
+        policy.max_prompt_chars,
+        None,
+        &[],
+    );
+    prompt_window::approximate_tokens_from_chars(policy.proactive_char_threshold(max_prompt_chars))
+}

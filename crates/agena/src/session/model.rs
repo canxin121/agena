@@ -13,10 +13,6 @@ use crate::{
     role::Role,
 };
 
-pub(crate) const MESSAGE_TAG_PROMPT_SUMMARY: &str = "prompt_summary";
-pub(crate) const MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED: &str = "attachment_payload_stripped";
-pub(crate) const MESSAGE_TAG_TOOL_RESULT_PRUNED: &str = "tool_result_pruned";
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SessionPartRef {
     #[serde(default, skip_serializing)]
@@ -174,10 +170,56 @@ impl TurnRuntimeState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCompactionStrategy {
+    #[default]
+    LocalAgent,
+    Remote,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+pub struct PromptCompactionRuntime {
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail_start_message_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_at_message_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compacted_by_message_id: Option<i64>,
+    #[serde(default)]
+    pub strategy: PromptCompactionStrategy,
+    #[serde(default)]
+    pub created_at_ms: i64,
+}
+
+impl PromptCompactionRuntime {
+    pub fn is_empty(&self) -> bool {
+        self.summary.trim().is_empty()
+            && self.tail_start_message_id.is_none()
+            && self.compacted_at_message_id.is_none()
+            && self.compacted_by_message_id.is_none()
+            && self.strategy == PromptCompactionStrategy::LocalAgent
+            && self.created_at_ms == 0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
 pub struct PromptWindowRuntime {
     #[serde(default)]
     pub generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<PromptCompactionRuntime>,
+}
+
+impl PromptWindowRuntime {
+    pub fn is_empty(&self) -> bool {
+        self.generation == 0
+            && self
+                .compaction
+                .as_ref()
+                .is_none_or(PromptCompactionRuntime::is_empty)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
@@ -195,12 +237,16 @@ pub struct PromptTokenUsageSnapshot {
 }
 
 impl PromptTokenUsageSnapshot {
-    pub fn total_tokens(&self) -> u64 {
+    pub fn prompt_tokens(&self) -> u64 {
         self.input_tokens
-            .saturating_add(self.output_tokens)
-            .saturating_add(self.reasoning_tokens)
             .saturating_add(self.cache_write_tokens)
             .saturating_add(self.cache_read_tokens)
+    }
+
+    pub fn total_tokens(&self) -> u64 {
+        self.prompt_tokens()
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.reasoning_tokens)
     }
 }
 
@@ -243,6 +289,12 @@ impl PromptTokenRuntime {
             && self.request_options_fingerprint.is_empty()
             && self.transcript_digest.is_empty()
             && self.model_context_window_tokens.is_none()
+    }
+
+    pub fn prompt_tokens(&self) -> Option<u64> {
+        self.last_successful_usage
+            .as_ref()
+            .map(PromptTokenUsageSnapshot::prompt_tokens)
     }
 
     pub fn total_tokens(&self) -> Option<u64> {
@@ -950,10 +1002,7 @@ impl Session {
     }
 
     pub(crate) fn last_conversation_message(&self) -> Option<&Message> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| !message.metadata.has_tag(MESSAGE_TAG_PROMPT_SUMMARY))
+        self.messages.last()
     }
 
     pub(crate) fn find_pending_permission_by_request_id(

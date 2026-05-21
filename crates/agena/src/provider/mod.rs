@@ -60,8 +60,8 @@ pub use runtime::{
     ProviderStreamReplayConfig, gemini_cli_user_agent,
 };
 pub(crate) use wire_message::{
-    PRUNED_TOOL_RESULT_PLACEHOLDER, WirePart as ProjectedSessionPart,
-    project as project_session_parts, project_text_lossy as project_session_text_lossy,
+    WirePart as ProjectedSessionPart, project as project_session_parts,
+    project_text_lossy as project_session_text_lossy,
 };
 pub type ProviderModel = Model;
 pub use types::{

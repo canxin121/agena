@@ -34,8 +34,8 @@ use crate::{
 };
 
 use super::{
-    AssistantMessageCompleted, FinishReason, MessageRevised, RevisionKind, SystemNoticeAppended,
-    SystemNoticeKind, ToolCallCompleted, ToolCallIssued, TurnAborted, TurnCompleted, TurnStarted,
+    AssistantMessageCompleted, FinishReason, SystemNoticeAppended, SystemNoticeKind,
+    ToolCallCompleted, ToolCallIssued, TurnAborted, TurnCompleted, TurnStarted,
     UserMessageAppended,
     projection::HistoryFold,
     transcript::{TranscriptBlock, TranscriptContent, TranscriptToolOutput},
@@ -51,6 +51,7 @@ use crate::event::{DomainEvent, EventKind, MessagePartUpdatedEvent};
 pub(crate) struct SessionView {
     /// Messages ordered by `(created_at, message_id)`.
     pub messages: Vec<Message>,
+    #[allow(dead_code)]
     pub last_seq: i64,
 }
 
@@ -79,12 +80,15 @@ pub(crate) struct SessionViewBuilder {
     /// stored in the event log (they were a property of the deleted
     /// `message_part` table); the projection synthesises them.
     next_part_id: i64,
-    /// Messages dropped by a `MessageRevised { Compacted }` revision.
-    compacted_messages: HashSet<i64>,
+    /// `MessagePartUpdated` events are persisted before the append-only
+    /// assistant completion event lands, so replay can observe them before
+    /// the owning message exists. Stash them and re-apply once the message
+    /// is materialized.
+    pending_part_updates: HashMap<MessageKey, Vec<MessagePartUpdatedEvent>>,
 }
 
 /// Sort key matching the legacy reducer's ordering of `(created_at, id)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct MessageKey {
     created_at: DateTime<Utc>,
     message_id: i64,
@@ -163,6 +167,7 @@ impl SessionViewBuilder {
     }
 
     fn handle_user(&mut self, payload: &UserMessageAppended) {
+        let parts_from_fallback = payload.parts.is_empty();
         let parts = if !payload.parts.is_empty() {
             // Authoritative: the event carries the original parts verbatim.
             self.adopt_parts(&payload.parts, payload.message_id.raw())
@@ -175,7 +180,7 @@ impl SessionViewBuilder {
                 || self.alloc_part_id(),
             )
         };
-        let message = Message {
+        let mut message = Message {
             id: payload.message_id.raw(),
             role: Role::User,
             state: MessageStatus::Completed,
@@ -185,6 +190,7 @@ impl SessionViewBuilder {
             usage: None,
             finish: None,
         };
+        self.apply_pending_part_updates(&mut message, parts_from_fallback);
         let key = MessageKey::new(payload.created_at, payload.message_id);
         self.ensure_turn(payload.turn_id)
             .messages
@@ -196,6 +202,7 @@ impl SessionViewBuilder {
     }
 
     fn handle_assistant(&mut self, payload: &AssistantMessageCompleted) {
+        let parts_from_fallback = payload.parts.is_empty();
         let parts = if !payload.parts.is_empty() {
             self.adopt_parts(&payload.parts, payload.message_id.raw())
         } else {
@@ -208,7 +215,7 @@ impl SessionViewBuilder {
             )
         };
         let finish_label = finish_reason_label(payload.finish_reason);
-        let message = Message {
+        let mut message = Message {
             id: payload.message_id.raw(),
             role: Role::Assistant,
             state: MessageStatus::Completed,
@@ -218,6 +225,7 @@ impl SessionViewBuilder {
             usage: payload.usage.clone(),
             finish: finish_label,
         };
+        self.apply_pending_part_updates(&mut message, parts_from_fallback);
         let key = MessageKey::new(payload.created_at, payload.message_id);
         let turn = self.ensure_turn(payload.turn_id);
         turn.messages.push(BufferedMessage {
@@ -291,7 +299,6 @@ impl SessionViewBuilder {
         };
         let output_text = match &payload.output {
             TranscriptToolOutput::Text { text } => text.clone(),
-            TranscriptToolOutput::Pruned { replacement } => replacement.clone(),
             TranscriptToolOutput::Error { message } => message.clone(),
         };
 
@@ -303,6 +310,7 @@ impl SessionViewBuilder {
                 &mut buffered.message,
                 &payload.call_id,
                 payload.tool_name.as_str(),
+                payload.part.as_ref(),
                 output_text,
                 &payload.output,
                 payload.completed_at,
@@ -319,6 +327,7 @@ impl SessionViewBuilder {
                 message,
                 &payload.call_id,
                 payload.tool_name.as_str(),
+                payload.part.as_ref(),
                 output_text,
                 &payload.output,
                 payload.completed_at,
@@ -345,7 +354,7 @@ impl SessionViewBuilder {
             ExecutionStatus::Completed,
             PartContent::Text(TextPart {
                 text: payload.text.clone(),
-                synthetic: matches!(payload.kind, SystemNoticeKind::CompactionSummary),
+                synthetic: false,
                 ignored: false,
             }),
         );
@@ -389,6 +398,27 @@ impl SessionViewBuilder {
                     return;
                 }
             }
+        }
+
+        self.pending_part_updates
+            .entry(key)
+            .or_default()
+            .push(payload.clone());
+    }
+
+    fn apply_pending_part_updates(&mut self, message: &mut Message, replace_fallback_parts: bool) {
+        let key = MessageKey {
+            created_at: message.created_at,
+            message_id: message.id,
+        };
+        let Some(pending) = self.pending_part_updates.remove(&key) else {
+            return;
+        };
+        if replace_fallback_parts {
+            message.parts.clear();
+        }
+        for payload in pending {
+            apply_message_part_update(message, &payload);
         }
     }
 
@@ -436,22 +466,6 @@ impl HistoryFold for SessionViewBuilder {
             EventKind::ToolCallIssued(payload) => self.handle_tool_call_issued(payload)?,
             EventKind::ToolCallCompleted(payload) => self.handle_tool_call_completed(payload)?,
             EventKind::SystemNoticeAppended(payload) => self.handle_system_notice(payload),
-            EventKind::MessageRevised(MessageRevised {
-                target_message_id,
-                kind,
-            }) => match kind {
-                RevisionKind::Compacted => {
-                    self.compacted_messages.insert(*target_message_id);
-                }
-                RevisionKind::Uncompacted => {
-                    self.compacted_messages.remove(target_message_id);
-                }
-                RevisionKind::ToolResultPruned { .. } | RevisionKind::AttachmentStripped { .. } => {
-                    // The session view shows the latest state of each message
-                    // — the on-disk message bodies have already been rewritten
-                    // by the upstream pruner/stripper. Nothing to do here.
-                }
-            },
             EventKind::MessagePartUpdated(payload) => self.handle_message_part_updated(payload),
             // Runtime / UI projection events do not contribute to the
             // transcript view.
@@ -475,15 +489,10 @@ impl HistoryFold for SessionViewBuilder {
 
     fn finish(self) -> Self::Output {
         let SessionViewBuilder {
-            mut finalized,
+            finalized,
             last_seq,
-            compacted_messages,
             ..
         } = self;
-
-        if !compacted_messages.is_empty() {
-            finalized.retain(|_, message| !compacted_messages.contains(&message.id));
-        }
 
         let messages: Vec<Message> = finalized.into_values().collect();
         Ok(SessionView { messages, last_seq })
@@ -516,6 +525,7 @@ fn complete_tool_part(
     message: &mut Message,
     call_id: &ToolCallId,
     tool_name: &str,
+    authoritative_part: Option<&MessagePart>,
     output_text: String,
     output: &TranscriptToolOutput,
     completed_at: DateTime<Utc>,
@@ -527,6 +537,14 @@ fn complete_tool_part(
     else {
         return;
     };
+
+    if let Some(authoritative_part) = authoritative_part {
+        let mut clone = authoritative_part.clone();
+        clone.message_id = message.id;
+        clone.part_index = part.part_index;
+        *part = clone;
+        return;
+    }
 
     let (numeric_call_id, invocation, mut lifecycle) = match part.content.as_ref() {
         Some(PartContent::Operation(operation)) => (
@@ -558,7 +576,7 @@ fn complete_tool_part(
             )));
             part.status = ExecutionStatus::Failed;
         }
-        TranscriptToolOutput::Text { .. } | TranscriptToolOutput::Pruned { .. } => {
+        TranscriptToolOutput::Text { .. } => {
             part.set_content(PartContent::Operation(OperationPart::completed(
                 numeric_call_id,
                 invocation,
@@ -602,7 +620,6 @@ fn finish_reason_label(reason: FinishReason) -> Option<String> {
 #[allow(dead_code)]
 fn system_notice_tag(kind: SystemNoticeKind) -> &'static str {
     match kind {
-        SystemNoticeKind::CompactionSummary => "system_notice:compaction_summary",
         SystemNoticeKind::ContextInjection => "system_notice:context_injection",
         SystemNoticeKind::ToolPolicyHint => "system_notice:tool_policy_hint",
         SystemNoticeKind::RewindCheckpoint => "system_notice:rewind_checkpoint",
@@ -786,6 +803,7 @@ mod tests {
                 call_id: call.clone(),
                 turn_id,
                 tool_name: SmolStr::new("read_file"),
+                part: None,
                 output: TranscriptToolOutput::Text {
                     text: "fn main(){}".into(),
                 },
@@ -811,6 +829,130 @@ mod tests {
         let payload = serde_json::Value::from(operation.invocation.input.clone());
         assert_eq!(payload["path"], "x");
         assert_eq!(view.messages[0].as_text_lossy(), "running\nfn main(){}");
+    }
+
+    #[test]
+    fn turn_with_tool_call_completion_prefers_authoritative_completed_part() {
+        let turn_id = TurnId::new();
+        let call: ToolCallId = "call_alpha".into();
+        let created_at = Utc::now();
+        let mut authoritative_part = MessagePart::with_content(
+            77,
+            10,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(OperationPart::completed(
+                0,
+                ToolInvocation {
+                    name: "read_file".to_string(),
+                    plugin_name: None,
+                    input: StructuredObject::default(),
+                },
+                "fn main(){}".to_string(),
+                Vec::new(),
+                vec![crate::message::AttachmentItem {
+                    kind: crate::message::AttachmentKind::Image,
+                    mime: "image/png".to_string(),
+                    source: crate::message::AttachmentSource::DataUrl {
+                        url: "data:image/png;base64,AAAA".to_string(),
+                    },
+                    filename: Some("preview.png".to_string()),
+                    title: None,
+                    size_bytes: None,
+                    sha256: None,
+                    width: Some(1),
+                    height: Some(1),
+                    duration_ms: None,
+                    page_count: None,
+                }],
+                ToolOutput::default(),
+                TimeRange::default(),
+            )),
+        );
+        authoritative_part.operation_id = Some(call.as_str().to_string());
+
+        let records = vec![
+            turn_started(turn_id),
+            assistant_msg(turn_id, 10, "running", FinishReason::ToolCalls),
+            record(EventKind::ToolCallIssued(ToolCallIssued {
+                message_id: MessageId(10),
+                turn_id,
+                call_id: call.clone(),
+                name: SmolStr::new("read_file"),
+                arguments: serde_json::json!({"path": "x"}),
+                created_at,
+            })),
+            record(EventKind::ToolCallCompleted(ToolCallCompleted {
+                message_id: MessageId(10),
+                call_id: call.clone(),
+                turn_id,
+                tool_name: SmolStr::new("read_file"),
+                part: Some(authoritative_part.clone()),
+                output: TranscriptToolOutput::Text {
+                    text: "stale fallback".into(),
+                },
+                completed_at: created_at,
+            })),
+            turn_completed(turn_id, FinishReason::ToolCalls),
+        ];
+        let view = run(records);
+        let tool_part = &view.messages[0].parts[1];
+        let Some(PartContent::Operation(operation)) = tool_part.content.as_ref() else {
+            panic!("expected operation part");
+        };
+        assert_eq!(tool_part.id, authoritative_part.id);
+        assert_eq!(tool_part.operation_id, authoritative_part.operation_id);
+        assert_eq!(operation.output_text(), Some("fn main(){}"));
+        assert_eq!(operation.attachments.len(), 1);
+        assert_eq!(
+            operation.attachments[0].filename.as_deref(),
+            Some("preview.png")
+        );
+    }
+
+    #[test]
+    fn part_updates_buffer_until_assistant_message_is_materialized() {
+        let turn_id = TurnId::new();
+        let created_at = Utc::now();
+        let part = MessagePart::with_content(
+            42,
+            7,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::text("streamed text"),
+        );
+
+        let view = run(vec![
+            record(EventKind::MessagePartUpdated(MessagePartUpdatedEvent {
+                session_id: 1,
+                message_id: 7,
+                message_role: Role::Assistant,
+                message_state: MessageStatus::Completed,
+                message_created_at: created_at,
+                part: part.clone(),
+                ts_ms: created_at.timestamp_millis(),
+            })),
+            turn_started(turn_id),
+            record(EventKind::AssistantMessageCompleted(
+                AssistantMessageCompleted {
+                    message_id: MessageId(7),
+                    turn_id,
+                    created_at,
+                    content: TranscriptContent::from_text("fallback"),
+                    parts: Vec::new(),
+                    usage: None,
+                    finish_reason: FinishReason::Stop,
+                    metadata: MessageMetadata::default(),
+                },
+            )),
+            turn_completed(turn_id, FinishReason::Stop),
+        ]);
+
+        assert_eq!(view.messages.len(), 1);
+        let assistant = &view.messages[0];
+        assert_eq!(assistant.parts.len(), 1);
+        assert_eq!(assistant.parts[0].id, 42);
+        assert_eq!(assistant.parts[0].text(), Some("streamed text"));
     }
 
     #[test]
@@ -871,8 +1013,8 @@ mod tests {
             record(EventKind::SystemNoticeAppended(SystemNoticeAppended {
                 message_id: MessageId(99),
                 created_at: Utc::now(),
-                kind: SystemNoticeKind::CompactionSummary,
-                text: "summary text".into(),
+                kind: SystemNoticeKind::ContextInjection,
+                text: "context text".into(),
             })),
         ];
         let view = run(records);
@@ -882,8 +1024,8 @@ mod tests {
             .iter()
             .find(|m| m.role == Role::System)
             .expect("system notice projected");
-        assert_eq!(system.as_text_lossy(), "summary text");
-        assert!(system.metadata.has_tag("system_notice:compaction_summary"));
+        assert_eq!(system.as_text_lossy(), "context text");
+        assert!(system.metadata.has_tag("system_notice:context_injection"));
     }
 
     #[test]
@@ -901,25 +1043,5 @@ mod tests {
             "expected no messages from in-flight turn, got {:?}",
             view.messages
         );
-    }
-
-    use crate::session::history::{MessageRevised, RevisionKind};
-
-    #[test]
-    fn message_revised_compacted_drops_target_message() {
-        let turn_id = TurnId::new();
-        let records = vec![
-            turn_started(turn_id),
-            user_msg(turn_id, 1, "doomed"),
-            assistant_msg(turn_id, 2, "kept", FinishReason::Stop),
-            turn_completed(turn_id, FinishReason::Stop),
-            record(EventKind::MessageRevised(MessageRevised {
-                target_message_id: 1,
-                kind: RevisionKind::Compacted,
-            })),
-        ];
-        let view = run(records);
-        assert_eq!(view.messages.len(), 1);
-        assert_eq!(view.messages[0].id, 2);
     }
 }

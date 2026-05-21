@@ -7,6 +7,8 @@ mod m20260515_000005_activity_projection;
 mod m20260515_000005_session_goal;
 mod m20260516_000006_session_goal_accounting;
 mod m20260518_000007_model_catalog;
+mod m20260520_000008_activity_projection_state;
+mod m20260520_000009_remove_legacy_history_rewrites;
 mod migrator;
 
 use sea_orm::{DatabaseConnection, DbErr};

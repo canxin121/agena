@@ -7,8 +7,6 @@
 /// The projection step handles all concerns that are shared across every
 /// provider:
 ///   - stripping UI-only content (file changes, permission requests, …)
-///   - respecting `MESSAGE_TAG_TOOL_RESULT_PRUNED` and
-///     `MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED` metadata tags
 ///   - resolving the tool-call ID from `part.operation_id` with fallback
 ///   - carrying operation outputs through one provider-neutral projection path
 ///   - emitting an empty output for still-pending / in-progress tool executions
@@ -18,9 +16,6 @@ use crate::message::{
     AttachmentItem, AttachmentKind, AttachmentSource, ExecutionStatus, Message, OperationPart,
     PartContent, ToolInvocation,
 };
-use crate::session::{MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_TOOL_RESULT_PRUNED};
-
-pub(crate) const PRUNED_TOOL_RESULT_PLACEHOLDER: &str = "[Old tool result content cleared]";
 
 // ─── Core type ────────────────────────────────────────────────────────────────
 
@@ -63,11 +58,6 @@ impl WirePart {
 
 /// Normalise a [`Message`] into a flat list of provider-ready [`WirePart`]s.
 pub fn project(message: &Message) -> Vec<WirePart> {
-    let pruned_tool_result = message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED);
-    let stripped_attachments = message
-        .metadata
-        .has_tag(MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED);
-
     let mut parts: Vec<WirePart> = Vec::new();
 
     for part in &message.parts {
@@ -84,17 +74,8 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                 }
             }
             PartContent::Attachment(attachment) => {
-                if pruned_tool_result {
-                    continue;
-                }
                 for item in &attachment.attachments {
-                    if stripped_attachments {
-                        parts.push(WirePart::Text {
-                            text: hint_text(item),
-                        });
-                    } else {
-                        parts.push(WirePart::Attachment { item: item.clone() });
-                    }
+                    parts.push(WirePart::Attachment { item: item.clone() });
                 }
             }
             PartContent::Operation(exec) => {
@@ -114,15 +95,10 @@ pub fn project(message: &Message) -> Vec<WirePart> {
                     part.status,
                     ExecutionStatus::Completed | ExecutionStatus::Failed
                 ) {
-                    let output_json = if pruned_tool_result {
-                        PRUNED_TOOL_RESULT_PLACEHOLDER.to_owned()
-                    } else {
-                        project_operation_output(part.status, exec)
-                    };
                     parts.push(WirePart::ToolResult {
                         tool_call_id: call_id,
                         tool_name: name,
-                        output_json,
+                        output_json: project_operation_output(part.status, exec),
                     });
                 }
             }
@@ -138,9 +114,6 @@ pub fn project(message: &Message) -> Vec<WirePart> {
 pub(crate) fn project_text_lossy(message: &Message) -> String {
     let parts = project(message);
     if parts.is_empty() {
-        if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
-            return PRUNED_TOOL_RESULT_PLACEHOLDER.to_owned();
-        }
         message.as_text_lossy()
     } else {
         parts_text_lossy(parts.as_slice())
@@ -401,7 +374,6 @@ mod tests {
         MessagePart, MessageStatus, ToolOutput,
     };
     use crate::role::Role;
-    use crate::session::{MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_TOOL_RESULT_PRUNED};
 
     #[test]
     fn project_keeps_tool_attachment_images() {
@@ -487,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn project_replaces_pruned_tool_result_with_placeholder() {
+    fn project_ignores_legacy_pruned_tool_result_tag() {
         let mut message = crate::message::Message {
             id: 11,
             role: Role::Assistant,
@@ -540,7 +512,7 @@ mod tests {
             created_at: Utc::now(),
             metadata: {
                 let mut metadata = MessageMetadata::default();
-                metadata.add_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED);
+                metadata.add_tag("tool_result_pruned");
                 metadata
             },
             usage: None,
@@ -560,14 +532,31 @@ mod tests {
                 WirePart::ToolResult {
                     tool_call_id: "call_5".to_string(),
                     tool_name: "resource_tool".to_string(),
-                    output_json: PRUNED_TOOL_RESULT_PLACEHOLDER.to_string(),
+                    output_json: "very long original output".to_string(),
+                },
+                WirePart::Attachment {
+                    item: AttachmentItem {
+                        kind: AttachmentKind::Image,
+                        mime: "image/png".to_string(),
+                        source: AttachmentSource::Url {
+                            url: "https://example.com/image.png".to_string(),
+                        },
+                        filename: Some("image.png".to_string()),
+                        title: None,
+                        size_bytes: None,
+                        sha256: None,
+                        width: None,
+                        height: None,
+                        duration_ms: None,
+                        page_count: None,
+                    },
                 },
             ]
         );
     }
 
     #[test]
-    fn project_replaces_stripped_attachments_with_hint_text() {
+    fn project_ignores_legacy_attachment_stripped_tag() {
         let message = crate::message::Message {
             id: 12,
             role: Role::User,
@@ -596,7 +585,7 @@ mod tests {
             created_at: Utc::now(),
             metadata: {
                 let mut metadata = MessageMetadata::default();
-                metadata.add_tag(MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED);
+                metadata.add_tag("attachment_payload_stripped");
                 metadata
             },
             usage: None,
@@ -606,8 +595,22 @@ mod tests {
         let parts = project(&message);
         assert_eq!(
             parts,
-            vec![WirePart::Text {
-                text: "[image:screenshot.png]".to_string(),
+            vec![WirePart::Attachment {
+                item: AttachmentItem {
+                    kind: AttachmentKind::Image,
+                    mime: "image/png".to_string(),
+                    source: AttachmentSource::DataUrl {
+                        url: format!("data:image/png;base64,{}", "A".repeat(1024)),
+                    },
+                    filename: Some("screenshot.png".to_string()),
+                    title: None,
+                    size_bytes: None,
+                    sha256: None,
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                },
             }]
         );
     }

@@ -37,6 +37,34 @@ impl ProviderRegistry {
         })
     }
 
+    pub async fn compact_conversation(
+        &self,
+        model: &ModelRef,
+        mut request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
+            AppError::Config(format!("provider not found: {}", model.provider_id))
+        })?;
+        validate_request_capabilities(model, provider.as_ref(), &request)?;
+        request.model = model.model_id.clone();
+        self.call_with_retry(model.provider_id.as_str(), "compact_conversation", {
+            let provider = provider.clone();
+            let request = request.clone();
+            let adapter_id = model.adapter_id.clone();
+            move || {
+                let provider = provider.clone();
+                let request = request.clone();
+                let adapter_id = adapter_id.clone();
+                async move {
+                    provider
+                        .compact_conversation_for_adapter(adapter_id.as_ref(), request)
+                        .await
+                }
+            }
+        })
+        .await
+    }
+
     pub async fn complete_stream(
         &self,
         model: &ModelRef,

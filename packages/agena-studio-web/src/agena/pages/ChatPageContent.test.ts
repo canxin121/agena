@@ -187,7 +187,6 @@ function createChatPageContentState() {
       },
     ]),
     loadRewindCheckpoints: () => {},
-    unrewindToMessage: () => {},
     sessionUsageHeadline: ref('1 assistant turn'),
     sessionUsageSummary: ref(sessionUsageSummary),
     sessionUsageModelLines: ref([
@@ -205,6 +204,8 @@ function createChatPageContentState() {
     selectedModelId: ref('gpt-5'),
     selectedThinkingMode: ref('high'),
     selectedSpeedMode: ref('fast'),
+    selectedVerbosity: ref('medium'),
+    selectedParallelToolCalls: ref('auto'),
     providers: ref([
       {
         provider_id: 'openai',
@@ -226,6 +227,8 @@ function createChatPageContentState() {
     providerModelLabel: (model: { display_name?: string; id: string }) => model.display_name || model.id,
     modelThinkingModeOptions: () => [{ id: 'high', label: 'High', description: 'More reasoning' }],
     modelSpeedModeOptions: () => [{ id: 'fast', label: 'Fast', description: 'Priority route' }],
+    modelVerbosityOptions: () => [{ id: 'medium', label: 'Medium', description: 'Balanced detail' }],
+    modelParallelToolCallsOptions: () => [{ id: 'auto', label: 'Auto', description: 'Provider decides' }],
     sessionImportJsonl: ref('{"schema":1}'),
     importSessionFromJsonl: () => {},
     messages: ref([message]),

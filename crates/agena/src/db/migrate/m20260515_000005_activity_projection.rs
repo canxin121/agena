@@ -39,10 +39,10 @@ impl MigrationTrait for Migration {
                 .if_not_exists()
                 .to_owned(),
             Index::create()
-                .name("idx_agena_activity_messages_session_compacted")
+                .name("idx_agena_activity_messages_session_hidden")
                 .table(entities::activity_message::Entity)
                 .col(entities::activity_message::Column::SessionId)
-                .col(entities::activity_message::Column::IsCompacted)
+                .col(entities::activity_message::Column::IsHidden)
                 .col(entities::activity_message::Column::CreatedAtMs)
                 .col(entities::activity_message::Column::MessageId)
                 .if_not_exists()

@@ -36,11 +36,11 @@ pub use dto::{
     SessionContinueRequestBody, SessionCreateRequest, SessionEventListQuery,
     SessionEventStreamQuery, SessionExecutionContextResource, SessionExecutionResource,
     SessionGoalResource, SessionGoalSetRequest, SessionListQuery,
-    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionResource,
-    SessionRewindRequestBody, SessionRunOptionsRequest, SessionRunState, SessionTurnRequest,
-    SessionUserInputReplyRequestBody, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
-    WorkspaceFileTreeResource, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource,
-    WorkspaceWriteRequest,
+    SessionPermissionReplyRequestBody, SessionPromptUsageResource, SessionReplaceRequest,
+    SessionResource, SessionRewindRequestBody, SessionRunOptionsRequest, SessionRunState,
+    SessionTurnRequest, SessionUserInputReplyRequestBody, WorkspaceFileKind, WorkspaceFileNode,
+    WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery, WorkspaceResolveRequest,
+    WorkspaceResource, WorkspaceWriteRequest,
 };
 pub use error::ApiError;
 pub use pagination::{

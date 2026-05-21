@@ -161,6 +161,26 @@ pub trait ModelRuntime: Send + Sync {
         self.complete(request).await
     }
 
+    /// Provider-native conversation compaction. Providers that do not expose a
+    /// dedicated compaction API return `Ok(None)` so callers can fall back to
+    /// an ordinary local summarization turn.
+    async fn compact_conversation(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        let _ = request;
+        Ok(None)
+    }
+
+    async fn compact_conversation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        let _ = adapter_id;
+        self.compact_conversation(request).await
+    }
+
     async fn complete_stream(
         &self,
         request: CompletionRequest,

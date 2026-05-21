@@ -300,10 +300,6 @@ pub fn router(state: AppState) -> Router {
                 post(rest::rewind_session),
             )
             .route(
-                "/api/v1/sessions/{session_id}/unrewind",
-                post(rest::unrewind_session),
-            )
-            .route(
                 "/api/v1/sessions/{session_id}/export",
                 get(rest::export_session),
             )

@@ -118,7 +118,6 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 - `permission`: path/network/tool permission、persisted rule、runtime request/reply。
 - `agent` / `agents`: default agent policy、disk/runtime subagent registry。
 - `tool` / `plugins/provided`: provided tools and runtime-provided static plugins.
-- `hooks`: user-configurable shell/HTTP hooks, exposed as a static plugin.
 - `memory`: project instructions and memory plugin.
 - `storage`: database URL/path resolution.
 - `tracing` / `metrics`: logging, DB tracing, process/provider/tool/session counters.
@@ -204,7 +203,6 @@ reply_permission
 reply_user_input
 fork_session
 rewind_session (creates a fork)
-unrewind_session (legacy no-op)
 cancel_active_turn
 export_session_jsonl
 import_session_jsonl
@@ -329,7 +327,6 @@ Core registers runtime-provided static plugins during runtime build, including:
 - LSP.
 - cron/scheduler.
 - memory.
-- shell/HTTP hooks.
 - MCP, when configured.
 - settings config editor.
 
@@ -342,7 +339,7 @@ Plugin host can invoke hooks for:
 - permission ask.
 - command before/after and shell env.
 - config notification.
-- session start/end. Prompt compaction hooks are legacy; runtime provider prompts are kept append-only for cache stability.
+- session start/end. Runtime provider prompts are kept append-only for cache stability.
 - user prompt submit.
 - agent stop.
 - pre_turn/post_turn.

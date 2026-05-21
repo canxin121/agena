@@ -555,9 +555,6 @@ pub enum MemorySubcommand {
 pub enum SessionsSubcommand {
     List(SessionListArgs),
     Goal(SessionGoalCommand),
-    /// Legacy compatibility command. Rewind now creates a fork, so unrewind
-    /// returns the current source session without mutating it.
-    Unrewind(SessionUnrewindArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
     /// Replay a JSONL bundle (read from stdin) as a fresh session in the
@@ -617,15 +614,6 @@ pub struct SessionGoalClearArgs {
 #[derive(Debug, Clone, Args)]
 pub struct SessionCheckpointsArgs {
     pub session_id: i64,
-    #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
-    pub format: ConfigOutputFormat,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct SessionUnrewindArgs {
-    pub session_id: i64,
-    #[arg(long = "message")]
-    pub message_id: i64,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
 }
@@ -923,11 +911,6 @@ struct SessionOutput {
 struct SessionForkOutput {
     source_session_id: i64,
     forked: SessionDetail,
-}
-
-#[derive(Debug, Serialize)]
-struct SessionUnrewindOutput {
-    session: SessionDetail,
 }
 
 #[derive(Debug, Serialize)]
@@ -2119,22 +2102,6 @@ impl AgenaCli {
                     )
                 }
             },
-            SessionsSubcommand::Unrewind(args) => {
-                let session = manager
-                    .unrewind_session(crate::session::SessionUnrewindRequest {
-                        expected_version: None,
-                        session_id: args.session_id,
-                        message_id: args.message_id,
-                    })
-                    .await?;
-                let latest_event_seq = latest_event_seq(&manager, session.id).await?;
-                render_serialized(
-                    args.format,
-                    &SessionUnrewindOutput {
-                        session: session_detail(&session, latest_event_seq),
-                    },
-                )
-            }
             SessionsSubcommand::Export(args) => {
                 let bundle = manager.export_session_jsonl(args.session_id).await?;
                 Ok(bundle)
@@ -4214,7 +4181,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
         fs,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
@@ -4223,25 +4189,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::{config::ConfigEnvironment, provider::CapabilitySupport};
-
-    #[derive(Debug, Clone, Default)]
-    struct TestEnvironment {
-        vars: BTreeMap<String, String>,
-    }
-
-    impl ConfigEnvironment for TestEnvironment {
-        fn var(&self, key: &str) -> Option<String> {
-            self.vars.get(key).cloned()
-        }
-
-        fn vars(&self) -> Vec<(String, String)> {
-            self.vars
-                .iter()
-                .map(|(key, value)| (key.clone(), value.clone()))
-                .collect()
-        }
-    }
+    use crate::provider::CapabilitySupport;
 
     #[tokio::test]
     async fn sessions_list_and_resume_last_render_session() {

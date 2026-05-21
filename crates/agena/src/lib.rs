@@ -5,7 +5,6 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod event;
-pub mod hooks;
 pub mod memory;
 pub mod message;
 pub mod metrics;

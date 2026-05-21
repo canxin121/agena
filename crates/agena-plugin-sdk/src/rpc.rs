@@ -143,10 +143,8 @@ pub mod method {
     pub const HOOK_COMMAND_BEFORE: &str = "hooks/command.execute.before";
     pub const HOOK_SHELL_ENV: &str = "hooks/shell.env";
     pub const HOOK_CONFIG: &str = "hooks/config";
-    pub const HOOK_SESSION_COMPACTING: &str = "hooks/session.compacting";
     pub const HOOK_SESSION_START: &str = "hooks/session.start";
     pub const HOOK_SESSION_END: &str = "hooks/session.end";
-    pub const HOOK_SESSION_COMPACTED: &str = "hooks/session.compacted";
     pub const HOOK_USER_PROMPT_SUBMIT: &str = "hooks/user.prompt.submit";
     pub const HOOK_TOOL_FAILURE: &str = "hooks/tool.execute.failure";
     pub const HOOK_TOOL_DEFINITION: &str = "hooks/tool.definition";

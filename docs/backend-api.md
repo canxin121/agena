@@ -851,7 +851,6 @@ limit=<1..2000>
 | POST   | `/api/v1/sessions/{session_id}/permission-replies` | reply to permission request      |
 | POST   | `/api/v1/sessions/{session_id}/user-input-replies` | reply to host/user input request |
 | POST   | `/api/v1/sessions/{session_id}/rewind`             | fork session at message          |
-| POST   | `/api/v1/sessions/{session_id}/unrewind`           | legacy no-op                     |
 | GET    | `/api/v1/sessions/{session_id}/export`             | export session JSONL             |
 | GET    | `/api/v1/sessions/{session_id}/rewind-checkpoints` | list rewind audit checkpoints    |
 
@@ -938,7 +937,12 @@ Submit turn:
     "model_id": "claude-sonnet-4-6"
   },
   "pending_permission_requests": [],
-  "pending_user_input_requests": []
+  "pending_user_input_requests": [],
+  "prompt_usage": {
+    "current_tokens": 32000,
+    "budget_tokens": 170000,
+    "model_context_window_tokens": 200000
+  }
 }
 ```
 
@@ -1012,7 +1016,7 @@ Rewind:
 }
 ```
 
-Rewind no longer compacts or removes messages from the source session. It returns a new forked session rooted at the selected message, preserving the source session's provider-visible prompt as append-only. Unrewind is retained for compatibility and returns the current source session without mutating it.
+Rewind returns a new forked session rooted at the selected message, preserving the source session's provider-visible prompt as append-only.
 
 Import:
 

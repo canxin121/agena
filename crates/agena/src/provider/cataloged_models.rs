@@ -303,6 +303,25 @@ impl ModelRuntime for CatalogedModelsProvider {
         self.target.complete_for_adapter(adapter_id, request).await
     }
 
+    async fn compact_conversation(
+        &self,
+        mut request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.backfill_assistant_reasoning_field(None, &mut request);
+        self.target.compact_conversation(request).await
+    }
+
+    async fn compact_conversation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
+        self.target
+            .compact_conversation_for_adapter(adapter_id, request)
+            .await
+    }
+
     async fn complete_stream(
         &self,
         mut request: CompletionRequest,

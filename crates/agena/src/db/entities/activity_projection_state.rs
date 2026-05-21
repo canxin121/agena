@@ -1,27 +1,21 @@
 use sea_orm::entity::prelude::*;
 
-use crate::{message::MessageMetadata, role::Role};
-
 use super::session;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "agena_activity_messages")]
+/// Watermark for the session message projection stored in
+/// `agena_activity_messages` / `agena_activity_parts`.
+///
+/// The row records the highest `seq_global` from the durable event log that
+/// has been applied to the message read model. Readers can compare this
+/// watermark with the event store's session watermark to detect stale or
+/// missing projections and trigger an explicit rebuild.
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+#[sea_orm(table_name = "agena_activity_projection_states")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
-    pub message_id: i64,
     pub session_id: i64,
-    pub role: Role,
-    pub state: crate::message::ExecutionStatus,
-    pub created_at_ms: i64,
+    pub last_seq_global: i64,
     pub updated_at_ms: i64,
-    #[sea_orm(column_type = "JsonBinary")]
-    pub metadata: MessageMetadata,
-    #[sea_orm(column_type = "JsonBinary", nullable)]
-    pub usage: Option<crate::message::MessageUsage>,
-    pub finish: Option<String>,
-    pub part_count: i64,
-    #[sea_orm(default_value = false)]
-    pub is_hidden: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

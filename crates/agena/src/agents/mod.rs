@@ -440,6 +440,7 @@ fn default_permission(
 
 fn default_profiles() -> Vec<AgentProfile> {
     vec![
+        compaction_profile(),
         default_profile(
             "build",
             "Primary coding agent for normal end-to-end implementation work.",
@@ -571,6 +572,49 @@ fn default_profiles() -> Vec<AgentProfile> {
             "You are a strict code review agent. Prioritize correctness issues, behavioral regressions, and test gaps. Findings come first; summaries are secondary.",
         ),
     ]
+}
+
+fn compaction_profile() -> AgentProfile {
+    let deny = crate::permission::PermissionMode::Deny;
+    AgentProfile {
+        name: "compaction".to_string(),
+        frontmatter: AgentFrontmatter {
+            description: "Hidden agent used only for conversation compaction.".to_string(),
+            mode: crate::agent::AgentMode::All,
+            hidden: true,
+            color: None,
+            temperature: Some(crate::agent::AgentTemperature(0.1)),
+            max_output_tokens: Some(20_000),
+            steps: Some(1),
+            allowed_tools: vec!["__agena_compaction_no_tools__".to_string()],
+            permission: crate::agent::AgentPermissionConfig {
+                inherit: crate::agent::PermissionInheritanceConfig::All(false),
+                path: Some(crate::agent::PathPermissionConfig {
+                    workspace: Some(crate::agent::PathAccessModes {
+                        read: Some(deny),
+                        write: Some(deny),
+                    }),
+                    external: Some(crate::agent::PathAccessModes {
+                        read: Some(deny),
+                        write: Some(deny),
+                    }),
+                    ..Default::default()
+                }),
+                network: Some(crate::agent::NetworkPermissionConfig {
+                    internet: Some(deny),
+                    private: Some(deny),
+                    loopback: Some(deny),
+                    ..Default::default()
+                }),
+                tools: Some(crate::agent::ToolPermissionConfig::default()),
+            },
+            default: AgentDefaultModelConfig::default(),
+            aliases: Vec::new(),
+        },
+        prompt: "You are Agena's hidden conversation compaction agent. Summarize only the transcript and context provided by the user message. Preserve the user's current objective, explicit constraints, decisions already made, important files or commands, tool results, pending work, blockers, and open questions. Do not call tools, do not invent facts, and do not mention the act of compaction. Return a concise Markdown summary with stable section headings.".to_string(),
+        source_path: None,
+        scope: AgentScope::Default,
+    }
 }
 
 fn default_profile(
@@ -757,6 +801,13 @@ mod tests {
                 .any(|tool| tool == "fs")
         );
         assert!(registry.get("review").is_some(), "alias should resolve");
+        assert!(
+            registry
+                .get("compaction")
+                .expect("default compaction profile")
+                .frontmatter
+                .hidden
+        );
     }
 
     #[test]
@@ -772,6 +823,7 @@ mod tests {
             "verify",
             "planner",
             "reviewer",
+            "compaction",
         ] {
             let profile = registry
                 .get(name)

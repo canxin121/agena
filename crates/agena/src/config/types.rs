@@ -74,8 +74,6 @@ pub struct ResolvedConfig {
     #[serde(skip_serializing)]
     pub web: WebToolsConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
-    #[serde(skip_serializing)]
-    pub hooks: crate::hooks::HooksConfig,
 }
 
 impl ResolvedConfig {

@@ -659,15 +659,15 @@ impl SessionManager {
             };
             let prompt_fingerprints =
                 prompt_window::prompt_request_fingerprints(&prompt_request_options);
-            let should_compact_from_runtime = prompt_window::estimate_prompt_tokens_from_runtime(
+            let prompt_exceeds_runtime_budget = prompt_window::estimate_prompt_tokens_from_runtime(
                 &session,
                 active_messages.as_slice(),
                 prompt_fingerprints.system_fingerprint.as_str(),
                 prompt_fingerprints.request_options_fingerprint.as_str(),
             )
             .is_some_and(|estimate| estimate.total_tokens > prompt_budget.max_prompt_tokens);
-            if should_compact_from_runtime
-                || state.processor.should_compact_prompt_with_budget(
+            if prompt_exceeds_runtime_budget
+                || state.processor.prompt_exceeds_budget(
                     active_messages.as_slice(),
                     prompt_budget.max_prompt_chars,
                 )
@@ -677,7 +677,7 @@ impl SessionManager {
                     prompt_message_count = active_messages.len(),
                     max_prompt_chars = prompt_budget.max_prompt_chars,
                     max_prompt_tokens = prompt_budget.max_prompt_tokens,
-                    "prompt exceeds configured budget; preserving append-only provider prefix and sending the full prompt"
+                    "prompt exceeds configured budget threshold; preserving append-only provider prefix and sending the full prompt"
                 );
             }
 
@@ -1891,6 +1891,14 @@ impl SessionManager {
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
         let tool_call_id = tool_call_id_for(&resolved);
+        let completed_part = assistant_message
+            .parts
+            .iter()
+            .find(|part| {
+                part.kind == crate::message::PartKind::Operation
+                    && part.operation_id.as_deref() == Some(tool_call_id.as_str())
+            })
+            .cloned();
         let tool_output_event = TranscriptToolOutput::Text {
             text: execution.view.output_text.clone(),
         };
@@ -1910,6 +1918,7 @@ impl SessionManager {
             call_id: tool_call_id,
             turn_id,
             tool_name: resolved.invocation.name.clone().into(),
+            part: completed_part,
             output: tool_output_event,
             completed_at: now,
         })];
@@ -1960,6 +1969,14 @@ impl SessionManager {
 
         let assistant_message = session.messages[pending_tool.part.message_index].clone();
         let tool_call_id = tool_call_id_for(&resolved);
+        let completed_part = assistant_message
+            .parts
+            .iter()
+            .find(|part| {
+                part.kind == crate::message::PartKind::Operation
+                    && part.operation_id.as_deref() == Some(tool_call_id.as_str())
+            })
+            .cloned();
         let session = self
             .persist_session_changes(
                 session,
@@ -1976,6 +1993,7 @@ impl SessionManager {
             call_id: tool_call_id,
             turn_id,
             tool_name: resolved.invocation.name.clone().into(),
+            part: completed_part,
             output: TranscriptToolOutput::Error { message: reason },
             completed_at: now,
         })];

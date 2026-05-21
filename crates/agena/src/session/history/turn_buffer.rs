@@ -386,6 +386,7 @@ impl TurnBuffer {
                                 call_id,
                                 turn_id,
                                 tool_name: name,
+                                part: None,
                                 output,
                                 completed_at: entry.completed_at.unwrap_or_else(Utc::now),
                             }));

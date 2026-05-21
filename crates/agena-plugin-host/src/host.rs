@@ -56,8 +56,7 @@ use crate::sdk::{
     HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
     PermissionDecision, PluginError, PluginErrorCode, PluginManifest, PluginStudioCommand,
     PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostTurnInput,
-    PreTurnInput, ProviderListInput, ProviderListPatch, SessionCompactedInput,
-    SessionCompactingInput, SessionCompactingPatch, SessionEndInput, SessionStartInput,
+    PreTurnInput, ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput,
     SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
     ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput,
     ToolInvokeInput, ToolInvokeOutput, ToolPermissionNetworksInput, ToolPermissionPathsInput,
@@ -293,17 +292,6 @@ pub struct ToolInvokeStream {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<ToolStreamChunk>,
     pub end: tokio::sync::oneshot::Receiver<Result<ToolStreamEnd, PluginError>>,
-}
-
-/// Result of dispatching `session.compacting` through the plugin chain.
-/// `messages` is the (possibly transformed) message list the host should
-/// hand to its summarization step; `summary`, when set, replaces the
-/// host's auto-generated summary entirely (the LLM-based summarizer
-/// extension point).
-#[derive(Debug, Clone)]
-pub struct SessionCompactingOutcome {
-    pub messages: Vec<crate::sdk::ChatMessage>,
-    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1148,35 +1136,6 @@ impl PluginHost {
         .map_err(transport_to_plugin_error)
     }
 
-    pub async fn dispatch_session_compacting(
-        &self,
-        input: SessionCompactingInput,
-    ) -> Result<SessionCompactingOutcome, PluginError> {
-        let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        let mut summary: Option<String> = None;
-        let folded = dispatcher::chain_patch::<SessionCompactingInput, SessionCompactingPatch, _>(
-            &self.plugins,
-            method::HOOK_SESSION_COMPACTING,
-            HookSubscription::SESSION_COMPACTING,
-            timeout,
-            input,
-            |inp, patch| {
-                if let Some(m) = patch.messages {
-                    inp.messages = m;
-                }
-                if let Some(s) = patch.summary {
-                    summary = Some(s);
-                }
-            },
-        )
-        .await
-        .map_err(transport_to_plugin_error)?;
-        Ok(SessionCompactingOutcome {
-            messages: folded.messages,
-            summary,
-        })
-    }
-
     // ── turn lifecycle ─────────────────────────────────────────────────────
 
     pub async fn broadcast_pre_turn(&self, input: PreTurnInput) {
@@ -1271,32 +1230,6 @@ impl PluginHost {
                 let _ = tokio::time::timeout(
                     timeout,
                     plugin.transport.notify(method::HOOK_SESSION_END, params),
-                )
-                .await;
-            });
-        }
-    }
-
-    // ── session.compacted ──────────────────────────────────────────────────
-
-    pub async fn broadcast_session_compacted(&self, input: SessionCompactedInput) {
-        let timeout = Duration::from_secs(5);
-        for plugin in &self.plugins {
-            if !plugin.subscribes(HookSubscription::SESSION_COMPACTED) {
-                continue;
-            }
-            let input = input.clone();
-            let plugin = plugin.clone();
-            tokio::spawn(async move {
-                let params = match serde_json::to_value(&input) {
-                    Ok(v) => v,
-                    Err(_) => return,
-                };
-                let _ = tokio::time::timeout(
-                    timeout,
-                    plugin
-                        .transport
-                        .notify(method::HOOK_SESSION_COMPACTED, params),
                 )
                 .await;
             });

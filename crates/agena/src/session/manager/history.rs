@@ -73,32 +73,6 @@ impl SessionManager {
             .await
     }
 
-    pub async fn unrewind_session(
-        &self,
-        request: SessionUnrewindRequest,
-    ) -> Result<Session, AppError> {
-        let state = self.execution_state();
-        let session = self
-            .store
-            .load_session(request.session_id, state.cache_policy())
-            .await?;
-        if let Some(expected) = request.expected_version
-            && session.version != expected
-        {
-            return Err(AppError::Conflict {
-                session_id: request.session_id,
-                expected,
-                current: session.version,
-            });
-        }
-        tracing::warn!(
-            session_id = request.session_id,
-            message_id = request.message_id,
-            "session unrewind is disabled; same-session provider prompts are append-only"
-        );
-        Ok(session)
-    }
-
     /// Reload `session_id` and bail with [`AppError::Conflict`] if the live
     /// `version` no longer equals `expected`. Used by command handlers that
     /// take an `If-Match`-style optimistic-lock parameter.

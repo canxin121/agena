@@ -4,10 +4,10 @@ use chrono::{DateTime, Utc};
 use sea_orm::{
     ActiveModelTrait, ActiveValue, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection,
     DbErr, EntityTrait, FromQueryResult, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
-    sea_query::OnConflict,
+    TransactionTrait, sea_query::OnConflict,
 };
 
-use crate::db::entities::{activity_message, activity_part, session_snapshot};
+use crate::db::entities::{activity_message, activity_part, activity_projection_state};
 use crate::event::{
     DomainEvent, EventFilter, EventKind, EventPublisher, MessagePartUpdatedEvent, PublishContext,
     Scope, StoreRange,
@@ -15,19 +15,8 @@ use crate::event::{
 use crate::message::{Message, MessagePart, MessageSource};
 use crate::session::SessionRuntimeState;
 
-use super::{
-    FinishReason, MessageRevised, RevisionKind, SessionView, SessionViewBuilder, SystemNoticeKind,
-    TurnAbortReason, TurnAborted, TurnId, TurnStarted, fold_history,
-};
+use super::{FinishReason, SystemNoticeKind, TurnAbortReason, TurnAborted, TurnId, TurnStarted};
 use crate::role::Role;
-
-/// Persisted form of a [`SessionView`] snapshot. Only the fields needed to
-/// reconstruct a `LoadedSessionProjection` participate; runtime state is
-/// authoritative on `agena_sessions.runtime_state_json`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct SnapshotPayload {
-    messages: Vec<Message>,
-}
 
 #[derive(Debug, Clone, FromQueryResult)]
 struct ProjectedPartSummaryRow {
@@ -71,69 +60,13 @@ impl SessionHistoryStore {
         session_id: i64,
         base_runtime: SessionRuntimeState,
     ) -> Result<LoadedSessionProjection, DbErr> {
-        // Try the snapshot fast path first: if a snapshot exists, fold only
-        // the events that landed *after* `last_seq` against the saved view.
-        let snapshot = self.load_snapshot(session_id).await.ok().flatten();
-
-        let after_seq = snapshot.as_ref().map(|s| s.last_seq).unwrap_or(0);
-        let mut events = self
-            .list_session_events_after(session_id, after_seq)
-            .await?;
-        let aborted = self.abort_hanging_turns(session_id, &events).await?;
-        events.extend(aborted);
-
-        let view: SessionView = match snapshot {
-            Some(model) => {
-                // Fold the tail against the cached message list. The fold is
-                // idempotent on top of the materialised messages because
-                // every projection event we replay either adds a new
-                // message or updates one already present.
-                let payload: SnapshotPayload = serde_json::from_value(model.view)
-                    .map_err(|err| DbErr::Custom(format!("decode session snapshot: {err}")))?;
-                let tail: SessionView = fold_history::<SessionViewBuilder>(events.as_slice())
-                    .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?
-                    .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?;
-                let mut messages = payload.messages;
-                // Tail messages override / extend snapshot messages keyed by id.
-                for message in tail.messages {
-                    if let Some(slot) = messages.iter_mut().find(|m| m.id == message.id) {
-                        *slot = message;
-                    } else {
-                        messages.push(message);
-                    }
-                }
-                SessionView {
-                    messages,
-                    last_seq: tail.last_seq.max(model.last_seq),
-                }
-            }
-            None => fold_history::<SessionViewBuilder>(events.as_slice())
-                .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?
-                .map_err(|err| DbErr::Custom(format!("session view fold failed: {err}")))?,
-        };
-
-        // Best-effort snapshot write so the next load can take the fast path.
-        // Failures are logged but never propagated — losing a snapshot is
-        // free; the next load just re-folds.
-        let snapshot_payload = SnapshotPayload {
-            messages: view.messages.clone(),
-        };
-        if let Err(err) = self
-            .write_snapshot(session_id, view.last_seq, &snapshot_payload)
-            .await
-        {
-            tracing::warn!(
-                error = %err,
-                session_id,
-                last_seq = view.last_seq,
-                "failed to persist session view snapshot"
-            );
-        }
+        let last_seq = self.ensure_projection_current(session_id).await?;
+        let messages = self.read_projected_messages(session_id, true).await?;
 
         Ok(LoadedSessionProjection {
-            messages: view.messages,
+            messages,
             runtime: base_runtime,
-            last_seq: view.last_seq,
+            last_seq,
         })
     }
 
@@ -142,30 +75,9 @@ impl SessionHistoryStore {
         session_id: i64,
         include_full_parts: bool,
     ) -> Result<Vec<Message>, DbErr> {
-        let message_rows = self.list_projected_message_rows(session_id).await?;
-
-        if message_rows.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let message_ids = message_rows
-            .iter()
-            .map(|row| row.message_id)
-            .collect::<Vec<_>>();
-        let mut parts_by_message = self
-            .load_projected_parts_for_messages(message_ids.as_slice(), include_full_parts)
-            .await?;
-
-        message_rows
-            .into_iter()
-            .map(|row| {
-                let message_id = row.message_id;
-                projected_message_from_row(
-                    row,
-                    parts_by_message.remove(&message_id).unwrap_or_default(),
-                )
-            })
-            .collect()
+        self.ensure_projection_current(session_id).await?;
+        self.read_projected_messages(session_id, include_full_parts)
+            .await
     }
 
     pub(crate) async fn list_projected_messages_page(
@@ -175,40 +87,16 @@ impl SessionHistoryStore {
         cursor: Option<(i64, i64)>,
         limit: u64,
     ) -> Result<(Vec<Message>, bool, Option<(i64, i64)>), DbErr> {
-        let (message_rows, has_more, next_cursor) = self
-            .list_projected_message_rows_page(session_id, cursor, limit)
-            .await?;
-
-        if message_rows.is_empty() {
-            return Ok((Vec::new(), has_more, next_cursor));
-        }
-
-        let message_ids = message_rows
-            .iter()
-            .map(|row| row.message_id)
-            .collect::<Vec<_>>();
-        let mut parts_by_message = self
-            .load_projected_parts_for_messages(message_ids.as_slice(), include_full_parts)
-            .await?;
-
-        let messages = message_rows
-            .into_iter()
-            .map(|row| {
-                let message_id = row.message_id;
-                projected_message_from_row(
-                    row,
-                    parts_by_message.remove(&message_id).unwrap_or_default(),
-                )
-            })
-            .collect::<Result<Vec<_>, DbErr>>()?;
-
-        Ok((messages, has_more, next_cursor))
+        self.ensure_projection_current(session_id).await?;
+        self.read_projected_messages_page(session_id, include_full_parts, cursor, limit)
+            .await
     }
 
     pub(crate) async fn list_projected_message_headers(
         &self,
         session_id: i64,
     ) -> Result<Vec<ProjectedMessageHeader>, DbErr> {
+        self.ensure_projection_current(session_id).await?;
         self.list_projected_message_rows(session_id)
             .await?
             .into_iter()
@@ -222,6 +110,7 @@ impl SessionHistoryStore {
         cursor: Option<(i64, i64)>,
         limit: u64,
     ) -> Result<(Vec<ProjectedMessageHeader>, bool, Option<(i64, i64)>), DbErr> {
+        self.ensure_projection_current(session_id).await?;
         let (message_rows, has_more, next_cursor) = self
             .list_projected_message_rows_page(session_id, cursor, limit)
             .await?;
@@ -238,18 +127,9 @@ impl SessionHistoryStore {
         message_id: i64,
         include_full_parts: bool,
     ) -> Result<Option<Message>, DbErr> {
-        let row = activity_message::Entity::find_by_id(message_id)
-            .filter(activity_message::Column::SessionId.eq(session_id))
-            .filter(activity_message::Column::IsCompacted.eq(false))
-            .one(&self.db)
-            .await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let parts = self
-            .list_projected_parts(message_id, include_full_parts)
-            .await?;
-        Ok(Some(projected_message_from_row(row, parts)?))
+        self.ensure_projection_current(session_id).await?;
+        self.read_projected_message(session_id, message_id, include_full_parts)
+            .await
     }
 
     pub(crate) async fn find_projected_message_header(
@@ -257,9 +137,10 @@ impl SessionHistoryStore {
         session_id: i64,
         message_id: i64,
     ) -> Result<Option<ProjectedMessageHeader>, DbErr> {
+        self.ensure_projection_current(session_id).await?;
         let row = activity_message::Entity::find_by_id(message_id)
             .filter(activity_message::Column::SessionId.eq(session_id))
-            .filter(activity_message::Column::IsCompacted.eq(false))
+            .filter(activity_message::Column::IsHidden.eq(false))
             .one(&self.db)
             .await?;
         row.map(projected_message_header_from_row).transpose()
@@ -376,23 +257,13 @@ impl SessionHistoryStore {
         Ok(row.map(|row| row.session_id))
     }
 
-    async fn load_snapshot(
-        &self,
-        session_id: i64,
-    ) -> Result<Option<session_snapshot::Model>, DbErr> {
-        session_snapshot::Entity::find()
-            .filter(session_snapshot::Column::SessionId.eq(session_id))
-            .one(&self.db)
-            .await
-    }
-
     async fn list_projected_message_rows(
         &self,
         session_id: i64,
     ) -> Result<Vec<activity_message::Model>, DbErr> {
         activity_message::Entity::find()
             .filter(activity_message::Column::SessionId.eq(session_id))
-            .filter(activity_message::Column::IsCompacted.eq(false))
+            .filter(activity_message::Column::IsHidden.eq(false))
             .order_by_asc(activity_message::Column::CreatedAtMs)
             .order_by_asc(activity_message::Column::MessageId)
             .all(&self.db)
@@ -413,7 +284,7 @@ impl SessionHistoryStore {
 
         let mut statement = activity_message::Entity::find()
             .filter(activity_message::Column::SessionId.eq(session_id))
-            .filter(activity_message::Column::IsCompacted.eq(false))
+            .filter(activity_message::Column::IsHidden.eq(false))
             .order_by_desc(activity_message::Column::CreatedAtMs)
             .order_by_desc(activity_message::Column::MessageId);
 
@@ -524,55 +395,6 @@ impl SessionHistoryStore {
                 .push(part);
         }
         Ok(parts_by_message)
-    }
-
-    async fn write_snapshot(
-        &self,
-        session_id: i64,
-        last_seq: i64,
-        payload: &SnapshotPayload,
-    ) -> Result<(), DbErr> {
-        let view_json = serde_json::to_value(payload)
-            .map_err(|err| DbErr::Custom(format!("encode session snapshot: {err}")))?;
-        let now_ms = Utc::now().timestamp_millis();
-        let backend = self.db.get_database_backend();
-
-        // Try INSERT first. If a row already exists, fall back to a
-        // monotonically-guarded UPDATE: only overwrite when our `last_seq`
-        // is strictly newer than the persisted one. Two concurrent loads
-        // can both reach this point — the older fold would otherwise stomp
-        // on a newer fold and silently demote the cached projection.
-        let active = session_snapshot::ActiveModel {
-            session_id: ActiveValue::Set(session_id),
-            last_seq: ActiveValue::Set(last_seq),
-            view: ActiveValue::Set(view_json.clone()),
-            updated_at_ms: ActiveValue::Set(now_ms),
-        };
-        if session_snapshot::Entity::insert(active)
-            .exec(&self.db)
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-
-        use sea_orm::Statement;
-        let stmt = Statement::from_sql_and_values(
-            backend,
-            "UPDATE agena_session_snapshots \
-             SET last_seq = ?, view_json = ?, updated_at_ms = ? \
-             WHERE session_id = ? AND last_seq < ?",
-            [
-                last_seq.into(),
-                view_json.into(),
-                now_ms.into(),
-                session_id.into(),
-                last_seq.into(),
-            ],
-        );
-        // rows_affected == 0 just means a newer snapshot already won; that
-        // is the desired no-op outcome, not an error.
-        self.db.execute(stmt).await.map(|_| ())
     }
 
     pub(crate) async fn list_session_events(
@@ -711,25 +533,47 @@ impl SessionHistoryStore {
         Ok(built)
     }
 
-    pub(crate) async fn apply_message_part_update(
-        &self,
-        update: &MessagePartUpdatedEvent,
-    ) -> Result<(), DbErr> {
-        let Some(message_row) = activity_message::Entity::find_by_id(update.message_id)
-            .one(&self.db)
+    async fn ensure_projection_current(&self, session_id: i64) -> Result<i64, DbErr> {
+        let filter = EventFilter::new(Scope::Session { session_id });
+        let projected_seq = self
+            .load_projection_state(session_id)
             .await?
-        else {
-            return Ok(());
-        };
+            .map(|row| row.last_seq_global)
+            .unwrap_or(0);
+        let stale = !self
+            .publisher
+            .store()
+            .range(
+                &filter,
+                StoreRange {
+                    after_seq_global: projected_seq,
+                    limit: 1,
+                },
+            )
+            .await
+            .map_err(|err| DbErr::Custom(format!("event store range failed: {err}")))?
+            .is_empty();
+        if stale {
+            self.rebuild_projection_from_history(session_id).await?;
+        }
+        Ok(self
+            .load_projection_state(session_id)
+            .await?
+            .map(|row| row.last_seq_global)
+            .unwrap_or(projected_seq))
+    }
 
-        upsert_part_projection(&self.db, update.session_id, &update.part).await?;
+    async fn rebuild_projection_from_history(&self, session_id: i64) -> Result<(), DbErr> {
+        let mut events = self.list_session_events(session_id).await?;
+        let aborted = self.abort_hanging_turns(session_id, &events).await?;
+        if !aborted.is_empty() {
+            events.extend(aborted);
+        }
 
-        let mut active: activity_message::ActiveModel = message_row.into();
-        active.state = ActiveValue::Set(update.message_state);
-        active.updated_at_ms = ActiveValue::Set(update.ts_ms);
-        active.part_count =
-            ActiveValue::Set(count_parts_for_message(&self.db, update.message_id).await? as i64);
-        active.update(&self.db).await?;
+        let txn = self.db.begin().await?;
+        clear_projection_for_session(&txn, session_id).await?;
+        apply_projection_events_on_connection(&txn, session_id, events.as_slice()).await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -738,183 +582,7 @@ impl SessionHistoryStore {
         session_id: i64,
         events: &[DomainEvent],
     ) -> Result<(), DbErr> {
-        for event in events {
-            match &event.kind {
-                EventKind::UserMessageAppended(payload) => {
-                    let metadata =
-                        with_source_if_missing(payload.metadata.clone(), MessageSource::User);
-                    upsert_message_projection(
-                        &self.db,
-                        activity_message::Model {
-                            message_id: payload.message_id.raw(),
-                            session_id,
-                            role: Role::User,
-                            state: crate::message::ExecutionStatus::Completed,
-                            created_at_ms: payload.created_at.timestamp_millis(),
-                            updated_at_ms: payload.created_at.timestamp_millis(),
-                            metadata,
-                            usage: None,
-                            finish: None,
-                            part_count: payload.parts.len() as i64,
-                            is_compacted: false,
-                        },
-                    )
-                    .await
-                    .map_err(|err| {
-                        DbErr::Custom(format!(
-                            "project user message {}: {err}",
-                            payload.message_id.raw()
-                        ))
-                    })?;
-                    for part in &payload.parts {
-                        upsert_part_projection(&self.db, session_id, part)
-                            .await
-                            .map_err(|err| {
-                                DbErr::Custom(format!(
-                                    "project user part {} for message {}: {err}",
-                                    part.id, part.message_id
-                                ))
-                            })?;
-                    }
-                }
-                EventKind::AssistantMessageCompleted(payload) => {
-                    let metadata =
-                        with_source_if_missing(payload.metadata.clone(), MessageSource::Assistant);
-                    upsert_message_projection(
-                        &self.db,
-                        activity_message::Model {
-                            message_id: payload.message_id.raw(),
-                            session_id,
-                            role: Role::Assistant,
-                            state: crate::message::ExecutionStatus::Completed,
-                            created_at_ms: payload.created_at.timestamp_millis(),
-                            updated_at_ms: payload.created_at.timestamp_millis(),
-                            metadata,
-                            usage: payload.usage.clone(),
-                            finish: finish_reason_label(payload.finish_reason),
-                            part_count: payload.parts.len() as i64,
-                            is_compacted: false,
-                        },
-                    )
-                    .await
-                    .map_err(|err| {
-                        DbErr::Custom(format!(
-                            "project assistant message {}: {err}",
-                            payload.message_id.raw()
-                        ))
-                    })?;
-                    for part in &payload.parts {
-                        upsert_part_projection(&self.db, session_id, part)
-                            .await
-                            .map_err(|err| {
-                                DbErr::Custom(format!(
-                                    "project assistant part {} for message {}: {err}",
-                                    part.id, part.message_id
-                                ))
-                            })?;
-                    }
-                }
-                EventKind::ToolCallIssued(payload) => {
-                    project_tool_call_issued(&self.db, session_id, payload)
-                        .await
-                        .map_err(|err| {
-                            DbErr::Custom(format!(
-                                "project tool call for message {} call {}: {err}",
-                                payload.message_id.raw(),
-                                payload.call_id
-                            ))
-                        })?;
-                }
-                EventKind::ToolCallCompleted(payload) => {
-                    update_tool_result_projection(&self.db, session_id, payload)
-                        .await
-                        .map_err(|err| {
-                            DbErr::Custom(format!(
-                                "project tool result for message {} call {}: {err}",
-                                payload.message_id.raw(),
-                                payload.call_id
-                            ))
-                        })?;
-                }
-                EventKind::SystemNoticeAppended(payload) => {
-                    let synthetic_part = project_system_notice_part(payload);
-                    upsert_message_projection(
-                        &self.db,
-                        activity_message::Model {
-                            message_id: payload.message_id.raw(),
-                            session_id,
-                            role: Role::System,
-                            state: crate::message::ExecutionStatus::Completed,
-                            created_at_ms: payload.created_at.timestamp_millis(),
-                            updated_at_ms: payload.created_at.timestamp_millis(),
-                            metadata: Default::default(),
-                            usage: None,
-                            finish: None,
-                            part_count: 1,
-                            is_compacted: matches!(
-                                payload.kind,
-                                SystemNoticeKind::RewindCheckpoint
-                            )
-                            .then_some(true)
-                            .unwrap_or(false),
-                        },
-                    )
-                    .await
-                    .map_err(|err| {
-                        DbErr::Custom(format!(
-                            "project system notice {}: {err}",
-                            payload.message_id.raw()
-                        ))
-                    })?;
-                    if !matches!(payload.kind, SystemNoticeKind::RewindCheckpoint) {
-                        upsert_part_projection(&self.db, session_id, &synthetic_part)
-                            .await
-                            .map_err(|err| {
-                                DbErr::Custom(format!(
-                                    "project system notice part {} for message {}: {err}",
-                                    synthetic_part.id, synthetic_part.message_id
-                                ))
-                            })?;
-                    }
-                }
-                EventKind::MessageRevised(MessageRevised {
-                    target_message_id,
-                    kind,
-                }) => {
-                    if let Some(row) = activity_message::Entity::find_by_id(*target_message_id)
-                        .one(&self.db)
-                        .await?
-                    {
-                        let mut active: activity_message::ActiveModel = row.into();
-                        match kind {
-                            RevisionKind::Compacted => {
-                                active.is_compacted = ActiveValue::Set(true);
-                            }
-                            RevisionKind::Uncompacted => {
-                                active.is_compacted = ActiveValue::Set(false);
-                            }
-                            RevisionKind::ToolResultPruned { .. }
-                            | RevisionKind::AttachmentStripped { .. } => {}
-                        }
-                        active.updated_at_ms =
-                            ActiveValue::Set(event.meta.created_at.timestamp_millis());
-                        active.update(&self.db).await?;
-                    }
-                }
-                EventKind::MessagePartUpdated(update) => {
-                    self.apply_message_part_update(update)
-                        .await
-                        .map_err(|err| {
-                            DbErr::Custom(format!(
-                                "project part update {} for message {}: {err}",
-                                update.part.id, update.message_id
-                            ))
-                        })?;
-                }
-                _ => {}
-            }
-        }
-        Ok(())
+        apply_projection_events_on_connection(&self.db, session_id, events).await
     }
 }
 
@@ -964,6 +632,32 @@ fn projected_message_header_from_row(
     })
 }
 
+fn projected_messages_needing_part_repair(
+    rows: &[activity_message::Model],
+    parts_by_message: &std::collections::BTreeMap<i64, Vec<MessagePart>>,
+) -> Vec<i64> {
+    rows.iter()
+        .filter(|row| {
+            projected_message_needs_part_repair(
+                row,
+                parts_by_message
+                    .get(&row.message_id)
+                    .map_or(0, std::vec::Vec::len),
+            )
+        })
+        .map(|row| row.message_id)
+        .collect()
+}
+
+fn projected_message_needs_part_repair(
+    row: &activity_message::Model,
+    loaded_part_count: usize,
+) -> bool {
+    let expected_part_count = usize::try_from(row.part_count).unwrap_or_default();
+    loaded_part_count < expected_part_count
+        || (loaded_part_count == 0 && matches!(row.role, Role::Assistant | Role::User))
+}
+
 fn finish_reason_label(reason: FinishReason) -> Option<String> {
     Some(
         match reason {
@@ -982,14 +676,16 @@ fn with_source_if_missing(
     mut metadata: crate::message::MessageMetadata,
     source: MessageSource,
 ) -> crate::message::MessageMetadata {
-    metadata.source = source;
+    if metadata.source != MessageSource::System {
+        metadata.source = source;
+    }
     metadata
 }
 
-async fn upsert_message_projection(
-    db: &DatabaseConnection,
-    row: activity_message::Model,
-) -> Result<(), DbErr> {
+async fn upsert_message_projection<C>(db: &C, row: activity_message::Model) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
     let metadata = serde_json::to_value(&row.metadata)
         .map_err(|err| DbErr::Custom(format!("serialize message metadata: {err}")))?;
     let metadata = sea_orm::Value::Json(Some(Box::new(metadata)));
@@ -1004,13 +700,13 @@ async fn upsert_message_projection(
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
         "INSERT INTO agena_activity_messages \
-         (message_id, session_id, role, state, created_at_ms, updated_at_ms, metadata, usage, finish, part_count, is_compacted) \
+         (message_id, session_id, role, state, created_at_ms, updated_at_ms, metadata, usage, finish, part_count, is_hidden) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(message_id) DO UPDATE SET \
          session_id = excluded.session_id, role = excluded.role, state = excluded.state, \
          created_at_ms = excluded.created_at_ms, updated_at_ms = excluded.updated_at_ms, \
          metadata = excluded.metadata, usage = excluded.usage, finish = excluded.finish, \
-         part_count = excluded.part_count, is_compacted = excluded.is_compacted",
+         part_count = excluded.part_count, is_hidden = excluded.is_hidden",
         [
             row.message_id.into(),
             row.session_id.into(),
@@ -1022,7 +718,7 @@ async fn upsert_message_projection(
             usage,
             row.finish.into(),
             row.part_count.into(),
-            row.is_compacted.into(),
+            row.is_hidden.into(),
         ],
     );
     db.execute(stmt).await?;
@@ -1047,17 +743,17 @@ fn execution_status_db_value(status: crate::message::ExecutionStatus) -> i8 {
     }
 }
 
-async fn upsert_part_projection(
-    db: &DatabaseConnection,
-    session_id: i64,
-    part: &MessagePart,
-) -> Result<(), DbErr> {
+async fn upsert_part_projection<C>(db: &C, session_id: i64, part: &MessagePart) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
     if let Some(operation_id) = part.operation_id.as_deref() {
         let existing = activity_part::Entity::find()
             .select_only()
             .column(activity_part::Column::PartId)
             .filter(activity_part::Column::MessageId.eq(part.message_id))
             .filter(activity_part::Column::OperationId.eq(operation_id))
+            .filter(activity_part::Column::Kind.eq(part.kind))
             .into_tuple::<i64>()
             .all(db)
             .await?;
@@ -1106,18 +802,24 @@ async fn upsert_part_projection(
     Ok(())
 }
 
-async fn count_parts_for_message(db: &DatabaseConnection, message_id: i64) -> Result<u64, DbErr> {
+async fn count_parts_for_message<C>(db: &C, message_id: i64) -> Result<u64, DbErr>
+where
+    C: ConnectionTrait,
+{
     activity_part::Entity::find()
         .filter(activity_part::Column::MessageId.eq(message_id))
         .count(db)
         .await
 }
 
-async fn touch_message_projection(
-    db: &DatabaseConnection,
+async fn touch_message_projection<C>(
+    db: &C,
     message_id: i64,
     updated_at_ms: i64,
-) -> Result<(), DbErr> {
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
     if let Some(message) = activity_message::Entity::find_by_id(message_id)
         .one(db)
         .await?
@@ -1143,11 +845,14 @@ fn project_system_notice_part(payload: &super::SystemNoticeAppended) -> MessageP
     part
 }
 
-async fn project_tool_call_issued(
-    db: &DatabaseConnection,
+async fn project_tool_call_issued<C>(
+    db: &C,
     session_id: i64,
     payload: &super::ToolCallIssued,
-) -> Result<(), DbErr> {
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
     if activity_message::Entity::find_by_id(payload.message_id.raw())
         .one(db)
         .await?
@@ -1188,11 +893,27 @@ async fn project_tool_call_issued(
     .await
 }
 
-async fn update_tool_result_projection(
-    db: &DatabaseConnection,
+async fn update_tool_result_projection<C>(
+    db: &C,
     session_id: i64,
     payload: &super::ToolCallCompleted,
-) -> Result<(), DbErr> {
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
+    if let Some(part) = payload.part.as_ref() {
+        let mut authoritative_part = part.clone();
+        authoritative_part.message_id = payload.message_id.raw();
+        upsert_part_projection(db, session_id, &authoritative_part).await?;
+        touch_message_projection(
+            db,
+            payload.message_id.raw(),
+            payload.completed_at.timestamp_millis(),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let existing = activity_part::Entity::find()
         .filter(activity_part::Column::MessageId.eq(payload.message_id.raw()))
         .filter(activity_part::Column::OperationId.eq(payload.call_id.as_str()))
@@ -1201,7 +922,6 @@ async fn update_tool_result_projection(
 
     let output_text = match &payload.output {
         super::transcript::TranscriptToolOutput::Text { text } => text.clone(),
-        super::transcript::TranscriptToolOutput::Pruned { replacement } => replacement.clone(),
         super::transcript::TranscriptToolOutput::Error { message } => message.clone(),
     };
     let (part_id, part_index, call_id, invocation, mut lifecycle) = match existing {
@@ -1248,8 +968,7 @@ async fn update_tool_result_projection(
         super::transcript::TranscriptToolOutput::Error { .. } => {
             crate::message::ExecutionStatus::Failed
         }
-        super::transcript::TranscriptToolOutput::Text { .. }
-        | super::transcript::TranscriptToolOutput::Pruned { .. } => {
+        super::transcript::TranscriptToolOutput::Text { .. } => {
             crate::message::ExecutionStatus::Completed
         }
     };
@@ -1266,8 +985,7 @@ async fn update_tool_result_projection(
                 lifecycle,
             ))
         }
-        super::transcript::TranscriptToolOutput::Text { .. }
-        | super::transcript::TranscriptToolOutput::Pruned { .. } => {
+        super::transcript::TranscriptToolOutput::Text { .. } => {
             crate::message::PartContent::Operation(crate::message::OperationPart::completed(
                 call_id,
                 invocation,
@@ -1306,4 +1024,420 @@ fn synthetic_tool_call_part_id(message_id: i64, call_id: &str) -> i64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     -((hash & 0x0000_3fff_ffff_ffff) as i64) - 1_000_000
+}
+
+impl SessionHistoryStore {
+    async fn read_projected_messages(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Vec<Message>, DbErr> {
+        let mut message_rows = self.list_projected_message_rows(session_id).await?;
+
+        if message_rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let message_ids = message_rows
+            .iter()
+            .map(|row| row.message_id)
+            .collect::<Vec<_>>();
+        let mut parts_by_message = self
+            .load_projected_parts_for_messages(message_ids.as_slice(), include_full_parts)
+            .await?;
+        if projected_messages_needing_part_repair(message_rows.as_slice(), &parts_by_message)
+            .is_empty()
+        {
+            return message_rows
+                .into_iter()
+                .map(|row| {
+                    let message_id = row.message_id;
+                    projected_message_from_row(
+                        row,
+                        parts_by_message.remove(&message_id).unwrap_or_default(),
+                    )
+                })
+                .collect();
+        }
+
+        self.rebuild_projection_from_history(session_id).await?;
+        message_rows = self.list_projected_message_rows(session_id).await?;
+        let message_ids = message_rows
+            .iter()
+            .map(|row| row.message_id)
+            .collect::<Vec<_>>();
+        parts_by_message = self
+            .load_projected_parts_for_messages(message_ids.as_slice(), include_full_parts)
+            .await?;
+        message_rows
+            .into_iter()
+            .map(|row| {
+                let message_id = row.message_id;
+                projected_message_from_row(
+                    row,
+                    parts_by_message.remove(&message_id).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    async fn read_projected_messages_page(
+        &self,
+        session_id: i64,
+        include_full_parts: bool,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<(Vec<Message>, bool, Option<(i64, i64)>), DbErr> {
+        let (mut message_rows, mut has_more, mut next_cursor) = self
+            .list_projected_message_rows_page(session_id, cursor, limit)
+            .await?;
+
+        if message_rows.is_empty() {
+            return Ok((Vec::new(), has_more, next_cursor));
+        }
+
+        let message_ids = message_rows
+            .iter()
+            .map(|row| row.message_id)
+            .collect::<Vec<_>>();
+        let mut parts_by_message = self
+            .load_projected_parts_for_messages(message_ids.as_slice(), include_full_parts)
+            .await?;
+        if !projected_messages_needing_part_repair(message_rows.as_slice(), &parts_by_message)
+            .is_empty()
+        {
+            self.rebuild_projection_from_history(session_id).await?;
+            (message_rows, has_more, next_cursor) = self
+                .list_projected_message_rows_page(session_id, cursor, limit)
+                .await?;
+            if message_rows.is_empty() {
+                return Ok((Vec::new(), has_more, next_cursor));
+            }
+            let message_ids = message_rows
+                .iter()
+                .map(|row| row.message_id)
+                .collect::<Vec<_>>();
+            parts_by_message = self
+                .load_projected_parts_for_messages(message_ids.as_slice(), include_full_parts)
+                .await?;
+        }
+
+        let messages = message_rows
+            .into_iter()
+            .map(|row| {
+                let message_id = row.message_id;
+                projected_message_from_row(
+                    row,
+                    parts_by_message.remove(&message_id).unwrap_or_default(),
+                )
+            })
+            .collect::<Result<Vec<_>, DbErr>>()?;
+
+        Ok((messages, has_more, next_cursor))
+    }
+
+    async fn read_projected_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+        include_full_parts: bool,
+    ) -> Result<Option<Message>, DbErr> {
+        let row = activity_message::Entity::find_by_id(message_id)
+            .filter(activity_message::Column::SessionId.eq(session_id))
+            .filter(activity_message::Column::IsHidden.eq(false))
+            .one(&self.db)
+            .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let mut parts = self
+            .list_projected_parts(message_id, include_full_parts)
+            .await?;
+        if projected_message_needs_part_repair(&row, parts.len()) {
+            self.rebuild_projection_from_history(session_id).await?;
+            let row = activity_message::Entity::find_by_id(message_id)
+                .filter(activity_message::Column::SessionId.eq(session_id))
+                .filter(activity_message::Column::IsHidden.eq(false))
+                .one(&self.db)
+                .await?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            parts = self
+                .list_projected_parts(message_id, include_full_parts)
+                .await?;
+            return Ok(Some(projected_message_from_row(row, parts)?));
+        }
+        Ok(Some(projected_message_from_row(row, parts)?))
+    }
+
+    async fn load_projection_state(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<activity_projection_state::Model>, DbErr> {
+        activity_projection_state::Entity::find_by_id(session_id)
+            .one(&self.db)
+            .await
+    }
+}
+
+async fn apply_projection_events_on_connection<C>(
+    db: &C,
+    session_id: i64,
+    events: &[DomainEvent],
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
+    for event in events {
+        match &event.kind {
+            EventKind::UserMessageAppended(payload) => {
+                let metadata =
+                    with_source_if_missing(payload.metadata.clone(), MessageSource::User);
+                upsert_message_projection(
+                    db,
+                    activity_message::Model {
+                        message_id: payload.message_id.raw(),
+                        session_id,
+                        role: Role::User,
+                        state: crate::message::ExecutionStatus::Completed,
+                        created_at_ms: payload.created_at.timestamp_millis(),
+                        updated_at_ms: payload.created_at.timestamp_millis(),
+                        metadata,
+                        usage: None,
+                        finish: None,
+                        part_count: payload.parts.len() as i64,
+                        is_hidden: false,
+                    },
+                )
+                .await
+                .map_err(|err| {
+                    DbErr::Custom(format!(
+                        "project user message {}: {err}",
+                        payload.message_id.raw()
+                    ))
+                })?;
+                for part in &payload.parts {
+                    upsert_part_projection(db, session_id, part)
+                        .await
+                        .map_err(|err| {
+                            DbErr::Custom(format!(
+                                "project user part {} for message {}: {err}",
+                                part.id, part.message_id
+                            ))
+                        })?;
+                }
+            }
+            EventKind::AssistantMessageCompleted(payload) => {
+                let metadata =
+                    with_source_if_missing(payload.metadata.clone(), MessageSource::Assistant);
+                upsert_message_projection(
+                    db,
+                    activity_message::Model {
+                        message_id: payload.message_id.raw(),
+                        session_id,
+                        role: Role::Assistant,
+                        state: crate::message::ExecutionStatus::Completed,
+                        created_at_ms: payload.created_at.timestamp_millis(),
+                        updated_at_ms: payload.created_at.timestamp_millis(),
+                        metadata,
+                        usage: payload.usage.clone(),
+                        finish: finish_reason_label(payload.finish_reason),
+                        part_count: payload.parts.len() as i64,
+                        is_hidden: false,
+                    },
+                )
+                .await
+                .map_err(|err| {
+                    DbErr::Custom(format!(
+                        "project assistant message {}: {err}",
+                        payload.message_id.raw()
+                    ))
+                })?;
+                for part in &payload.parts {
+                    upsert_part_projection(db, session_id, part)
+                        .await
+                        .map_err(|err| {
+                            DbErr::Custom(format!(
+                                "project assistant part {} for message {}: {err}",
+                                part.id, part.message_id
+                            ))
+                        })?;
+                }
+            }
+            EventKind::ToolCallIssued(payload) => {
+                project_tool_call_issued(db, session_id, payload)
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!(
+                            "project tool call for message {} call {}: {err}",
+                            payload.message_id.raw(),
+                            payload.call_id
+                        ))
+                    })?;
+            }
+            EventKind::ToolCallCompleted(payload) => {
+                update_tool_result_projection(db, session_id, payload)
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!(
+                            "project tool result for message {} call {}: {err}",
+                            payload.message_id.raw(),
+                            payload.call_id
+                        ))
+                    })?;
+            }
+            EventKind::SystemNoticeAppended(payload) => {
+                let synthetic_part = project_system_notice_part(payload);
+                upsert_message_projection(
+                    db,
+                    activity_message::Model {
+                        message_id: payload.message_id.raw(),
+                        session_id,
+                        role: Role::System,
+                        state: crate::message::ExecutionStatus::Completed,
+                        created_at_ms: payload.created_at.timestamp_millis(),
+                        updated_at_ms: payload.created_at.timestamp_millis(),
+                        metadata: Default::default(),
+                        usage: None,
+                        finish: None,
+                        part_count: 1,
+                        is_hidden: matches!(payload.kind, SystemNoticeKind::RewindCheckpoint),
+                    },
+                )
+                .await
+                .map_err(|err| {
+                    DbErr::Custom(format!(
+                        "project system notice {}: {err}",
+                        payload.message_id.raw()
+                    ))
+                })?;
+                if !matches!(payload.kind, SystemNoticeKind::RewindCheckpoint) {
+                    upsert_part_projection(db, session_id, &synthetic_part)
+                        .await
+                        .map_err(|err| {
+                            DbErr::Custom(format!(
+                                "project system notice part {} for message {}: {err}",
+                                synthetic_part.id, synthetic_part.message_id
+                            ))
+                        })?;
+                }
+            }
+            EventKind::MessagePartUpdated(update) => {
+                apply_message_part_update_on_connection(db, update)
+                    .await
+                    .map_err(|err| {
+                        DbErr::Custom(format!(
+                            "project part update {} for message {}: {err}",
+                            update.part.id, update.message_id
+                        ))
+                    })?;
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(last_seq_global) = events.iter().map(|event| event.meta.seq_global).max() {
+        upsert_projection_state(db, session_id, last_seq_global).await?;
+    }
+
+    Ok(())
+}
+
+async fn apply_message_part_update_on_connection<C>(
+    db: &C,
+    update: &MessagePartUpdatedEvent,
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
+    let message_row = match activity_message::Entity::find_by_id(update.message_id)
+        .one(db)
+        .await?
+    {
+        Some(row) => row,
+        None => {
+            let row = activity_message::Model {
+                message_id: update.message_id,
+                session_id: update.session_id,
+                role: update.message_role,
+                state: update.message_state,
+                created_at_ms: update.message_created_at.timestamp_millis(),
+                updated_at_ms: update.ts_ms,
+                metadata: with_source_if_missing(
+                    crate::message::MessageMetadata::default(),
+                    role_default_source(update.message_role),
+                ),
+                usage: None,
+                finish: None,
+                part_count: 0,
+                is_hidden: false,
+            };
+            upsert_message_projection(db, row.clone()).await?;
+            row
+        }
+    };
+
+    upsert_part_projection(db, update.session_id, &update.part).await?;
+
+    let mut active: activity_message::ActiveModel = message_row.into();
+    active.state = ActiveValue::Set(update.message_state);
+    active.updated_at_ms = ActiveValue::Set(update.ts_ms);
+    active.part_count =
+        ActiveValue::Set(count_parts_for_message(db, update.message_id).await? as i64);
+    active.update(db).await?;
+    Ok(())
+}
+
+fn role_default_source(role: Role) -> MessageSource {
+    match role {
+        Role::User => MessageSource::User,
+        Role::Assistant => MessageSource::Assistant,
+        Role::System => MessageSource::System,
+    }
+}
+
+async fn clear_projection_for_session<C>(db: &C, session_id: i64) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
+    activity_part::Entity::delete_many()
+        .filter(activity_part::Column::SessionId.eq(session_id))
+        .exec(db)
+        .await?;
+    activity_message::Entity::delete_many()
+        .filter(activity_message::Column::SessionId.eq(session_id))
+        .exec(db)
+        .await?;
+    activity_projection_state::Entity::delete_by_id(session_id)
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
+async fn upsert_projection_state<C>(
+    db: &C,
+    session_id: i64,
+    last_seq_global: i64,
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait,
+{
+    let updated_at_ms = Utc::now().timestamp_millis();
+    let stmt = sea_orm::Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "INSERT INTO agena_activity_projection_states \
+         (session_id, last_seq_global, updated_at_ms) \
+         VALUES (?, ?, ?) \
+         ON CONFLICT(session_id) DO UPDATE SET \
+         last_seq_global = excluded.last_seq_global, \
+         updated_at_ms = excluded.updated_at_ms",
+        [
+            session_id.into(),
+            last_seq_global.into(),
+            updated_at_ms.into(),
+        ],
+    );
+    db.execute(stmt).await?;
+    Ok(())
 }

@@ -88,12 +88,17 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
     if table.contains_key("modes") {
         return Err(ConfigError::UnsupportedModeConfig { field: "modes" });
     }
-    for field in ["memory", "mcp", "lsp", "web", "hooks"] {
+    for field in ["memory", "mcp", "lsp", "web"] {
         if table.contains_key(field) {
             return Err(ConfigError::Validation(format!(
                 "`{field}` must be configured as plugin options under `[plugins.list.\"agena.{field}\".options]`"
             )));
         }
+    }
+    if table.contains_key("hooks") {
+        return Err(ConfigError::Validation(
+            "`hooks` has been removed; implement hook behavior as a regular plugin under `[plugins.list.<id>]`".to_string(),
+        ));
     }
     if let Some(providers) = table.get("providers").and_then(Value::as_object) {
         for (provider_id, provider) in providers {
@@ -150,8 +155,6 @@ pub(crate) struct RawConfig {
     pub(crate) lsp: Option<crate::config::types::LspConfig>,
     pub(crate) web: Option<WebToolsConfig>,
     pub(crate) providers: BTreeMap<String, ProviderOverlay>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "hooks")]
-    pub(crate) hooks: Vec<crate::hooks::HookEntry>,
 }
 
 impl RawConfig {
@@ -169,9 +172,6 @@ impl RawConfig {
         merge_option_struct(&mut self.lsp, overlay.lsp);
         merge_option_struct(&mut self.web, overlay.web);
         merge_map(&mut self.providers, overlay.providers);
-        if !overlay.hooks.is_empty() {
-            self.hooks = overlay.hooks;
-        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -188,7 +188,6 @@ impl RawConfig {
             && self.lsp.is_none()
             && self.web.is_none()
             && self.providers.is_empty()
-            && self.hooks.is_empty()
     }
 
     pub(crate) fn from_env(env: &dyn ConfigEnvironment) -> Result<Self, ConfigError> {
@@ -374,7 +373,6 @@ impl RawConfig {
         let lsp: crate::config::types::LspConfig =
             plugin_options.lsp.or(self.lsp).unwrap_or_default();
         let web: WebToolsConfig = plugin_options.web.or(self.web).unwrap_or_default();
-        let hooks = plugin_options.hooks.unwrap_or(self.hooks);
 
         let providers = self
             .providers
@@ -407,7 +405,6 @@ impl RawConfig {
             lsp,
             web,
             providers,
-            hooks: crate::hooks::HooksConfig::new(hooks),
         })
     }
 }
@@ -463,22 +460,20 @@ fn validate_default_config(
 #[derive(Debug, Default)]
 struct PluginRuntimeOptions {
     memory: Option<MemoryConfig>,
-    hooks: Option<Vec<crate::hooks::HookEntry>>,
     mcp: Option<McpConfig>,
     lsp: Option<crate::config::types::LspConfig>,
     web: Option<WebToolsConfig>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-struct HooksPluginOptions {
-    hooks: Vec<crate::hooks::HookEntry>,
 }
 
 impl PluginRuntimeOptions {
     fn from_plugins(plugins: &PluginConfig) -> Result<Self, ConfigError> {
         let mut out = Self::default();
         for (plugin_id, entry) in &plugins.list {
+            if plugin_id == "agena.hooks" {
+                return Err(ConfigError::Validation(
+                    "`plugins.list.\"agena.hooks\"` has been removed; implement hook behavior as a regular plugin under `[plugins.list.<id>]`".to_string(),
+                ));
+            }
             let options = entry.options();
             if options.is_null() {
                 continue;
@@ -486,11 +481,6 @@ impl PluginRuntimeOptions {
             match plugin_id.as_str() {
                 "agena.memory" => {
                     out.memory = Some(parse_plugin_options(plugin_id, options.clone())?);
-                }
-                "agena.hooks" => {
-                    let parsed: HooksPluginOptions =
-                        parse_plugin_options(plugin_id, options.clone())?;
-                    out.hooks = Some(parsed.hooks);
                 }
                 "agena.mcp" => {
                     out.mcp = Some(parse_plugin_options(plugin_id, options.clone())?);
@@ -514,6 +504,48 @@ where
 {
     serde_json::from_value(value)
         .map_err(|err| ConfigError::Validation(format!("plugins.list.{plugin_id}.options: {err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::validate_config_text;
+    use crate::config::{ConfigError, ProcessEnvironment};
+
+    #[test]
+    fn validate_config_text_rejects_removed_top_level_hooks() {
+        let err = validate_config_text(
+            Path::new("config.json"),
+            r#"{"hooks":[{"event":"user_prompt_submit","command":"true"}]}"#,
+            &ProcessEnvironment,
+        )
+        .expect_err("top-level hooks should be rejected");
+
+        match err {
+            ConfigError::Validation(message) => {
+                assert!(message.contains("`hooks` has been removed"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
+
+    #[test]
+    fn validate_config_text_rejects_removed_agena_hooks_plugin() {
+        let err = validate_config_text(
+            Path::new("config.json"),
+            r#"{"plugins":{"list":{"agena.hooks":{"kind":"static","options":{"hooks":[]}}}}}"#,
+            &ProcessEnvironment,
+        )
+        .expect_err("agena.hooks plugin should be rejected");
+
+        match err {
+            ConfigError::Validation(message) => {
+                assert!(message.contains("`plugins.list.\"agena.hooks\"` has been removed"));
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]

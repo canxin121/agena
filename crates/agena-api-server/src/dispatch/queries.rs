@@ -20,7 +20,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                     include_session_count,
                 })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(QueryResult::Workspaces(page_from_http(page)))
         }
         Query::GetWorkspace(GetWorkspaceParams { workspace_id }) => {
@@ -28,7 +28,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 .service()
                 .get_workspace(workspace_id)
                 .await
-                .map_err(server_error_from_http)?
+                .server()?
                 .ok_or_else(|| {
                     ServerError::NotFound(format!("workspace {workspace_id} not found"))
                 })?;
@@ -53,7 +53,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                     search,
                 })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(QueryResult::Sessions(page_from_http(page)))
         }
         Query::GetSession(GetSessionParams { session_id }) => {
@@ -61,7 +61,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 .service()
                 .get_session(session_id)
                 .await
-                .map_err(server_error_from_http)?
+                .server()?
                 .ok_or_else(|| ServerError::NotFound(format!("session {session_id} not found")))?;
             Ok(QueryResult::Session(session.into()))
         }
@@ -83,7 +83,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                     },
                 )
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(QueryResult::Messages(page_from_http(page)))
         }
         Query::GetMessage(GetMessageParams { message_id, parts }) => {
@@ -91,7 +91,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 .service()
                 .get_message(manager.as_ref(), message_id, parts.into())
                 .await
-                .map_err(server_error_from_http)?
+                .server()?
                 .map(Into::into)
                 .ok_or_else(|| ServerError::NotFound(format!("message {message_id} not found")))?;
             Ok(QueryResult::Message(message))
@@ -184,7 +184,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(QueryResult::SessionState(state_resource.into()))
         }
         Query::GetSessionGoal(GetSessionParams { session_id }) => {
@@ -195,7 +195,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                         .service()
                         .session_goal_resource(manager.as_ref(), &session, goal)
                         .await
-                        .map_err(server_error_from_http)?
+                        .server()?
                         .into(),
                 ),
                 None => None,
@@ -215,7 +215,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                     search,
                 })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(QueryResult::PermissionRules(page_from_http(page)))
         }
         Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
@@ -223,7 +223,7 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
                 .service()
                 .get_permission_rule(rule_id)
                 .await
-                .map_err(server_error_from_http)?
+                .server()?
                 .ok_or_else(|| {
                     ServerError::NotFound(format!("permission rule {rule_id} not found"))
                 })?;

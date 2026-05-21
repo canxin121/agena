@@ -9,8 +9,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::super::{
-    DirectoryQuery, is_safe_repo_rel_path, lock_repo, map_git_failure, require_directory,
-    require_directory_raw, run_git,
+    DirectoryQuery, is_safe_repo_rel_path, require_directory, require_directory_raw,
+    require_locked_directory, run_git, run_git_checked, run_git_checked_with_status,
 };
 
 use super::file_diff::GitFileDiffQuery;
@@ -28,20 +28,10 @@ pub async fn git_conflicts_list(Query(q): Query<DirectoryQuery>) -> Response {
     };
     // `ls-files -u` is the most reliable source for unresolved entries,
     // including cases where conflict markers are not textual.
-    let (code, out, err) =
-        run_git(&dir, &["ls-files", "-u"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
+    let (out, _) = match run_git_checked(&dir, &["ls-files", "-u"], None).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let mut files: Vec<String> = Vec::new();
     for line in out.lines() {
         let t = line.trim();
@@ -298,13 +288,8 @@ pub async fn git_conflict_resolve(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitConflictResolveBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
     let Some(path) = body
@@ -340,21 +325,15 @@ pub async fn git_conflict_resolve(
         } else {
             "--theirs"
         };
-        let (code, out, err) = run_git(&dir, &["checkout", flag, "--", path])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": err.trim(),
-                    "code": "checkout_conflict_failed"
-                })),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked_with_status(
+            &dir,
+            &["checkout", flag, "--", path],
+            StatusCode::BAD_REQUEST,
+            Some("checkout_conflict_failed"),
+        )
+        .await
+        {
+            return resp;
         }
     } else {
         let full = dir.join(path);
@@ -404,20 +383,15 @@ pub async fn git_conflict_resolve(
     }
 
     if stage {
-        let (code, out, err) = run_git(&dir, &["add", "--", path]).await.unwrap_or((
-            1,
-            "".to_string(),
-            "".to_string(),
-        ));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": err.trim(), "code": "stage_failed"})),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked_with_status(
+            &dir,
+            &["add", "--", path],
+            StatusCode::CONFLICT,
+            Some("stage_failed"),
+        )
+        .await
+        {
+            return resp;
         }
     }
 

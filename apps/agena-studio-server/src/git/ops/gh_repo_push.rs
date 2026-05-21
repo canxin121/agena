@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 use super::super::remote::git_current_branch;
-use super::super::{DirectoryQuery, lock_repo, map_git_failure, require_directory, run_git};
+use super::super::{DirectoryQuery, map_git_failure, require_locked_directory, run_git};
 
 const GH_TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -140,13 +140,8 @@ pub async fn git_create_github_repo_and_push(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitCreateGithubRepoAndPushBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 

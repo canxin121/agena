@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::git2_utils;
 
 use super::{
-    DirectoryQuery, MAX_BLOB_BYTES, abs_path, git2_open_error_response, is_safe_repo_rel_path,
-    lock_repo, map_git_failure, require_directory, run_git,
+    DirectoryQuery, MAX_BLOB_BYTES, abs_path, git_success_response, git2_open_error_response,
+    is_safe_repo_rel_path, run_git, run_git_checked, run_locked_git_checked,
 };
 
 #[derive(Debug, Serialize)]
@@ -200,20 +200,10 @@ pub async fn git_log(Query(q): Query<GitLogQuery>) -> Response {
             args.push(format!("--skip={}", scan_skip));
 
             let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            let (code, out, err) =
-                run_git(&dir, &args_ref)
-                    .await
-                    .unwrap_or((1, "".to_string(), "".to_string()));
-            if code != 0 {
-                if let Some(resp) = map_git_failure(code, &out, &err) {
-                    return resp;
-                }
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": err.trim(), "code": "git_log_failed"})),
-                )
-                    .into_response();
-            }
+            let (out, _) = match run_git_checked(&dir, &args_ref, Some("git_log_failed")).await {
+                Ok(value) => value,
+                Err(resp) => return resp,
+            };
 
             let batch = parse_git_log_records(&out);
             let scanned = batch.len();
@@ -251,20 +241,10 @@ pub async fn git_log(Query(q): Query<GitLogQuery>) -> Response {
         }
 
         let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        let (code, out, err) =
-            run_git(&dir, &args_ref)
-                .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.trim(), "code": "git_log_failed"})),
-            )
-                .into_response();
-        }
+        let (out, _) = match run_git_checked(&dir, &args_ref, Some("git_log_failed")).await {
+            Ok(value) => value,
+            Err(resp) => return resp,
+        };
 
         commits = parse_git_log_records(&out);
         has_more = commits.len() > limit;
@@ -328,20 +308,10 @@ pub async fn git_commit_diff(Query(q): Query<GitCommitDiffQuery>) -> Response {
         "--format=",
         commit,
     ];
-    let (code, out, err) =
-        run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_commit_diff_failed"})),
-        )
-            .into_response();
-    }
+    let (out, _) = match run_git_checked(&dir, &args, Some("git_commit_diff_failed")).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     Json(serde_json::json!({"diff": out})).into_response()
 }
@@ -565,20 +535,10 @@ pub async fn git_commit_files(Query(q): Query<GitCommitFilesQuery>) -> Response 
         "-M",
         commit,
     ];
-    let (code, out, err) =
-        run_git(&dir, &name_args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_commit_files_failed"})),
-        )
-            .into_response();
-    }
+    let (out, _) = match run_git_checked(&dir, &name_args, Some("git_commit_files_failed")).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     let numstat_args = [
         "diff-tree",
@@ -730,20 +690,10 @@ pub async fn git_commit_file_diff(Query(q): Query<GitCommitFileDiffQuery>) -> Re
         "--",
         path,
     ];
-    let (code, out, err) =
-        run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_commit_file_diff_failed"})),
-        )
-            .into_response();
-    }
+    let (out, _) = match run_git_checked(&dir, &args, Some("git_commit_file_diff_failed")).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     Json(serde_json::json!({"diff": out})).into_response()
 }
@@ -884,16 +834,6 @@ pub async fn git_cherry_pick(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitCommitActionBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(commit) = body
         .commit
         .as_deref()
@@ -907,39 +847,19 @@ pub async fn git_cherry_pick(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["cherry-pick", commit]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_cherry_pick_failed"})),
-        )
-            .into_response();
+    if let Err(resp) =
+        run_locked_git_checked(&q, &["cherry-pick", commit], Some("git_cherry_pick_failed")).await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 pub async fn git_revert_commit(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitCommitActionBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(commit) = body
         .commit
         .as_deref()
@@ -953,21 +873,17 @@ pub async fn git_revert_commit(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["revert", "--no-edit", commit])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_revert_commit_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["revert", "--no-edit", commit],
+        Some("git_revert_commit_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[cfg(test)]

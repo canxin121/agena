@@ -17,7 +17,7 @@ use crate::model::{
 };
 use crate::plugin::ProviderDescriptor;
 
-use super::core::remap_stream_event_provider_id;
+use super::core::{ForwardingModelRuntime, remap_stream_event_provider_id};
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelRuntime,
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
@@ -248,6 +248,32 @@ impl NamedProvider {
 }
 
 #[async_trait]
+impl ForwardingModelRuntime for NamedProvider {
+    fn target(&self) -> &dyn ModelRuntime {
+        self.target.as_ref()
+    }
+
+    fn rewrite_response(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut response: CompletionResponse,
+    ) -> CompletionResponse {
+        let _ = adapter_id;
+        self.rewrite_response_provider_id(&mut response);
+        response
+    }
+
+    fn rewrite_stream(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        stream: super::core::CompletionEventStream,
+    ) -> super::core::CompletionEventStream {
+        let _ = adapter_id;
+        self.remap_stream_provider_id(stream)
+    }
+}
+
+#[async_trait]
 impl ModelRuntime for NamedProvider {
     fn id(&self) -> &str {
         self.provider_id.as_str()
@@ -376,9 +402,7 @@ impl ModelRuntime for NamedProvider {
     }
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        let mut response = self.target.complete(request).await?;
-        self.rewrite_response_provider_id(&mut response);
-        Ok(response)
+        self.forward_complete(None, request).await
     }
 
     async fn complete_for_adapter(
@@ -386,19 +410,14 @@ impl ModelRuntime for NamedProvider {
         adapter_id: Option<&AdapterId>,
         request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
-        let mut response = self
-            .target
-            .complete_for_adapter(adapter_id, request)
-            .await?;
-        self.rewrite_response_provider_id(&mut response);
-        Ok(response)
+        self.forward_complete(adapter_id, request).await
     }
 
     async fn compact_conversation(
         &self,
         request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
-        self.target.compact_conversation(request).await
+        self.forward_compact_conversation(None, request).await
     }
 
     async fn compact_conversation_for_adapter(
@@ -406,9 +425,7 @@ impl ModelRuntime for NamedProvider {
         adapter_id: Option<&AdapterId>,
         request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
-        self.target
-            .compact_conversation_for_adapter(adapter_id, request)
-            .await
+        self.forward_compact_conversation(adapter_id, request).await
     }
 
     async fn complete_stream(
@@ -418,8 +435,7 @@ impl ModelRuntime for NamedProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let stream = self.target.complete_stream(request).await?;
-        Ok(self.remap_stream_provider_id(stream))
+        self.forward_complete_stream(None, request).await
     }
 
     async fn complete_stream_for_adapter(
@@ -430,11 +446,7 @@ impl ModelRuntime for NamedProvider {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let stream = self
-            .target
-            .complete_stream_for_adapter(adapter_id, request)
-            .await?;
-        Ok(self.remap_stream_provider_id(stream))
+        self.forward_complete_stream(adapter_id, request).await
     }
 }
 

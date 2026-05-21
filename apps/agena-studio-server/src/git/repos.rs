@@ -12,7 +12,7 @@ use walkdir::WalkDir;
 
 use super::{
     DirectoryQuery, is_safe_repo_rel_path, map_git_failure, path_slash, rel_path_slash,
-    require_directory, require_directory_raw, run_git,
+    require_directory, require_directory_raw, run_git, run_git_checked,
 };
 
 #[derive(Debug, Deserialize)]
@@ -255,21 +255,14 @@ pub async fn git_safe_directory(Query(q): Query<DirectoryQuery>) -> Response {
         }
     }
 
-    let (code, out, err) = run_git(
+    if let Err(resp) = run_git_checked(
         &dir,
         &["config", "--global", "--add", "safe.directory", &safe_path],
+        Some("git_safe_directory_failed"),
     )
     .await
-    .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_safe_directory_failed"})),
-        )
-            .into_response();
+    {
+        return resp;
     }
 
     Json(serde_json::json!({
@@ -362,19 +355,8 @@ pub async fn git_init(Query(q): Query<DirectoryQuery>, Json(body): Json<GitInitB
         args.push(branch);
     }
 
-    let (code, out, err) =
-        run_git(&target, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_init_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked(&target, &args, Some("git_init_failed")).await {
+        return resp;
     }
 
     Json(serde_json::json!({
@@ -541,19 +523,8 @@ pub async fn git_clone(
     args.push(target_str);
 
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, out, err) =
-        run_git(&base, &args_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_clone_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked(&base, &args_ref, Some("git_clone_failed")).await {
+        return resp;
     }
 
     Json(serde_json::json!({

@@ -70,8 +70,9 @@ pub(crate) use auth::{TempGitAskpass, git_http_auth_env, normalize_http_auth};
 pub use blame::*;
 
 pub(crate) use exec::{
-    git_success_response, lock_repo, run_git, run_git_checked, run_git_env, run_git_env_checked,
-    run_git_with_input,
+    git_success_response, lock_repo, run_git, run_git_checked, run_git_checked_with_status,
+    run_git_env, run_git_with_input, run_locked_git_checked, run_locked_git_checked_with_status,
+    run_locked_git_env_checked, run_locked_git_env_checked_with_status,
 };
 pub(crate) use policy::{
     GitBranchProtectionPrompt, git_allow_force_push, git_allow_no_verify_commit,

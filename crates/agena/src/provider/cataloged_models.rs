@@ -13,6 +13,7 @@ use crate::{
     },
 };
 
+use super::core::ForwardingModelRuntime;
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ModelRuntime,
     PromptCacheShape, StreamResumePolicy,
@@ -110,6 +111,17 @@ impl CatalogedModelsProvider {
             model.as_str(),
             &self.model_metadata_for_adapter(adapter_id, model),
         )
+    }
+}
+
+#[async_trait]
+impl ForwardingModelRuntime for CatalogedModelsProvider {
+    fn target(&self) -> &dyn ModelRuntime {
+        self.target.as_ref()
+    }
+
+    fn prepare_request(&self, adapter_id: Option<&AdapterId>, request: &mut CompletionRequest) {
+        ModelRuntime::backfill_assistant_reasoning_field(self, adapter_id, request);
     }
 }
 
@@ -273,65 +285,52 @@ impl ModelRuntime for CatalogedModelsProvider {
         Ok(models)
     }
 
-    async fn complete(
-        &self,
-        mut request: CompletionRequest,
-    ) -> Result<CompletionResponse, AppError> {
-        self.backfill_assistant_reasoning_field(None, &mut request);
-        self.target.complete(request).await
+    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        self.forward_complete(None, request).await
     }
 
     async fn complete_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        self.target.complete_for_adapter(adapter_id, request).await
+        self.forward_complete(adapter_id, request).await
     }
 
     async fn compact_conversation(
         &self,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
-        self.backfill_assistant_reasoning_field(None, &mut request);
-        self.target.compact_conversation(request).await
+        self.forward_compact_conversation(None, request).await
     }
 
     async fn compact_conversation_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        self.target
-            .compact_conversation_for_adapter(adapter_id, request)
-            .await
+        self.forward_compact_conversation(adapter_id, request).await
     }
 
     async fn complete_stream(
         &self,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        self.backfill_assistant_reasoning_field(None, &mut request);
-        self.target.complete_stream(request).await
+        self.forward_complete_stream(None, request).await
     }
 
     async fn complete_stream_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        self.target
-            .complete_stream_for_adapter(adapter_id, request)
-            .await
+        self.forward_complete_stream(adapter_id, request).await
     }
 }
 

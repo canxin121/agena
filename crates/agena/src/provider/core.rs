@@ -6,11 +6,12 @@ use std::collections::BTreeMap;
 use crate::error::AppError;
 use crate::model::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode,
+    ProviderId,
 };
 
 use super::{
     CapabilityFamily, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    PromptCacheShape,
+    PromptCacheShape, chat_wire,
 };
 
 #[async_trait]
@@ -148,6 +149,19 @@ pub trait ModelRuntime: Send + Sync {
             .map(|shape| shape.fingerprint())
     }
 
+    fn backfill_assistant_reasoning_field(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &mut CompletionRequest,
+    ) {
+        let metadata = self.model_metadata_for_adapter(adapter_id, &request.model);
+        chat_wire::backfill_assistant_reasoning_field_on_request(
+            request,
+            metadata.assistant_reasoning_field.as_deref(),
+            metadata.assistant_reasoning_interleaved.unwrap_or(false),
+        );
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, AppError>;
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError>;
@@ -231,4 +245,99 @@ pub trait ModelRuntime: Send + Sync {
 pub enum StreamResumePolicy {
     Disabled,
     ReplaySafePrefix,
+}
+
+pub(crate) fn remap_stream_event_provider_id(
+    provider_id: &ProviderId,
+    event: CompletionStreamEvent,
+) -> CompletionStreamEvent {
+    match event {
+        CompletionStreamEvent::TextDelta { model, delta, .. } => CompletionStreamEvent::TextDelta {
+            provider_id: provider_id.clone(),
+            model,
+            delta,
+        },
+        CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
+            CompletionStreamEvent::ThinkingDelta {
+                provider_id: provider_id.clone(),
+                model,
+                delta,
+            }
+        }
+        CompletionStreamEvent::ToolCallDelta {
+            model,
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+            ..
+        } => CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model,
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+        },
+        CompletionStreamEvent::Completed {
+            model,
+            finish_reason,
+            usage,
+            provider_metadata,
+            ..
+        } => CompletionStreamEvent::Completed {
+            provider_id: provider_id.clone(),
+            model,
+            finish_reason,
+            usage,
+            provider_metadata,
+        },
+    }
+}
+
+pub(crate) fn remap_stream_event_provider_and_model(
+    provider_id: &ProviderId,
+    model: &ModelId,
+    event: CompletionStreamEvent,
+) -> CompletionStreamEvent {
+    match event {
+        CompletionStreamEvent::TextDelta { delta, .. } => CompletionStreamEvent::TextDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            delta,
+        },
+        CompletionStreamEvent::ThinkingDelta { delta, .. } => {
+            CompletionStreamEvent::ThinkingDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                delta,
+            }
+        }
+        CompletionStreamEvent::ToolCallDelta {
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+            ..
+        } => CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+        },
+        CompletionStreamEvent::Completed {
+            finish_reason,
+            usage,
+            provider_metadata,
+            ..
+        } => CompletionStreamEvent::Completed {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            finish_reason,
+            usage,
+            provider_metadata,
+        },
+    }
 }

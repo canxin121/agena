@@ -56,12 +56,23 @@ pub(crate) fn require_directory(q: &DirectoryQuery) -> Result<PathBuf, Box<Respo
     require_directory_raw(q.directory.as_deref())
 }
 
+pub(crate) async fn require_locked_directory(
+    q: &DirectoryQuery,
+) -> Result<(PathBuf, exec::RepoLockGuard), Response> {
+    let dir = require_directory(q).map_err(|resp| *resp)?;
+    let guard = lock_repo(&dir).await?;
+    Ok((dir, guard))
+}
+
 // Shared helpers/types re-exported for submodules.
 pub use auth::GitAuthInput;
 pub(crate) use auth::{TempGitAskpass, git_http_auth_env, normalize_http_auth};
 pub use blame::*;
 
-pub(crate) use exec::{lock_repo, run_git, run_git_env, run_git_with_input};
+pub(crate) use exec::{
+    git_success_response, lock_repo, run_git, run_git_checked, run_git_env, run_git_env_checked,
+    run_git_with_input,
+};
 pub(crate) use policy::{
     GitBranchProtectionPrompt, git_allow_force_push, git_allow_no_verify_commit,
     git_branch_protection_for_branch, git_enforce_branch_protection, git_strict_patch_validation,

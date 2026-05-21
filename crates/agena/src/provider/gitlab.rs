@@ -8,6 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use super::core::remap_stream_event_provider_id;
 use crate::{
     error::AppError,
     model::{ModelId, ProviderId},
@@ -554,7 +555,11 @@ impl GitlabProvider {
                 )
                 .with_extra_headers(token.headers);
                 let stream = provider.complete_stream(request).await?;
-                let mapped = stream.map(|item| item.map(remap_stream_provider_id));
+                let provider_id = ProviderId::new(PROVIDER_ID);
+                let mapped = stream.map(move |item| {
+                    let provider_id = provider_id.clone();
+                    item.map(|event| remap_stream_event_provider_id(&provider_id, event))
+                });
                 return Ok(Box::pin(mapped));
             }
 
@@ -582,7 +587,11 @@ impl GitlabProvider {
         .with_extra_headers(token.headers);
 
         let stream = provider.complete_stream(request).await?;
-        let mapped = stream.map(|item| item.map(remap_stream_provider_id));
+        let provider_id = ProviderId::new(PROVIDER_ID);
+        let mapped = stream.map(move |item| {
+            let provider_id = provider_id.clone();
+            item.map(|event| remap_stream_event_provider_id(&provider_id, event))
+        });
         Ok(Box::pin(mapped))
     }
 
@@ -747,52 +756,6 @@ struct AnthropicModel {
     display_name: Option<String>,
     #[serde(default)]
     name: Option<String>,
-}
-
-fn remap_stream_provider_id(event: CompletionStreamEvent) -> CompletionStreamEvent {
-    let provider_id = ProviderId::new(PROVIDER_ID);
-    match event {
-        CompletionStreamEvent::TextDelta { model, delta, .. } => CompletionStreamEvent::TextDelta {
-            provider_id: provider_id.clone(),
-            model,
-            delta,
-        },
-        CompletionStreamEvent::ToolCallDelta {
-            model,
-            stream_key,
-            id,
-            name,
-            arguments_delta,
-            ..
-        } => CompletionStreamEvent::ToolCallDelta {
-            provider_id: provider_id.clone(),
-            model,
-            stream_key,
-            id,
-            name,
-            arguments_delta,
-        },
-        CompletionStreamEvent::Completed {
-            model,
-            finish_reason,
-            usage,
-            provider_metadata,
-            ..
-        } => CompletionStreamEvent::Completed {
-            provider_id,
-            model,
-            finish_reason,
-            usage,
-            provider_metadata,
-        },
-        CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
-            CompletionStreamEvent::ThinkingDelta {
-                provider_id,
-                model,
-                delta,
-            }
-        }
-    }
 }
 
 fn should_retry_backend_auth(err: &AppError) -> bool {

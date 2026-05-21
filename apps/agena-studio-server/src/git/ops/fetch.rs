@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use super::super::{
     DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, normalize_http_auth,
-    require_locked_directory, run_git_env_checked,
+    run_locked_git_env_checked,
 };
 
 #[derive(Debug, Deserialize)]
@@ -29,10 +29,6 @@ pub async fn git_fetch(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitFetchBody>,
 ) -> Response {
-    let (dir, _guard) = match require_locked_directory(&q).await {
-        Ok(value) => value,
-        Err(resp) => return resp,
-    };
     let remote = body
         .remote
         .as_deref()
@@ -119,7 +115,7 @@ pub async fn git_fetch(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    if let Err(resp) = run_git_env_checked(&dir, &args_ref, &env_ref, None).await {
+    if let Err(resp) = run_locked_git_env_checked(&q, &args_ref, &env_ref, None).await {
         return resp;
     }
     Json(serde_json::json!({"success": true})).into_response()

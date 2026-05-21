@@ -87,7 +87,7 @@ async fn run_options_to_core(
             },
         )
         .await
-        .map_err(server_error_from_http)
+        .server()
 }
 
 fn configured_default_model(
@@ -117,6 +117,16 @@ fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
             ServerError::ServiceUnavailable(error.message().to_owned())
         }
         _ => ServerError::Internal(error.message().to_owned()),
+    }
+}
+
+trait HttpApiResultExt<T> {
+    fn server(self) -> Result<T, ServerError>;
+}
+
+impl<T> HttpApiResultExt<T> for Result<T, crate::local_api::ApiError> {
+    fn server(self) -> Result<T, ServerError> {
+        self.map_err(server_error_from_http)
     }
 }
 

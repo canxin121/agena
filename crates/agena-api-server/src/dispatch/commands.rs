@@ -13,7 +13,7 @@ pub async fn dispatch_command(
                 .service()
                 .create_workspace(WorkspaceWriteRequest { path })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Workspace(workspace.into()))
         }
         Command::UpdateWorkspace(UpdateWorkspaceParams {
@@ -23,7 +23,7 @@ pub async fn dispatch_command(
                 .service()
                 .replace_workspace(workspace_id, WorkspaceWriteRequest { path })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Workspace(workspace.into()))
         }
         Command::DeleteWorkspace(DeleteWorkspaceParams { workspace_id }) => {
@@ -31,7 +31,7 @@ pub async fn dispatch_command(
                 .service()
                 .delete_workspace(workspace_id)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::WorkspaceDeleted { id: workspace_id })
         }
         Command::ResolveWorkspace(ResolveWorkspaceParams {
@@ -45,7 +45,7 @@ pub async fn dispatch_command(
                     create_if_missing,
                 })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Workspace(workspace.into()))
         }
         Command::CreateSession(CreateSessionParams {
@@ -61,7 +61,7 @@ pub async fn dispatch_command(
                     parent_id,
                 })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Session(session.into()))
         }
         Command::CreateSessionGoal(CreateSessionGoalParams {
@@ -79,7 +79,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_goal_resource(manager.as_ref(), &session, &goal)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::SessionGoal(resource.into()))
         }
         Command::SetSessionGoal(SetSessionGoalParams {
@@ -130,7 +130,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_goal_resource(manager.as_ref(), &session, &goal)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::SessionGoal(resource.into()))
         }
         Command::CompleteSessionGoal(CompleteSessionGoalParams { session_id }) => {
@@ -140,7 +140,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_goal_resource(manager.as_ref(), &session, &goal)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::SessionGoal(resource.into()))
         }
         Command::ClearSessionGoal(ClearSessionGoalParams { session_id }) => {
@@ -167,7 +167,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::ContinueRun(ContinueRunParams {
@@ -183,7 +183,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::CompactSession(CompactSessionParams {
@@ -199,7 +199,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::CancelTurn(CancelTurnParams { session_id }) => {
@@ -227,7 +227,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::ForkSession(ForkSessionParams {
@@ -247,7 +247,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
@@ -272,7 +272,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::ReplyPermission(ReplyPermissionParams {
@@ -291,7 +291,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::ReplyUserInput(ReplyUserInputParams {
@@ -309,7 +309,7 @@ pub async fn dispatch_command(
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::UpdateSession(UpdateSessionParams {
@@ -323,13 +323,13 @@ pub async fn dispatch_command(
                     .service()
                     .assert_session_version(session_id, expected_version)
                     .await
-                    .map_err(server_error_from_http)?;
+                    .server()?;
             }
             let session = state
                 .service()
                 .replace_session(session_id, SessionReplaceRequest { title, parent_id })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::Session(session.into()))
         }
         Command::DeleteSession(DeleteSessionParams {
@@ -341,13 +341,9 @@ pub async fn dispatch_command(
                     .service()
                     .assert_session_version(session_id, expected_version)
                     .await
-                    .map_err(server_error_from_http)?;
+                    .server()?;
             }
-            state
-                .service()
-                .delete_session(session_id)
-                .await
-                .map_err(server_error_from_http)?;
+            state.service().delete_session(session_id).await.server()?;
             Ok(CommandResult::SessionDeleted { id: session_id })
         }
         Command::UpsertPermissionRule(UpsertPermissionRuleParams {
@@ -383,7 +379,7 @@ pub async fn dispatch_command(
                     mode,
                 })
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::PermissionRule(rule.into()))
         }
         Command::ReplacePermissionRule(ReplacePermissionRuleParams { rule_id, rule }) => {
@@ -408,7 +404,7 @@ pub async fn dispatch_command(
                     },
                 )
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::PermissionRule(rule.into()))
         }
         Command::RevokePermissionRule(RevokePermissionRuleParams { rule_id, reason }) => {
@@ -416,7 +412,7 @@ pub async fn dispatch_command(
                 .service()
                 .revoke_permission_rule(rule_id, reason)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::PermissionRule(rule.into()))
         }
         Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
@@ -424,7 +420,7 @@ pub async fn dispatch_command(
                 .service()
                 .delete_permission_rule(rule_id)
                 .await
-                .map_err(server_error_from_http)?;
+                .server()?;
             Ok(CommandResult::PermissionRuleDeleted { id: rule_id })
         }
     }

@@ -14,6 +14,9 @@ use super::{
     PromptCacheShape, chat_wire,
 };
 
+pub(crate) type CompletionEventStream =
+    std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>;
+
 #[async_trait]
 pub trait ModelRuntime: Send + Sync {
     fn id(&self) -> &str;
@@ -238,6 +241,71 @@ pub trait ModelRuntime: Send + Sync {
     > {
         let _ = adapter_id;
         self.complete_stream(request).await
+    }
+}
+
+#[async_trait]
+pub(crate) trait ForwardingModelRuntime: Send + Sync {
+    fn target(&self) -> &dyn ModelRuntime;
+
+    fn prepare_request(&self, adapter_id: Option<&AdapterId>, request: &mut CompletionRequest) {
+        let _ = adapter_id;
+        let _ = request;
+    }
+
+    fn rewrite_response(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        response: CompletionResponse,
+    ) -> CompletionResponse {
+        let _ = adapter_id;
+        response
+    }
+
+    fn rewrite_stream(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        stream: CompletionEventStream,
+    ) -> CompletionEventStream {
+        let _ = adapter_id;
+        stream
+    }
+
+    async fn forward_complete(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        self.prepare_request(adapter_id, &mut request);
+        let response = self
+            .target()
+            .complete_for_adapter(adapter_id, request)
+            .await?;
+        Ok(self.rewrite_response(adapter_id, response))
+    }
+
+    async fn forward_compact_conversation(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.prepare_request(adapter_id, &mut request);
+        self.target()
+            .compact_conversation_for_adapter(adapter_id, request)
+            .await
+    }
+
+    async fn forward_complete_stream(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<CompletionEventStream, AppError> {
+        self.prepare_request(adapter_id, &mut request);
+        let stream = self
+            .target()
+            .complete_stream_for_adapter(adapter_id, request)
+            .await?;
+        Ok(self.rewrite_stream(adapter_id, stream))
     }
 }
 

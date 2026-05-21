@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::{
     DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, normalize_http_auth,
-    require_locked_directory, run_git_env_checked,
+    run_locked_git_env_checked,
 };
 
 #[derive(Debug, Deserialize)]
@@ -79,11 +79,6 @@ fn parse_pull_stat(stdout: &str) -> (Vec<String>, i32, i32) {
 }
 
 pub async fn git_pull(Query(q): Query<DirectoryQuery>, Json(body): Json<GitPullBody>) -> Response {
-    let (dir, _guard) = match require_locked_directory(&q).await {
-        Ok(value) => value,
-        Err(resp) => return resp,
-    };
-
     let remote = body
         .remote
         .as_deref()
@@ -144,7 +139,7 @@ pub async fn git_pull(Query(q): Query<DirectoryQuery>, Json(body): Json<GitPullB
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let (out, _err) = match run_git_env_checked(&dir, &args_ref, &env_ref, None).await {
+    let (out, _err) = match run_locked_git_env_checked(&q, &args_ref, &env_ref, None).await {
         Ok(value) => value,
         Err(resp) => return resp,
     };

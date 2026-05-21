@@ -157,24 +157,25 @@ pub(crate) fn git_success_response() -> Response {
     Json(serde_json::json!({"success": true})).into_response()
 }
 
-fn git_command_error_response(error: &str, code: Option<&str>) -> Response {
+fn git_command_error_response_with_status(
+    status: StatusCode,
+    error: &str,
+    code: Option<&str>,
+) -> Response {
     match code {
         Some(code) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            status,
             Json(serde_json::json!({"error": error.trim(), "code": code})),
         )
             .into_response(),
-        None => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": error.trim()})),
-        )
-            .into_response(),
+        None => (status, Json(serde_json::json!({"error": error.trim()}))).into_response(),
     }
 }
 
-pub(crate) async fn run_git_checked(
+pub(crate) async fn run_git_checked_with_status(
     directory: &Path,
     args: &[&str],
+    failure_status: StatusCode,
     failure_code: Option<&str>,
 ) -> Result<(String, String), Response> {
     let (code, out, err) =
@@ -187,13 +188,32 @@ pub(crate) async fn run_git_checked(
     if let Some(resp) = super::map_git_failure(code, &out, &err) {
         return Err(resp);
     }
-    Err(git_command_error_response(&err, failure_code))
+    Err(git_command_error_response_with_status(
+        failure_status,
+        &err,
+        failure_code,
+    ))
 }
 
-pub(crate) async fn run_git_env_checked(
+pub(crate) async fn run_git_checked(
+    directory: &Path,
+    args: &[&str],
+    failure_code: Option<&str>,
+) -> Result<(String, String), Response> {
+    run_git_checked_with_status(
+        directory,
+        args,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        failure_code,
+    )
+    .await
+}
+
+pub(crate) async fn run_git_env_checked_with_status(
     directory: &Path,
     args: &[&str],
     extra_env: &[(&str, &str)],
+    failure_status: StatusCode,
     failure_code: Option<&str>,
 ) -> Result<(String, String), Response> {
     let (code, out, err) =
@@ -206,7 +226,67 @@ pub(crate) async fn run_git_env_checked(
     if let Some(resp) = super::map_git_failure(code, &out, &err) {
         return Err(resp);
     }
-    Err(git_command_error_response(&err, failure_code))
+    Err(git_command_error_response_with_status(
+        failure_status,
+        &err,
+        failure_code,
+    ))
+}
+
+pub(crate) async fn run_git_env_checked(
+    directory: &Path,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+    failure_code: Option<&str>,
+) -> Result<(String, String), Response> {
+    run_git_env_checked_with_status(
+        directory,
+        args,
+        extra_env,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        failure_code,
+    )
+    .await
+}
+
+pub(crate) async fn run_locked_git_checked(
+    q: &super::DirectoryQuery,
+    args: &[&str],
+    failure_code: Option<&str>,
+) -> Result<(String, String), Response> {
+    let (dir, _guard) = super::require_locked_directory(q).await?;
+    run_git_checked(&dir, args, failure_code).await
+}
+
+pub(crate) async fn run_locked_git_checked_with_status(
+    q: &super::DirectoryQuery,
+    args: &[&str],
+    failure_status: StatusCode,
+    failure_code: Option<&str>,
+) -> Result<(String, String), Response> {
+    let (dir, _guard) = super::require_locked_directory(q).await?;
+    run_git_checked_with_status(&dir, args, failure_status, failure_code).await
+}
+
+pub(crate) async fn run_locked_git_env_checked(
+    q: &super::DirectoryQuery,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+    failure_code: Option<&str>,
+) -> Result<(String, String), Response> {
+    let (dir, _guard) = super::require_locked_directory(q).await?;
+    run_git_env_checked(&dir, args, extra_env, failure_code).await
+}
+
+pub(crate) async fn run_locked_git_env_checked_with_status(
+    q: &super::DirectoryQuery,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+    failure_status: StatusCode,
+    failure_code: Option<&str>,
+) -> Result<(String, String), Response> {
+    let (dir, _guard) = super::require_locked_directory(q).await?;
+    run_git_env_checked_with_status(&dir, args, extra_env, failure_status, failure_code).await
 }
 
 pub(crate) async fn run_git_env(

@@ -6,7 +6,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{DirectoryQuery, lock_repo, map_git_failure, require_directory, run_git, run_git_env};
+use super::{
+    DirectoryQuery, git_success_response, require_directory, run_locked_git_checked,
+    run_locked_git_env_checked,
+};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,15 +104,6 @@ pub async fn git_submodule_add(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitSubmoduleAddBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(url) = body
         .url
         .as_deref()
@@ -148,22 +142,11 @@ pub async fn git_submodule_add(
     args.push(url);
     args.push(path);
 
-    let (code, out, err) =
-        run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_submodule_add_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(&q, &args, Some("git_submodule_add_failed")).await {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,15 +158,6 @@ pub async fn git_submodule_init(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitSubmodulePathBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(path) = body
         .path
         .as_deref()
@@ -197,21 +171,17 @@ pub async fn git_submodule_init(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["submodule", "init", "--", path])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_submodule_init_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["submodule", "init", "--", path],
+        Some("git_submodule_init_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,15 +196,6 @@ pub async fn git_submodule_update(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitSubmoduleUpdateBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let mut args: Vec<&str> = vec!["submodule", "update"];
     if body.init.unwrap_or(false) {
         args.push("--init");
@@ -252,20 +213,11 @@ pub async fn git_submodule_update(
         args.push(path);
     }
 
-    let (code, out, err) =
-        run_git_env(&dir, &args, &[])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_submodule_update_failed"})),
-        )
-            .into_response();
+    if let Err(resp) =
+        run_locked_git_env_checked(&q, &args, &[], Some("git_submodule_update_failed")).await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }

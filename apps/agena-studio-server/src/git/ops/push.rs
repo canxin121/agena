@@ -10,8 +10,8 @@ use std::sync::Arc;
 use super::super::remote::git_current_branch;
 use super::super::{
     DirectoryQuery, GitAuthInput, GitBranchProtectionPrompt, TempGitAskpass, git_allow_force_push,
-    git_branch_protection_for_branch, git_enforce_branch_protection, git_http_auth_env, lock_repo,
-    map_git_failure, normalize_http_auth, require_directory, run_git_env,
+    git_branch_protection_for_branch, git_enforce_branch_protection, git_http_auth_env,
+    map_git_failure, normalize_http_auth, require_locked_directory, run_git_env,
 };
 
 #[derive(Debug, Deserialize)]
@@ -77,13 +77,8 @@ pub async fn git_push(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitPushBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
     let remote = body

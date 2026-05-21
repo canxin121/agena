@@ -7,9 +7,56 @@ use axum::{
 use serde::Deserialize;
 
 use super::super::{
-    DirectoryQuery, abs_path, is_safe_repo_rel_path, lock_repo, map_git_failure, require_directory,
-    run_git,
+    DirectoryQuery, git_success_response, is_safe_repo_rel_path, map_git_failure,
+    require_locked_directory, run_git, run_git_checked, run_git_checked_with_status,
 };
+
+fn invalid_file_path_response() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "Invalid file path"})),
+    )
+        .into_response()
+}
+
+fn validate_repo_paths(paths: &[String]) -> Result<(), Response> {
+    if paths.iter().any(|path| !is_safe_repo_rel_path(path)) {
+        return Err(invalid_file_path_response());
+    }
+    Ok(())
+}
+
+fn collect_body_paths(path: Option<String>, paths: Option<Vec<String>>) -> Vec<String> {
+    let mut collected: Vec<String> = Vec::new();
+    if let Some(path) = path {
+        let path = path.trim();
+        if !path.is_empty() {
+            collected.push(path.to_string());
+        }
+    }
+    if let Some(paths) = paths {
+        for path in paths {
+            let path = path.trim();
+            if !path.is_empty() {
+                collected.push(path.to_string());
+            }
+        }
+    }
+    collected.sort();
+    collected.dedup();
+    collected
+}
+
+fn collect_output_paths(output: &str) -> Vec<String> {
+    let mut paths: Vec<String> = output
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
 
 #[derive(Debug, Deserialize)]
 pub struct GitRevertBody {
@@ -20,13 +67,8 @@ pub async fn git_revert(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitRevertBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
@@ -43,14 +85,10 @@ pub async fn git_revert(
             .into_response();
     };
 
-    let repo_root = abs_path(dir.to_string_lossy().as_ref());
+    let repo_root = dir.clone();
     let absolute_target = repo_root.join(file_path);
     if !absolute_target.starts_with(&repo_root) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid file path"})),
-        )
-            .into_response();
+        return invalid_file_path_response();
     }
 
     let tracked = run_git(&dir, &["ls-files", "--error-unmatch", file_path])
@@ -62,7 +100,7 @@ pub async fn git_revert(
         // Best-effort clean for untracked.
         let _ = run_git(&dir, &["clean", "-f", "-d", "--", file_path]).await;
         let _ = tokio::fs::remove_file(&absolute_target).await;
-        return Json(serde_json::json!({"success": true})).into_response();
+        return git_success_response();
     }
 
     // Unstage.
@@ -77,7 +115,7 @@ pub async fn git_revert(
         let _ = run_git(&dir, &["checkout", "--", file_path]).await;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,13 +131,8 @@ pub async fn git_stage(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitStageBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
@@ -117,70 +150,35 @@ pub async fn git_stage(
 
     if scope == "all" {
         // Stage everything (including deletions), like a "Stage All" action.
-        let (code, out, err) =
-            run_git(&dir, &["add", "-A"])
-                .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.trim()})),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked(&dir, &["add", "-A"], None).await {
+            return resp;
         }
-        return Json(serde_json::json!({"success": true})).into_response();
+        return git_success_response();
     }
 
     if scope == "tracked" {
         // Only stage updates to already tracked files (no new untracked).
-        let (code, out, err) =
-            run_git(&dir, &["add", "-u"])
-                .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.trim()})),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked(&dir, &["add", "-u"], None).await {
+            return resp;
         }
-        return Json(serde_json::json!({"success": true})).into_response();
+        return git_success_response();
     }
 
     if scope == "untracked" {
         // Stage only untracked files.
-        let (code, out, err) = run_git(&dir, &["ls-files", "--others", "--exclude-standard"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.trim()})),
-            )
-                .into_response();
-        }
-        let mut files: Vec<String> = out
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        files.sort();
-        files.dedup();
-        if files.iter().any(|p| !is_safe_repo_rel_path(p)) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid file path"})),
-            )
-                .into_response();
+        let (out, _) = match run_git_checked(
+            &dir,
+            &["ls-files", "--others", "--exclude-standard"],
+            None,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(resp) => return resp,
+        };
+        let files = collect_output_paths(&out);
+        if let Err(resp) = validate_repo_paths(&files) {
+            return resp;
         }
         if files.is_empty() {
             return Json(serde_json::json!({"success": true, "staged": 0})).into_response();
@@ -189,19 +187,8 @@ pub async fn git_stage(
         for p in &files {
             args.push(p);
         }
-        let (code, out, err) =
-            run_git(&dir, &args)
-                .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.trim()})),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked(&dir, &args, None).await {
+            return resp;
         }
         return Json(serde_json::json!({"success": true, "staged": files.len()})).into_response();
     }
@@ -209,32 +196,14 @@ pub async fn git_stage(
     if scope == "merge" {
         // Attempt to stage all unmerged paths. This will only succeed for files that
         // have been resolved in the worktree.
-        let (code, out, err) = run_git(&dir, &["diff", "--name-only", "--diff-filter=U"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.trim()})),
-            )
-                .into_response();
-        }
-        let mut files: Vec<String> = out
-            .lines()
-            .map(|l| l.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
-        files.sort();
-        files.dedup();
-        if files.iter().any(|p| !is_safe_repo_rel_path(p)) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid file path"})),
-            )
-                .into_response();
+        let (out, _) =
+            match run_git_checked(&dir, &["diff", "--name-only", "--diff-filter=U"], None).await {
+                Ok(value) => value,
+                Err(resp) => return resp,
+            };
+        let files = collect_output_paths(&out);
+        if let Err(resp) = validate_repo_paths(&files) {
+            return resp;
         }
         if files.is_empty() {
             return Json(serde_json::json!({"success": true, "staged": 0})).into_response();
@@ -243,19 +212,11 @@ pub async fn git_stage(
         for p in &files {
             args.push(p);
         }
-        let (code, out, err) =
-            run_git(&dir, &args)
+        if let Err(resp) =
+            run_git_checked_with_status(&dir, &args, StatusCode::CONFLICT, Some("merge_unresolved"))
                 .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": err.trim(), "code": "merge_unresolved"})),
-            )
-                .into_response();
+        {
+            return resp;
         }
         return Json(serde_json::json!({"success": true, "staged": files.len()})).into_response();
     }
@@ -269,23 +230,7 @@ pub async fn git_stage(
             .into_response();
     }
 
-    let mut paths: Vec<String> = Vec::new();
-    if let Some(p) = body.path {
-        let p = p.trim();
-        if !p.is_empty() {
-            paths.push(p.to_string());
-        }
-    }
-    if let Some(list) = body.paths {
-        for p in list {
-            let p = p.trim();
-            if !p.is_empty() {
-                paths.push(p.to_string());
-            }
-        }
-    }
-    paths.sort();
-    paths.dedup();
+    let paths = collect_body_paths(body.path, body.paths);
     if paths.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -293,12 +238,8 @@ pub async fn git_stage(
         )
             .into_response();
     }
-    if paths.iter().any(|p| !is_safe_repo_rel_path(p)) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid file path"})),
-        )
-            .into_response();
+    if let Err(resp) = validate_repo_paths(&paths) {
+        return resp;
     }
 
     // Stage full files only (non-interactive).
@@ -306,22 +247,11 @@ pub async fn git_stage(
     for p in &paths {
         args.push(p);
     }
-    let (code, out, err) =
-        run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked(&dir, &args, None).await {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -335,52 +265,20 @@ pub async fn git_unstage(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitUnstageBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
     if body.all.unwrap_or(false) {
         // Unstage everything while keeping worktree changes.
-        let (code, out, err) =
-            run_git(&dir, &["reset"])
-                .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.trim()})),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked(&dir, &["reset"], None).await {
+            return resp;
         }
-        return Json(serde_json::json!({"success": true})).into_response();
+        return git_success_response();
     }
 
-    let mut paths: Vec<String> = Vec::new();
-    if let Some(p) = body.path {
-        let p = p.trim();
-        if !p.is_empty() {
-            paths.push(p.to_string());
-        }
-    }
-    if let Some(list) = body.paths {
-        for p in list {
-            let p = p.trim();
-            if !p.is_empty() {
-                paths.push(p.to_string());
-            }
-        }
-    }
-    paths.sort();
-    paths.dedup();
+    let paths = collect_body_paths(body.path, body.paths);
     if paths.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -388,12 +286,8 @@ pub async fn git_unstage(
         )
             .into_response();
     }
-    if paths.iter().any(|p| !is_safe_repo_rel_path(p)) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid file path"})),
-        )
-            .into_response();
+    if let Err(resp) = validate_repo_paths(&paths) {
+        return resp;
     }
 
     // Unstage full files only.
@@ -402,36 +296,21 @@ pub async fn git_unstage(
     for p in &paths {
         args.push(p);
     }
-    let (code, out, err) =
+    let (code, _out, _err) =
         run_git(&dir, &args)
             .await
             .unwrap_or((1, "".to_string(), "".to_string()));
     if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-
         let mut reset_args: Vec<&str> = vec!["reset", "HEAD", "--"]; // `--` prevents path-as-flag.
         for p in &paths {
             reset_args.push(p);
         }
-        let (code2, out2, err2) =
-            run_git(&dir, &reset_args)
-                .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if code2 != 0 {
-            if let Some(resp) = map_git_failure(code2, &out2, &err2) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err2.trim()})),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked(&dir, &reset_args, None).await {
+            return resp;
         }
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -446,13 +325,8 @@ pub async fn git_clean(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitCleanBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
@@ -462,21 +336,9 @@ pub async fn git_clean(
         .unwrap_or("untracked")
         .trim()
         .to_ascii_lowercase();
-    let mut paths: Vec<String> = body
-        .paths
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    paths.sort();
-    paths.dedup();
-    if paths.iter().any(|p| !is_safe_repo_rel_path(p)) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid file path"})),
-        )
-            .into_response();
+    let paths = collect_body_paths(None, body.paths);
+    if let Err(resp) = validate_repo_paths(&paths) {
+        return resp;
     }
 
     if scope == "tracked" {
@@ -487,23 +349,11 @@ pub async fn git_clean(
             .unwrap_or((1, "".to_string(), "".to_string()));
         if c1 != 0 {
             let _ = run_git(&dir, &["reset"]).await;
-            let (c2, o2, e2) = run_git(&dir, &["checkout", "--", "."]).await.unwrap_or((
-                1,
-                "".to_string(),
-                "".to_string(),
-            ));
-            if c2 != 0 {
-                if let Some(resp) = map_git_failure(c2, &o2, &e2) {
-                    return resp;
-                }
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e2.trim()})),
-                )
-                    .into_response();
+            if let Err(resp) = run_git_checked(&dir, &["checkout", "--", "."], None).await {
+                return resp;
             }
         }
-        return Json(serde_json::json!({"success": true})).into_response();
+        return git_success_response();
     }
 
     let mut args: Vec<&str> = vec!["clean", "-f", "-d"];
@@ -523,20 +373,10 @@ pub async fn git_clean(
         }
     }
 
-    let (code, out, err) =
-        run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
+    let (out, _) = match run_git_checked(&dir, &args, None).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     Json(serde_json::json!({"success": true, "output": out.trim()})).into_response()
 }
@@ -552,13 +392,8 @@ pub async fn git_rename(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitRenameBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
     let from = body.from.trim();
@@ -598,7 +433,7 @@ pub async fn git_rename(
                 .into_response();
         }
     }
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -612,13 +447,8 @@ pub async fn git_delete(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitDeleteBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
     let path = body.path.trim();
@@ -645,19 +475,11 @@ pub async fn git_delete(
         args.push("-r");
         args.push("--");
         args.push(path);
-        let (code, out, err) =
-            run_git(&dir, &args)
+        if let Err(resp) =
+            run_git_checked_with_status(&dir, &args, StatusCode::BAD_REQUEST, Some("delete_failed"))
                 .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": err.trim(), "code": "delete_failed"})),
-            )
-                .into_response();
+        {
+            return resp;
         }
         return Json(serde_json::json!({"success": true, "staged": true})).into_response();
     }

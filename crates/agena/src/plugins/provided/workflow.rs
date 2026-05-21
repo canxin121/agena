@@ -23,9 +23,9 @@ use crate::plugin::sdk::host_api::{
     HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
     HostAgentSwitchResponse, HostClearGoalRequest, HostClient, HostCreateGoalRequest,
     HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostGetGoalRequest, HostGoal, HostGoalStatus, HostTodoItem,
-    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
-    SpawnSubtaskRequest, ToolDescriptor,
+    HostExitWorktreeRequest, HostGetGoalRequest, HostGetSessionRequest, HostGoal, HostGoalStatus,
+    HostRenameSessionRequest, HostSession, HostTodoItem, HostTodoPriority, HostTodoStatus,
+    HostTodoWriteRequest, HostUpdateGoalRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
     HookSubscription, HostCapability, InitContext, InitOutcome, PathAccessSpec, PathKind,
@@ -86,6 +86,18 @@ enum TodoToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+struct SessionRenameToolInput {
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum SessionToolInput {
+    Get,
+    Rename(SessionRenameToolInput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 enum GoalToolInput {
     Get(GetGoalToolInput),
@@ -122,54 +134,24 @@ enum WorktreeToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct GoalToolResponse {
     goal: Option<HostGoal>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    remaining_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    completion_budget_report: Option<String>,
 }
 
-#[derive(Clone, Copy)]
-enum CompletionBudgetReport {
-    Include,
-    Omit,
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct SessionToolResponse {
+    session: HostSession,
 }
 
 impl GoalToolResponse {
-    fn new(goal: Option<HostGoal>, report_mode: CompletionBudgetReport) -> Self {
-        let remaining_tokens = goal.as_ref().and_then(|goal| {
-            goal.token_budget
-                .map(|budget| budget.saturating_sub(goal.tokens_used))
-        });
-        let completion_budget_report = match report_mode {
-            CompletionBudgetReport::Include => goal
-                .as_ref()
-                .filter(|goal| goal.status == HostGoalStatus::Completed)
-                .and_then(completion_budget_report),
-            CompletionBudgetReport::Omit => None,
-        };
-        Self {
-            goal,
-            remaining_tokens,
-            completion_budget_report,
-        }
+    fn new(goal: Option<HostGoal>) -> Self {
+        Self { goal }
     }
 }
 
-fn completion_budget_report(goal: &HostGoal) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(budget) = goal.token_budget {
-        parts.push(format!("tokens used: {} of {budget}", goal.tokens_used));
-    }
-    if goal.time_used_seconds > 0 {
-        parts.push(format!("time used: {} seconds", goal.time_used_seconds));
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "Goal achieved. Report final budget usage to the user: {}.",
-            parts.join("; ")
-        ))
+fn goal_status_label(status: HostGoalStatus) -> &'static str {
+    match status {
+        HostGoalStatus::Active => "active",
+        HostGoalStatus::Paused => "paused",
+        HostGoalStatus::Completed => "completed",
     }
 }
 
@@ -327,35 +309,80 @@ impl WorkflowPlugin {
         serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string())
     }
 
-    fn goal_tool_payload(
-        goal: Option<HostGoal>,
-        report_mode: CompletionBudgetReport,
-    ) -> SdkResult<serde_json::Value> {
-        serde_json::to_value(GoalToolResponse::new(goal, report_mode))
+    fn goal_tool_payload(goal: Option<HostGoal>) -> SdkResult<serde_json::Value> {
+        serde_json::to_value(GoalToolResponse::new(goal))
             .map_err(|err| PluginError::new(err.to_string()))
     }
 
     fn goal_summary(goal: &HostGoal) -> String {
-        let budget = goal
-            .token_budget
-            .map(|value| format!("{}/{}", goal.tokens_used, value))
-            .unwrap_or_else(|| goal.tokens_used.to_string());
-        format!(
-            "Goal {} is {}. Tokens: {}.",
-            goal.id,
-            match goal.status {
-                HostGoalStatus::Active => "active",
-                HostGoalStatus::Paused => "paused",
-                HostGoalStatus::BudgetLimited => "budget_limited",
-                HostGoalStatus::Completed => "completed",
-            },
-            budget,
-        )
+        format!("Goal {} is {}.", goal.id, goal_status_label(goal.status),)
+    }
+
+    fn session_tool_payload(session: HostSession) -> SdkResult<serde_json::Value> {
+        serde_json::to_value(SessionToolResponse { session })
+            .map_err(|err| PluginError::new(err.to_string()))
+    }
+
+    fn session_summary(session: &HostSession) -> String {
+        let mut parts = vec![format!("Session #{} title: {}", session.id, session.title)];
+        if let Some(parent_id) = session.parent_id {
+            parts.push(format!("parent #{parent_id}"));
+        }
+        if session.root_id != session.id {
+            parts.push(format!("root #{}", session.root_id));
+        }
+        if session.is_subagent {
+            parts.push("subagent".to_string());
+        }
+        parts.join(" | ")
+    }
+
+    async fn invoke_get_session(&self) -> SdkResult<ToolInvokeOutput> {
+        let response = self
+            .host()?
+            .get_session(HostGetSessionRequest::default())
+            .await?;
+        let payload = Self::session_tool_payload(response.session.clone())?;
+        Ok(ToolInvokeOutput::text(format!(
+            "{}\n\n{}",
+            Self::session_summary(&response.session),
+            Self::goal_payload_text(&payload)
+        ))
+        .with_title("session")
+        .with_payload(payload))
+    }
+
+    async fn invoke_rename_session(
+        &self,
+        input: &SessionRenameToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let title = input.title.trim();
+        if title.is_empty() {
+            return Err(PluginError::invalid_params(
+                "session rename requires a non-empty title",
+            ));
+        }
+        let response = self
+            .host()?
+            .rename_session(HostRenameSessionRequest {
+                session_id: None,
+                title: title.to_string(),
+            })
+            .await?;
+        let payload = Self::session_tool_payload(response.session.clone())?;
+        Ok(ToolInvokeOutput::text(format!(
+            "Renamed session #{} to {}.\n\n{}",
+            response.session.id,
+            response.session.title,
+            Self::goal_payload_text(&payload)
+        ))
+        .with_title("session")
+        .with_payload(payload))
     }
 
     async fn invoke_get_goal(&self, _input: &GetGoalToolInput) -> SdkResult<ToolInvokeOutput> {
         let response = self.host()?.get_goal(HostGetGoalRequest::default()).await?;
-        let payload = Self::goal_tool_payload(response.goal.clone(), CompletionBudgetReport::Omit)?;
+        let payload = Self::goal_tool_payload(response.goal.clone())?;
         let text = match response.goal.as_ref() {
             Some(goal) => format!(
                 "{}\n\n{}",
@@ -374,11 +401,9 @@ impl WorkflowPlugin {
             .host()?
             .create_goal(HostCreateGoalRequest {
                 objective: input.objective.clone(),
-                token_budget: input.token_budget,
             })
             .await?;
-        let payload =
-            Self::goal_tool_payload(Some(response.goal.clone()), CompletionBudgetReport::Omit)?;
+        let payload = Self::goal_tool_payload(Some(response.goal.clone()))?;
         Ok(ToolInvokeOutput::text(format!(
             "{}\n\n{}",
             Self::goal_summary(&response.goal),
@@ -422,11 +447,9 @@ impl WorkflowPlugin {
                 status: Some(match input.status {
                     WorkflowUpdateGoalStatus::Complete => HostGoalStatus::Completed,
                 }),
-                token_budget: None,
             })
             .await?;
-        let payload =
-            Self::goal_tool_payload(Some(response.goal.clone()), CompletionBudgetReport::Include)?;
+        let payload = Self::goal_tool_payload(Some(response.goal.clone()))?;
         Ok(ToolInvokeOutput::text(format!(
             "{}\n\n{}",
             Self::goal_summary(&response.goal),
@@ -721,6 +744,10 @@ impl Plugin for WorkflowPlugin {
                         .await
                 }
             },
+            "session" => match serde_json::from_value::<SessionToolInput>(input.input)? {
+                SessionToolInput::Get => self.invoke_get_session().await,
+                SessionToolInput::Rename(args) => self.invoke_rename_session(&args).await,
+            },
             "goal" => match serde_json::from_value::<GoalToolInput>(input.input)? {
                 GoalToolInput::Get(args) => self.invoke_get_goal(&args).await,
             },
@@ -907,6 +934,17 @@ fn entries() -> Vec<PluginToolDecl> {
         .tags([ToolTag::Mutating, ToolTag::Planning])
         .always_load(),
         PluginToolDecl::new(
+            "session",
+            crate::entry::definition::json_schema_for::<SessionToolInput>(),
+        )
+        .description(
+            "Session metadata command. Set command to get the current session metadata or rename to update the session title.",
+        )
+        .tags([ToolTag::ReadOnly, ToolTag::Mutating])
+        .always_load()
+        .concurrency_safe(false)
+        .host_capability(HostCapability::SessionRegistry),
+        PluginToolDecl::new(
             "goal",
             crate::entry::definition::json_schema_for::<GoalToolInput>(),
         )
@@ -985,7 +1023,6 @@ mod tests {
     struct RecordedUpdateGoalRequest {
         objective: Option<String>,
         status: Option<HostGoalStatus>,
-        token_budget: Option<Option<u64>>,
     }
 
     struct TestHost {
@@ -993,6 +1030,7 @@ mod tests {
         update_goal_request: Mutex<Option<RecordedUpdateGoalRequest>>,
         agent_switch_requests: Mutex<Vec<HostAgentSwitchRequest>>,
         agent_restore_requests: Mutex<Vec<HostAgentRestoreRequest>>,
+        session: Mutex<HostSession>,
     }
 
     impl TestHost {
@@ -1002,6 +1040,14 @@ mod tests {
                 update_goal_request: Mutex::new(None),
                 agent_switch_requests: Mutex::new(Vec::new()),
                 agent_restore_requests: Mutex::new(Vec::new()),
+                session: Mutex::new(HostSession {
+                    id: 1,
+                    parent_id: None,
+                    root_id: 1,
+                    workspace_id: 99,
+                    title: "Original session".to_string(),
+                    is_subagent: false,
+                }),
             }
         }
 
@@ -1031,6 +1077,10 @@ mod tests {
                 .lock()
                 .expect("agent restore request lock")
                 .clone()
+        }
+
+        fn current_session(&self) -> HostSession {
+            self.session.lock().expect("session lock").clone()
         }
     }
 
@@ -1166,15 +1216,34 @@ mod tests {
             )
         }
 
+        async fn get_session(
+            &self,
+            req: HostGetSessionRequest,
+        ) -> SdkResult<crate::plugin::sdk::host_api::HostGetSessionResponse> {
+            assert_eq!(req.session_id, None);
+            Ok(crate::plugin::sdk::host_api::HostGetSessionResponse {
+                session: self.current_session(),
+            })
+        }
+
+        async fn rename_session(
+            &self,
+            req: HostRenameSessionRequest,
+        ) -> SdkResult<crate::plugin::sdk::host_api::HostRenameSessionResponse> {
+            assert_eq!(req.session_id, None);
+            let mut session = self.session.lock().expect("session lock");
+            session.title = req.title;
+            Ok(crate::plugin::sdk::host_api::HostRenameSessionResponse {
+                session: session.clone(),
+            })
+        }
+
         async fn get_goal(&self, _req: HostGetGoalRequest) -> SdkResult<HostGetGoalResponse> {
             Ok(HostGetGoalResponse {
                 goal: Some(HostGoal {
                     id: 7,
                     objective: "ship it".to_string(),
                     status: HostGoalStatus::Active,
-                    token_budget: Some(128),
-                    tokens_used: 32,
-                    time_used_seconds: 5,
                     completed_at_ms: None,
                 }),
             })
@@ -1185,15 +1254,11 @@ mod tests {
             req: HostCreateGoalRequest,
         ) -> SdkResult<HostCreateGoalResponse> {
             assert_eq!(req.objective, "ship it");
-            assert_eq!(req.token_budget, Some(128));
             Ok(HostCreateGoalResponse {
                 goal: HostGoal {
                     id: 7,
                     objective: req.objective,
                     status: HostGoalStatus::Active,
-                    token_budget: req.token_budget,
-                    tokens_used: 0,
-                    time_used_seconds: 0,
                     completed_at_ms: None,
                 },
             })
@@ -1209,7 +1274,6 @@ mod tests {
                 .expect("update goal request lock") = Some(RecordedUpdateGoalRequest {
                 objective: req.objective.clone(),
                 status: req.status,
-                token_budget: req.token_budget,
             });
             let status = req.status.unwrap_or(HostGoalStatus::Active);
             Ok(HostUpdateGoalResponse {
@@ -1217,9 +1281,6 @@ mod tests {
                     id: 7,
                     objective: req.objective.unwrap_or_else(|| "ship it".to_string()),
                     status,
-                    token_budget: req.token_budget.unwrap_or(Some(128)),
-                    tokens_used: 48,
-                    time_used_seconds: 8,
                     completed_at_ms: (status == HostGoalStatus::Completed).then_some(123),
                 },
             })
@@ -1401,20 +1462,6 @@ mod tests {
                 .and_then(|payload| payload["goal"]["objective"].as_str()),
             Some("ship it")
         );
-        assert_eq!(
-            output
-                .payload
-                .as_ref()
-                .and_then(|payload| payload["remaining_tokens"].as_u64()),
-            Some(96)
-        );
-        assert_eq!(
-            output
-                .payload
-                .as_ref()
-                .map(|payload| payload["completion_budget_report"].is_null()),
-            Some(true)
-        );
     }
 
     #[test]
@@ -1423,13 +1470,10 @@ mod tests {
             id: 7,
             objective: "ship it".to_string(),
             status: HostGoalStatus::Paused,
-            token_budget: Some(128),
-            tokens_used: 32,
-            time_used_seconds: 5,
             completed_at_ms: None,
         });
 
-        assert_eq!(summary, "Goal 7 is paused. Tokens: 32/128.");
+        assert_eq!(summary, "Goal 7 is paused.");
     }
 
     #[tokio::test]
@@ -1441,7 +1485,6 @@ mod tests {
                 "create",
                 CreateGoalToolInput {
                     objective: "ship it".to_string(),
-                    token_budget: Some(128),
                 },
             ))
             .await
@@ -1454,20 +1497,6 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload["goal"]["objective"].as_str()),
             Some("ship it")
-        );
-        assert_eq!(
-            output
-                .payload
-                .as_ref()
-                .and_then(|payload| payload["goal"]["token_budget"].as_u64()),
-            Some(128)
-        );
-        assert_eq!(
-            output
-                .payload
-                .as_ref()
-                .and_then(|payload| payload["remaining_tokens"].as_u64()),
-            Some(128)
         );
     }
 
@@ -1514,7 +1543,6 @@ mod tests {
             Some(RecordedUpdateGoalRequest {
                 objective: None,
                 status: Some(HostGoalStatus::Completed),
-                token_budget: None,
             })
         );
         assert_eq!(
@@ -1523,22 +1551,6 @@ mod tests {
                 .as_ref()
                 .and_then(|payload| payload["goal"]["status"].as_str()),
             Some("completed")
-        );
-        assert_eq!(
-            output
-                .payload
-                .as_ref()
-                .and_then(|payload| payload["remaining_tokens"].as_u64()),
-            Some(80)
-        );
-        assert_eq!(
-            output
-                .payload
-                .as_ref()
-                .and_then(|payload| payload["completion_budget_report"].as_str()),
-            Some(
-                "Goal achieved. Report final budget usage to the user: tokens used: 48 of 128; time used: 8 seconds."
-            )
         );
     }
 
@@ -1667,6 +1679,60 @@ mod tests {
             }
             other => panic!("unexpected output: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn session_get_invokes_host_without_executor_context() {
+        let (plugin, _) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_input(
+                "session",
+                serde_json::json!({ "command": "get" }),
+            ))
+            .await
+            .expect("session get host invoke");
+
+        assert!(
+            output
+                .output_text
+                .contains("Session #1 title: Original session")
+        );
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["session"]["title"].as_str()),
+            Some("Original session")
+        );
+    }
+
+    #[tokio::test]
+    async fn session_rename_invokes_host_without_executor_context() {
+        let (plugin, host) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_command(
+                "session",
+                "rename",
+                SessionRenameToolInput {
+                    title: "Renamed session".to_string(),
+                },
+            ))
+            .await
+            .expect("session rename host invoke");
+
+        assert!(
+            output
+                .output_text
+                .contains("Renamed session #1 to Renamed session.")
+        );
+        assert_eq!(host.current_session().title, "Renamed session");
+        assert_eq!(
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload["session"]["title"].as_str()),
+            Some("Renamed session")
+        );
     }
 
     #[tokio::test]

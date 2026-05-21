@@ -333,8 +333,6 @@ pub struct ClearGoalToolInput {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct CreateGoalToolInput {
     pub objective: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -350,8 +348,6 @@ pub struct UpdateGoalToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objective: Option<String>,
     pub status: UpdateGoalStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]

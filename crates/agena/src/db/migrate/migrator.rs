@@ -7,10 +7,10 @@ use super::m20260509_000003_permission_rule_revoke;
 use super::m20260509_000004_permission_rule_global_scope;
 use super::m20260515_000005_activity_projection;
 use super::m20260515_000005_session_goal;
-use super::m20260516_000006_session_goal_accounting;
 use super::m20260518_000007_model_catalog;
 use super::m20260520_000008_activity_projection_state;
 use super::m20260520_000009_remove_legacy_history_rewrites;
+use super::m20260521_000011_session_usage_cleanup;
 
 pub struct Migrator;
 
@@ -25,10 +25,10 @@ impl MigratorTrait for Migrator {
             Box::new(EventsMigration),
             Box::new(m20260515_000005_activity_projection::Migration),
             Box::new(m20260515_000005_session_goal::Migration),
-            Box::new(m20260516_000006_session_goal_accounting::Migration),
             Box::new(m20260518_000007_model_catalog::Migration),
             Box::new(m20260520_000008_activity_projection_state::Migration),
             Box::new(m20260520_000009_remove_legacy_history_rewrites::Migration),
+            Box::new(m20260521_000011_session_usage_cleanup::Migration),
         ]
     }
 }

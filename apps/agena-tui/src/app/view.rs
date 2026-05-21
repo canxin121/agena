@@ -166,9 +166,7 @@ impl App {
             (area, None)
         };
 
-        let block = Block::default()
-            .title(sanitize_display_text(self.composer_panel_title()))
-            .borders(Borders::ALL);
+        let block = Block::default().borders(Borders::ALL);
         let inner = block.inner(composer_area);
         frame.render_widget(block, composer_area);
 
@@ -521,16 +519,6 @@ impl App {
         }
     }
 
-    fn composer_panel_title(&self) -> String {
-        let mut title = ui_text::composer_title(&self.i18n, self.transcript.session_id);
-        title.push_str(format!("[{}] ", self.composer_mode.status_label()).as_str());
-        if self.transcript.submitting {
-            title.push_str(ui_text::t(&self.i18n, "transcript-header-busy").as_str());
-        }
-        title.push(' ');
-        title
-    }
-
     fn render_composer_items_row(&self, frame: &mut Frame, area: Rect) {
         if area.width == 0 || area.height == 0 {
             return;
@@ -856,35 +844,8 @@ impl App {
         };
 
         match overlay {
-            Overlay::Help => {
-                let area = centered_rect(area, 72, 8);
-                frame.render_widget(Clear, area);
-                let help_lines = ui_text::help_lines(&self.i18n);
-                let text = help_lines
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, value)| {
-                        if index == 0 {
-                            Line::from(Span::styled(
-                                value,
-                                Style::default().add_modifier(Modifier::BOLD),
-                            ))
-                        } else {
-                            Line::from(value)
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                let widget = Paragraph::new(Text::from(text))
-                    .block(
-                        Block::default()
-                            .title(sanitize_display_text(format!(
-                                " {} ",
-                                ui_text::t(&self.i18n, "help-title")
-                            )))
-                            .borders(Borders::ALL),
-                    )
-                    .wrap(Wrap { trim: false });
-                frame.render_widget(widget, area);
+            Overlay::Help(dialog) => {
+                self.render_help_overlay(frame, area, dialog);
             }
             Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                 self.render_line_overlay(frame, area, dialog);
@@ -931,6 +892,9 @@ impl App {
             }
             Overlay::Confirm(dialog) => {
                 self.render_confirm_overlay(frame, area, dialog);
+            }
+            Overlay::SessionSearch(dialog) => {
+                self.render_session_search_overlay(frame, area, dialog);
             }
             Overlay::Picker(dialog) => {
                 self.render_picker_overlay(frame, area, dialog);
@@ -1565,6 +1529,162 @@ impl App {
                 .alignment(Alignment::Right),
             rows[1],
         );
+    }
+
+    fn render_help_overlay(&self, frame: &mut Frame, area: Rect, dialog: &HelpOverlay) {
+        let area = centered_rect(area, 108, 28);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(
+                " {} ",
+                ui_text::t(&self.i18n, "help-title")
+            )))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(8), Constraint::Length(1)])
+            .split(inner);
+
+        let text = ui_text::help_lines(&self.i18n)
+            .into_iter()
+            .map(|line| match line.kind {
+                ui_text::HelpLineKind::Header => Line::from(Span::styled(
+                    sanitize_display_text(line.text),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                ui_text::HelpLineKind::Section => Line::from(Span::styled(
+                    sanitize_display_text(line.text),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                ui_text::HelpLineKind::Body => Line::from(sanitize_display_text(line.text)),
+                ui_text::HelpLineKind::Spacer => Line::from(""),
+            })
+            .collect::<Vec<_>>();
+        frame.render_widget(
+            Paragraph::new(Text::from(text))
+                .scroll((dialog.scroll, 0))
+                .wrap(Wrap { trim: false }),
+            rows[0],
+        );
+        frame.render_widget(
+            Paragraph::new(ui_text::t(&self.i18n, "overlay-help-footer"))
+                .alignment(Alignment::Right)
+                .style(Style::default().fg(Color::DarkGray)),
+            rows[1],
+        );
+    }
+
+    fn render_session_search_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &SessionSearchOverlay,
+    ) {
+        let area = centered_rect(area, 108, 24);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(" {} ", dialog.title)))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(3),
+                Constraint::Min(10),
+                Constraint::Length(1),
+            ])
+            .split(inner);
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
+            rows[0],
+        );
+
+        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
+        frame.render_widget(
+            Paragraph::new(Text::from(input_view.lines.clone()))
+                .block(Block::default().borders(Borders::ALL)),
+            rows[1],
+        );
+
+        let result_items = if dialog.loading {
+            vec![ListItem::new(Line::from(Span::styled(
+                ui_text::t(&self.i18n, "overlay-picker-loading"),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else if dialog.items.is_empty() {
+            vec![ListItem::new(Line::from(Span::styled(
+                sanitize_display_text(dialog.empty_message.as_str()),
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else {
+            dialog
+                .items
+                .iter()
+                .map(|session| {
+                    let mut detail_parts = vec![ui_text::session_meta(
+                        &self.i18n,
+                        session.id,
+                        session.message_count,
+                        session.updated_at,
+                    )];
+                    if self.transcript.session_id == Some(session.id) {
+                        detail_parts.push(ui_text::t(&self.i18n, "session-tag-current"));
+                    }
+                    if let Some(parent_id) = session.parent_id {
+                        detail_parts.push(self.i18n.text_args(
+                            "session-summary-parent",
+                            &crate::fl_args!("id" => parent_id),
+                        ));
+                    }
+                    if session.child_session_count > 0 {
+                        detail_parts.push(self.i18n.text_args(
+                            "session-summary-children",
+                            &crate::fl_args!("count" => session.child_session_count as i64),
+                        ));
+                    }
+                    ListItem::new(vec![
+                        Line::from(sanitize_display_text(session.title.as_str())),
+                        Line::from(Span::styled(
+                            sanitize_display_text(detail_parts.join(" | ")),
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ])
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let list = List::new(result_items)
+            .block(Block::default().borders(Borders::ALL))
+            .highlight_style(selection_highlight_style())
+            .highlight_symbol(">> ");
+        let mut state = ListState::default();
+        state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
+        frame.render_stateful_widget(list, rows[2], &mut state);
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str()))
+                .style(Style::default().fg(Color::DarkGray)),
+            rows[3],
+        );
+        frame.set_cursor_position((
+            rows[1]
+                .x
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_x),
+            rows[1]
+                .y
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_y),
+        ));
     }
 
     fn render_picker_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PickerOverlay) {

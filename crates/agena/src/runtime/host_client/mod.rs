@@ -23,23 +23,25 @@ use crate::plugin::sdk::host_api::{
     HostAgentSwitchResponse, HostCallbackContext, HostClearGoalRequest, HostClearGoalResponse,
     HostClient, HostConfigReloadResponse, HostCreateGoalRequest, HostCreateGoalResponse,
     HostEnterPlanModeRequest, HostEnterWorktreeRequest, HostExitPlanModeRequest,
-    HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGoal, HostGoalStatus,
-    HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
-    HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpHttpMode,
-    HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostMcpServerSpec, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse,
-    HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostSchedulerCreateRequest,
+    HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGetSessionRequest,
+    HostGetSessionResponse, HostGoal, HostGoalStatus, HostLspDiagnostic,
+    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+    HostLspServer, HostMcpAddServerRequest, HostMcpHttpMode, HostMcpListServersResponse,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
+    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
+    HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostStorageDeleteRequest,
-    HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest,
-    HostStorageListResponse, HostStorageSetRequest, HostTodoItem, HostTodoPriority, HostTodoStatus,
-    HostTodoWriteRequest, HostUpdateGoalRequest, HostUpdateGoalResponse, HostWorktreeEntry,
-    HostWorktreeListResponse, LogLevel, MonitorEvent, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
+    HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostTodoItem,
+    HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
+    HostUpdateGoalResponse, HostWorktreeEntry, HostWorktreeListResponse, LogLevel, MonitorEvent,
+    MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, NoopHostClient, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+    current_host_callback_context,
 };
 use crate::plugin::{
     EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
@@ -192,6 +194,21 @@ impl RuntimeHostClient {
             .await
             .map_err(|err| PluginError::new(err.to_string()))?;
         Ok(host_permission_check_response_from_resolution(resolution))
+    }
+
+    fn callback_or_requested_session_id(
+        &self,
+        requested: Option<i64>,
+        action: &str,
+    ) -> Result<i64, PluginError> {
+        match requested {
+            Some(session_id) => Ok(session_id),
+            None => self.callback_context()?.session_id.ok_or_else(|| {
+                host_unavailable(format!(
+                    "host callback context is missing session_id for {action}"
+                ))
+            }),
+        }
     }
 }
 
@@ -474,6 +491,42 @@ impl HostClient for RuntimeHostClient {
         )
     }
 
+    async fn get_session(
+        &self,
+        req: HostGetSessionRequest,
+    ) -> Result<HostGetSessionResponse, PluginError> {
+        let session_id = self.callback_or_requested_session_id(req.session_id, "get_session")?;
+        let session = self
+            .session_manager()?
+            .get_session(session_id)
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(HostGetSessionResponse {
+            session: host_session_from_session(&session),
+        })
+    }
+
+    async fn rename_session(
+        &self,
+        req: HostRenameSessionRequest,
+    ) -> Result<HostRenameSessionResponse, PluginError> {
+        let session_id = self.callback_or_requested_session_id(req.session_id, "rename_session")?;
+        let title = req.title.trim();
+        if title.is_empty() {
+            return Err(PluginError::invalid_params(
+                "session title must not be empty",
+            ));
+        }
+        let session = self
+            .session_manager()?
+            .rename_session(session_id, title.to_string())
+            .await
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(HostRenameSessionResponse {
+            session: host_session_from_session(&session),
+        })
+    }
+
     async fn get_goal(&self, _req: HostGetGoalRequest) -> Result<HostGetGoalResponse, PluginError> {
         let session_id = self.callback_context()?.session_id.ok_or_else(|| {
             host_unavailable("host callback context is missing session_id for get_goal")
@@ -516,7 +569,6 @@ impl HostClient for RuntimeHostClient {
             .create_goal(crate::session::SessionGoalCreateRequest {
                 session_id,
                 objective: req.objective,
-                token_budget: req.token_budget,
             })
             .await
             .map_err(map_create_goal_error)?;
@@ -538,7 +590,6 @@ impl HostClient for RuntimeHostClient {
                 session_id,
                 objective: req.objective,
                 status: req.status.map(session_goal_status_from_host),
-                token_budget: req.token_budget,
                 expected_goal_id: None,
             })
             .await

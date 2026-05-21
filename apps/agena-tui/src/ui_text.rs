@@ -28,16 +28,6 @@ pub fn transcript_header_title(
     }
 }
 
-pub fn composer_title(i18n: &I18n, session_id: Option<i64>) -> String {
-    let session = session_id
-        .map(|id| format!("#{id}"))
-        .unwrap_or_else(|| t(i18n, "composer-session-new"));
-    format!(
-        " {} ",
-        i18n.text_args("pane-composer", &fl_args!("session" => session))
-    )
-}
-
 pub fn session_meta(i18n: &I18n, id: i64, message_count: u64, updated_at: DateTime<Utc>) -> String {
     i18n.text_args(
         "session-meta",
@@ -175,19 +165,16 @@ pub fn default_session_title(i18n: &I18n) -> String {
     )
 }
 
-#[allow(dead_code)]
-pub fn empty_session_title(i18n: &I18n) -> String {
-    t(i18n, "session-default-base")
-}
-
 pub fn session_fallback_title(i18n: &I18n, session_id: i64) -> String {
     i18n.text_args("session-fallback-title", &fl_args!("id" => session_id))
 }
 
+#[cfg(test)]
 pub fn user_input_error_empty(i18n: &I18n) -> String {
     t(i18n, "user-input-error-empty")
 }
 
+#[cfg(test)]
 pub fn user_input_error_invalid_segment(i18n: &I18n, segment: &str) -> String {
     i18n.text_args(
         "user-input-error-invalid-segment",
@@ -195,6 +182,7 @@ pub fn user_input_error_invalid_segment(i18n: &I18n, segment: &str) -> String {
     )
 }
 
+#[cfg(test)]
 pub fn user_input_error_unknown_question(i18n: &I18n, question_id: &str) -> String {
     i18n.text_args(
         "user-input-error-unknown-question",
@@ -202,6 +190,7 @@ pub fn user_input_error_unknown_question(i18n: &I18n, question_id: &str) -> Stri
     )
 }
 
+#[cfg(test)]
 pub fn user_input_error_missing_answer(i18n: &I18n, question_id: &str) -> String {
     i18n.text_args(
         "user-input-error-missing-answer",
@@ -209,18 +198,195 @@ pub fn user_input_error_missing_answer(i18n: &I18n, question_id: &str) -> String
     )
 }
 
+#[cfg(test)]
 pub fn user_input_error_no_answers(i18n: &I18n) -> String {
     t(i18n, "user-input-error-no-answers")
 }
 
-pub fn help_lines(i18n: &I18n) -> Vec<String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpLineKind {
+    Header,
+    Section,
+    Body,
+    Spacer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelpLine {
+    pub text: String,
+    pub kind: HelpLineKind,
+}
+
+pub fn help_lines(i18n: &I18n) -> Vec<HelpLine> {
     vec![
-        t(i18n, "help-header"),
-        String::new(),
-        t(i18n, "status-global"),
-        t(i18n, "status-composer"),
-        t(i18n, "status-transcript"),
-        t(i18n, "help-actions-line-6"),
+        HelpLine {
+            text: t(i18n, "help-header"),
+            kind: HelpLineKind::Header,
+        },
+        HelpLine {
+            text: t(i18n, "status-global"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "status-transcript"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "status-composer"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: String::new(),
+            kind: HelpLineKind::Spacer,
+        },
+        HelpLine {
+            text: t(i18n, "help-section-sessions"),
+            kind: HelpLineKind::Section,
+        },
+        HelpLine {
+            text: t(i18n, "help-sessions-line-1"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-sessions-line-2"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-sessions-line-3"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-sessions-line-4"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-sessions-line-5"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: String::new(),
+            kind: HelpLineKind::Spacer,
+        },
+        HelpLine {
+            text: t(i18n, "help-section-transcript"),
+            kind: HelpLineKind::Section,
+        },
+        HelpLine {
+            text: t(i18n, "help-transcript-line-1"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-transcript-line-2"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-transcript-line-3"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-transcript-line-4"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-transcript-line-5"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-transcript-line-6"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-transcript-line-7"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-transcript-line-8"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: String::new(),
+            kind: HelpLineKind::Spacer,
+        },
+        HelpLine {
+            text: t(i18n, "help-section-composer"),
+            kind: HelpLineKind::Section,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-1"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-2"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-3"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-4"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-5"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-6"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-7"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-8"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-9"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-10"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-composer-line-11"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: String::new(),
+            kind: HelpLineKind::Spacer,
+        },
+        HelpLine {
+            text: t(i18n, "help-section-actions"),
+            kind: HelpLineKind::Section,
+        },
+        HelpLine {
+            text: t(i18n, "help-actions-line-1"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-actions-line-2"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-actions-line-3"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-actions-line-4"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-actions-line-5"),
+            kind: HelpLineKind::Body,
+        },
+        HelpLine {
+            text: t(i18n, "help-actions-line-6"),
+            kind: HelpLineKind::Body,
+        },
     ]
 }
 

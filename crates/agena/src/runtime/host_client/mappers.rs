@@ -267,6 +267,17 @@ pub(super) fn todo_item_from_host(item: HostTodoItem) -> TodoItem {
     }
 }
 
+pub(super) fn host_session_from_session(session: &crate::session::Session) -> HostSession {
+    HostSession {
+        id: session.id,
+        parent_id: session.parent_id,
+        root_id: session.root_id,
+        workspace_id: session.workspace_id,
+        title: session.title.clone(),
+        is_subagent: session.is_subagent,
+    }
+}
+
 pub(super) fn host_goal_from_session_goal(goal: crate::session::SessionGoal) -> HostGoal {
     HostGoal {
         id: goal.id,
@@ -274,12 +285,8 @@ pub(super) fn host_goal_from_session_goal(goal: crate::session::SessionGoal) -> 
         status: match goal.status {
             crate::session::GoalStatus::Active => HostGoalStatus::Active,
             crate::session::GoalStatus::Paused => HostGoalStatus::Paused,
-            crate::session::GoalStatus::BudgetLimited => HostGoalStatus::BudgetLimited,
             crate::session::GoalStatus::Completed => HostGoalStatus::Completed,
         },
-        token_budget: goal.token_budget,
-        tokens_used: goal.tokens_used,
-        time_used_seconds: goal.time_used_seconds,
         completed_at_ms: goal.completed_at.map(|value| value.timestamp_millis()),
     }
 }
@@ -288,7 +295,6 @@ pub(super) fn session_goal_status_from_host(status: HostGoalStatus) -> crate::se
     match status {
         HostGoalStatus::Active => crate::session::GoalStatus::Active,
         HostGoalStatus::Paused => crate::session::GoalStatus::Paused,
-        HostGoalStatus::BudgetLimited => crate::session::GoalStatus::BudgetLimited,
         HostGoalStatus::Completed => crate::session::GoalStatus::Completed,
     }
 }

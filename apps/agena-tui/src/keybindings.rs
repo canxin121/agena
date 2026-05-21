@@ -48,6 +48,7 @@ pub struct ComposerKeyBindings {
     pub newline: Vec<KeyChord>,
     pub edit_queue: Vec<KeyChord>,
     pub history_search: Vec<KeyChord>,
+    pub clear_input: Vec<KeyChord>,
     pub focus_items: Vec<KeyChord>,
     pub attach_file: Vec<KeyChord>,
     pub external_editor: Vec<KeyChord>,
@@ -70,7 +71,8 @@ impl Default for ComposerKeyBindings {
             ],
             edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::empty())],
             history_search: vec![KeyChord::new(KeyCode::Char('r'), KeyModifiers::CONTROL)],
-            focus_items: vec![KeyChord::new(KeyCode::Tab, KeyModifiers::empty())],
+            clear_input: vec![KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL)],
+            focus_items: vec![KeyChord::new(KeyCode::F(2), KeyModifiers::empty())],
             attach_file: vec![
                 KeyChord::new(KeyCode::F(3), KeyModifiers::empty()),
                 KeyChord::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
@@ -99,6 +101,7 @@ impl ComposerKeyBindings {
             newline: parse_list(&raw.newline, &defaults.newline)?,
             edit_queue: parse_list(&raw.edit_queue, &defaults.edit_queue)?,
             history_search: parse_list(&raw.history_search, &defaults.history_search)?,
+            clear_input: parse_list(&raw.clear_input, &defaults.clear_input)?,
             focus_items: parse_list(&raw.focus_items, &defaults.focus_items)?,
             attach_file: parse_list(&raw.attach_file, &defaults.attach_file)?,
             external_editor: parse_list(&raw.external_editor, &defaults.external_editor)?,
@@ -128,6 +131,9 @@ impl ComposerKeyBindings {
         }
         if self.history_search.iter().any(|c| c.matches(event)) {
             return Some(ComposerAction::HistorySearch);
+        }
+        if self.clear_input.iter().any(|c| c.matches(event)) {
+            return Some(ComposerAction::ClearInput);
         }
         if self
             .open_pending_user_input
@@ -172,6 +178,7 @@ pub enum ComposerAction {
     Newline,
     EditQueue,
     HistorySearch,
+    ClearInput,
     FocusItems,
     AttachFile,
     ExternalEditor,
@@ -188,6 +195,7 @@ pub struct RawComposerKeyBindings {
     pub newline: Vec<String>,
     pub edit_queue: Vec<String>,
     pub history_search: Vec<String>,
+    pub clear_input: Vec<String>,
     pub focus_items: Vec<String>,
     pub attach_file: Vec<String>,
     pub external_editor: Vec<String>,
@@ -309,7 +317,11 @@ mod tests {
             Some(ComposerAction::HistorySearch)
         );
         assert_eq!(
-            kb.match_action(&KeyEvent::new(KeyCode::Tab, KeyModifiers::empty())),
+            kb.match_action(&KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL,)),
+            Some(ComposerAction::ClearInput)
+        );
+        assert_eq!(
+            kb.match_action(&KeyEvent::new(KeyCode::F(2), KeyModifiers::empty())),
             Some(ComposerAction::FocusItems)
         );
         assert_eq!(

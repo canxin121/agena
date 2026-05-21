@@ -177,6 +177,25 @@ where
         .await
 }
 
+pub async fn rename_session<C>(
+    db: &C,
+    session_id: i64,
+    title: impl Into<String>,
+) -> Result<Option<entities::session::Model>, DbErr>
+where
+    C: ConnectionTrait,
+{
+    let Some(existing) = get_session_by_id(db, session_id).await? else {
+        return Ok(None);
+    };
+    let next_version = existing.version + 1;
+    let mut active: entities::session::ActiveModel = existing.into();
+    active.title = Set(title.into());
+    active.version = Set(next_version);
+    active.updated_at_ms = Set(Utc::now().timestamp_millis());
+    active.update(db).await.map(Some)
+}
+
 /// Outcome of a [`touch_session_updated_at`] attempt.
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]

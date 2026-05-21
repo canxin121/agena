@@ -31,12 +31,7 @@ impl SessionManager {
         }
         let updated = self
             .store
-            .upsert_goal(
-                request.session_id,
-                request.objective,
-                request.token_budget,
-                state.cache_policy(),
-            )
+            .upsert_goal(request.session_id, request.objective, state.cache_policy())
             .await?;
         let goal = updated.goal.clone().ok_or_else(|| {
             AppError::Internal(format!(
@@ -96,7 +91,6 @@ impl SessionManager {
                 GoalUpdate {
                     objective: request.objective,
                     status: request.status,
-                    token_budget: request.token_budget,
                     expected_goal_id: request.expected_goal_id,
                 },
                 state.cache_policy(),
@@ -177,9 +171,6 @@ impl SessionManager {
                         goal_id: None,
                         objective: None,
                         status: None,
-                        token_budget: None,
-                        tokens_used: None,
-                        time_used_seconds: None,
                         completed_at_ms: None,
                         ts_ms: Utc::now().timestamp_millis(),
                     }),

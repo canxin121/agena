@@ -99,6 +99,19 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Read the current session metadata.
+    async fn get_session(&self, _req: HostGetSessionRequest) -> Result<HostGetSessionResponse> {
+        Err(unavailable())
+    }
+
+    /// Rename the current session.
+    async fn rename_session(
+        &self,
+        _req: HostRenameSessionRequest,
+    ) -> Result<HostRenameSessionResponse> {
+        Err(unavailable())
+    }
+
     /// Read the current persisted session goal, if any.
     async fn get_goal(&self, _req: HostGetGoalRequest) -> Result<HostGetGoalResponse> {
         Err(unavailable())
@@ -642,12 +655,46 @@ pub struct HostTodoWriteRequest {
     pub items: Vec<HostTodoItem>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HostSession {
+    pub id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<i64>,
+    pub root_id: i64,
+    pub workspace_id: i64,
+    pub title: String,
+    #[serde(default)]
+    pub is_subagent: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostGetSessionRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostGetSessionResponse {
+    pub session: HostSession,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostRenameSessionRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostRenameSessionResponse {
+    pub session: HostSession,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HostGoalStatus {
     Active,
     Paused,
-    BudgetLimited,
     Completed,
 }
 
@@ -656,12 +703,6 @@ pub struct HostGoal {
     pub id: i64,
     pub objective: String,
     pub status: HostGoalStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<u64>,
-    #[serde(default)]
-    pub tokens_used: u64,
-    #[serde(default)]
-    pub time_used_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at_ms: Option<i64>,
 }
@@ -678,8 +719,6 @@ pub struct HostGetGoalResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostCreateGoalRequest {
     pub objective: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -693,8 +732,6 @@ pub struct HostUpdateGoalRequest {
     pub objective: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<HostGoalStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<Option<u64>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

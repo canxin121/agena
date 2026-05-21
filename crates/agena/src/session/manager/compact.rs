@@ -97,6 +97,65 @@ impl SessionManager {
         .await
     }
 
+    pub(super) async fn auto_compact_session(
+        &self,
+        session: Session,
+        options: &SessionRunOptions,
+        state: Arc<SessionManagerState>,
+        control: Arc<TurnControl>,
+    ) -> Result<Session, AppError> {
+        if session.messages.is_empty() {
+            return Ok(session);
+        }
+
+        let original_execution = session.runtime.execution.clone();
+        let original_options = options.clone();
+        let compacted_at = session.messages.last().map(|message| message.id);
+        let tail_start = select_tail_start_message_id(session.messages.as_slice());
+
+        match self
+            .try_remote_compact(&session, &original_options, state.clone())
+            .await
+        {
+            Ok(Some(summary)) => {
+                let session = self
+                    .install_compaction_runtime(
+                        session,
+                        summary,
+                        tail_start,
+                        compacted_at,
+                        compacted_at,
+                        PromptCompactionStrategy::Remote,
+                        original_execution,
+                        Vec::new(),
+                        state,
+                    )
+                    .await?;
+                return Ok(session);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::warn!(
+                    target: "agena::session::compact",
+                    session_id = session.id,
+                    error = %err,
+                    "automatic remote compaction failed; falling back to local compaction agent"
+                );
+            }
+        }
+
+        self.local_compact_with_agent(
+            session,
+            original_options,
+            original_execution,
+            tail_start,
+            compacted_at,
+            state,
+            control,
+        )
+        .await
+    }
+
     async fn try_remote_compact(
         &self,
         session: &Session,

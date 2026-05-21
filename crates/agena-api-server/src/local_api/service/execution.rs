@@ -241,7 +241,7 @@ impl ApiService {
                 Some(goal) => Some(self.session_goal_resource(manager, session, goal).await?),
                 None => None,
             },
-            prompt_usage: session_prompt_usage_resource(session),
+            usage: session_usage_resource(manager, session).map_err(api_error_from_app)?,
         })
     }
 
@@ -256,9 +256,6 @@ impl ApiService {
             session_id: goal.session_id,
             objective: goal.objective.clone(),
             status: goal.status,
-            token_budget: goal.token_budget,
-            tokens_used: goal.tokens_used,
-            time_used_seconds: goal.time_used_seconds,
             created_at: goal.created_at,
             updated_at: goal.updated_at,
             completed_at: goal.completed_at,
@@ -266,63 +263,40 @@ impl ApiService {
     }
 }
 
-fn session_prompt_usage_resource(session: &Session) -> Option<SessionPromptUsageResource> {
-    session_prompt_usage_from_runtime(
-        &session.runtime().prompt_tokens,
-        session.runtime().execution.agent_run.max_output_tokens,
-    )
+fn session_usage_resource(
+    manager: &SessionManager,
+    session: &Session,
+) -> Result<SessionUsageResource, AppError> {
+    let usage = manager.session_usage(session)?;
+    Ok(SessionUsageResource {
+        measured_prompt_tokens: usage.measured_prompt_tokens,
+        current_tokens: usage.current_tokens,
+        projected_tokens: usage.projected_tokens,
+        limit_tokens: usage.limit_tokens,
+        limit_basis: usage.limit_basis.map(session_usage_limit_basis_resource),
+        reserved_tokens: usage.reserved_tokens,
+        model_context_window_tokens: usage.model_context_window_tokens,
+        model_max_input_tokens: usage.model_max_input_tokens,
+        model_max_output_tokens: usage.model_max_output_tokens,
+    })
 }
 
-fn session_prompt_usage_from_runtime(
-    prompt_tokens: &agena::session::PromptTokenRuntime,
-    max_output_tokens: Option<u32>,
-) -> Option<SessionPromptUsageResource> {
-    let current_tokens = prompt_tokens.prompt_tokens()?;
-    let model_context_window_tokens = prompt_tokens.model_context_window_tokens;
-    let budget_tokens = Some(agena::session::estimate_prompt_budget_threshold_tokens(
-        model_context_window_tokens,
-        max_output_tokens,
-    ))
-    .filter(|tokens| *tokens > 0);
-
-    Some(SessionPromptUsageResource {
-        current_tokens,
-        budget_tokens,
-        model_context_window_tokens,
-    })
+fn session_usage_limit_basis_resource(
+    basis: agena::session::SessionUsageLimitBasis,
+) -> SessionUsageLimitBasis {
+    match basis {
+        agena::session::SessionUsageLimitBasis::ContextWindow => {
+            SessionUsageLimitBasis::ContextWindow
+        }
+        agena::session::SessionUsageLimitBasis::PromptThreshold => {
+            SessionUsageLimitBasis::PromptThreshold
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::session_prompt_usage_from_runtime;
-    use agena::session::{
-        PromptTokenRuntime, PromptTokenUsageSnapshot, estimate_prompt_budget_threshold_tokens,
-    };
-
-    #[test]
-    fn session_prompt_usage_resource_counts_only_prompt_side_tokens() {
-        let runtime = PromptTokenRuntime {
-            last_successful_usage: Some(PromptTokenUsageSnapshot {
-                input_tokens: 1_200,
-                output_tokens: 600,
-                reasoning_tokens: 400,
-                cache_write_tokens: 30,
-                cache_read_tokens: 20,
-            }),
-            model_context_window_tokens: Some(8_192),
-            ..Default::default()
-        };
-        let usage = session_prompt_usage_from_runtime(&runtime, Some(512)).expect("prompt usage");
-        assert_eq!(usage.current_tokens, 1_250);
-        assert_eq!(
-            usage.budget_tokens,
-            Some(estimate_prompt_budget_threshold_tokens(
-                Some(8_192),
-                Some(512)
-            ))
-        );
-        assert_eq!(usage.model_context_window_tokens, Some(8_192));
-    }
+    // execution resource usage projection is covered through agena session manager tests
 }
 
 fn resolve_mode_request_override(

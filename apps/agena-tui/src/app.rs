@@ -28,7 +28,7 @@ use agena_api::{
     resource::{
         MessageResource, MessageRole, PermissionRuleResource, ProviderAdapterModelsResource,
         ProviderAdapterModelsResponse, ProviderSummaryResource, RunOptions,
-        SessionExecutionResource, SessionResource, SessionRunState,
+        SessionExecutionResource, SessionResource, SessionRunState, SessionUsageResource,
     },
 };
 use anyhow::Result;
@@ -528,7 +528,15 @@ enum AppMessage {
         purpose: ProviderPickerPurpose,
         result: UiResult<Vec<ProviderSummaryResource>>,
     },
-    WorkspaceSessionsLoaded {
+    SessionSearchPageLoaded {
+        mode: SessionViewMode,
+        query: String,
+        page_index: usize,
+        result: UiResult<PaginatedResponse<SessionResource>>,
+    },
+    SessionSearchSubtreeLoaded {
+        session_id: i64,
+        query: String,
         result: UiResult<Vec<SessionResource>>,
     },
     LineageLoaded {
@@ -616,7 +624,7 @@ type UiResult<T> = std::result::Result<T, String>;
 
 #[derive(Debug, Clone)]
 enum Overlay {
-    Help,
+    Help(HelpOverlay),
     TranscriptSearch(LineInputOverlay),
     SessionRename(LineInputOverlay),
     SettingsStudio(SettingsStudioOverlay),
@@ -628,6 +636,7 @@ enum Overlay {
     Permission(PermissionOverlay),
     UserInputReply(UserInputOverlay),
     Confirm(ConfirmOverlay),
+    SessionSearch(SessionSearchOverlay),
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
@@ -641,6 +650,11 @@ struct LineInputOverlay {
     title: String,
     prompt: String,
     input: Editor,
+}
+
+#[derive(Debug, Clone, Default)]
+struct HelpOverlay {
+    scroll: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -1047,6 +1061,27 @@ struct ModelCatalogStudioOverlay {
 }
 
 #[derive(Debug, Clone)]
+struct SessionSearchOverlay {
+    title: String,
+    prompt: String,
+    empty_message: String,
+    footer: String,
+    input: Editor,
+    items: Vec<SessionResource>,
+    all_items: Vec<SessionResource>,
+    selected: usize,
+    loading: bool,
+    mode: SessionViewMode,
+    scope_session_id: Option<i64>,
+    page_limit: usize,
+    page_index: usize,
+    offset: usize,
+    cursors: Vec<Option<String>>,
+    next_cursor: Option<String>,
+    has_more: bool,
+}
+
+#[derive(Debug, Clone)]
 struct PickerOverlay {
     title: String,
     prompt: String,
@@ -1109,7 +1144,6 @@ enum ProviderPickerPurpose {
 #[derive(Debug, Clone)]
 enum PickerKind {
     Commands,
-    WorkspaceSessions,
     Lineage { session_id: i64 },
     RewindMessages { session_id: i64 },
     Providers(ProviderPickerPurpose),
@@ -1709,7 +1743,7 @@ impl App {
                     return;
                 }
                 KeyCode::Char('?') => {
-                    self.overlay = Some(Overlay::Help);
+                    self.overlay = Some(Overlay::Help(HelpOverlay::default()));
                     return;
                 }
                 _ => {}
@@ -1717,23 +1751,16 @@ impl App {
         }
 
         if matches!(key.code, KeyCode::Tab)
+            && self.focus != Focus::Composer
             && !(self.focus == Focus::Composer && self.slash_command_suggestions.is_some())
         {
-            self.focus = match self.focus {
-                Focus::Sessions => Focus::Transcript,
-                Focus::Transcript => Focus::Composer,
-                Focus::Composer => Focus::Transcript,
-            };
+            self.focus = Focus::Composer;
             self.slash_command_suggestions = None;
             return;
         }
 
-        if matches!(key.code, KeyCode::BackTab) {
-            self.focus = match self.focus {
-                Focus::Sessions => Focus::Composer,
-                Focus::Transcript => Focus::Composer,
-                Focus::Composer => Focus::Transcript,
-            };
+        if matches!(key.code, KeyCode::BackTab) && self.focus != Focus::Composer {
+            self.focus = Focus::Composer;
             self.slash_command_suggestions = None;
             return;
         }
@@ -1881,10 +1908,7 @@ impl App {
         };
 
         let close = match &mut overlay {
-            Overlay::Help => matches!(
-                key.code,
-                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q')
-            ),
+            Overlay::Help(dialog) => self.handle_help_overlay_key(key, dialog),
             Overlay::TranscriptSearch(dialog) => {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }
@@ -1904,6 +1928,7 @@ impl App {
             Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
             Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
             Overlay::Confirm(dialog) => self.handle_confirm_overlay_key(key, dialog),
+            Overlay::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
             Overlay::Picker(dialog) => self.handle_picker_overlay_key(key, dialog),
             Overlay::SessionModelChooser(dialog) => {
                 self.handle_session_model_chooser_overlay_key(key, dialog)
@@ -2781,6 +2806,273 @@ impl App {
         }
     }
 
+    fn handle_help_overlay_key(&mut self, key: KeyEvent, dialog: &mut HelpOverlay) -> bool {
+        let max_scroll = ui_text::help_lines(&self.i18n)
+            .len()
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.scroll = dialog.scroll.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dialog.scroll = min(dialog.scroll.saturating_add(1), max_scroll);
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.scroll = dialog.scroll.saturating_sub(8);
+                false
+            }
+            KeyCode::PageDown => {
+                dialog.scroll = min(dialog.scroll.saturating_add(8), max_scroll);
+                false
+            }
+            KeyCode::Home => {
+                dialog.scroll = 0;
+                false
+            }
+            KeyCode::End => {
+                dialog.scroll = max_scroll;
+                false
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_session_search_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut SessionSearchOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if !dialog.items.is_empty() {
+                    dialog.selected =
+                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
+                }
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.selected = dialog.selected.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown => {
+                if !dialog.items.is_empty() {
+                    dialog.selected =
+                        min(dialog.selected + 10, dialog.items.len().saturating_sub(1));
+                }
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected = 0;
+                false
+            }
+            KeyCode::End => {
+                if !dialog.items.is_empty() {
+                    dialog.selected = dialog.items.len().saturating_sub(1);
+                }
+                false
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if dialog.loading || dialog.page_index == 0 {
+                    return false;
+                }
+                dialog.page_index = dialog.page_index.saturating_sub(1);
+                dialog.selected = 0;
+                match dialog.mode {
+                    SessionViewMode::Subtree => {
+                        self.refresh_session_search_overlay_local(dialog);
+                    }
+                    SessionViewMode::All | SessionViewMode::Roots => {
+                        let cursor = dialog.cursors.get(dialog.page_index).cloned().flatten();
+                        dialog.loading = true;
+                        dialog.footer = self.session_search_footer(dialog);
+                        self.request_session_search_page(
+                            dialog.mode,
+                            dialog.input.text().trim().to_string(),
+                            dialog.page_index,
+                            cursor,
+                        );
+                    }
+                }
+                false
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if dialog.loading || !dialog.has_more {
+                    return false;
+                }
+                match dialog.mode {
+                    SessionViewMode::Subtree => {
+                        dialog.page_index = dialog.page_index.saturating_add(1);
+                        dialog.selected = 0;
+                        self.refresh_session_search_overlay_local(dialog);
+                    }
+                    SessionViewMode::All | SessionViewMode::Roots => {
+                        let Some(cursor) = dialog.next_cursor.clone() else {
+                            return false;
+                        };
+                        dialog.page_index = dialog.page_index.saturating_add(1);
+                        if dialog.cursors.len() <= dialog.page_index {
+                            dialog.cursors.resize(dialog.page_index + 1, None);
+                        }
+                        dialog.cursors[dialog.page_index] = Some(cursor.clone());
+                        dialog.selected = 0;
+                        dialog.loading = true;
+                        dialog.footer = self.session_search_footer(dialog);
+                        self.request_session_search_page(
+                            dialog.mode,
+                            dialog.input.text().trim().to_string(),
+                            dialog.page_index,
+                            Some(cursor),
+                        );
+                    }
+                }
+                false
+            }
+            KeyCode::Tab => {
+                if let Some(session) = dialog.items.get(dialog.selected) {
+                    let title = session.title.clone();
+                    if dialog.input.text() != title {
+                        dialog.input.set_text(title.clone());
+                        self.reset_session_search_query(dialog, title);
+                    }
+                }
+                false
+            }
+            KeyCode::Enter => {
+                let Some(session) = dialog.items.get(dialog.selected).cloned() else {
+                    return false;
+                };
+                self.open_session(session.id, session.title);
+                self.focus = Focus::Composer;
+                true
+            }
+            _ => {
+                let before = dialog.input.text().trim().to_string();
+                dialog.input.handle_line_input_key(key);
+                let after = dialog.input.text().trim().to_string();
+                if before != after {
+                    self.reset_session_search_query(dialog, after);
+                }
+                false
+            }
+        }
+    }
+
+    fn reset_session_search_query(&mut self, dialog: &mut SessionSearchOverlay, query: String) {
+        dialog.page_index = 0;
+        dialog.selected = 0;
+        dialog.offset = 0;
+        dialog.cursors.clear();
+        dialog.cursors.push(None);
+        dialog.next_cursor = None;
+        dialog.has_more = false;
+        dialog.loading = true;
+        dialog.footer = self.session_search_footer(dialog);
+        match dialog.mode {
+            SessionViewMode::Subtree => {
+                if let Some(session_id) = dialog.scope_session_id {
+                    self.request_session_search_subtree(session_id, query);
+                }
+            }
+            SessionViewMode::All | SessionViewMode::Roots => {
+                self.request_session_search_page(dialog.mode, query, 0, None);
+            }
+        }
+    }
+
+    fn refresh_session_search_overlay_local(&self, dialog: &mut SessionSearchOverlay) {
+        let query = dialog.input.text().trim().to_ascii_lowercase();
+        let filtered = dialog
+            .all_items
+            .iter()
+            .filter(|session| session_matches_query(session, query.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let total = filtered.len();
+        let page_limit = dialog.page_limit.max(1);
+        let max_page_index = total.saturating_sub(1) / page_limit;
+        dialog.page_index = min(dialog.page_index, max_page_index);
+        dialog.offset = dialog.page_index.saturating_mul(page_limit);
+        dialog.items = filtered
+            .into_iter()
+            .skip(dialog.offset)
+            .take(page_limit)
+            .collect();
+        dialog.has_more = dialog.offset + dialog.items.len() < total;
+        dialog.next_cursor = None;
+        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+        dialog.loading = false;
+        dialog.footer = self.session_search_footer(dialog);
+    }
+
+    fn session_search_footer(&self, dialog: &SessionSearchOverlay) -> String {
+        let scope = match dialog.mode {
+            SessionViewMode::All => ui_text::t(&self.i18n, "overlay-session-search-scope-all"),
+            SessionViewMode::Roots => ui_text::t(&self.i18n, "overlay-session-search-scope-roots"),
+            SessionViewMode::Subtree => {
+                ui_text::t(&self.i18n, "overlay-session-search-scope-subtree")
+            }
+        };
+        let start = if dialog.items.is_empty() {
+            0
+        } else {
+            dialog.offset.saturating_add(1)
+        };
+        let end = dialog.offset.saturating_add(dialog.items.len());
+        if dialog.mode == SessionViewMode::Subtree {
+            let total = dialog
+                .all_items
+                .iter()
+                .filter(|session| {
+                    session_matches_query(
+                        session,
+                        dialog.input.text().trim().to_ascii_lowercase().as_str(),
+                    )
+                })
+                .count();
+            let page_total = if total == 0 {
+                0
+            } else {
+                (total + dialog.page_limit.saturating_sub(1)) / dialog.page_limit.max(1)
+            };
+            return self.i18n.text_args(
+                "overlay-session-search-footer-local",
+                &crate::fl_args!(
+                    "scope" => scope,
+                    "start" => start as i64,
+                    "end" => end as i64,
+                    "total" => total as i64,
+                    "page" => dialog.page_index.saturating_add(1) as i64,
+                    "pages" => page_total.max(1) as i64,
+                ),
+            );
+        }
+
+        let end_state = if dialog.has_more {
+            ui_text::t(&self.i18n, "overlay-session-search-tail-more")
+        } else {
+            ui_text::t(&self.i18n, "overlay-session-search-tail-end")
+        };
+        self.i18n.text_args(
+            "overlay-session-search-footer-remote",
+            &crate::fl_args!(
+                "scope" => scope,
+                "start" => start as i64,
+                "end" => end as i64,
+                "page" => dialog.page_index.saturating_add(1) as i64,
+                "tail" => end_state,
+            ),
+        )
+    }
+
     fn handle_picker_overlay_key(&mut self, key: KeyEvent, dialog: &mut PickerOverlay) -> bool {
         match key.code {
             KeyCode::Esc => true,
@@ -3325,6 +3617,8 @@ impl App {
 
     fn handle_paste(&mut self, text: String) {
         let backend = self.backend.clone();
+        let mut pending_session_search_request: Option<(SessionViewMode, Option<i64>, String)> =
+            None;
         if let Some(overlay) = &mut self.overlay {
             match overlay {
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
@@ -3419,7 +3713,19 @@ impl App {
                 }
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
-                Overlay::Help => {}
+                Overlay::Help(_) => {}
+            }
+            if let Some((mode, scope_session_id, query)) = pending_session_search_request {
+                match mode {
+                    SessionViewMode::Subtree => {
+                        if let Some(session_id) = scope_session_id {
+                            self.request_session_search_subtree(session_id, query);
+                        }
+                    }
+                    SessionViewMode::All | SessionViewMode::Roots => {
+                        self.request_session_search_page(mode, query, 0, None);
+                    }
+                }
             }
             return;
         }
@@ -3601,6 +3907,12 @@ impl App {
                 }
                 ComposerAction::HistorySearch => {
                     self.open_prompt_history_search();
+                    return;
+                }
+                ComposerAction::ClearInput => {
+                    self.reset_prompt_history_recall();
+                    self.clear_composer_state();
+                    self.last_esc_at = None;
                     return;
                 }
                 ComposerAction::FocusItems => {
@@ -4379,8 +4691,8 @@ impl App {
         items
     }
 
-    /// Single-Esc leaves composer focus. Double-Esc within the configured
-    /// window clears the input.
+    /// Single-Esc dismisses transient composer UI. Double-Esc within the
+    /// configured window clears the input without leaving the composer.
     fn handle_composer_esc(&mut self) {
         let now = Instant::now();
         let double = self
@@ -4389,17 +4701,7 @@ impl App {
             .unwrap_or(false);
         if double {
             self.reset_prompt_history_recall();
-            self.composer = Editor::default();
-            self.composer_items.clear();
-            self.slash_command_suggestions = None;
-            self.dismissed_slash_command_suggestions_for = None;
-            self.file_mention_suggestions = None;
-            self.dismissed_file_mention_suggestions_for = None;
-            self.prompt_history_search = None;
-            self.selected_composer_item = None;
-            if self.composer_mode.is_vim() {
-                self.composer_mode = ComposerMode::VimInsert;
-            }
+            self.clear_composer_state();
             self.last_esc_at = None;
             return;
         }
@@ -4408,7 +4710,6 @@ impl App {
         self.file_mention_suggestions = None;
         self.prompt_history_search = None;
         self.selected_composer_item = None;
-        self.focus = Focus::Transcript;
     }
 
     /// UP / EditQueue binding: pull every editable queued message back into
@@ -4484,9 +4785,17 @@ impl App {
             AppMessage::UserInputReplied { session_id, result } => {
                 self.handle_user_input_replied(session_id, result)
             }
-            AppMessage::WorkspaceSessionsLoaded { result } => {
-                self.handle_workspace_sessions_loaded(result)
-            }
+            AppMessage::SessionSearchPageLoaded {
+                mode,
+                query,
+                page_index,
+                result,
+            } => self.handle_session_search_page_loaded(mode, query, page_index, result),
+            AppMessage::SessionSearchSubtreeLoaded {
+                session_id,
+                query,
+                result,
+            } => self.handle_session_search_subtree_loaded(session_id, query, result),
             AppMessage::LineageLoaded { session_id, result } => {
                 self.handle_lineage_loaded(session_id, result)
             }
@@ -4974,12 +5283,54 @@ impl App {
         self.overlay = Some(Overlay::Picker(dialog));
     }
 
-    fn handle_workspace_sessions_loaded(&mut self, result: UiResult<Vec<SessionResource>>) {
-        let Some(Overlay::Picker(mut dialog)) = self.overlay.take() else {
+    fn handle_session_search_page_loaded(
+        &mut self,
+        mode: SessionViewMode,
+        query: String,
+        page_index: usize,
+        result: UiResult<PaginatedResponse<SessionResource>>,
+    ) {
+        let Some(Overlay::SessionSearch(mut dialog)) = self.overlay.take() else {
             return;
         };
-        if !matches!(dialog.kind, PickerKind::WorkspaceSessions) {
-            self.overlay = Some(Overlay::Picker(dialog));
+        if dialog.mode != mode
+            || dialog.page_index != page_index
+            || dialog.input.text().trim() != query
+        {
+            self.overlay = Some(Overlay::SessionSearch(dialog));
+            return;
+        }
+
+        dialog.loading = false;
+        dialog.empty_message = ui_text::t(&self.i18n, "overlay-resume-empty");
+        match result {
+            Ok(page) => {
+                dialog.items = page.items;
+                dialog.offset = dialog.page_index.saturating_mul(dialog.page_limit);
+                dialog.next_cursor = page.page.next_cursor;
+                dialog.has_more = page.page.has_more;
+                dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+                dialog.footer = self.session_search_footer(&dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
+        self.overlay = Some(Overlay::SessionSearch(dialog));
+    }
+
+    fn handle_session_search_subtree_loaded(
+        &mut self,
+        session_id: i64,
+        query: String,
+        result: UiResult<Vec<SessionResource>>,
+    ) {
+        let Some(Overlay::SessionSearch(mut dialog)) = self.overlay.take() else {
+            return;
+        };
+        if dialog.mode != SessionViewMode::Subtree
+            || dialog.scope_session_id != Some(session_id)
+            || dialog.input.text().trim() != query
+        {
+            self.overlay = Some(Overlay::SessionSearch(dialog));
             return;
         }
 
@@ -4993,15 +5344,12 @@ impl App {
                         .cmp(&left.updated_at)
                         .then_with(|| right.id.cmp(&left.id))
                 });
-                dialog.all_items = sessions
-                    .into_iter()
-                    .map(|session| self.workspace_session_picker_item(session))
-                    .collect();
-                Self::refresh_picker_overlay(&mut dialog);
+                dialog.all_items = sessions;
+                self.refresh_session_search_overlay_local(&mut dialog);
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::Picker(dialog));
+        self.overlay = Some(Overlay::SessionSearch(dialog));
     }
 
     fn handle_lineage_loaded(&mut self, session_id: i64, result: UiResult<Vec<SessionResource>>) {
@@ -5082,6 +5430,7 @@ impl App {
             Ok(messages) => {
                 dialog.all_items = messages
                     .into_iter()
+                    .filter(is_rewind_target_message)
                     .rev()
                     .map(|message| self.rewind_message_picker_item(message))
                     .collect();
@@ -5461,15 +5810,47 @@ impl App {
         });
     }
 
-    fn request_workspace_sessions_picker(&mut self) {
+    fn request_session_search_page(
+        &mut self,
+        mode: SessionViewMode,
+        query: String,
+        page_index: usize,
+        cursor: Option<String>,
+    ) {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
-                .list_workspace_sessions(false)
+                .list_workspace_sessions_page(
+                    mode == SessionViewMode::Roots,
+                    (!query.trim().is_empty()).then_some(query.as_str()),
+                    cursor,
+                    50,
+                )
                 .await
                 .map_err(|error| error.to_string());
-            let _ = tx.send(AppMessage::WorkspaceSessionsLoaded { result });
+            let _ = tx.send(AppMessage::SessionSearchPageLoaded {
+                mode,
+                query,
+                page_index,
+                result,
+            });
+        });
+    }
+
+    fn request_session_search_subtree(&mut self, session_id: i64, query: String) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .list_session_subtree(session_id)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::SessionSearchSubtreeLoaded {
+                session_id,
+                query,
+                result,
+            });
         });
     }
 
@@ -7188,19 +7569,50 @@ impl App {
     fn open_resume_session_picker_with_query(&mut self, query: &str) {
         let mut input = Editor::from_text(query.trim().to_string());
         input.cursor = input.text().len();
-        self.overlay = Some(Overlay::Picker(PickerOverlay {
+        let scope_session_id = (self.sessions.view_mode == SessionViewMode::Subtree)
+            .then(|| self.current_or_selected_session_id())
+            .flatten();
+        let mut dialog = SessionSearchOverlay {
             title: ui_text::t(&self.i18n, "overlay-resume-title"),
             prompt: ui_text::t(&self.i18n, "overlay-resume-prompt"),
             empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
+            footer: String::new(),
             input,
-            all_items: Vec::new(),
             items: Vec::new(),
+            all_items: Vec::new(),
             selected: 0,
             loading: true,
-            kind: PickerKind::WorkspaceSessions,
-        }));
-        self.request_workspace_sessions_picker();
+            mode: self.sessions.view_mode,
+            scope_session_id,
+            page_limit: 50,
+            page_index: 0,
+            offset: 0,
+            cursors: vec![None],
+            next_cursor: None,
+            has_more: false,
+        };
+        dialog.footer = self.session_search_footer(&dialog);
+        match dialog.mode {
+            SessionViewMode::Subtree => {
+                let Some(session_id) = dialog.scope_session_id else {
+                    self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+                    return;
+                };
+                self.request_session_search_subtree(
+                    session_id,
+                    dialog.input.text().trim().to_string(),
+                );
+            }
+            SessionViewMode::All | SessionViewMode::Roots => {
+                self.request_session_search_page(
+                    dialog.mode,
+                    dialog.input.text().trim().to_string(),
+                    0,
+                    None,
+                );
+            }
+        }
+        self.overlay = Some(Overlay::SessionSearch(dialog));
     }
 
     fn open_lineage_picker(&mut self) {
@@ -8297,37 +8709,6 @@ impl App {
         }));
     }
 
-    fn workspace_session_picker_item(&self, session: SessionResource) -> PickerItem {
-        let mut detail_parts = vec![ui_text::session_meta(
-            &self.i18n,
-            session.id,
-            session.message_count,
-            session.updated_at,
-        )];
-
-        if self.transcript.session_id == Some(session.id) {
-            detail_parts.push(ui_text::t(&self.i18n, "session-tag-current"));
-        }
-        if let Some(parent_id) = session.parent_id {
-            detail_parts.push(self.i18n.text_args(
-                "session-summary-parent",
-                &crate::fl_args!("id" => parent_id),
-            ));
-        }
-        if session.child_session_count > 0 {
-            detail_parts.push(self.i18n.text_args(
-                "session-summary-children",
-                &crate::fl_args!("count" => session.child_session_count as i64),
-            ));
-        }
-
-        PickerItem {
-            label: session.title.clone(),
-            detail: detail_parts.join(" | "),
-            value: PickerValue::Session(session.id),
-        }
-    }
-
     fn lineage_session_picker_item(&self, item: LineageSessionItem) -> PickerItem {
         let session = item.session;
         let mut detail_parts = vec![ui_text::session_meta(
@@ -8497,8 +8878,7 @@ impl App {
                 item.label.to_ascii_lowercase().contains(query)
                     || item.detail.to_ascii_lowercase().contains(query)
             }
-            (PickerKind::WorkspaceSessions, PickerValue::Session(session_id))
-            | (PickerKind::Lineage { .. }, PickerValue::Session(session_id)) => {
+            (PickerKind::Lineage { .. }, PickerValue::Session(session_id)) => {
                 item.label.to_ascii_lowercase().contains(query)
                     || item.detail.to_ascii_lowercase().contains(query)
                     || format!("#{session_id}").contains(query)
@@ -8525,13 +8905,6 @@ impl App {
                     .set_text(format!("/{entry_name} ").trim_end().to_string());
                 self.focus = Focus::Composer;
                 self.sync_composer_suggestions();
-            }
-            (PickerKind::WorkspaceSessions, PickerValue::Session(session_id)) => {
-                self.open_session(
-                    session_id,
-                    ui_text::session_fallback_title(&self.i18n, session_id),
-                );
-                self.focus = Focus::Transcript;
             }
             (PickerKind::Lineage { .. }, PickerValue::Session(session_id)) => {
                 self.open_session(
@@ -8768,7 +9141,7 @@ impl App {
 
     fn execute_command(&mut self, spec: &'static CommandSpec, args: &str) {
         match spec.id {
-            CommandId::Help => self.overlay = Some(Overlay::Help),
+            CommandId::Help => self.overlay = Some(Overlay::Help(HelpOverlay::default())),
             CommandId::Commands => self.open_command_palette(),
             CommandId::New => self.create_session(None),
             CommandId::Sessions => self.handle_sessions_command(spec, args),
@@ -9465,7 +9838,6 @@ impl App {
         let fallback_agent = || self.backend.default_agent_name();
 
         if let Some(execution) = self.transcript.execution.as_ref() {
-            let mut parts = Vec::new();
             let model_part = if let (Some(provider_id), Some(model_id)) = (
                 execution.execution.model_provider_id.as_deref(),
                 execution.execution.model_id.as_deref(),
@@ -9481,9 +9853,6 @@ impl App {
             } else {
                 fallback_model()
             };
-            if let Some(model_part) = model_part {
-                parts.push(format!("model {model_part}"));
-            }
             let agent = execution
                 .execution
                 .agent_profile
@@ -9492,21 +9861,8 @@ impl App {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
                 .or_else(fallback_agent);
-            if let Some(agent) = agent {
-                parts.push(format!("agent {agent}"));
-            }
-            if let Some(usage) = execution.prompt_usage.as_ref() {
-                if let Some(budget_tokens) = usage.budget_tokens.filter(|value| *value > 0) {
-                    let progress =
-                        format_budget_progress_label(usage.current_tokens, budget_tokens);
-                    parts.push(format!(
-                        "tokens {}/{} ({progress})",
-                        usage.current_tokens, budget_tokens
-                    ));
-                } else {
-                    parts.push(format!("tokens {}", usage.current_tokens));
-                }
-            }
+            let token_usage = status_line_token_usage(&execution.usage);
+            let mut parts = session_summary_status_parts(model_part, agent, token_usage);
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
                 && !thinking_mode.trim().is_empty()
             {
@@ -9517,37 +9873,20 @@ impl App {
             {
                 parts.push(format!("speed {speed_mode}"));
             }
-            if execution.prompt_usage.is_none()
-                && let Some(goal) = execution.goal.as_ref()
-            {
-                if let Some(token_budget) = goal.token_budget.filter(|value| *value > 0) {
-                    let progress = format_budget_progress_label(goal.tokens_used, token_budget);
-                    parts.push(format!(
-                        "goal tokens {}/{} ({progress})",
-                        goal.tokens_used, token_budget
-                    ));
-                } else if goal.tokens_used > 0 {
-                    parts.push(format!("goal tokens {}", goal.tokens_used));
-                }
-            }
             if !parts.is_empty() {
                 return parts;
             }
         }
 
-        let mut parts = Vec::new();
-        if let Some(model_part) = self
-            .run_options
-            .model
-            .as_ref()
-            .map(model_status_label)
-            .or_else(fallback_model)
-        {
-            parts.push(format!("model {model_part}"));
-        }
-        if let Some(agent) = fallback_agent() {
-            parts.push(format!("agent {agent}"));
-        }
+        let mut parts = session_summary_status_parts(
+            self.run_options
+                .model
+                .as_ref()
+                .map(model_status_label)
+                .or_else(fallback_model),
+            fallback_agent(),
+            None,
+        );
         if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
         {
@@ -9610,6 +9949,7 @@ impl App {
                         dialog.custom_input.flush_pending_input_if_due(now);
                     }
                 }
+                Overlay::SessionSearch(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::SessionModelChooser(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
@@ -9629,7 +9969,7 @@ impl App {
                 }
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
-                Overlay::Help => {}
+                Overlay::Help(_) => {}
             }
         }
     }
@@ -13241,21 +13581,6 @@ fn format_plugin_inspector_logs(entries: &[agena::plugin::PluginLogEntry]) -> St
         .join("\n")
 }
 
-#[allow(dead_code)]
-fn format_relative_time(timestamp: DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let delta = now.signed_duration_since(timestamp);
-    if delta.num_seconds() < 60 {
-        "just now".to_string()
-    } else if delta.num_minutes() < 60 {
-        format!("{}m ago", delta.num_minutes())
-    } else if delta.num_hours() < 24 {
-        format!("{}h ago", delta.num_hours())
-    } else {
-        format!("{}d ago", delta.num_days())
-    }
-}
-
 fn build_timeline_item(record: &DomainEvent) -> TimelineItem {
     let event_type = timeline_event_type_name(record);
     let summary_suffix = timeline_event_summary(record);
@@ -13566,23 +13891,9 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
                 event.status.clone().unwrap_or_else(|| "<none>".to_string())
             ),
             format!(
-                "token_budget: {}",
+                "completed_at_ms: {}",
                 event
-                    .token_budget
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "<none>".to_string())
-            ),
-            format!(
-                "tokens_used: {}",
-                event
-                    .tokens_used
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "<none>".to_string())
-            ),
-            format!(
-                "time_used_seconds: {}",
-                event
-                    .time_used_seconds
+                    .completed_at_ms
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "<none>".to_string())
             ),
@@ -13890,17 +14201,54 @@ fn model_status_label(model: &ModelRef) -> String {
         .unwrap_or_else(|| format!("{}/{}", model.provider_id, model.model_id))
 }
 
-fn format_budget_progress_label(current_tokens: u64, budget_tokens: u64) -> String {
-    if budget_tokens == 0 {
-        return "n/a".to_string();
+fn session_summary_status_parts(
+    model_part: Option<String>,
+    agent: Option<String>,
+    token_usage: Option<(u64, Option<u64>)>,
+) -> Vec<String> {
+    let mut parts = Vec::new();
+    if let Some(model_part) = model_part
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(model_part);
+    }
+    if let Some(agent) = agent
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(agent);
+    }
+    if let Some(token_progress) = token_usage.and_then(|(current_tokens, limit_tokens)| {
+        token_progress_status_part(current_tokens, limit_tokens)
+    }) {
+        parts.push(token_progress);
+    }
+    parts
+}
+
+fn status_line_token_usage(usage: &SessionUsageResource) -> Option<(u64, Option<u64>)> {
+    usage
+        .limit_tokens
+        .map(|limit_tokens| (usage.current_tokens, Some(limit_tokens)))
+}
+
+fn token_progress_status_part(current_tokens: u64, limit_tokens: Option<u64>) -> Option<String> {
+    limit_tokens
+        .filter(|value| *value > 0)
+        .map(|limit_tokens| format_token_progress_label(current_tokens, limit_tokens))
+}
+
+fn format_token_progress_label(current_tokens: u64, limit_tokens: u64) -> String {
+    if limit_tokens == 0 {
+        return "0%".to_string();
     }
 
-    let ratio = current_tokens as f64 / budget_tokens as f64;
-    if ratio >= 10.0 {
-        return format!("{ratio:.1}x");
-    }
+    let percent = ((current_tokens as f64 / limit_tokens as f64) * 100.0)
+        .clamp(0.0, 100.0)
+        .round() as u64;
 
-    format!("{:.0}%", ratio * 100.0)
+    format!("{percent}%")
 }
 
 fn session_lineage_chain(
@@ -13926,6 +14274,11 @@ fn session_lineage_chain(
 
     chain.reverse();
     chain
+}
+
+fn is_rewind_target_message(message: &MessageResource) -> bool {
+    matches!(message.role, MessageRole::User | MessageRole::Assistant)
+        && message.state == MessageStatus::Completed
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -14003,11 +14356,6 @@ fn derive_session_title(text: &str) -> String {
     truncate_display_width(first_line, 60)
 }
 
-#[allow(dead_code)]
-fn default_session_title() -> String {
-    format!("New session {}", Local::now().format("%H:%M"))
-}
-
 fn draft_title_source(draft: &ComposerDraft) -> Option<String> {
     let mut labels = draft
         .items
@@ -14069,6 +14417,7 @@ fn truncate_display_width(text: &str, max_width: usize) -> String {
     }
 }
 
+#[cfg(test)]
 fn parse_user_input_answers(
     i18n: &I18n,
     raw: &str,
@@ -14410,24 +14759,6 @@ fn find_placeholder_occurrence(
         search_start = next_grapheme_boundary(text, start);
     }
     None
-}
-
-#[allow(dead_code)]
-fn format_bytes(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
-
-    let bytes_f = bytes as f64;
-    if bytes_f >= GB {
-        format!("{:.1} GB", bytes_f / GB)
-    } else if bytes_f >= MB {
-        format!("{:.1} MB", bytes_f / MB)
-    } else if bytes_f >= KB {
-        format!("{:.1} KB", bytes_f / KB)
-    } else {
-        format!("{bytes} B")
-    }
 }
 
 fn is_altgr(modifiers: KeyModifiers) -> bool {
@@ -15470,14 +15801,48 @@ mod tests {
     }
 
     #[test]
-    fn format_budget_progress_label_uses_percent_for_normal_ranges() {
-        assert_eq!(format_budget_progress_label(8_500, 10_000), "85%");
-        assert_eq!(format_budget_progress_label(10_800, 10_000), "108%");
+    fn format_token_progress_label_uses_percent_for_normal_ranges() {
+        assert_eq!(format_token_progress_label(8_500, 10_000), "85%");
+        assert_eq!(format_token_progress_label(10_800, 10_000), "100%");
     }
 
     #[test]
-    fn format_budget_progress_label_uses_multiplier_for_extreme_overages() {
-        assert_eq!(format_budget_progress_label(216_383, 19_965), "10.8x");
+    fn format_token_progress_label_clamps_extreme_overages() {
+        assert_eq!(format_token_progress_label(216_383, 19_965), "100%");
+    }
+
+    #[test]
+    fn session_summary_status_parts_drop_model_and_agent_prefixes() {
+        assert_eq!(
+            session_summary_status_parts(
+                Some("atom/openai/deepseek-v4-flash".to_string()),
+                Some("build".to_string()),
+                Some((3_889, Some(19_965))),
+            ),
+            vec![
+                "atom/openai/deepseek-v4-flash".to_string(),
+                "build".to_string(),
+                "19%".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn status_line_token_usage_falls_back_to_prompt_threshold() {
+        assert_eq!(
+            status_line_token_usage(&SessionUsageResource {
+                measured_prompt_tokens: Some(1_100),
+                current_tokens: 1_200,
+                projected_tokens: Some(1_350),
+                limit_tokens: Some(2_400),
+                limit_basis: Some(agena_api::resource::SessionUsageLimitBasis::PromptThreshold),
+                reserved_tokens: None,
+                model_context_window_tokens: Some(8_192),
+                model_max_input_tokens: None,
+                model_max_output_tokens: Some(512),
+            }),
+            Some((1_200, Some(2_400)))
+        );
     }
 
     #[test]

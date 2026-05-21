@@ -176,6 +176,9 @@ function sampleExecution(): SessionExecutionResource {
       },
     ],
     pending_user_input_requests: [],
+    usage: {
+      current_tokens: 0,
+    },
   }
 }
 

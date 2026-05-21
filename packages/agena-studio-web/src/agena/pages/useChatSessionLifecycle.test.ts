@@ -43,6 +43,7 @@ function sessionState(overrides?: Partial<SessionExecutionResource>): SessionExe
     pending_permission_requests: [],
     pending_user_input_requests: [],
     ...overrides,
+    usage: overrides?.usage ?? { current_tokens: 0 },
   }
 }
 

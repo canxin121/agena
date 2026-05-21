@@ -105,6 +105,110 @@ impl SessionManager {
             .await
     }
 
+    pub async fn rename_session(
+        &self,
+        session_id: i64,
+        title: String,
+    ) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        self.store
+            .rename_session(session_id, title, state.cache_policy())
+            .await
+    }
+
+    pub fn session_usage(&self, session: &Session) -> Result<SessionUsage, AppError> {
+        let state = self.execution_state();
+        let options = self.run_options_from_session(session, state.clone()).ok();
+        let active_messages = prompt_window::active_prompt_messages(session);
+        let scoped_executor = state
+            .tool_executor
+            .for_session_context(&session.runtime.execution);
+        let tools = scoped_executor.available_tools_for_messages_and_loaded(
+            active_messages.as_slice(),
+            session.runtime.loaded_deferred_tools(),
+        );
+        let metadata = options
+            .as_ref()
+            .and_then(|options| state.processor.model_metadata(&options.model).ok())
+            .unwrap_or_default();
+        let context_window_tokens = metadata
+            .limits
+            .context_window_tokens
+            .or(session.runtime.prompt_tokens.model_context_window_tokens);
+        let max_input_tokens = metadata.limits.max_input_tokens;
+        let max_output_tokens = options
+            .as_ref()
+            .and_then(|options| options.max_output_tokens)
+            .or(metadata.limits.max_output_tokens);
+        let reserved_tokens = crate::session::estimate_auto_compaction_reserve_tokens(
+            context_window_tokens,
+            max_output_tokens,
+            state.config.auto_compaction.reserved_tokens,
+        );
+        let usable_tokens = crate::session::estimate_session_context_usable_tokens(
+            context_window_tokens,
+            max_input_tokens,
+            max_output_tokens,
+            reserved_tokens,
+        )
+        .filter(|value| *value > 0);
+        let threshold_tokens = Some(crate::session::estimate_prompt_budget_threshold_tokens(
+            context_window_tokens,
+            max_output_tokens,
+        ))
+        .filter(|value| *value > 0);
+
+        let projected_tokens = prompt_window::estimate_prompt_tokens_from_runtime(
+            session,
+            active_messages.as_slice(),
+            session.runtime.prompt_tokens.system_fingerprint.as_str(),
+            session
+                .runtime
+                .prompt_tokens
+                .request_options_fingerprint
+                .as_str(),
+        )
+        .map(|estimate| estimate.total_tokens);
+        let measured_prompt_tokens = session.runtime.prompt_tokens.prompt_tokens();
+        let current_tokens = measured_prompt_tokens.unwrap_or_else(|| {
+            projected_tokens.unwrap_or_else(|| {
+                prompt_window::approximate_total_request_tokens(
+                    active_messages.as_slice(),
+                    options
+                        .as_ref()
+                        .and_then(|options| options.system.as_deref())
+                        .or(session.runtime.execution.system_prompt_override.as_deref()),
+                    tools.as_slice(),
+                )
+            })
+        });
+        let (limit_tokens, limit_basis) = if let Some(limit_tokens) = usable_tokens {
+            (
+                Some(limit_tokens),
+                Some(SessionUsageLimitBasis::ContextWindow),
+            )
+        } else if let Some(limit_tokens) = threshold_tokens {
+            (
+                Some(limit_tokens),
+                Some(SessionUsageLimitBasis::PromptThreshold),
+            )
+        } else {
+            (None, None)
+        };
+
+        Ok(SessionUsage {
+            measured_prompt_tokens,
+            current_tokens,
+            projected_tokens,
+            limit_tokens,
+            limit_basis,
+            reserved_tokens,
+            model_context_window_tokens: context_window_tokens,
+            model_max_input_tokens: max_input_tokens,
+            model_max_output_tokens: max_output_tokens,
+        })
+    }
+
     pub async fn switch_session_agent(
         &self,
         session_id: i64,

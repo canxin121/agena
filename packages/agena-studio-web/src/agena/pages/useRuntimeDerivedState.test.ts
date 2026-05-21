@@ -118,6 +118,9 @@ function sessionExecution(): SessionExecutionResource {
     },
     pending_permission_requests: [],
     pending_user_input_requests: [],
+    usage: {
+      current_tokens: 0,
+    },
   }
 }
 

@@ -347,7 +347,6 @@ pub enum GoalStatus {
     #[default]
     Active,
     Paused,
-    BudgetLimited,
     Completed,
 }
 
@@ -355,7 +354,6 @@ pub enum GoalStatus {
 #[serde(rename_all = "snake_case")]
 pub enum GoalSteeringKind {
     ObjectiveUpdated,
-    BudgetLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
@@ -368,13 +366,11 @@ pub struct GoalSteeringState {
 pub struct GoalRuntimeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_steering: Option<GoalSteeringState>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget_limit_reported_goal_id: Option<i64>,
 }
 
 impl GoalRuntimeState {
     pub fn is_empty(&self) -> bool {
-        self.pending_steering.is_none() && self.budget_limit_reported_goal_id.is_none()
+        self.pending_steering.is_none()
     }
 
     pub fn pending_steering(&self) -> Option<&GoalSteeringState> {
@@ -387,14 +383,6 @@ impl GoalRuntimeState {
 
     pub fn clear_pending_steering(&mut self) {
         self.pending_steering = None;
-    }
-
-    pub fn budget_limit_reported(&self, goal_id: i64) -> bool {
-        self.budget_limit_reported_goal_id == Some(goal_id)
-    }
-
-    pub fn mark_budget_limit_reported(&mut self, goal_id: i64) {
-        self.budget_limit_reported_goal_id = Some(goal_id);
     }
 
     pub fn clear(&mut self) {
@@ -423,12 +411,6 @@ pub struct SessionGoal {
     pub objective: String,
     #[serde(default)]
     pub status: GoalStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_budget: Option<u64>,
-    #[serde(default)]
-    pub tokens_used: u64,
-    #[serde(default)]
-    pub time_used_seconds: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -30,9 +30,9 @@ pub use types::{
     ProviderHttpConfig, ProviderModelDiscoveryConfig, ProviderProtocolPathsConfig,
     RequestRetryConfig, ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
     ResolvedProviderModelConfig, RuntimeConfig, RuntimeJanitorConfig, RuntimeModelCatalogConfig,
-    RuntimeReloadConfig, SessionCacheConfig, SimpleHttpProviderOptions, StreamReplayConfig,
-    StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend, WebSearchBackendKind,
-    WebSearchConfig, WebToolsConfig,
+    RuntimeReloadConfig, SessionCacheConfig, SessionCompactionConfig, SessionConfig,
+    SimpleHttpProviderOptions, StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig,
+    WebSearchBackend, WebSearchBackendKind, WebSearchConfig, WebToolsConfig,
 };
 
 pub use adapter_models::{

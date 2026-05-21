@@ -331,6 +331,7 @@ pub enum HostCapability {
     AskUser,
     SpawnSubtask,
     ListTools,
+    SessionRegistry,
     GoalRegistry,
     MonitorRegistry,
     ReadConfig,

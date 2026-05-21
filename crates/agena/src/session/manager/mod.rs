@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use arc_swap::ArcSwap;
@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 use tracing::Instrument;
 
 use crate::AppError;
-use crate::db::crud::session_goal::{GoalAccountingMode, GoalUpdate};
+use crate::db::crud::session_goal::GoalUpdate;
 use crate::event::{
     ErrorInfo, EventKind, PermissionRepliedEvent, PermissionRequestedEvent, RunFailedEvent,
     RunStartedEvent, SessionGoalEvent,
@@ -64,6 +64,41 @@ pub struct SessionManagerConfig {
     pub doom_loop: crate::session::DoomLoopPolicy,
     pub default_agent: Option<String>,
     pub permission: crate::agent::PermissionConfig,
+    pub auto_compaction: SessionAutoCompactionConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionAutoCompactionConfig {
+    pub enabled: bool,
+    pub reserved_tokens: Option<u32>,
+}
+
+impl Default for SessionAutoCompactionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            reserved_tokens: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionUsageLimitBasis {
+    ContextWindow,
+    PromptThreshold,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionUsage {
+    pub measured_prompt_tokens: Option<u64>,
+    pub current_tokens: u64,
+    pub projected_tokens: Option<u64>,
+    pub limit_tokens: Option<u64>,
+    pub limit_basis: Option<SessionUsageLimitBasis>,
+    pub reserved_tokens: Option<u32>,
+    pub model_context_window_tokens: Option<u32>,
+    pub model_max_input_tokens: Option<u32>,
+    pub model_max_output_tokens: Option<u32>,
 }
 
 impl Default for SessionManagerConfig {
@@ -76,6 +111,7 @@ impl Default for SessionManagerConfig {
             doom_loop: crate::session::DoomLoopPolicy::default(),
             default_agent: None,
             permission: crate::agent::PermissionConfig::default(),
+            auto_compaction: SessionAutoCompactionConfig::default(),
         }
     }
 }
@@ -240,7 +276,6 @@ pub struct SessionSubtaskResponse {
 pub struct SessionGoalCreateRequest {
     pub session_id: i64,
     pub objective: String,
-    pub token_budget: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -248,7 +283,6 @@ pub struct SessionGoalUpdateRequest {
     pub session_id: i64,
     pub objective: Option<String>,
     pub status: Option<GoalStatus>,
-    pub token_budget: Option<Option<u64>>,
     pub expected_goal_id: Option<i64>,
 }
 
@@ -256,7 +290,6 @@ pub struct SessionGoalUpdateRequest {
 enum GoalTurnDirectiveKind {
     ObjectiveUpdated,
     Continuation,
-    BudgetLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

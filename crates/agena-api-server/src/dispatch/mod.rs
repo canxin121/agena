@@ -51,7 +51,8 @@ use agena_api::{
         RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
         RuntimeStatusResponse, RuntimeTaskResource, SessionAutomationResource,
         SessionExecutionContextResource, SessionExecutionResource, SessionGoalResource,
-        SessionPromptUsageResource, SessionResource, SessionRunState, WorkspaceResource,
+        SessionResource, SessionRunState, SessionUsageLimitBasis, SessionUsageResource,
+        WorkspaceResource,
     },
 };
 
@@ -154,9 +155,6 @@ fn session_goal_from_http(value: HttpSessionGoalResource) -> SessionGoalResource
         session_id: value.session_id,
         objective: value.objective,
         status: value.status,
-        token_budget: value.token_budget,
-        tokens_used: value.tokens_used,
-        time_used_seconds: value.time_used_seconds,
         created_at: value.created_at,
         updated_at: value.updated_at,
         completed_at: value.completed_at,
@@ -272,17 +270,34 @@ fn session_execution_from_http(value: HttpSessionExecutionResource) -> SessionEx
         pending_permission_requests: value.pending_permission_requests,
         pending_user_input_requests: value.pending_user_input_requests,
         goal: value.goal.map(session_goal_from_http),
-        prompt_usage: value.prompt_usage.map(session_prompt_usage_from_http),
+        usage: session_usage_from_http(value.usage),
     }
 }
 
-fn session_prompt_usage_from_http(
-    value: crate::local_api::SessionPromptUsageResource,
-) -> SessionPromptUsageResource {
-    SessionPromptUsageResource {
+fn session_usage_from_http(value: crate::local_api::SessionUsageResource) -> SessionUsageResource {
+    SessionUsageResource {
+        measured_prompt_tokens: value.measured_prompt_tokens,
         current_tokens: value.current_tokens,
-        budget_tokens: value.budget_tokens,
+        projected_tokens: value.projected_tokens,
+        limit_tokens: value.limit_tokens,
+        limit_basis: value.limit_basis.map(session_usage_limit_basis_from_http),
+        reserved_tokens: value.reserved_tokens,
         model_context_window_tokens: value.model_context_window_tokens,
+        model_max_input_tokens: value.model_max_input_tokens,
+        model_max_output_tokens: value.model_max_output_tokens,
+    }
+}
+
+fn session_usage_limit_basis_from_http(
+    value: crate::local_api::SessionUsageLimitBasis,
+) -> SessionUsageLimitBasis {
+    match value {
+        crate::local_api::SessionUsageLimitBasis::ContextWindow => {
+            SessionUsageLimitBasis::ContextWindow
+        }
+        crate::local_api::SessionUsageLimitBasis::PromptThreshold => {
+            SessionUsageLimitBasis::PromptThreshold
+        }
     }
 }
 

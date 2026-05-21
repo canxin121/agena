@@ -301,11 +301,12 @@ impl SessionManager {
             if session.status() != SessionStatus::Idle {
                 return;
             }
-            let Some(goal) = session.goal.as_ref() else {
-                return;
-            };
-            if matches!(goal.status, GoalStatus::Completed | GoalStatus::Paused) {
-                return;
+            match session.goal.as_ref() {
+                None => return,
+                Some(goal) if matches!(goal.status, GoalStatus::Completed | GoalStatus::Paused) => {
+                    return;
+                }
+                _ => {}
             }
             if manager
                 .goal_turn_directive(&session, allow_goal_continuation)
@@ -515,16 +516,47 @@ impl SessionManager {
                         }
                     }
                 }
-                SessionStatus::AwaitingModel => {
-                    if session
-                        .goal
-                        .as_ref()
-                        .is_some_and(|goal| goal.status == GoalStatus::BudgetLimited)
-                        && goal_turn_directive.is_none()
-                    {
-                        return Ok(session);
-                    }
-                }
+                SessionStatus::AwaitingModel => {}
+            }
+
+            let last_message_id = session.messages.last().map(|message| message.id);
+            let already_auto_compacted_at_boundary = session
+                .runtime
+                .prompt_window
+                .compaction
+                .as_ref()
+                .and_then(|compaction| compaction.compacted_by_message_id)
+                == last_message_id;
+            let session_usage = self.session_usage(&session)?;
+            if state.config.auto_compaction.enabled
+                && session
+                    .runtime
+                    .prompt_tokens
+                    .last_successful_usage
+                    .is_some()
+                && !already_auto_compacted_at_boundary
+                && session_usage.limit_basis == Some(SessionUsageLimitBasis::ContextWindow)
+                && let Some(limit_tokens) = session_usage.limit_tokens
+                && session_usage
+                    .projected_tokens
+                    .unwrap_or(session_usage.current_tokens)
+                    >= limit_tokens
+            {
+                let projected_tokens = session_usage
+                    .projected_tokens
+                    .unwrap_or(session_usage.current_tokens);
+                tracing::info!(
+                    target: "agena::session::compact",
+                    session_id = session.id,
+                    current_tokens = session_usage.current_tokens,
+                    projected_tokens,
+                    usable_tokens = limit_tokens,
+                    reserved_tokens = session_usage.reserved_tokens.unwrap_or_default(),
+                    "automatic session compaction triggered before model turn"
+                );
+                session = self
+                    .auto_compact_session(session, &current_options, state.clone(), control.clone())
+                    .await?;
             }
 
             let session_id = session.id;
@@ -756,7 +788,6 @@ impl SessionManager {
                 )
                 .await?;
 
-            let turn_started_at = Instant::now();
             let processor_fut = state.processor.run_turn(run).instrument(turn_span.clone());
             let turn_outcome = tokio::select! {
                 res = processor_fut => res,
@@ -764,7 +795,6 @@ impl SessionManager {
                     Err(AppError::Internal("turn cancelled by user".to_string()))
                 }
             };
-            let turn_elapsed_seconds = turn_started_at.elapsed().as_secs();
             match turn_outcome {
                 Ok(result) => {
                     let turn_id = result.turn_id;
@@ -855,10 +885,6 @@ impl SessionManager {
                     drop(prepared);
 
                     let client_events = result.client_events;
-                    let goal_token_delta = assistant_message
-                        .usage
-                        .as_ref()
-                        .map_or(0, |usage| usage.total_tokens());
                     session.messages.push(assistant_message.clone());
                     let mut persisted_session = self
                         .persist_session_changes(
@@ -901,14 +927,6 @@ impl SessionManager {
                     .map_err(|err| {
                         AppError::Internal(format!("history append task failed: {err}"))
                     })??;
-                    persisted_session = self
-                        .account_goal_usage_from_turn(
-                            persisted_session,
-                            goal_token_delta,
-                            state.as_ref(),
-                            turn_elapsed_seconds,
-                        )
-                        .await?;
 
                     if let Some(err) = terminal_error {
                         if is_user_cancelled_error(&err) {
@@ -2051,41 +2069,6 @@ impl SessionManager {
             changed = true;
         }
 
-        match goal.status {
-            GoalStatus::Active => {
-                if session
-                    .runtime
-                    .goal
-                    .pending_steering()
-                    .is_some_and(|pending| pending.kind == GoalSteeringKind::BudgetLimit)
-                {
-                    session.runtime.goal.clear_pending_steering();
-                    changed = true;
-                }
-                if session.runtime.goal.budget_limit_reported_goal_id.is_some() {
-                    session.runtime.goal.budget_limit_reported_goal_id = None;
-                    changed = true;
-                }
-            }
-            GoalStatus::Paused => {}
-            GoalStatus::BudgetLimited => {
-                if !session.runtime.goal.budget_limit_reported(goal.id)
-                    && !session
-                        .runtime
-                        .goal
-                        .pending_steering()
-                        .is_some_and(|pending| pending.kind == GoalSteeringKind::BudgetLimit)
-                {
-                    session
-                        .runtime
-                        .goal
-                        .set_pending_steering(goal.id, GoalSteeringKind::BudgetLimit);
-                    changed = true;
-                }
-            }
-            GoalStatus::Completed => {}
-        }
-
         changed
     }
 
@@ -2098,17 +2081,6 @@ impl SessionManager {
         match goal.status {
             GoalStatus::Completed => None,
             GoalStatus::Paused => None,
-            GoalStatus::BudgetLimited => {
-                let pending = session.runtime.goal.pending_steering()?;
-                if pending.goal_id != goal.id || pending.kind != GoalSteeringKind::BudgetLimit {
-                    return None;
-                }
-                Some(GoalTurnDirective {
-                    goal_id: goal.id,
-                    kind: GoalTurnDirectiveKind::BudgetLimit,
-                    prompt: self.render_goal_context(goal, GoalTurnDirectiveKind::BudgetLimit),
-                })
-            }
             GoalStatus::Active => {
                 if let Some(pending) = session.runtime.goal.pending_steering()
                     && pending.goal_id == goal.id
@@ -2226,49 +2198,22 @@ impl SessionManager {
                 }
                 false
             }
-            GoalTurnDirectiveKind::BudgetLimit => {
-                let already_reported = session
-                    .runtime
-                    .goal
-                    .budget_limit_reported(directive.goal_id);
-                let had_pending = session
-                    .runtime
-                    .goal
-                    .pending_steering()
-                    .is_some_and(|pending| {
-                        pending.goal_id == directive.goal_id
-                            && pending.kind == GoalSteeringKind::BudgetLimit
-                    });
-                if had_pending {
-                    session.runtime.goal.clear_pending_steering();
-                }
-                if !already_reported {
-                    session
-                        .runtime
-                        .goal
-                        .mark_budget_limit_reported(directive.goal_id);
-                }
-                had_pending || !already_reported
-            }
         }
     }
 
     fn render_goal_context(&self, goal: &SessionGoal, kind: GoalTurnDirectiveKind) -> String {
         let objective = goal.objective.trim();
-        let budget_line = goal
-            .token_budget
-            .map(|budget| format!("Token budget: {}/{}", goal.tokens_used, budget))
-            .unwrap_or_else(|| format!("Tokens used: {}", goal.tokens_used));
         match kind {
-            GoalTurnDirectiveKind::ObjectiveUpdated => format!(
-                "An active runtime goal has been set or updated.\nObjective:\n{objective}\n\n{budget_line}\nContinue making concrete progress toward this goal without waiting for additional user input. Use tools when needed, keep the work grounded in the current workspace, and call `update_goal` with `status = complete` once the objective is actually finished."
-            ),
-            GoalTurnDirectiveKind::Continuation => format!(
-                "Continue working toward the active runtime goal.\nObjective:\n{objective}\n\n{budget_line}\nDo not wait for the user just because the last turn ended. Make the next concrete move toward finishing the objective, explain the blocker if you are truly blocked, and call `update_goal` with `status = complete` once the objective is actually done."
-            ),
-            GoalTurnDirectiveKind::BudgetLimit => format!(
-                "The active runtime goal has reached its token budget.\nObjective:\n{objective}\n\n{budget_line}\nStop autonomous work after this turn. Briefly summarize current progress, what remains, and that the goal hit its budget limit."
-            ),
+            GoalTurnDirectiveKind::ObjectiveUpdated => join_runtime_context_lines(&[
+                "An active runtime goal has been set or updated.".to_string(),
+                format!("Objective:\n{objective}"),
+                "Continue making concrete progress toward this goal without waiting for additional user input. Use tools when needed, keep the work grounded in the current workspace, and call `update_goal` with `status = complete` once the objective is actually finished.".to_string(),
+            ]),
+            GoalTurnDirectiveKind::Continuation => join_runtime_context_lines(&[
+                "Continue working toward the active runtime goal.".to_string(),
+                format!("Objective:\n{objective}"),
+                "Do not wait for the user just because the last turn ended. Make the next concrete move toward finishing the objective, explain the blocker if you are truly blocked, and call `update_goal` with `status = complete` once the objective is actually done.".to_string(),
+            ]),
         }
     }
 
@@ -2287,12 +2232,8 @@ impl SessionManager {
                     status: Some(match goal.status {
                         GoalStatus::Active => "active".to_string(),
                         GoalStatus::Paused => "paused".to_string(),
-                        GoalStatus::BudgetLimited => "budget_limited".to_string(),
                         GoalStatus::Completed => "completed".to_string(),
                     }),
-                    token_budget: goal.token_budget,
-                    tokens_used: Some(goal.tokens_used),
-                    time_used_seconds: Some(goal.time_used_seconds),
                     completed_at_ms: goal.completed_at.map(|ts| ts.timestamp_millis()),
                     ts_ms: Utc::now().timestamp_millis(),
                 }),
@@ -2300,46 +2241,6 @@ impl SessionManager {
             .await
             .map_err(|err| AppError::Internal(format!("publish goal event failed: {err}")))?;
         Ok(())
-    }
-
-    async fn account_goal_usage_from_turn(
-        &self,
-        session: Session,
-        token_delta: u64,
-        state: &SessionManagerState,
-        time_delta_seconds: u64,
-    ) -> Result<Session, AppError> {
-        let Some(goal_before) = session.goal.as_ref() else {
-            return Ok(session);
-        };
-        if token_delta == 0 && time_delta_seconds == 0 {
-            return Ok(session);
-        }
-
-        let accounted = self
-            .store
-            .account_goal_usage(
-                session.id,
-                token_delta,
-                time_delta_seconds,
-                GoalAccountingMode::ActiveOnly,
-                None,
-                state.cache_policy(),
-            )
-            .await?;
-        let Some(updated) = accounted else {
-            return Ok(session);
-        };
-        let goal_after = updated.goal.as_ref().ok_or_else(|| {
-            AppError::Internal(format!(
-                "goal missing after usage accounting for session {}",
-                session.id
-            ))
-        })?;
-        if goal_after != goal_before {
-            self.publish_goal_event(goal_after, session.id).await?;
-        }
-        Ok(updated)
     }
 
     pub(super) fn apply_execution_context_to_run_options(
@@ -3065,4 +2966,14 @@ impl SessionManager {
     pub(super) fn execution_state(&self) -> Arc<SessionManagerState> {
         self.execution.load_full()
     }
+}
+
+fn join_runtime_context_lines(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }

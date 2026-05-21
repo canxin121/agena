@@ -11,11 +11,7 @@ use tokio::sync::{Mutex as AsyncMutex, OnceCell};
 use crate::{
     AppError,
     db::{
-        crud::{
-            permission_rule, session, session_goal,
-            session_goal::{GoalAccountingMode, GoalUpdate},
-            workspace,
-        },
+        crud::{permission_rule, session, session_goal, session_goal::GoalUpdate, workspace},
         entities,
         tx::{with_transaction_and_app_effects, with_transaction_and_effects},
     },
@@ -508,6 +504,30 @@ impl SessionStore {
         Ok(session)
     }
 
+    pub(crate) async fn rename_session(
+        &self,
+        session_id: i64,
+        title: String,
+        cache_policy: SessionCachePolicy,
+    ) -> Result<Session, AppError> {
+        let updated = session::rename_session(&self.db, session_id, title)
+            .await?
+            .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
+        let mut session = session_from_model(updated)?;
+        session.goal = load_session_goal(&self.db, session_id).await?;
+        let projection = self
+            .history
+            .load_projection(session_id, session.runtime.clone())
+            .await?;
+        session.replace_messages(projection.messages);
+        session.runtime = projection.runtime;
+        session.refresh_derived();
+        with_cache(self.cache.as_ref(), |guard| {
+            guard.insert(session.clone(), cache_policy);
+        });
+        Ok(session)
+    }
+
     pub(crate) async fn fork_session(
         &self,
         source: Session,
@@ -574,7 +594,6 @@ impl SessionStore {
         &self,
         session_id: i64,
         objective: String,
-        token_budget: Option<u64>,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
         let cache = Arc::clone(&self.cache);
@@ -587,7 +606,7 @@ impl SessionStore {
                     .ok_or_else(|| {
                         AppError::Internal(format!("session not found: {session_id}"))
                     })?;
-                session_goal::upsert_goal(txn, session_id, objective, token_budget).await?;
+                session_goal::upsert_goal(txn, session_id, objective).await?;
                 let model = session::touch_session_updated_at(
                     txn,
                     session_id,
@@ -738,56 +757,6 @@ impl SessionStore {
             let update = update.clone();
             Box::pin(async move {
                 let Some(goal) = session_goal::update_goal(txn, session_id, update).await? else {
-                    return Ok(None);
-                };
-                let model = session::touch_session_updated_at(
-                    txn,
-                    session_id,
-                    session::get_session_by_id(txn, session_id)
-                        .await?
-                        .ok_or_else(|| DbErr::Custom(format!("session not found: {session_id}")))?
-                        .runtime_state
-                        .unwrap_or_default(),
-                )
-                .await?
-                .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                let mut updated = session_from_model(model)?;
-                updated.goal = Some(session_goal_from_model(goal)?);
-                let session_for_cache = updated.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
-                    });
-                });
-                Ok(Some(updated))
-            })
-        })
-        .await
-    }
-
-    pub(crate) async fn account_goal_usage(
-        &self,
-        session_id: i64,
-        token_delta: u64,
-        time_delta_seconds: u64,
-        mode: GoalAccountingMode,
-        expected_goal_id: Option<i64>,
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Option<Session>, AppError> {
-        let cache = Arc::clone(&self.cache);
-        with_transaction_and_app_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
-            Box::pin(async move {
-                let Some(goal) = session_goal::account_usage(
-                    txn,
-                    session_id,
-                    token_delta,
-                    time_delta_seconds,
-                    mode,
-                    expected_goal_id,
-                )
-                .await?
-                else {
                     return Ok(None);
                 };
                 let model = session::touch_session_updated_at(
@@ -1692,7 +1661,6 @@ fn session_goal_from_model(
     let status = match model.status.as_str() {
         "active" => GoalStatus::Active,
         "paused" => GoalStatus::Paused,
-        "budget_limited" => GoalStatus::BudgetLimited,
         "completed" => GoalStatus::Completed,
         other => {
             return Err(AppError::Internal(format!(
@@ -1701,31 +1669,11 @@ fn session_goal_from_model(
             )));
         }
     };
-    let token_budget = model
-        .token_budget
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|_| {
-            AppError::Internal(format!(
-                "invalid negative token budget in goal {}",
-                model.id
-            ))
-        })?;
     Ok(SessionGoal {
         id: model.id,
         session_id: model.session_id,
         objective: model.objective,
         status,
-        token_budget,
-        tokens_used: u64::try_from(model.tokens_used).map_err(|_| {
-            AppError::Internal(format!("invalid negative tokens_used in goal {}", model.id))
-        })?,
-        time_used_seconds: u64::try_from(model.time_used_seconds).map_err(|_| {
-            AppError::Internal(format!(
-                "invalid negative time_used_seconds in goal {}",
-                model.id
-            ))
-        })?,
         created_at: timestamp_millis_to_utc(model.created_at_ms)?,
         updated_at: timestamp_millis_to_utc(model.updated_at_ms)?,
         completed_at: model

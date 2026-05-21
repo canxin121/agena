@@ -177,7 +177,9 @@ where
 pub fn provider_model_overlay_from_catalog_definition(
     definition: &CatalogModelDefinition,
 ) -> ProviderModelOverlay {
-    provider_model_overlay_from_definition(catalog_definition_to_provider_definition(definition))
+    let mut configured = catalog_definition_to_provider_definition(definition);
+    configured.capabilities = configured.capabilities.normalized_resolved_patch();
+    provider_model_overlay_from_definition(configured)
 }
 
 pub fn provider_model_overlay_from_definition(

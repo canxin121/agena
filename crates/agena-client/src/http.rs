@@ -8,8 +8,8 @@ use agena_api::{
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
         ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, SubmitTurnParams, UnrewindSessionParams,
-        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        RevokePermissionRuleParams, RewindSessionParams, SubmitTurnParams, UpdateSessionParams,
+        UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     queries::{
         GetMessageParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
@@ -357,17 +357,6 @@ impl AgenaClient {
             }) => Ok(CommandResult::Execution(
                 self.post_json(
                     &format!("/api/v1/sessions/{session_id}/rewind"),
-                    serde_json::json!({ "message_id": message_id }),
-                )
-                .await?,
-            )),
-            Command::UnrewindSession(UnrewindSessionParams {
-                session_id,
-                message_id,
-                ..
-            }) => Ok(CommandResult::Execution(
-                self.post_json(
-                    &format!("/api/v1/sessions/{session_id}/unrewind"),
                     serde_json::json!({ "message_id": message_id }),
                 )
                 .await?,

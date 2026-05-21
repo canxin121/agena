@@ -1,24 +1,20 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::LazyLock,
-};
+use std::collections::HashSet;
 
-use regex::Regex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use smol_str::SmolStr;
 
 use crate::{
     message::{
-        AttachmentSource, ExecutionStatus, Message, MessagePart, OperationPart, PartContent,
-        ToolInvocation,
+        AttachmentSource, ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource,
+        OperationPart, PartContent, ToolInvocation,
     },
     plugin::registry::PluginEntry as RegistryPluginEntry,
     provider::{
-        PRUNED_TOOL_RESULT_PLACEHOLDER, ProjectedSessionPart, PromptCacheShape,
-        PromptCacheShapeDiff, project_session_parts, project_session_text_lossy,
+        ProjectedSessionPart, PromptCacheShape, PromptCacheShapeDiff, project_session_parts,
+        project_session_text_lossy,
     },
     role::Role,
 };
@@ -29,51 +25,18 @@ use super::history::{
     TranscriptToolOutput,
 };
 use super::ids::ToolCallId;
-use super::model::{
-    MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED, MESSAGE_TAG_PROMPT_SUMMARY,
-    MESSAGE_TAG_TOOL_RESULT_PRUNED,
-};
 
-const ATTACHMENT_PAYLOAD_STRIP_MIN_BYTES: usize = 256_000;
-const ATTACHMENT_PAYLOAD_STRIP_PROTECT_BYTES: usize = 512_000;
-const ATTACHMENT_PAYLOAD_STRIP_PROTECTED_USER_TURNS: usize = 2;
 const APPROX_CHARS_PER_TOKEN: usize = 4;
-const COMPACTION_SUMMARY_BUDGET_CHARS: usize = 4_000;
 const MIN_PROMPT_BUDGET_TOKENS: u32 = 512;
 const MIN_CONTEXT_RESERVE_TOKENS: u32 = 1_024;
 const MAX_CONTEXT_RESERVE_TOKENS: u32 = 20_000;
 const PROMPT_PROTOCOL_OVERHEAD_CHARS: usize = 2_048;
 const PROMPT_REQUEST_SHAPE_VERSION: u32 = 4;
+const SYNTHETIC_COMPACTION_MESSAGE_ID: i64 = -9_000_000_000;
 const SYNTHETIC_TOOL_COMPLETED_PLACEHOLDER: &str =
     "[Tool execution completed without persisted output]";
 const SYNTHETIC_TOOL_INTERRUPTED_PLACEHOLDER: &str = "[Tool execution was interrupted]";
 const SYNTHETIC_TOOL_FAILED_PLACEHOLDER: &str = "[Tool execution failed without persisted output]";
-const TOOL_RESULT_PRUNE_MIN_CHARS: usize = 12_000;
-const TOOL_RESULT_PRUNE_PROTECT_CHARS: usize = 24_000;
-const TOOL_RESULT_PROTECTED_USER_TURNS: usize = 2;
-const COMPACTION_SUMMARY_HEADING: &str = "Conversation summary (compacted):";
-const COMPACTION_SUMMARY_SECTIONS: [&str; 5] = [
-    "Goal",
-    "Instructions",
-    "Discoveries",
-    "Accomplished",
-    "Relevant files / directories",
-];
-
-static FILE_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?x)
-        (?:
-            [A-Za-z]:[\\/][^\s"'`]+
-            |
-            (?:\.{1,2}[\\/])?[A-Za-z0-9._-]+(?:[\\/][A-Za-z0-9._-]+)+(?:\.[A-Za-z0-9._-]+)?
-            |
-            [A-Za-z0-9._-]+\.(?:rs|toml|json|md|txt|yaml|yml|ts|tsx|js|jsx|py|go|java|sql|html|css)
-        )
-        "#,
-    )
-    .expect("file path regex should compile")
-});
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PreparedPrompt {
@@ -151,22 +114,6 @@ impl PromptContinuationReason {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PromptCompactionPlan {
-    pub compacted_message_ids: Vec<i64>,
-    pub summary_text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolResultPrunePlan {
-    pub pruned_message_ids: Vec<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AttachmentPayloadStripPlan {
-    pub stripped_message_ids: Vec<i64>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PromptTokenEstimate {
     pub total_tokens: u64,
@@ -183,131 +130,74 @@ struct PendingToolCallOutput {
 }
 
 pub(crate) fn active_prompt_messages(session: &Session) -> Vec<Message> {
-    // Prompt-cache affinity depends on every later request preserving the
-    // exact provider-visible prefix from earlier requests. Revisions such as
-    // compaction, pruning, or summary promotion stay in the audit log, but the
-    // prompt path itself is append-only and keeps message order unchanged.
-    session.messages.clone()
+    let Some(compaction) = session
+        .runtime
+        .prompt_window
+        .compaction
+        .as_ref()
+        .filter(|value| !value.summary.trim().is_empty())
+    else {
+        // Prompt-cache affinity depends on every later request preserving the
+        // exact provider-visible prefix from earlier requests. Without an
+        // installed compaction snapshot, the prompt path stays append-only.
+        return session.messages.clone();
+    };
+
+    let mut messages = Vec::new();
+    messages.push(compaction_summary_message(
+        session,
+        compaction.summary.as_str(),
+    ));
+    messages.extend(
+        session
+            .messages
+            .iter()
+            .filter(|message| message_visible_after_compaction(message, compaction))
+            .cloned(),
+    );
+    messages
 }
 
-pub(crate) fn can_compact(
-    messages: &[Message],
-    keep_tail_messages: usize,
-    max_prompt_chars: usize,
+fn compaction_summary_message(session: &Session, summary: &str) -> Message {
+    let mut message = Message::prompt_text(
+        Role::User,
+        format!(
+            "Conversation summary before the current active context:\n\n{}",
+            summary.trim()
+        ),
+    );
+    message.id = SYNTHETIC_COMPACTION_MESSAGE_ID - session.runtime.prompt_window.generation as i64;
+    message.created_at = session.created_at;
+    message.metadata = MessageMetadata {
+        source: MessageSource::System,
+        tags: vec!["compaction_summary".to_string()],
+        ..Default::default()
+    };
+    for (idx, part) in message.parts.iter_mut().enumerate() {
+        part.id = message.id - idx as i64 - 1;
+        part.message_id = message.id;
+        part.created_at = session.created_at;
+    }
+    message
+}
+
+fn message_visible_after_compaction(
+    message: &Message,
+    compaction: &super::model::PromptCompactionRuntime,
 ) -> bool {
-    if messages.len() <= 1 {
-        return false;
-    }
-
-    tail_messages_to_keep(messages, keep_tail_messages, max_prompt_chars) < messages.len()
-}
-
-pub(crate) fn plan_compaction(
-    messages: &[Message],
-    keep_tail_messages: usize,
-    max_prompt_chars: usize,
-) -> Option<PromptCompactionPlan> {
-    if messages.is_empty() || !can_compact(messages, keep_tail_messages, max_prompt_chars) {
-        return None;
-    }
-
-    let keep_tail = tail_messages_to_keep(messages, keep_tail_messages, max_prompt_chars);
-    let split = messages.len().saturating_sub(keep_tail);
-    if split == 0 {
-        return None;
-    }
-
-    let head = &messages[..split];
-    let summary_text = build_compaction_summary(head);
-
-    Some(PromptCompactionPlan {
-        compacted_message_ids: head.iter().map(|message| message.id).collect(),
-        summary_text,
-    })
-}
-
-pub(crate) fn plan_tool_result_pruning(messages: &[Message]) -> Option<ToolResultPrunePlan> {
-    let mut user_turns = 0_usize;
-    let mut protected_chars = 0_usize;
-    let mut prunable_chars = 0_usize;
-    let mut pruned_message_ids = Vec::new();
-
-    for message in messages.iter().rev() {
-        if message.metadata.has_tag(MESSAGE_TAG_PROMPT_SUMMARY) {
-            break;
-        }
-
-        if message.role == Role::User {
-            user_turns += 1;
-        }
-        if user_turns < TOOL_RESULT_PROTECTED_USER_TURNS {
-            continue;
-        }
-
-        if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
-            continue;
-        }
-
-        let output_chars = tool_result_output_chars(message);
-        if output_chars == 0 {
-            continue;
-        }
-
-        protected_chars += output_chars;
-        if protected_chars > TOOL_RESULT_PRUNE_PROTECT_CHARS {
-            prunable_chars += output_chars;
-            pruned_message_ids.push(message.id);
-        }
-    }
-
-    (prunable_chars >= TOOL_RESULT_PRUNE_MIN_CHARS && !pruned_message_ids.is_empty())
-        .then_some(ToolResultPrunePlan { pruned_message_ids })
-}
-
-pub(crate) fn plan_attachment_payload_stripping(
-    messages: &[Message],
-) -> Option<AttachmentPayloadStripPlan> {
-    let mut user_turns = 0_usize;
-    let mut protected_bytes = 0_usize;
-    let mut strippable_bytes = 0_usize;
-    let mut stripped_message_ids = Vec::new();
-
-    for message in messages.iter().rev() {
-        if message.metadata.has_tag(MESSAGE_TAG_PROMPT_SUMMARY) {
-            break;
-        }
-
-        if message.role == Role::User {
-            user_turns += 1;
-        }
-        if user_turns < ATTACHMENT_PAYLOAD_STRIP_PROTECTED_USER_TURNS {
-            continue;
-        }
-
-        if message
-            .metadata
-            .has_tag(MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED)
-            || message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED)
-        {
-            continue;
-        }
-
-        let payload_bytes = attachment_payload_bytes(message);
-        if payload_bytes == 0 {
-            continue;
-        }
-
-        protected_bytes += payload_bytes;
-        if protected_bytes > ATTACHMENT_PAYLOAD_STRIP_PROTECT_BYTES {
-            strippable_bytes += payload_bytes;
-            stripped_message_ids.push(message.id);
-        }
-    }
-
-    (strippable_bytes >= ATTACHMENT_PAYLOAD_STRIP_MIN_BYTES && !stripped_message_ids.is_empty())
-        .then_some(AttachmentPayloadStripPlan {
-            stripped_message_ids,
-        })
+    let preserved_tail = match (
+        compaction.tail_start_message_id,
+        compaction.compacted_at_message_id,
+    ) {
+        (Some(start), Some(end)) => message.id >= start && message.id <= end,
+        (Some(start), None) => message.id >= start,
+        _ => false,
+    };
+    let boundary = compaction
+        .compacted_by_message_id
+        .or(compaction.compacted_at_message_id);
+    let future_message = boundary.is_some_and(|id| message.id > id);
+    preserved_tail || future_message
 }
 
 pub(crate) fn normalize_prompt_messages(messages: &[Message]) -> Vec<Message> {
@@ -422,7 +312,7 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
         return None;
     }
 
-    let last_successful_total_tokens = runtime.total_tokens()?;
+    let last_successful_prompt_tokens = runtime.prompt_tokens()?;
     let assistant_message_id = runtime.last_successful_assistant_message_id?;
     let prompt_messages = prompt_messages_for_request(messages);
     let anchor_index = prompt_messages
@@ -438,7 +328,7 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
     let delta_tokens = approximate_tokens_from_chars(delta_chars);
 
     Some(PromptTokenEstimate {
-        total_tokens: last_successful_total_tokens.saturating_add(delta_tokens),
+        total_tokens: last_successful_prompt_tokens.saturating_add(delta_tokens),
         delta_tokens,
         delta_chars: delta_chars as u64,
     })
@@ -504,16 +394,9 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                             if output_json.is_empty() {
                                 continue;
                             }
-                            let output = if output_json == PRUNED_TOOL_RESULT_PLACEHOLDER {
-                                TranscriptToolOutput::Pruned {
-                                    replacement: output_json,
-                                }
-                            } else {
-                                TranscriptToolOutput::Text { text: output_json }
-                            };
                             tool_results.push(TranscriptFragment::ToolResult {
                                 call_id: ToolCallId::from(SmolStr::from(tool_call_id)),
-                                output,
+                                output: TranscriptToolOutput::Text { text: output_json },
                             });
                         }
                     }
@@ -838,235 +721,6 @@ pub(crate) fn provider_metadata_with_response_id(
     response_id.map(|response_id| serde_json::json!({ "response_id": response_id }))
 }
 
-#[cfg(test)]
-pub(crate) fn prune_tool_result_message(message: &mut Message) -> bool {
-    if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
-        return false;
-    }
-
-    if tool_result_output_chars(message) > 0 {
-        message.metadata.add_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED);
-        return true;
-    }
-
-    false
-}
-
-#[cfg(test)]
-pub(crate) fn strip_attachment_payloads(message: &mut Message) -> bool {
-    if message
-        .metadata
-        .has_tag(MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED)
-        || message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED)
-    {
-        return false;
-    }
-
-    if attachment_payload_bytes(message) > 0 {
-        message
-            .metadata
-            .add_tag(MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED);
-        return true;
-    }
-
-    false
-}
-
-fn build_compaction_summary(messages: &[Message]) -> String {
-    let sections = summary_sections(messages);
-    let mut lines = vec![COMPACTION_SUMMARY_HEADING.to_string(), String::new()];
-    lines.extend(render_summary_section(
-        COMPACTION_SUMMARY_SECTIONS[0],
-        sections.goal,
-    ));
-    lines.push(String::new());
-    lines.extend(render_summary_section(
-        COMPACTION_SUMMARY_SECTIONS[1],
-        sections.instructions,
-    ));
-    lines.push(String::new());
-    lines.extend(render_summary_section(
-        COMPACTION_SUMMARY_SECTIONS[2],
-        sections.discoveries,
-    ));
-    lines.push(String::new());
-    lines.extend(render_summary_section(
-        COMPACTION_SUMMARY_SECTIONS[3],
-        sections.accomplished,
-    ));
-    lines.push(String::new());
-    lines.extend(render_summary_section(
-        COMPACTION_SUMMARY_SECTIONS[4],
-        sections.relevant_files,
-    ));
-    lines.join("\n")
-}
-
-fn render_summary_section(title: &str, items: Vec<String>) -> Vec<String> {
-    let mut lines = vec![format!("## {title}")];
-    if items.is_empty() {
-        lines.push("- No durable context captured.".to_string());
-    } else {
-        lines.extend(items.into_iter().map(|item| format!("- {item}")));
-    }
-    lines
-}
-
-fn summary_sections(messages: &[Message]) -> SummarySections {
-    let mut sections = SummarySections::default();
-    for message in messages {
-        let Some(text) = summary_message_text(message) else {
-            continue;
-        };
-
-        collect_relevant_files(text.as_str(), &mut sections.relevant_files);
-
-        match message.role {
-            Role::System => push_unique(&mut sections.instructions, text, 4),
-            Role::User => {
-                if sections.goal.is_empty() {
-                    push_unique(&mut sections.goal, text.clone(), 3);
-                } else {
-                    push_unique(
-                        &mut sections.instructions,
-                        format!("User request: {text}"),
-                        4,
-                    );
-                }
-            }
-            Role::Assistant => push_unique(&mut sections.accomplished, text, 5),
-        }
-    }
-
-    if sections.goal.is_empty()
-        && let Some(instruction) = sections.instructions.first().cloned()
-    {
-        sections.goal.push(instruction);
-    }
-    if sections.discoveries.is_empty() {
-        for item in sections.accomplished.iter().take(2).cloned() {
-            push_unique(&mut sections.discoveries, item, 3);
-        }
-    }
-    if sections.accomplished.is_empty() {
-        for item in sections.discoveries.iter().take(2).cloned() {
-            push_unique(&mut sections.accomplished, item, 3);
-        }
-    }
-
-    sections
-}
-
-fn summary_message_text(message: &Message) -> Option<String> {
-    let text = if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
-        PRUNED_TOOL_RESULT_PLACEHOLDER.to_owned()
-    } else {
-        project_session_text_lossy(message)
-    };
-    normalize_summary_text(text)
-}
-
-fn normalize_summary_text(text: String) -> Option<String> {
-    let compact = text
-        .split_whitespace()
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ");
-    let compact = compact.trim();
-    if compact.is_empty() {
-        return None;
-    }
-
-    Some(truncate_chars(compact, 320))
-}
-
-fn truncate_chars(value: &str, limit: usize) -> String {
-    let mut chars = value.chars();
-    let truncated = chars.by_ref().take(limit).collect::<String>();
-    if chars.next().is_some() {
-        format!("{truncated}...")
-    } else {
-        truncated
-    }
-}
-
-fn push_unique(items: &mut Vec<String>, value: String, limit: usize) {
-    if value.trim().is_empty() || items.len() >= limit || items.contains(&value) {
-        return;
-    }
-    items.push(value);
-}
-
-fn collect_relevant_files(text: &str, files: &mut Vec<String>) {
-    let mut discovered = BTreeSet::new();
-    for candidate in FILE_PATH_RE.find_iter(text).map(|m| m.as_str()) {
-        if candidate.contains("://") {
-            continue;
-        }
-        let cleaned = candidate
-            .trim_matches(|ch: char| matches!(ch, '"' | '\'' | '`' | '(' | ')' | '[' | ']'))
-            .trim();
-        if cleaned.is_empty() || cleaned.starts_with("[tool_") {
-            continue;
-        }
-        discovered.insert(cleaned.replace('\\', "/"));
-    }
-
-    for item in discovered {
-        push_unique(files, item, 8);
-    }
-}
-
-fn tail_messages_to_keep(
-    messages: &[Message],
-    keep_tail_messages: usize,
-    max_prompt_chars: usize,
-) -> usize {
-    if messages.is_empty() {
-        return 0;
-    }
-    if messages.len() == 1 {
-        return 1;
-    }
-
-    let total_chars = approximate_prompt_payload_chars(messages);
-    let count_limited_keep = keep_tail_messages.max(1).min(messages.len() - 1);
-    if total_chars <= max_prompt_chars {
-        if messages.len() > keep_tail_messages.max(1) {
-            return count_limited_keep;
-        }
-        return messages.len();
-    }
-
-    let tail_budget = max_prompt_chars
-        .saturating_sub(COMPACTION_SUMMARY_BUDGET_CHARS)
-        .max(1);
-    let mut keep_tail = 1_usize;
-    let mut tail_chars = approximate_message_payload_chars(&messages[messages.len() - 1]);
-    while keep_tail < count_limited_keep {
-        let next_index = messages.len() - keep_tail - 1;
-        let next_chars = approximate_message_payload_chars(&messages[next_index]);
-        if tail_chars.saturating_add(next_chars) > tail_budget {
-            break;
-        }
-        tail_chars = tail_chars.saturating_add(next_chars);
-        keep_tail += 1;
-    }
-
-    keep_tail
-}
-
-fn tool_result_output_chars(message: &Message) -> usize {
-    message
-        .parts
-        .iter()
-        .map(|part| match part.content.as_ref() {
-            Some(PartContent::Operation(exec)) => tool_result_output_text(part, exec).len(),
-            _ => 0,
-        })
-        .sum()
-}
-
 fn approximate_message_payload_chars(message: &Message) -> usize {
     project_session_text_lossy(message)
         .len()
@@ -1100,10 +754,6 @@ fn assistant_tool_call_payload_chars(message: &Message) -> usize {
 }
 
 fn tool_result_extra_payload_chars(message: &Message) -> usize {
-    if message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED) {
-        return 0;
-    }
-
     message
         .parts
         .iter()
@@ -1300,39 +950,6 @@ fn tool_invocation_arguments_json(invocation: &ToolInvocation) -> String {
     serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn attachment_payload_bytes(message: &Message) -> usize {
-    message
-        .parts
-        .iter()
-        .map(|part| match part.content.as_ref() {
-            Some(PartContent::Attachment(attachment)) => attachment
-                .attachments
-                .iter()
-                .map(attachment_item_payload_bytes)
-                .sum(),
-            _ => 0,
-        })
-        .sum()
-}
-
-fn attachment_item_payload_bytes(item: &crate::message::AttachmentItem) -> usize {
-    match &item.source {
-        AttachmentSource::DataUrl { url } | AttachmentSource::Url { url } => url.trim().len(),
-        AttachmentSource::Base64 { data } => data.trim().len(),
-        AttachmentSource::FileId { file_id } => file_id.trim().len(),
-        AttachmentSource::LocalPath { .. } => 0,
-    }
-}
-
-#[derive(Debug, Default)]
-struct SummarySections {
-    goal: Vec<String>,
-    instructions: Vec<String>,
-    discoveries: Vec<String>,
-    accomplished: Vec<String>,
-    relevant_files: Vec<String>,
-}
-
 fn fingerprint_request_options(
     provider_id: &str,
     model_id: &str,
@@ -1389,7 +1006,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::session::{PromptWindowRuntime, ProviderPromptAnchor, SessionRuntimeState};
+    use crate::session::{
+        PromptCompactionRuntime, PromptCompactionStrategy, PromptWindowRuntime,
+        ProviderPromptAnchor, SessionRuntimeState,
+    };
 
     fn test_tool(
         name: &str,
@@ -1442,29 +1062,68 @@ mod tests {
 
     #[test]
     fn active_prompt_messages_preserves_append_only_order() {
-        let mut compacted = Message::prompt_text(Role::User, "old");
-        compacted.id = 1;
-        compacted.metadata.add_tag("prompt_compacted");
-        let compacted_id = compacted.id;
+        let mut first = Message::prompt_text(Role::User, "old");
+        first.id = 1;
+        let first_id = first.id;
 
         let mut current = Message::prompt_text(Role::User, "new");
         current.id = 2;
 
-        let mut summary = Message::prompt_text(Role::System, "summary");
-        summary.id = 3;
-        summary.metadata.add_tag(MESSAGE_TAG_PROMPT_SUMMARY);
+        let mut system = Message::prompt_text(Role::System, "system");
+        system.id = 3;
 
         let session = Session::new(7, 1, "prompt", Utc::now()).with_messages(vec![
-            compacted,
+            first,
             current.clone(),
-            summary.clone(),
+            system.clone(),
         ]);
 
         let prompt_messages = active_prompt_messages(&session);
         assert_eq!(prompt_messages.len(), 3);
-        assert_eq!(prompt_messages[0].id, compacted_id);
+        assert_eq!(prompt_messages[0].id, first_id);
         assert_eq!(prompt_messages[1].id, current.id);
-        assert_eq!(prompt_messages[2].id, summary.id);
+        assert_eq!(prompt_messages[2].id, system.id);
+    }
+
+    #[test]
+    fn active_prompt_messages_projects_compacted_summary_tail_and_future_messages() {
+        let mut old = Message::prompt_text(Role::User, "old");
+        old.id = 1;
+        let mut tail = Message::prompt_text(Role::Assistant, "recent answer");
+        tail.id = 2;
+        let mut compact_request = Message::prompt_text(Role::User, "compact this");
+        compact_request.id = 3;
+        let mut compact_assistant = Message::prompt_text(Role::Assistant, "summary");
+        compact_assistant.id = 4;
+        let mut future = Message::prompt_text(Role::User, "next question");
+        future.id = 5;
+
+        let mut session = Session::new(7, 1, "prompt", Utc::now()).with_messages(vec![
+            old,
+            tail.clone(),
+            compact_request,
+            compact_assistant,
+            future.clone(),
+        ]);
+        session.runtime.prompt_window = PromptWindowRuntime {
+            generation: 3,
+            compaction: Some(PromptCompactionRuntime {
+                summary: "The user discussed the old topic.".to_string(),
+                tail_start_message_id: Some(tail.id),
+                compacted_at_message_id: Some(tail.id),
+                compacted_by_message_id: Some(4),
+                strategy: PromptCompactionStrategy::LocalAgent,
+                created_at_ms: 123,
+            }),
+        };
+
+        let prompt_messages = active_prompt_messages(&session);
+        assert_eq!(prompt_messages.len(), 3);
+        assert_eq!(prompt_messages[0].role, Role::User);
+        assert_eq!(prompt_messages[0].metadata.source, MessageSource::System);
+        assert!(prompt_messages[0].as_text_lossy().contains("old topic"));
+        assert_eq!(prompt_messages[1].id, tail.id);
+        assert_eq!(prompt_messages[2].id, future.id);
     }
 
     #[test]
@@ -1478,7 +1137,10 @@ mod tests {
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
         session.runtime = SessionRuntimeState {
             turn: Default::default(),
-            prompt_window: PromptWindowRuntime { generation: 2 },
+            prompt_window: PromptWindowRuntime {
+                generation: 2,
+                ..Default::default()
+            },
             prompt_tokens: Default::default(),
             provider_anchors: [(
                 SessionRuntimeState::provider_anchor_key("openai", "gpt-5"),
@@ -1544,15 +1206,18 @@ mod tests {
 
         let mut session =
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
-        session.runtime.prompt_window = PromptWindowRuntime { generation: 2 };
+        session.runtime.prompt_window = PromptWindowRuntime {
+            generation: 2,
+            ..Default::default()
+        };
         session.runtime.record_prompt_tokens(
             11,
             &crate::message::MessageUsage {
                 input_tokens: 1_200,
                 output_tokens: 200,
                 reasoning_tokens: 50,
-                cache_write_tokens: 0,
-                cache_read_tokens: 0,
+                cache_write_tokens: 30,
+                cache_read_tokens: 20,
                 total_cost: 0.0,
             },
             2,
@@ -1576,7 +1241,7 @@ mod tests {
             Message::prompt_text(Role::User, "follow up"),
         ]));
         assert_eq!(estimate.delta_tokens, delta_tokens);
-        assert_eq!(estimate.total_tokens, 1_450 + delta_tokens);
+        assert_eq!(estimate.total_tokens, 1_250 + delta_tokens);
     }
 
     #[test]
@@ -1589,7 +1254,10 @@ mod tests {
 
         let mut session =
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
-        session.runtime.prompt_window = PromptWindowRuntime { generation: 2 };
+        session.runtime.prompt_window = PromptWindowRuntime {
+            generation: 2,
+            ..Default::default()
+        };
         session.runtime.record_prompt_tokens(
             11,
             &crate::message::MessageUsage {
@@ -1630,7 +1298,10 @@ mod tests {
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
         session.runtime = SessionRuntimeState {
             turn: Default::default(),
-            prompt_window: PromptWindowRuntime { generation: 2 },
+            prompt_window: PromptWindowRuntime {
+                generation: 2,
+                ..Default::default()
+            },
             prompt_tokens: Default::default(),
             provider_anchors: [(
                 SessionRuntimeState::provider_anchor_key("openai", "gpt-5"),
@@ -1696,7 +1367,10 @@ mod tests {
 
         let mut session =
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
-        session.runtime.prompt_window = PromptWindowRuntime { generation: 2 };
+        session.runtime.prompt_window = PromptWindowRuntime {
+            generation: 2,
+            ..Default::default()
+        };
         session.runtime.record_prompt_tokens(
             11,
             &crate::message::MessageUsage {
@@ -1724,161 +1398,6 @@ mod tests {
         );
 
         assert!(estimate.is_none());
-    }
-
-    #[test]
-    fn plan_compaction_compacts_head_and_keeps_tail() {
-        let mut first = Message::prompt_text(Role::User, "one");
-        first.id = 1;
-        let mut second = Message::prompt_text(Role::Assistant, "two");
-        second.id = 2;
-        let mut third = Message::prompt_text(Role::User, "three");
-        third.id = 3;
-
-        let plan = plan_compaction(&[first, second, third], 1, 32_000).expect("plan should exist");
-        assert_eq!(plan.compacted_message_ids, vec![1, 2]);
-        assert!(plan.summary_text.contains("## Goal"));
-        assert!(plan.summary_text.contains("- one"));
-        assert!(plan.summary_text.contains("## Accomplished"));
-        assert!(plan.summary_text.contains("- two"));
-    }
-
-    #[test]
-    fn compaction_summary_template_stays_stable() {
-        let mut system = Message::prompt_text(Role::System, "Always answer in Chinese.");
-        system.id = 1;
-        let mut user =
-            Message::prompt_text(Role::User, "Update crates/agena/src/session/manager.rs");
-        user.id = 2;
-        let mut tool = Message::prompt_tool_result("call_1", "Found compact_prompt_window");
-        tool.id = 3;
-        let mut assistant = Message::prompt_text(Role::Assistant, "Wired the compaction worker.");
-        assistant.id = 4;
-        let mut tail = Message::prompt_text(Role::User, "Continue");
-        tail.id = 5;
-
-        let plan = plan_compaction(&[system, user, tool, assistant, tail], 1, 32_000)
-            .expect("plan should exist");
-
-        assert_eq!(
-            plan.summary_text,
-            "Conversation summary (compacted):\n\n## Goal\n- Update crates/agena/src/session/manager.rs\n\n## Instructions\n- Always answer in Chinese.\n\n## Discoveries\n- [tool_call:tool:call_1][tool_result:call_1]\n- Wired the compaction worker.\n\n## Accomplished\n- [tool_call:tool:call_1][tool_result:call_1]\n- Wired the compaction worker.\n\n## Relevant files / directories\n- crates/agena/src/session/manager.rs"
-        );
-    }
-
-    #[test]
-    fn plan_tool_result_pruning_targets_only_older_large_results() {
-        let mut messages = Vec::new();
-        let mut first = Message::prompt_tool_result("call_1", "x".repeat(13_000));
-        first.id = 1;
-        let mut first_user = Message::prompt_text(Role::User, "first turn");
-        first_user.id = 2;
-        let mut second = Message::prompt_tool_result("call_2", "y".repeat(13_000));
-        second.id = 3;
-        let mut second_user = Message::prompt_text(Role::User, "second turn");
-        second_user.id = 4;
-        let mut latest_tool = Message::prompt_tool_result("call_3", "z".repeat(2_000));
-        latest_tool.id = 5;
-        let mut latest_user = Message::prompt_text(Role::User, "latest turn");
-        latest_user.id = 6;
-
-        messages.extend([
-            first,
-            first_user,
-            second,
-            second_user,
-            latest_tool,
-            latest_user,
-        ]);
-
-        let plan = plan_tool_result_pruning(messages.as_slice()).expect("prune plan should exist");
-        assert_eq!(plan.pruned_message_ids, vec![1]);
-    }
-
-    #[test]
-    fn plan_attachment_payload_stripping_targets_only_older_large_inline_payloads() {
-        let mut first = Message::prompt_parts(
-            Role::User,
-            vec![
-                PartContent::text("old screenshot"),
-                PartContent::attachments(vec![crate::message::AttachmentItem {
-                    kind: crate::message::AttachmentKind::Image,
-                    mime: "image/png".to_string(),
-                    source: AttachmentSource::DataUrl {
-                        url: format!("data:image/png;base64,{}", "A".repeat(700_000)),
-                    },
-                    filename: Some("old.png".to_string()),
-                    title: None,
-                    size_bytes: None,
-                    sha256: None,
-                    width: None,
-                    height: None,
-                    duration_ms: None,
-                    page_count: None,
-                }]),
-            ],
-        );
-        first.id = 1;
-        let mut second_user = Message::prompt_text(Role::User, "recent turn");
-        second_user.id = 2;
-        let mut third_user = Message::prompt_text(Role::User, "latest turn");
-        third_user.id = 3;
-
-        let plan = plan_attachment_payload_stripping(&[first, second_user, third_user])
-            .expect("attachment strip plan should exist");
-        assert_eq!(plan.stripped_message_ids, vec![1]);
-    }
-
-    #[test]
-    fn prune_tool_result_message_replaces_old_output_with_placeholder() {
-        let mut message = Message::prompt_tool_result("call_1", "very long output");
-        message.id = 9;
-
-        assert!(prune_tool_result_message(&mut message));
-        assert!(message.metadata.has_tag(MESSAGE_TAG_TOOL_RESULT_PRUNED));
-        assert_eq!(message.as_text_lossy(), "very long output".to_string());
-        assert_eq!(
-            crate::provider::project_session_text_lossy(&message),
-            "[tool_call:tool:call_1][tool_result:call_1]".to_string()
-        );
-    }
-
-    #[test]
-    fn strip_attachment_payloads_keeps_persisted_message_but_changes_projection() {
-        let mut message = Message::prompt_parts(
-            Role::User,
-            vec![
-                PartContent::text("see screenshot"),
-                PartContent::attachments(vec![crate::message::AttachmentItem {
-                    kind: crate::message::AttachmentKind::Image,
-                    mime: "image/png".to_string(),
-                    source: AttachmentSource::DataUrl {
-                        url: format!("data:image/png;base64,{}", "A".repeat(1024)),
-                    },
-                    filename: Some("shot.png".to_string()),
-                    title: None,
-                    size_bytes: None,
-                    sha256: None,
-                    width: None,
-                    height: None,
-                    duration_ms: None,
-                    page_count: None,
-                }]),
-            ],
-        );
-        message.id = 10;
-
-        assert!(strip_attachment_payloads(&mut message));
-        assert!(
-            message
-                .metadata
-                .has_tag(MESSAGE_TAG_ATTACHMENT_PAYLOAD_STRIPPED)
-        );
-        assert!(message.as_text_lossy().contains("shot.png"));
-        assert_eq!(
-            crate::provider::project_session_text_lossy(&message),
-            "see screenshot[image:shot.png]".to_string()
-        );
     }
 
     #[test]
@@ -2158,17 +1677,43 @@ mod tests {
     }
 
     #[test]
-    fn plan_compaction_compacts_small_histories_when_visible_payload_is_too_large() {
-        let mut first = Message::prompt_text(Role::User, "A".repeat(8_000));
-        first.id = 1;
-        let mut second = Message::prompt_text(Role::Assistant, "B".repeat(8_000));
-        second.id = 2;
+    fn prompt_transcript_digest_ignores_legacy_pruned_tool_result_tag() {
+        let mut message = Message::prompt_tool_result("call_1", "very long output");
+        message.id = 9;
+        let baseline = prompt_transcript_digest(&[message.clone()]);
+        message.metadata.add_tag("tool_result_pruned");
+        let tagged = prompt_transcript_digest(&[message]);
+        assert_eq!(tagged, baseline);
+    }
 
-        let plan = plan_compaction(&[first, second.clone()], 12, 6_000)
-            .expect("large visible payload should trigger compaction");
-        assert_eq!(plan.compacted_message_ids, vec![1]);
-        assert!(plan.summary_text.contains("## Goal"));
-        assert!(plan.summary_text.contains("A"));
+    #[test]
+    fn prompt_transcript_digest_ignores_legacy_attachment_stripped_tag() {
+        let mut message = Message::prompt_parts(
+            Role::User,
+            vec![
+                PartContent::text("see screenshot"),
+                PartContent::attachments(vec![crate::message::AttachmentItem {
+                    kind: crate::message::AttachmentKind::Image,
+                    mime: "image/png".to_string(),
+                    source: AttachmentSource::DataUrl {
+                        url: format!("data:image/png;base64,{}", "A".repeat(1024)),
+                    },
+                    filename: Some("shot.png".to_string()),
+                    title: None,
+                    size_bytes: None,
+                    sha256: None,
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                }]),
+            ],
+        );
+        message.id = 10;
+        let baseline = prompt_transcript_digest(&[message.clone()]);
+        message.metadata.add_tag("attachment_payload_stripped");
+        let tagged = prompt_transcript_digest(&[message]);
+        assert_eq!(tagged, baseline);
     }
 
     #[test]
@@ -2279,7 +1824,10 @@ mod tests {
             Session::new(99, 1, "continuation", Utc::now()).with_messages(vec![assistant, user]);
         session.runtime = SessionRuntimeState {
             turn: Default::default(),
-            prompt_window: PromptWindowRuntime { generation: 2 },
+            prompt_window: PromptWindowRuntime {
+                generation: 2,
+                ..Default::default()
+            },
             prompt_tokens: Default::default(),
             provider_anchors: [(
                 SessionRuntimeState::provider_anchor_key("openai", "gpt-5"),

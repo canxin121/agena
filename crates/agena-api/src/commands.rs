@@ -35,9 +35,9 @@ pub enum Command {
     // ── turn / run ──
     SubmitTurn(SubmitTurnParams),
     ContinueRun(ContinueRunParams),
+    CompactSession(CompactSessionParams),
     CancelTurn(CancelTurnParams),
     RewindSession(RewindSessionParams),
-    UnrewindSession(UnrewindSessionParams),
 
     // ── tree / fork / portability ──
     ForkSession(ForkSessionParams),
@@ -180,22 +180,19 @@ pub struct ContinueRunParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactSessionParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub options: RunOptions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancelTurnParams {
     pub session_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewindSessionParams {
-    pub session_id: i64,
-    pub message_id: i64,
-    #[serde(default)]
-    pub expected_version: Option<i64>,
-}
-
-/// Reverses a prior [`RewindSessionParams`] on the same session by re-admitting
-/// every still-compacted message at or after `message_id`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnrewindSessionParams {
     pub session_id: i64,
     pub message_id: i64,
     #[serde(default)]

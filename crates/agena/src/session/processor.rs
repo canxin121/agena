@@ -588,13 +588,14 @@ impl SessionProcessor {
             }));
             // Even on failure the buffer has accumulated state we can still
             // commit; downstream callers may inspect it for diagnostics.
-            let history_items = turn_buffer
+            let mut history_items = turn_buffer
                 .commit(
                     &mut crate::session::history::SequentialIdAllocator::starting_at(
                         run.next_message_id.saturating_add(1),
                     ),
                 )
                 .unwrap_or_default();
+            sync_assistant_completion_event(history_items.as_mut_slice(), &assistant);
             return Ok(SessionRunResult {
                 assistant_message_id,
                 state: vec![assistant],
@@ -625,13 +626,14 @@ impl SessionProcessor {
             .set_finish_reason(finish_reason_enum)
             .map_err(|err| AppError::Internal(err.to_string()))?;
 
-        let history_items = turn_buffer
+        let mut history_items = turn_buffer
             .commit(
                 &mut crate::session::history::SequentialIdAllocator::starting_at(
                     run.next_message_id.saturating_add(1),
                 ),
             )
             .map_err(|err| AppError::Internal(err.to_string()))?;
+        sync_assistant_completion_event(history_items.as_mut_slice(), &assistant);
 
         Ok(SessionRunResult {
             assistant_message_id,
@@ -644,13 +646,13 @@ impl SessionProcessor {
         })
     }
 
-    pub(crate) fn should_compact_prompt_with_budget(
+    pub(crate) fn prompt_exceeds_budget(
         &self,
         messages: &[Message],
         max_prompt_chars: usize,
     ) -> bool {
         self.context_governor
-            .should_compact_prompt_with_budget(messages, max_prompt_chars)
+            .prompt_exceeds_budget(messages, max_prompt_chars)
     }
 
     pub(crate) fn max_prompt_chars(&self) -> usize {
@@ -1043,6 +1045,20 @@ fn complete_part_status(assistant: &mut Message, part_id: i64) -> Result<(), App
             .map_err(|err| AppError::Internal(err.to_string()))?;
     }
     Ok(())
+}
+
+fn sync_assistant_completion_event(history_items: &mut [EventKind], assistant: &Message) {
+    for event in history_items {
+        let EventKind::AssistantMessageCompleted(payload) = event else {
+            continue;
+        };
+        if payload.message_id.raw() != assistant.id {
+            continue;
+        }
+        payload.parts = assistant.parts.clone();
+        payload.usage = assistant.usage.clone();
+        payload.metadata = assistant.metadata.clone();
+    }
 }
 
 fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {

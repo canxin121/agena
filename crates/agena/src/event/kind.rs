@@ -13,8 +13,8 @@ use crate::event::client::{
     RunFailedEvent, RunStartedEvent, SessionGoalEvent, StreamErrorEvent,
 };
 use crate::session::history::{
-    AssistantMessageCompleted, MessageRevised, SystemNoticeAppended, ToolCallCompleted,
-    ToolCallIssued, TurnAborted, TurnCompleted, TurnStarted, UserMessageAppended,
+    AssistantMessageCompleted, SystemNoticeAppended, ToolCallCompleted, ToolCallIssued,
+    TurnAborted, TurnCompleted, TurnStarted, UserMessageAppended,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,7 +46,6 @@ pub enum EventKind {
     ToolCallIssued(ToolCallIssued),
     ToolCallCompleted(ToolCallCompleted),
     SystemNoticeAppended(SystemNoticeAppended),
-    MessageRevised(MessageRevised),
 
     // --- plugin-injected synthetic events ---
     /// Free-form payload published by a plugin via `host/event.publish`.
@@ -87,7 +86,6 @@ impl EventKind {
             Self::ToolCallIssued(_) => "tool_call_issued",
             Self::ToolCallCompleted(_) => "tool_call_completed",
             Self::SystemNoticeAppended(_) => "system_notice_appended",
-            Self::MessageRevised(_) => "message_revised",
             Self::PluginEvent(_) => "plugin_event",
         }
     }
@@ -149,7 +147,6 @@ pub const HISTORY_KINDS: &[&str] = &[
     "tool_call_issued",
     "tool_call_completed",
     "system_notice_appended",
-    "message_revised",
     "plugin_event",
 ];
 
@@ -178,7 +175,6 @@ pub const ALL_KINDS: &[&str] = &[
     "tool_call_issued",
     "tool_call_completed",
     "system_notice_appended",
-    "message_revised",
     "plugin_event",
 ];
 

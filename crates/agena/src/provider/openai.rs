@@ -406,6 +406,13 @@ impl OpenAiAdapter {
         ))
     }
 
+    fn responses_compact_endpoint(&self) -> Result<String, AppError> {
+        Ok(format!(
+            "{}/responses/compact",
+            self.resolved_base_url()?.trim_end_matches('/')
+        ))
+    }
+
     fn chat_endpoint(&self) -> Result<String, AppError> {
         Ok(format!(
             "{}/chat/completions",
@@ -1927,6 +1934,42 @@ impl OpenAiAdapter {
             .collect()
     }
 
+    fn compact_summary_from_output(output: &[serde_json::Value]) -> Option<String> {
+        let mut chunks = Vec::new();
+        for item in output {
+            let item_type = item
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            match item_type {
+                "message" => {
+                    if let Some(role) = item.get("role").and_then(serde_json::Value::as_str)
+                        && role == "developer"
+                    {
+                        continue;
+                    }
+                    collect_compact_content_text(item.get("content"), &mut chunks);
+                }
+                "compaction" | "compaction_summary" | "context_compaction" => {
+                    collect_compact_string_field(item, "summary", &mut chunks);
+                    collect_compact_string_field(item, "text", &mut chunks);
+                    collect_compact_string_field(item, "message", &mut chunks);
+                }
+                _ => {
+                    collect_compact_string_field(item, "summary", &mut chunks);
+                    collect_compact_string_field(item, "text", &mut chunks);
+                }
+            }
+        }
+        let summary = chunks
+            .into_iter()
+            .map(|text| text.trim().to_string())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        (!summary.trim().is_empty()).then_some(summary)
+    }
+
     async fn send_json<R>(
         &self,
         operation: &str,
@@ -2316,6 +2359,60 @@ impl ModelRuntime for OpenAiAdapter {
         })
     }
 
+    async fn compact_conversation(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        let model = request.model.clone();
+        if self.backend != OpenAiBackend::Api
+            || self.profile != OpenAiProfile::Standard
+            || self.is_openai_compatible_family()
+            || !self.should_use_responses(model.as_str())
+        {
+            return Ok(None);
+        }
+
+        let mut input_request = request.clone();
+        input_request.system = None;
+        input_request.previous_response_id = None;
+        let input = self.responses_input_for_request(&input_request);
+        let body = OpenAiResponsesCompactRequest {
+            model: model.to_string(),
+            instructions: request.system.clone(),
+            input,
+            tools: Self::responses_tools(request.tools.as_slice()),
+            parallel_tool_calls: request
+                .request_override
+                .parallel_tool_calls()
+                .unwrap_or(false),
+            prompt_cache_key: request.prompt_cache_key.clone(),
+            reasoning: chat_wire::reasoning_effort(request.thinking.as_ref(), model.as_str()).map(
+                |effort| OpenAiCompactReasoningConfig {
+                    effort: Some(effort),
+                },
+            ),
+            text: request
+                .verbosity
+                .as_ref()
+                .map(|verbosity| OpenAiResponsesTextConfig {
+                    verbosity: verbosity.clone(),
+                }),
+        };
+        let body_json =
+            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+        let response: OpenAiResponsesCompactResponse = self
+            .send_json(
+                "compact.responses",
+                self.responses_compact_endpoint()?,
+                Some(&body_json),
+                RequestHeaderContext::from_request(&request),
+            )
+            .await?;
+        Ok(Self::compact_summary_from_output(
+            response.output.as_slice(),
+        ))
+    }
+
     #[tracing::instrument(
         skip_all,
         fields(provider = tracing::field::Empty, model = %request.model)
@@ -2659,6 +2756,35 @@ struct OpenAiResponsesRequest {
 }
 
 #[derive(Debug, Serialize)]
+struct OpenAiResponsesCompactRequest {
+    model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
+    input: Vec<OpenAiResponsesInputItem>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<OpenAiResponsesTool>,
+    parallel_tool_calls: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<OpenAiCompactReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<OpenAiResponsesTextConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct OpenAiCompactReasoningConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiResponsesCompactResponse {
+    #[serde(default)]
+    output: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
 struct OpenAiResponsesTextConfig {
     verbosity: String,
 }
@@ -2943,6 +3069,33 @@ struct OpenAiUsage {
     output_tokens_details: Option<OpenAiOutputTokenDetails>,
     #[serde(default)]
     input_tokens_details: Option<OpenAiInputTokenDetails>,
+}
+
+fn collect_compact_content_text(value: Option<&serde_json::Value>, chunks: &mut Vec<String>) {
+    match value {
+        Some(serde_json::Value::String(text)) => chunks.push(text.clone()),
+        Some(serde_json::Value::Array(items)) => {
+            for item in items {
+                collect_compact_string_field(item, "text", chunks);
+                collect_compact_string_field(item, "summary", chunks);
+            }
+        }
+        Some(serde_json::Value::Object(_)) => {
+            if let Some(value) = value {
+                collect_compact_string_field(value, "text", chunks);
+                collect_compact_string_field(value, "summary", chunks);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_compact_string_field(value: &serde_json::Value, field: &str, chunks: &mut Vec<String>) {
+    if let Some(text) = value.get(field).and_then(serde_json::Value::as_str)
+        && !text.trim().is_empty()
+    {
+        chunks.push(text.to_string());
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3510,6 +3663,63 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("resp_next")
         );
+    }
+
+    #[tokio::test]
+    async fn compact_conversation_posts_responses_compact_and_extracts_summary() {
+        let mut server = mockito::Server::new_async().await;
+        let _compact = server
+            .mock("POST", "/responses/compact")
+            .expect(1)
+            .match_body(mockito::Matcher::Regex(
+                "\\\"model\\\":\\\"gpt-5\\\"".to_owned(),
+            ))
+            .match_body(mockito::Matcher::Regex(
+                "\\\"instructions\\\":\\\"system\\\"".to_owned(),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "output": [{
+                        "type": "message",
+                        "role": "user",
+                        "content": [{
+                            "type": "input_text",
+                            "text": "remote summary"
+                        }]
+                    }]
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let provider = OpenAiAdapter::new(reqwest::Client::new(), "sk-test", server.url(), "gpt-5");
+        let summary = provider
+            .compact_conversation(CompletionRequest {
+                model: ModelId::new("gpt-5"),
+                system: Some("system".to_string()),
+                messages: vec![Message::prompt_text(crate::role::Role::User, "hello")],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: Some("session-42".to_string()),
+                previous_response_id: None,
+                prompt_window_generation: Some(7),
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("remote compact should succeed");
+
+        assert_eq!(summary.as_deref(), Some("remote summary"));
     }
 
     #[test]

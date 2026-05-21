@@ -98,7 +98,6 @@ const PASTE_ENTER_SUPPRESS_WINDOW_MS: u64 = 120;
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 const TOOL_CARD_PREVIEW_LINES: usize = 8;
 const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
-const PROMPT_SUMMARY_TAG: &str = "prompt_summary";
 const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
 const MAX_FILE_MENTION_SUGGESTIONS: usize = 8;
 const MAX_PROMPT_HISTORY_SEARCH_RESULTS: usize = 6;
@@ -1136,9 +1135,15 @@ struct SessionLineageSummary {
 }
 
 #[derive(Debug, Clone)]
+struct SessionPathSegment {
+    id: i64,
+}
+
+#[derive(Debug, Clone)]
 struct CurrentLineageState {
     session_id: i64,
     summary: SessionLineageSummary,
+    path: Vec<SessionPathSegment>,
 }
 
 #[derive(Debug, Clone)]
@@ -4213,7 +4218,7 @@ impl App {
                 self.handle_session_continued(session_id, result)
             }
             AppMessage::SessionCompacted { session_id, result } => {
-                self.handle_session_compacted(session_id, result)
+                self.handle_session_continued(session_id, result)
             }
             AppMessage::SessionRenamed { session_id, result } => {
                 self.handle_session_renamed(session_id, result)
@@ -4596,26 +4601,6 @@ impl App {
         }
     }
 
-    fn handle_session_compacted(
-        &mut self,
-        session_id: i64,
-        result: UiResult<SessionExecutionResource>,
-    ) {
-        match result {
-            Ok(execution) => {
-                self.handle_session_execution_updated(session_id, execution, true);
-                self.flash_success(ui_text::t(&self.i18n, "flash-session-compacted"));
-            }
-            Err(error) => {
-                if self.transcript.session_id == Some(session_id) {
-                    self.transcript.submitting = false;
-                }
-                self.submitting_session_ids.remove(&session_id);
-                self.flash_error(error);
-            }
-        }
-    }
-
     fn handle_session_renamed(&mut self, session_id: i64, result: UiResult<SessionResource>) {
         match result {
             Ok(session) => {
@@ -4772,6 +4757,7 @@ impl App {
                     self.current_lineage = Some(CurrentLineageState {
                         session_id,
                         summary,
+                        path: lineage_path_segments(sessions.as_slice(), session_id),
                     });
                 }
 
@@ -4839,7 +4825,6 @@ impl App {
             Ok(messages) => {
                 dialog.all_items = messages
                     .into_iter()
-                    .filter(|message| !message.metadata.has_tag(PROMPT_SUMMARY_TAG))
                     .rev()
                     .map(|message| self.rewind_message_picker_item(message))
                     .collect();
@@ -5428,10 +5413,7 @@ impl App {
     }
 
     fn request_compact(&mut self, session_id: i64) {
-        if self.transcript.session_id == Some(session_id) {
-            self.transcript.submitting = true;
-        }
-        self.submitting_session_ids.insert(session_id);
+        self.transcript.submitting = true;
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
@@ -5792,8 +5774,8 @@ impl App {
         self.request_continue(session_id);
     }
 
-    fn handle_compact_command(&mut self) {
-        let Some(session_id) = self.current_or_selected_session_id() else {
+    fn compact_current_session(&mut self) {
+        let Some(session_id) = self.transcript.session_id else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
@@ -8404,6 +8386,23 @@ impl App {
         parts
     }
 
+    fn current_session_path_label(&self) -> Option<String> {
+        let lineage = self.current_lineage.as_ref()?;
+        if self.transcript.session_id != Some(lineage.session_id) || lineage.path.is_empty() {
+            return None;
+        }
+
+        Some(format!(
+            "path {}",
+            lineage
+                .path
+                .iter()
+                .map(|segment| format!("#{}", segment.id))
+                .collect::<Vec<_>>()
+                .join(" > ")
+        ))
+    }
+
     fn open_parent_session(&mut self) {
         let Some(parent_id) = self.current_parent_session_id() else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-parent-session-missing"));
@@ -8505,7 +8504,7 @@ impl App {
             CommandId::Memory => self.handle_memory_command(spec, args),
             CommandId::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
             CommandId::Continue => self.continue_current_session(),
-            CommandId::Compact => self.handle_compact_command(),
+            CommandId::Compact => self.compact_current_session(),
             CommandId::UserInput => self.open_user_input_overlay(),
             CommandId::Allow => self.reply_permission(PermissionReplyKind::AllowOnce),
             CommandId::AllowAlways => self.reply_permission(PermissionReplyKind::AllowAlways),
@@ -9161,19 +9160,56 @@ impl App {
     }
 
     fn current_session_status_parts(&self) -> Vec<String> {
+        let fallback_model = || {
+            self.backend
+                .resolved_model_for_run_options(&self.run_options.to_request())
+                .ok()
+                .map(|model| model_status_label(&model))
+        };
+        let fallback_agent = || self.backend.default_agent_name();
+
         if let Some(execution) = self.transcript.execution.as_ref() {
             let mut parts = Vec::new();
-            if let (Some(provider_id), Some(model_id)) = (
+            let model_part = if let (Some(provider_id), Some(model_id)) = (
                 execution.execution.model_provider_id.as_deref(),
                 execution.execution.model_id.as_deref(),
             ) {
-                let model_part = execution
-                    .execution
-                    .model_adapter_id
-                    .as_deref()
-                    .map(|adapter_id| format!("{provider_id}/{adapter_id}/{model_id}"))
-                    .unwrap_or_else(|| format!("{provider_id}/{model_id}"));
-                parts.push(model_part);
+                Some(
+                    execution
+                        .execution
+                        .model_adapter_id
+                        .as_deref()
+                        .map(|adapter_id| format!("{provider_id}/{adapter_id}/{model_id}"))
+                        .unwrap_or_else(|| format!("{provider_id}/{model_id}")),
+                )
+            } else {
+                fallback_model()
+            };
+            if let Some(model_part) = model_part {
+                parts.push(format!("model {model_part}"));
+            }
+            let agent = execution
+                .execution
+                .agent_profile
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(fallback_agent);
+            if let Some(agent) = agent {
+                parts.push(format!("agent {agent}"));
+            }
+            if let Some(usage) = execution.prompt_usage.as_ref() {
+                if let Some(budget_tokens) = usage.budget_tokens.filter(|value| *value > 0) {
+                    let progress =
+                        format_budget_progress_label(usage.current_tokens, budget_tokens);
+                    parts.push(format!(
+                        "tokens {}/{} ({progress})",
+                        usage.current_tokens, budget_tokens
+                    ));
+                } else {
+                    parts.push(format!("tokens {}", usage.current_tokens));
+                }
             }
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
                 && !thinking_mode.trim().is_empty()
@@ -9185,16 +9221,17 @@ impl App {
             {
                 parts.push(format!("speed {speed_mode}"));
             }
-            if let Some(goal) = execution.goal.as_ref() {
+            if execution.prompt_usage.is_none()
+                && let Some(goal) = execution.goal.as_ref()
+            {
                 if let Some(token_budget) = goal.token_budget.filter(|value| *value > 0) {
-                    let percent =
-                        ((goal.tokens_used as f64 / token_budget as f64) * 100.0).clamp(0.0, 999.0);
+                    let progress = format_budget_progress_label(goal.tokens_used, token_budget);
                     parts.push(format!(
-                        "tokens {}/{} ({percent:.0}%)",
+                        "goal tokens {}/{} ({progress})",
                         goal.tokens_used, token_budget
                     ));
                 } else if goal.tokens_used > 0 {
-                    parts.push(format!("tokens {}", goal.tokens_used));
+                    parts.push(format!("goal tokens {}", goal.tokens_used));
                 }
             }
             if !parts.is_empty() {
@@ -9203,15 +9240,17 @@ impl App {
         }
 
         let mut parts = Vec::new();
-        if let Some(model) = self.run_options.model.as_ref() {
-            let model_part = model
-                .adapter_id
-                .as_ref()
-                .map(|adapter_id| {
-                    format!("{}/{}/{}", model.provider_id, adapter_id, model.model_id)
-                })
-                .unwrap_or_else(|| format!("{}/{}", model.provider_id, model.model_id));
-            parts.push(model_part);
+        if let Some(model_part) = self
+            .run_options
+            .model
+            .as_ref()
+            .map(model_status_label)
+            .or_else(fallback_model)
+        {
+            parts.push(format!("model {model_part}"));
+        }
+        if let Some(agent) = fallback_agent() {
+            parts.push(format!("agent {agent}"));
         }
         if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
@@ -12976,7 +13015,6 @@ fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
         AgenaSessionEvent::UserMessageAppended(event) => Some(event.message_id.into()),
         AgenaSessionEvent::AssistantMessageCompleted(event) => Some(event.message_id.into()),
         AgenaSessionEvent::SystemNoticeAppended(event) => Some(event.message_id.into()),
-        AgenaSessionEvent::MessageRevised(event) => Some(event.target_message_id),
         AgenaSessionEvent::RunStarted(_)
         | AgenaSessionEvent::RunFailed(_)
         | AgenaSessionEvent::StreamError(_)
@@ -13105,9 +13143,6 @@ fn timeline_event_summary(record: &DomainEvent) -> String {
         AgenaSessionEvent::ToolCallCompleted(p) => format!("tool call {} done", p.call_id),
         AgenaSessionEvent::SystemNoticeAppended(p) => {
             format!("system #{}: {:?}", p.message_id, p.kind)
-        }
-        AgenaSessionEvent::MessageRevised(p) => {
-            format!("message #{} revised", p.target_message_id)
         }
         AgenaSessionEvent::PluginEvent(p) => {
             format!("plugin {}/{}", p.plugin_id, p.kind_label)
@@ -13294,10 +13329,6 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
             format!("message_id: {}", p.message_id),
             format!("kind: {:?}", p.kind),
             format!("text: {}", detail_excerpt(p.text.as_str(), 200)),
-        ],
-        AgenaSessionEvent::MessageRevised(p) => vec![
-            format!("target_message_id: {}", p.target_message_id),
-            format!("kind: {:?}", p.kind),
         ],
         AgenaSessionEvent::PluginEvent(p) => vec![
             format!("plugin_id: {}", p.plugin_id),
@@ -13537,6 +13568,43 @@ fn summarize_lineage_session_items(items: &[LineageSessionItem]) -> Option<Sessi
             .filter(|item| item.relation == LineageRelation::Child)
             .count(),
     })
+}
+
+fn lineage_path_segments(
+    items: &[SessionResource],
+    current_session_id: i64,
+) -> Vec<SessionPathSegment> {
+    let by_id = items
+        .iter()
+        .cloned()
+        .map(|session| (session.id, session))
+        .collect::<BTreeMap<_, _>>();
+
+    session_lineage_chain(current_session_id, &by_id)
+        .into_iter()
+        .map(|id| SessionPathSegment { id })
+        .collect()
+}
+
+fn model_status_label(model: &ModelRef) -> String {
+    model
+        .adapter_id
+        .as_ref()
+        .map(|adapter_id| format!("{}/{}/{}", model.provider_id, adapter_id, model.model_id))
+        .unwrap_or_else(|| format!("{}/{}", model.provider_id, model.model_id))
+}
+
+fn format_budget_progress_label(current_tokens: u64, budget_tokens: u64) -> String {
+    if budget_tokens == 0 {
+        return "n/a".to_string();
+    }
+
+    let ratio = current_tokens as f64 / budget_tokens as f64;
+    if ratio >= 10.0 {
+        return format!("{ratio:.1}x");
+    }
+
+    format!("{:.0}%", ratio * 100.0)
 }
 
 fn session_lineage_chain(
@@ -15103,6 +15171,17 @@ mod tests {
         assert!(slash_command_suggestion_context_for_text("/ test", 1).is_none());
         assert!(slash_command_suggestion_context_for_text("//literal", 2).is_none());
         assert!(slash_command_suggestion_context_for_text(" /rew", 5).is_none());
+    }
+
+    #[test]
+    fn format_budget_progress_label_uses_percent_for_normal_ranges() {
+        assert_eq!(format_budget_progress_label(8_500, 10_000), "85%");
+        assert_eq!(format_budget_progress_label(10_800, 10_000), "108%");
+    }
+
+    #[test]
+    fn format_budget_progress_label_uses_multiplier_for_extreme_overages() {
+        assert_eq!(format_budget_progress_label(216_383, 19_965), "10.8x");
     }
 
     #[test]

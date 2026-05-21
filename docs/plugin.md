@@ -1,6 +1,6 @@
 # Plugin 体系
 
-Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、MCP server 暴露出来的能力、LSP 查询、skills、workflow、memory、hooks、cron 等，都会在 runtime 中表达为 plugin 或 plugin tool，然后进入同一个 tool registry。
+Agena 的扩展能力统一通过 plugin host 接入。模型可见的 tools、MCP server 暴露出来的能力、LSP 查询、skills、workflow、memory、cron 等，都会在 runtime 中表达为 plugin 或 plugin tool，然后进入同一个 tool registry。
 
 这意味着使用者和开发者应该把 plugin 当成主要抽象：
 
@@ -135,7 +135,6 @@ Runtime build 注册：
 | `agena.lsp` | LSP server 观测和 LSP 查询 tools |
 | `agena.cron` | cron 和 one-shot wakeup 调度 tools |
 | `agena.memory` | memory 配置和项目记忆相关能力 |
-| `agena.hooks` | 用户配置的 shell/HTTP hooks |
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
 | `agena.settings` | 读取、列出、校验和编辑当前 `config.json` 的 settings tools |
 
@@ -582,7 +581,7 @@ Hook 名称遵循 plugin SDK 协议命名；`tool.*` hook 作用于 plugin tool 
 | provider/auth | `provider.list`, `auth` |
 | permission | `permission.ask` |
 | command/shell | `command.execute.before`, `command.execute.after`, `shell.env` |
-| session | `session.start`, `session.end` (`session.compacting` / `session.compacted` are legacy) |
+| session | `session.start`, `session.end` |
 | turn | `pre_turn`, `post_turn`, `user.prompt.submit`, `agent.stop` |
 | event/notification | `event`, `notification` |
 | config | `config` |

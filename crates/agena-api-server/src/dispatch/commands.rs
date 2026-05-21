@@ -195,6 +195,24 @@ pub async fn dispatch_command(
                 resource,
             )))
         }
+        Command::CompactSession(CompactSessionParams {
+            session_id,
+            options,
+        }) => {
+            let request = SessionCompactRequest {
+                session_id,
+                options: run_options_to_core(state, session_id, &options).await?,
+            };
+            let session = manager.compact_session(request).await?;
+            let resource = state
+                .service()
+                .session_execution_resource(manager.as_ref(), &session)
+                .await
+                .map_err(server_error_from_http)?;
+            Ok(CommandResult::Execution(session_execution_from_http(
+                resource,
+            )))
+        }
         Command::CancelTurn(CancelTurnParams { session_id }) => {
             // Best-effort: if the turn just finished moments before the
             // cancel arrived, NoActiveTurn is normal — surface as Ack so
@@ -211,27 +229,6 @@ pub async fn dispatch_command(
         }) => {
             let session = manager
                 .rewind_session(agena::session::SessionRewindRequest {
-                    session_id,
-                    message_id,
-                    expected_version,
-                })
-                .await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .map_err(server_error_from_http)?;
-            Ok(CommandResult::Execution(session_execution_from_http(
-                resource,
-            )))
-        }
-        Command::UnrewindSession(UnrewindSessionParams {
-            session_id,
-            message_id,
-            expected_version,
-        }) => {
-            let session = manager
-                .unrewind_session(agena::session::SessionUnrewindRequest {
                     session_id,
                     message_id,
                     expected_version,

@@ -553,30 +553,6 @@ pub async fn rewind_session(
     Ok(Json(resource))
 }
 
-pub async fn unrewind_session(
-    State(state): State<AppState>,
-    Path(session_id): Path<i64>,
-    headers: HeaderMap,
-    Json(request): Json<SessionRewindRequestBody>,
-) -> Result<impl IntoResponse, ServerError> {
-    let expected_version = if_match_version(&headers)?;
-    let manager = state.session_manager()?;
-    let session = manager
-        .unrewind_session(agena::session::SessionUnrewindRequest {
-            session_id,
-            message_id: request.message_id,
-            expected_version,
-        })
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
-}
-
 pub async fn list_session_tree(
     State(state): State<AppState>,
     Path(root_id): Path<i64>,

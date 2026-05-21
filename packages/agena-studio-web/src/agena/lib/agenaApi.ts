@@ -814,6 +814,12 @@ export type SessionExecutionContextResource = {
   task_id?: string | null
 }
 
+export type SessionPromptUsageResource = {
+  current_tokens: number
+  budget_tokens?: number | null
+  model_context_window_tokens?: number | null
+}
+
 export type SessionExecutionResource = {
   session: SessionResource
   blocked: boolean
@@ -824,6 +830,7 @@ export type SessionExecutionResource = {
   pending_permission_requests: PermissionRequest[]
   pending_user_input_requests: UserInputRequest[]
   goal?: SessionGoalResource | null
+  prompt_usage?: SessionPromptUsageResource | null
 }
 
 export type SessionEventRecord = {
@@ -2065,19 +2072,6 @@ export async function rewindSession(input: {
   messageId: number
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/rewind`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      message_id: input.messageId,
-    }),
-  })
-}
-
-export async function unrewindSession(input: {
-  sessionId: number
-  messageId: number
-}): Promise<SessionExecutionResource> {
-  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/unrewind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

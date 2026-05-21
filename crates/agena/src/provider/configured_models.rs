@@ -272,6 +272,81 @@ impl ModelCapabilityPatch {
         apply_feature_patch(self.features.as_ref(), &mut capabilities);
         capabilities
     }
+
+    pub fn normalized_resolved_patch(&self) -> Self {
+        let mut supported_inputs = Vec::new();
+        let mut unsupported_inputs = Vec::new();
+        for modality in [
+            ModelInputModality::Text,
+            ModelInputModality::Image,
+            ModelInputModality::Document,
+            ModelInputModality::Audio,
+            ModelInputModality::Video,
+            ModelInputModality::File,
+        ] {
+            match self.input_support(modality) {
+                Some(CapabilitySupport::Supported) => supported_inputs.push(modality),
+                Some(CapabilitySupport::Unsupported) => unsupported_inputs.push(modality),
+                Some(CapabilitySupport::Unknown) | None => {}
+            }
+        }
+
+        let mut supported_features = Vec::new();
+        let mut unsupported_features = Vec::new();
+        for feature in [
+            ModelCapabilityFeature::ToolCalling,
+            ModelCapabilityFeature::Streaming,
+            ModelCapabilityFeature::Reasoning,
+            ModelCapabilityFeature::StructuredOutput,
+            ModelCapabilityFeature::Temperature,
+        ] {
+            match self.feature_support(feature) {
+                Some(CapabilitySupport::Supported) => supported_features.push(feature),
+                Some(CapabilitySupport::Unsupported) => unsupported_features.push(feature),
+                Some(CapabilitySupport::Unknown) | None => {}
+            }
+        }
+
+        Self {
+            input: capability_input_patch(supported_inputs, unsupported_inputs),
+            features: capability_feature_patch(supported_features, unsupported_features),
+            ..Self::default()
+        }
+    }
+}
+
+fn capability_input_patch(
+    supported: Vec<ModelInputModality>,
+    unsupported: Vec<ModelInputModality>,
+) -> Option<InputCapabilityPatch> {
+    if supported.is_empty() && unsupported.is_empty() {
+        return None;
+    }
+    if unsupported.is_empty() {
+        Some(InputCapabilityPatch::Supported(supported))
+    } else {
+        Some(InputCapabilityPatch::Patch(InputCapabilityPatchBody {
+            supported,
+            unsupported,
+        }))
+    }
+}
+
+fn capability_feature_patch(
+    supported: Vec<ModelCapabilityFeature>,
+    unsupported: Vec<ModelCapabilityFeature>,
+) -> Option<FeatureCapabilityPatch> {
+    if supported.is_empty() && unsupported.is_empty() {
+        return None;
+    }
+    if unsupported.is_empty() {
+        Some(FeatureCapabilityPatch::Supported(supported))
+    } else {
+        Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+            supported,
+            unsupported,
+        }))
+    }
 }
 
 fn apply_legacy_capability_patch(
@@ -1001,6 +1076,25 @@ impl ModelRuntime for ConfiguredModelsProvider {
         self.target.complete_for_adapter(adapter_id, request).await
     }
 
+    async fn compact_conversation(
+        &self,
+        mut request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.backfill_assistant_reasoning_field(None, &mut request);
+        self.target.compact_conversation(request).await
+    }
+
+    async fn compact_conversation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
+        self.target
+            .compact_conversation_for_adapter(adapter_id, request)
+            .await
+    }
+
     async fn complete_stream(
         &self,
         mut request: CompletionRequest,
@@ -1314,6 +1408,46 @@ mod tests {
         assert_eq!(patch.tool_calling, Some(CapabilitySupport::Supported));
         assert_eq!(
             patch.temperature_supported,
+            Some(CapabilitySupport::Unsupported)
+        );
+    }
+
+    #[test]
+    fn normalized_resolved_patch_removes_compact_conflicts() {
+        let patch = ModelCapabilityPatch {
+            input: Some(InputCapabilityPatch::Patch(InputCapabilityPatchBody {
+                supported: vec![ModelInputModality::Audio],
+                unsupported: vec![ModelInputModality::Audio, ModelInputModality::Image],
+            })),
+            features: Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
+                supported: vec![ModelCapabilityFeature::Reasoning],
+                unsupported: vec![
+                    ModelCapabilityFeature::Reasoning,
+                    ModelCapabilityFeature::Streaming,
+                ],
+            })),
+            ..ModelCapabilityPatch::default()
+        };
+
+        let normalized = patch.normalized_resolved_patch();
+
+        normalized
+            .validate()
+            .expect("normalized patch should be conflict-free");
+        assert_eq!(
+            normalized.input_support(ModelInputModality::Audio),
+            Some(CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            normalized.input_support(ModelInputModality::Image),
+            Some(CapabilitySupport::Unsupported)
+        );
+        assert_eq!(
+            normalized.feature_support(ModelCapabilityFeature::Reasoning),
+            Some(CapabilitySupport::Supported)
+        );
+        assert_eq!(
+            normalized.feature_support(ModelCapabilityFeature::Streaming),
             Some(CapabilitySupport::Unsupported)
         );
     }

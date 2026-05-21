@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-const CHAT_ACTIVITY_FILTERS_ALLOWED: [&str; 8] = [
+const CHAT_ACTIVITY_FILTERS_ALLOWED: [&str; 7] = [
     "tool",
     "step-start",
     "step-finish",
@@ -10,7 +10,6 @@ const CHAT_ACTIVITY_FILTERS_ALLOWED: [&str; 8] = [
     "patch",
     "agent",
     "retry",
-    "compaction",
 ];
 
 const CHAT_ACTIVITY_TOOL_FILTERS_DEFAULT: [&str; 22] = [

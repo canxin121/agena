@@ -210,7 +210,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: CommandId::Compact,
         name: "compact",
-        aliases: &["summarize"],
+        aliases: &["compress", "summarize"],
         arguments: "",
         summary_key: "command-compact-summary",
     },
@@ -489,13 +489,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_command_supports_compact_alias() {
-        let parsed = parse_command("/summarize").expect("compact command should parse");
-        assert_eq!(parsed.spec.id, CommandId::Compact);
-        assert_eq!(parsed.args, "");
-    }
-
-    #[test]
     fn parse_command_supports_plugin_inspector_command() {
         let parsed = parse_command("/plugin failed").expect("plugin command should parse");
         assert_eq!(parsed.spec.id, CommandId::Plugins);
@@ -567,6 +560,17 @@ mod tests {
     fn parse_command_supports_pager_alias() {
         let parsed = parse_command("/view").expect("pager alias should parse");
         assert_eq!(parsed.spec.id, CommandId::Pager);
+        assert_eq!(parsed.args, "");
+    }
+
+    #[test]
+    fn parse_command_supports_compact_aliases() {
+        let parsed = parse_command("/compact").expect("compact command should parse");
+        assert_eq!(parsed.spec.id, CommandId::Compact);
+        assert_eq!(parsed.args, "");
+
+        let parsed = parse_command("/compress").expect("compact alias should parse");
+        assert_eq!(parsed.spec.id, CommandId::Compact);
         assert_eq!(parsed.args, "");
     }
 

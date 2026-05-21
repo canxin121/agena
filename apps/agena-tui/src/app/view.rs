@@ -141,7 +141,11 @@ impl App {
             is_running,
         );
         if self.transcript.session_id.is_some() {
-            title
+            if let Some(path) = self.current_session_path_label() {
+                format!("{}  {}", title.trim_end(), path)
+            } else {
+                title
+            }
         } else {
             format!(" {} ", ui_text::t(&self.i18n, "pane-transcript"))
         }

@@ -394,6 +394,26 @@ impl ModelRuntime for MultiAdapterProvider {
         Ok(response)
     }
 
+    async fn compact_conversation(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.compact_conversation_for_adapter(None, request).await
+    }
+
+    async fn compact_conversation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        let visible_model = request.model.clone();
+        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
+        let (adapter_id, target_model, _) = self.resolve_route(adapter_id, &visible_model)?;
+        let adapter = self.adapter(adapter_id.as_str())?;
+        request.model = target_model;
+        adapter.compact_conversation(request).await
+    }
+
     async fn complete_stream(
         &self,
         request: CompletionRequest,

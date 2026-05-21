@@ -338,10 +338,6 @@ impl super::ConfigResolution {
             .register_static(
                 crate::memory::memory_plugin_id(),
                 crate::memory::new_memory_plugin(self.config.memory.clone()),
-            )
-            .register_static(
-                crate::hooks::ShellHookPlugin::id(),
-                crate::hooks::ShellHookPlugin::new(self.config.hooks.clone()),
             );
         if let Some(manager) = mcp_manager {
             builder = builder.register_static(

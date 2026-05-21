@@ -2310,6 +2310,7 @@ mod tests {
             PluginEntry::Static {
                 options: serde_json::Value::Null,
                 timeouts: Default::default(),
+                disabled: false,
             },
         );
         let config = PluginsConfig {

@@ -8,7 +8,9 @@ import { useRuntimePluginDetails } from './useRuntimePluginDetails'
 function createState() {
   return {
     actionError: ref(''),
+    actionMessage: ref(''),
     activePluginsTab: ref<PluginsTab>('installed'),
+    loadPageState: async () => {},
     pluginLoading: ref(false),
     pluginLogs: ref<PluginLogEntry[]>([{ seq: 3, plugin_id: 'demo/plugin', level: 'info', target: 'plugin', message: 'existing', timestamp_ms: 1 }]),
     pluginLogPollTimer: ref<ReturnType<typeof setInterval> | null>(null),
@@ -25,6 +27,9 @@ describe('useRuntimePluginDetails', () => {
     const timers: Array<() => void> = []
     const timerToken = {} as ReturnType<typeof setInterval>
     const pluginDetails = useRuntimePluginDetails(state, {
+      setSettings: async () => {
+        throw new Error('unused')
+      },
       clearInterval: () => {
         calls.push('clearInterval')
       },
@@ -38,6 +43,7 @@ describe('useRuntimePluginDetails', () => {
             restart_count: 0,
           },
           manifest: { metadata: { name: 'Demo Plugin' } },
+          entry: { kind: 'wasm', path: '/tmp/plugin.wasm', options: {}, timeouts: {} },
         }
       },
       listPluginLogs: async (pluginId, options) => {
@@ -92,6 +98,9 @@ describe('useRuntimePluginDetails', () => {
 
     const calls: string[] = []
     const pluginDetails = useRuntimePluginDetails(state, {
+      setSettings: async () => {
+        throw new Error('unused')
+      },
       clearInterval: () => {
         calls.push('clearInterval')
       },
@@ -122,6 +131,9 @@ describe('useRuntimePluginDetails', () => {
 
     const calls: string[] = []
     const pluginDetails = useRuntimePluginDetails(state, {
+      setSettings: async () => {
+        throw new Error('unused')
+      },
       clearInterval: () => {
         calls.push('clearInterval')
       },
@@ -141,5 +153,64 @@ describe('useRuntimePluginDetails', () => {
 
     expect(calls).toEqual(['clearInterval'])
     expect(state.pluginLogPollTimer.value === null).toBe(true)
+  })
+
+  test('setSelectedPluginDisabled rewrites plugin config and reloads state', async () => {
+    const state = createState()
+    state.selectedPlugin.value = {
+      status: {
+        plugin_id: 'demo/plugin',
+        kind: 'stdio',
+        state: 'running',
+        restart_count: 0,
+      },
+      manifest: { metadata: { name: 'Demo Plugin' } },
+      entry: {
+        kind: 'stdio',
+        command: '/workspace/plugins/demo-plugin',
+        args: [],
+        env: {},
+        cwd: null,
+        restart: { policy: 'never' },
+        options: {},
+        timeouts: {},
+        sha256: null,
+        disabled: false,
+      },
+    }
+
+    const calls: string[] = []
+    const pluginDetails = useRuntimePluginDetails(state, {
+      setSettings: async (input) => {
+        calls.push(`set:${input.path}`)
+        return {
+          config_path: '/workspace/.agena/config.json',
+          config_found: true,
+          operation: 'set',
+          path: input.path,
+          dry_run: false,
+          changed: true,
+          created: false,
+          deleted: false,
+          validated: true,
+          reload_requested: true,
+          reload_required: false,
+          reload: null,
+          previous: { disabled: false },
+          current: { disabled: true },
+        }
+      },
+      clearInterval: () => {},
+      getPlugin: async () => {
+        throw new Error('unused')
+      },
+      listPluginLogs: async () => [],
+      setInterval: () => 123 as unknown as ReturnType<typeof setInterval>,
+    })
+
+    await pluginDetails.setSelectedPluginDisabled(true)
+
+    expect(calls).toEqual(['set:plugins.list."demo/plugin"'])
+    expect(state.actionMessage.value).toContain('Disabled plugin demo/plugin; config kept and runtime reloaded.')
   })
 })

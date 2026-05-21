@@ -6,6 +6,7 @@ import {
   replyPermission,
   revokePermissionRule,
   updatePermissionRule,
+  type PermissionRequest,
   type PermissionMode,
   type PermissionRuleResource,
   type PermissionSubjectKind,
@@ -29,7 +30,7 @@ export type RuntimePermissionDraft = {
 export type RuntimePermissionActionsInput = {
   actionError: Ref<string>
   actionMessage: Ref<string>
-  activeSettingsTab: Ref<'providers' | 'permissions' | 'desktop'>
+  activeSettingsTab: Ref<'providers' | 'agents' | 'plugins' | 'permissions' | 'desktop'>
   editingPermissionRuleId: Ref<number | null>
   load: () => Promise<void>
   loadSessionExecution: (sessionId: number) => Promise<void>
@@ -180,6 +181,53 @@ export function useRuntimePermissionActions(
     input.activeSettingsTab.value = 'permissions'
   }
 
+  function editPermissionRequest(request: PermissionRequest) {
+    const action = request.action || {}
+    const kind = typeof action.kind === 'string' ? action.kind : ''
+    input.permissionDraft.subjectKind =
+      kind === 'path_access' ? 'path_access' : kind === 'network_access' ? 'network_access' : 'tool'
+    input.permissionDraft.toolName = typeof action.tool_name === 'string' ? action.tool_name : ''
+    input.permissionDraft.qualifier = typeof action.qualifier === 'string' ? action.qualifier : ''
+    input.permissionDraft.pathAccessKind =
+      typeof action.access_kind === 'string'
+        ? action.access_kind
+        : typeof action.path_access_kind === 'string'
+          ? action.path_access_kind
+          : 'read'
+    input.permissionDraft.workspaceRoot =
+      typeof action.workspace_root === 'string' ? action.workspace_root : ''
+    input.permissionDraft.targetPath = typeof action.target_path === 'string' ? action.target_path : ''
+    input.permissionDraft.networkTarget =
+      typeof action.target === 'string'
+        ? action.target
+        : typeof action.network_target === 'string'
+          ? action.network_target
+          : typeof action.host === 'string'
+            ? action.host
+            : ''
+    const networkPort =
+      typeof action.port === 'number'
+        ? action.port
+        : typeof action.port === 'string'
+          ? Number(action.port)
+          : undefined
+    input.permissionDraft.networkPort =
+      networkPort === undefined || !Number.isFinite(networkPort) ? '' : String(networkPort)
+    input.permissionDraft.scope =
+      request.scope === 'session'
+        ? 'session'
+        : request.scope === 'global'
+          ? 'global'
+          : request.session_id != null
+            ? 'session'
+            : 'workspace'
+    input.permissionDraft.sessionId =
+      input.permissionDraft.scope === 'session' && request.session_id != null ? String(request.session_id) : ''
+    input.permissionDraft.mode = 'allow'
+    input.editingPermissionRuleId.value = null
+    input.activeSettingsTab.value = 'permissions'
+  }
+
   async function savePermissionRule() {
     const toolName = input.permissionDraft.toolName.trim()
     const qualifier = input.permissionDraft.qualifier.trim()
@@ -286,6 +334,7 @@ export function useRuntimePermissionActions(
 
   return {
     approvePermission,
+    editPermissionRequest,
     editPermissionRule,
     deletePermissionRuleAction,
     permissionRuleFacts,

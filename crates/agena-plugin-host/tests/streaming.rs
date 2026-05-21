@@ -40,6 +40,7 @@ async fn streaming_emulation_yields_one_chunk() {
         PluginEntry::Static {
             options: json!(null),
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")

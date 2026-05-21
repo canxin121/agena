@@ -3,6 +3,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import SectionTabbedPageLayout from './SectionTabbedPageLayout.vue'
 import SettingsSectionPanelRenderer from './SettingsSectionPanelRenderer.vue'
+import type { SettingsTab } from './runtimePageStateModel'
 import { useSettingsPageState } from './useSettingsPageState'
 
 const route = useRoute()
@@ -22,7 +23,7 @@ const { activeSettingsTab, actionError, actionMessage, load, loading, pageDescri
     :page-title="pageTitle"
     :tabs="tabs"
     @refresh="load"
-    @update:active-tab="activeSettingsTab = $event as 'providers' | 'permissions' | 'desktop'"
+    @update:active-tab="activeSettingsTab = $event as SettingsTab"
   >
     <SettingsSectionPanelRenderer :active-tab="activeSettingsTab" :loading="loading" :load="load" :panels="panels" />
   </SectionTabbedPageLayout>

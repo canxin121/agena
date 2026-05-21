@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { ref } from 'vue'
 
-import type { PermissionRuleResource, SessionExecutionResource } from '../lib/agenaApi'
+import type { PermissionRequest, PermissionRuleResource, SessionExecutionResource } from '../lib/agenaApi'
 import type { SettingsTab } from './runtimePageStateModel'
 import type { RuntimePermissionDraft } from './useRuntimePermissionActions'
 import { useRuntimePermissionActions } from './useRuntimePermissionActions'
@@ -150,6 +150,43 @@ describe('useRuntimePermissionActions', () => {
 
     expect(state.permissionDraft.subjectKind).toBe('tool')
     expect(state.permissionDraft.toolName).toBe('')
+    expect(state.editingPermissionRuleId.value).toBe(null)
+  })
+
+  test('edits pending permission requests into the rule draft', () => {
+    const { state } = createState()
+    const actions = useRuntimePermissionActions(state, {
+      createPermissionRule: async () => createRule(),
+      deletePermissionRule: async () => createRule(),
+      replyPermission: async () => createExecution(),
+      revokePermissionRule: async () => createRule(),
+      updatePermissionRule: async () => createRule(),
+    })
+
+    const request: PermissionRequest = {
+      request_id: 'req-1',
+      session_id: 12,
+      action: {
+        kind: 'network_access',
+        target: 'api.example.com',
+        host: 'api.example.com',
+        port: 443,
+      },
+      reason: 'needs approval',
+      scope: 'session',
+      source: 'api',
+      created_at: '2026-05-10T00:00:00Z',
+    }
+
+    actions.editPermissionRequest(request)
+
+    expect(state.permissionDraft.subjectKind).toBe('network_access')
+    expect(state.permissionDraft.networkTarget).toBe('api.example.com')
+    expect(state.permissionDraft.networkPort).toBe('443')
+    expect(state.permissionDraft.scope).toBe('session')
+    expect(state.permissionDraft.sessionId).toBe('12')
+    expect(state.permissionDraft.mode).toBe('allow')
+    expect(state.activeSettingsTab.value).toBe('permissions')
     expect(state.editingPermissionRuleId.value).toBe(null)
   })
 

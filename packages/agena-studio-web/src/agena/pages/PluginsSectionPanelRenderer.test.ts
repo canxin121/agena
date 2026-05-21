@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
+import { ref } from 'vue'
 
 import { renderVueSsr } from './test/renderVueSsr'
 
 const panels = {
   installed: {
+    canTogglePluginConfig: ref(false),
     plugins: [
       {
         plugin_id: 'alpha',
@@ -22,8 +24,30 @@ const panels = {
         last_exit_code: null,
         last_restart_at_ms: 10,
       },
+      entry: {
+        kind: 'static',
+        disabled: false,
+      },
       manifest: {
         name: 'Alpha Plugin',
+        version: '1.2.3',
+        description: 'Alpha runtime helper',
+        authors: ['Agena'],
+        transports: ['static'],
+        hooks: ['tool.before'],
+        entries: [
+          {
+            name: 'alpha.tool',
+            description: 'Alpha tool entry',
+            summary: 'Summarize workspace',
+            help: 'Use this entry to summarize the workspace.',
+            tags: ['workspace'],
+            strict: true,
+            streaming: false,
+            concurrency_safe: true,
+            load_priority: 10,
+          },
+        ],
         ui: {
           studio: {
             commands: [
@@ -73,12 +97,21 @@ const panels = {
           },
         },
       },
+      authority: {
+        trust_level: 'trusted',
+        provenance: ['workspace'],
+        plugin_capabilities: ['tool.invoke'],
+        entry_capabilities: {
+          'alpha.tool': ['tool.invoke'],
+        },
+      },
     },
     pluginLogs: [{ seq: 1, level: 'info', target: 'plugin', timestamp_ms: 1, message: 'started' }],
     pluginLoading: false,
     loadPluginDetails: () => {},
     openPluginManifestInWorkspace: () => {},
     openPluginLogsWorkspacePath: () => {},
+    setSelectedPluginDisabled: () => {},
   },
   marketplace: {
     registryUrl: 'https://example.com/index.json',
@@ -133,6 +166,9 @@ describe('PluginsSectionPanelRenderer', () => {
     expect(html.includes('Plugins')).toBe(true)
     expect(html.includes('Plugin Detail')).toBe(true)
     expect(html.includes('Alpha Plugin')).toBe(true)
+    expect(html.includes('Manifest Summary')).toBe(true)
+    expect(html.includes('Authority')).toBe(true)
+    expect(html.includes('Tool Entries')).toBe(true)
     expect(html.includes('Summarize Workspace')).toBe(true)
     expect(html.includes('Planning Mode')).toBe(true)
     expect(html.includes('Current plugin report')).toBe(true)
@@ -148,6 +184,9 @@ describe('PluginsSectionPanelRenderer', () => {
     expect(html.includes('Marketplace')).toBe(true)
     expect(html.includes('Search Registry')).toBe(true)
     expect(html.includes('Alpha Plugin')).toBe(true)
+    expect(html.includes('wasm')).toBe(true)
+    expect(html.includes('any')).toBe(true)
+    expect(html.includes('installed')).toBe(true)
     expect(html.includes('Outdated')).toBe(true)
   })
 })

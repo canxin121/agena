@@ -124,6 +124,8 @@ pub enum PluginEntry {
         options: serde_json::Value,
         #[serde(default)]
         timeouts: TimeoutsConfig,
+        #[serde(default)]
+        disabled: bool,
     },
     Cdylib {
         path: PathBuf,
@@ -131,6 +133,8 @@ pub enum PluginEntry {
         options: serde_json::Value,
         #[serde(default)]
         timeouts: TimeoutsConfig,
+        #[serde(default)]
+        disabled: bool,
         /// Optional sha256 hex digest of the cdylib bytes. If set, the
         /// host computes the digest at load time and refuses to load on
         /// mismatch. Requires the `signing` cargo feature.
@@ -156,6 +160,8 @@ pub enum PluginEntry {
         options: serde_json::Value,
         #[serde(default)]
         timeouts: TimeoutsConfig,
+        #[serde(default)]
+        disabled: bool,
         /// Optional sha256 of the binary at `command`. Requires the
         /// `signing` cargo feature.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -169,6 +175,8 @@ pub enum PluginEntry {
         options: serde_json::Value,
         #[serde(default)]
         timeouts: TimeoutsConfig,
+        #[serde(default)]
+        disabled: bool,
     },
     Wasm {
         path: PathBuf,
@@ -176,6 +184,8 @@ pub enum PluginEntry {
         options: serde_json::Value,
         #[serde(default)]
         timeouts: TimeoutsConfig,
+        #[serde(default)]
+        disabled: bool,
         /// Optional sha256 of the wasm bytes for supply-chain verification.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
@@ -210,6 +220,16 @@ impl PluginEntry {
             PluginEntry::Stdio { .. } => "stdio",
             PluginEntry::Http { .. } => "http",
             PluginEntry::Wasm { .. } => "wasm",
+        }
+    }
+
+    pub fn disabled(&self) -> bool {
+        match self {
+            PluginEntry::Static { disabled, .. }
+            | PluginEntry::Cdylib { disabled, .. }
+            | PluginEntry::Stdio { disabled, .. }
+            | PluginEntry::Http { disabled, .. }
+            | PluginEntry::Wasm { disabled, .. } => *disabled,
         }
     }
 }

@@ -1,5 +1,7 @@
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
+import { createSettingsAgentsPanelState } from './useSettingsAgentsPageState'
+import { createSettingsPluginsPanelState } from './useSettingsPluginsPageState'
 import { useRuntimeSectionState } from './useRuntimeSectionState'
 import { useSectionPanelRegistry } from './useSectionPanelRegistry'
 import { createSettingsDesktopPanelState } from './useSettingsDesktopPageState'
@@ -52,6 +54,20 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     deletePermissionRuleAction: state.deletePermissionRuleAction,
   })
 
+  const agents = createSettingsAgentsPanelState({
+    actionError: shared.actionError,
+    actionMessage: shared.actionMessage,
+    load: shared.load,
+    runtime: state.runtime,
+  })
+
+  const plugins = createSettingsPluginsPanelState({
+    actionError: shared.actionError,
+    actionMessage: shared.actionMessage,
+    load: shared.load,
+    settingsPlugins: state.settingsPlugins,
+  })
+
   const desktop = createSettingsDesktopPanelState({
     backendErrorFacts: state.desktopBackendErrorFacts,
     backendUrl: state.desktopBackendUrl,
@@ -88,6 +104,8 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     activeTab: shell.activeTab,
     panels: {
       providers,
+      agents,
+      plugins,
       permissions,
       desktop,
     },
@@ -104,6 +122,8 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     pageDescription: shared.pageDescription,
     pageTitle: shared.pageTitle,
     panels: panelRegistry.panels,
+    agents,
+    plugins,
     permissions,
     providers,
     tabs: shell.tabs,

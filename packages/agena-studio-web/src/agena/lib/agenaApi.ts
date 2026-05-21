@@ -152,9 +152,18 @@ export type PluginStatus = {
   last_error?: string | null
 }
 
+export type PluginAuthoritySummary = {
+  trust_level: string
+  provenance: string[]
+  plugin_capabilities: string[]
+  entry_capabilities: Record<string, string[]>
+}
+
 export type PluginInspect = {
   status: PluginStatus
   manifest?: Record<string, unknown> | null
+  authority?: PluginAuthoritySummary | null
+  entry?: Record<string, unknown> | null
 }
 
 export type PluginUiAction =
@@ -503,6 +512,36 @@ export type ConfigSettingsPatchRequest = {
   dry_run?: boolean
   validate?: boolean
   reload?: boolean
+}
+
+export type ConfigSettingsSetRequest = {
+  path: string
+  value: unknown
+  dry_run?: boolean
+  validate?: boolean
+  reload?: boolean
+}
+
+export type ConfigSettingsDeleteRequest = {
+  path: string
+  dry_run?: boolean
+  validate?: boolean
+  reload?: boolean
+}
+
+export type ConfigSettingsSource = 'effective' | 'file'
+
+export type ConfigSettingsGetRequest = {
+  path?: string | null
+  source?: ConfigSettingsSource
+}
+
+export type ConfigSettingsReadResponse = {
+  config_path: string
+  config_found: boolean
+  source: ConfigSettingsSource
+  path?: string | null
+  value: unknown
 }
 
 export type ConfigSettingsEditResponse = {
@@ -981,6 +1020,33 @@ export async function patchSettings(input: ConfigSettingsPatchRequest): Promise<
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
   })
+}
+
+export async function setSettings(input: ConfigSettingsSetRequest): Promise<ConfigSettingsEditResponse> {
+  return await apiJson<ConfigSettingsEditResponse>('/api/v1/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deleteSettings(input: ConfigSettingsDeleteRequest): Promise<ConfigSettingsEditResponse> {
+  const params = new URLSearchParams()
+  params.set('path', input.path.trim())
+  if (input.dry_run) params.set('dry_run', 'true')
+  if (input.validate !== undefined) params.set('validate', String(input.validate))
+  if (input.reload !== undefined) params.set('reload', String(input.reload))
+  return await apiJson<ConfigSettingsEditResponse>(`/api/v1/settings?${params.toString()}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function getSettings(input: ConfigSettingsGetRequest = {}): Promise<ConfigSettingsReadResponse> {
+  const params = new URLSearchParams()
+  if (input.path?.trim()) params.set('path', input.path.trim())
+  if (input.source) params.set('source', input.source)
+  const suffix = params.toString()
+  return await apiJson<ConfigSettingsReadResponse>(`/api/v1/settings${suffix ? `?${suffix}` : ''}`)
 }
 
 export async function listModelCatalogEntries(query: ModelCatalogListQuery = {}): Promise<ModelCatalogListResponse> {

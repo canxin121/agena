@@ -11,6 +11,7 @@ use std::{
 use agena::event::{EventFilter, Scope, bus::SubscriptionItem};
 use agena::permission::PermissionScope;
 use agena::{
+    agents::AgentDescriptor,
     config::{
         ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
         ConfigSettingsPatchInput, ConfigSettingsSetInput, ProcessEnvironment,
@@ -1566,6 +1567,10 @@ impl Backend {
         names
     }
 
+    pub fn list_agent_descriptors(&self) -> Vec<AgentDescriptor> {
+        self.runtime.current_snapshot().agents().list_descriptors()
+    }
+
     pub fn default_agent_name(&self) -> Option<String> {
         let snapshot = self.runtime.current_snapshot();
         let configured = snapshot
@@ -1790,6 +1795,20 @@ impl Backend {
                 .context("failed to reload runtime after config change")?;
         }
         Ok(response)
+    }
+
+    pub async fn set_agent_hidden(
+        &self,
+        agent_name: &str,
+        hidden: bool,
+    ) -> Result<ConfigSettingsEditResponse> {
+        let path = format!(
+            "agents.{}.hidden",
+            quoted_settings_segment(agent_name.trim())
+        );
+        self.set_config_setting(path.as_str(), JsonValue::Bool(hidden))
+            .await
+            .context("failed to set agent hidden flag")
     }
 
     pub async fn delete_config_setting(&self, path: &str) -> Result<ConfigSettingsEditResponse> {

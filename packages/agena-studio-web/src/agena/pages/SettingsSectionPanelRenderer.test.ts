@@ -52,6 +52,82 @@ const panels = {
     startBrowserAuth: () => {},
     startDeviceAuth: () => {},
   },
+  agents: {
+    actionError: ref(''),
+    actionMessage: ref(''),
+    load: async () => {},
+    summaryFacts: [
+      { label: 'Default Agent', value: 'build' },
+      { label: 'Total Agents', value: '2' },
+    ],
+    agentCards: [
+      {
+        name: 'build',
+        description: 'Primary build agent',
+        mode: 'primary',
+        hidden: false,
+        canToggleHidden: true,
+        isDefault: true,
+        scope: 'project',
+        sourcePath: '/workspace/.agena/config.json',
+        allowedTools: ['bash', 'fs'],
+        aliases: ['default'],
+        permissionSummary: 'inherits runtime defaults',
+        defaultSummary: 'model=openai · adapter=openai',
+        detailFacts: ['scope=project', 'visibility=visible', 'mode=primary'],
+      },
+    ],
+    setDefaultAgent: () => {},
+    toggleAgentHidden: () => {},
+  },
+  plugins: {
+    actionError: ref(''),
+    actionMessage: ref(''),
+    load: async () => {},
+    enabled: ref(true),
+    defaultMode: ref('detailed'),
+    modeOptions: [
+      {
+        label: 'Detailed',
+        value: 'detailed',
+        description: 'Expose the model-visible description text as-is.',
+      },
+      {
+        label: 'Help',
+        value: 'help',
+        description: 'Keep tool descriptions short and push details into help.',
+      },
+    ],
+    summaryFacts: ref([
+      { label: 'Enabled', value: 'on' },
+      { label: 'Default Tool Description', value: 'Detailed' },
+    ]),
+    pluginEntries: ref([
+      {
+        pluginId: 'demo.plugin',
+        kind: 'stdio',
+        disabled: false,
+        source: 'file',
+        filePresent: true,
+        entry: {
+          kind: 'stdio',
+          command: 'demo',
+          args: [],
+          env: {},
+          cwd: null,
+          restart: {},
+          options: {},
+          timeouts: {},
+          disabled: false,
+        },
+      },
+    ]),
+    pluginEntrySummary: (entry: { source: string; kind: string; disabled: boolean }) =>
+      `${entry.source} · ${entry.kind} · ${entry.disabled ? 'disabled' : 'enabled'}`,
+    setDefaultToolDescriptionMode: () => {},
+    togglePluginEntryDisabled: () => {},
+    togglePluginsEnabled: () => {},
+  },
   permissions: {
     search: 'bash',
     statusFilter: 'active',
@@ -153,6 +229,34 @@ describe('SettingsSectionPanelRenderer', () => {
     expect(html.includes('Guardrails')).toBe(true)
     expect(html.includes('Create Rule')).toBe(true)
     expect(html.includes('Allow git status in workspace')).toBe(true)
+  })
+
+  test('renders agent settings content', async () => {
+    const html = await renderVueSsr('/src/agena/pages/SettingsSectionPanelRenderer.vue', {
+      activeTab: 'agents',
+      loading: false,
+      load: async () => {},
+      panels,
+    })
+
+    expect(html.includes('Agents')).toBe(true)
+    expect(html.includes('build')).toBe(true)
+    expect(html.includes('Make Default')).toBe(true)
+  })
+
+  test('renders plugin settings content', async () => {
+    const html = await renderVueSsr('/src/agena/pages/SettingsSectionPanelRenderer.vue', {
+      activeTab: 'plugins',
+      loading: false,
+      load: async () => {},
+      panels,
+    })
+
+    expect(html.includes('Plugin Entries')).toBe(true)
+    expect(html.includes('stdio')).toBe(true)
+    expect(html.includes('file')).toBe(true)
+    expect(html.includes('enabled')).toBe(true)
+    expect(html.includes('Disable Entry')).toBe(true)
   })
 
   test('falls back to desktop settings content', async () => {

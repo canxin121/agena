@@ -312,6 +312,7 @@ impl super::ConfigResolution {
                     options: serde_json::to_value(&self.config.mcp)
                         .unwrap_or(serde_json::Value::Null),
                     timeouts: Default::default(),
+                    disabled: false,
                 });
         }
         let mut builder = PluginHostBuilder::new(workspace_root, agena_version)

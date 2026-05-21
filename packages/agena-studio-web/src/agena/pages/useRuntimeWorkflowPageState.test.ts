@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test'
 import { computed, ref } from 'vue'
 
+import type { PermissionRequest } from '../lib/agenaApi'
 import { createRuntimeWorkflowPanelState, useRuntimeWorkflowPageState } from './useRuntimeWorkflowPageState'
 
 describe('useRuntimeWorkflowPageState', () => {
   test('assembles workflow panel state from provided runtime source', () => {
     const workflow = createRuntimeWorkflowPanelState({
       approvePermission: async () => {},
+      editPermissionRequest: (_request: PermissionRequest) => {},
       executionFacts: computed(() => [{ label: 'state', value: 'idle' }]),
       openSelectedSessionInChat: () => {},
       selectSession: async () => {},
@@ -53,6 +55,7 @@ describe('useRuntimeWorkflowPageState', () => {
             shared,
             state: {
               approvePermission: async () => {},
+              editPermissionRequest: (_request: PermissionRequest) => {},
               executionFacts: computed(() => []),
               openSelectedSessionInChat: () => {},
               selectSession: async () => {},

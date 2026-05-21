@@ -13,6 +13,7 @@ describe('useRuntimePageStore', () => {
     expect(state.providers.value).toEqual([])
     expect(state.providerModels).toEqual({})
     expect(state.permissionRules.value).toEqual([])
+    expect(state.settingsPlugins.value).toBe(null)
     expect(state.sessions.value).toEqual([])
     expect(state.globalEvents.value).toEqual([])
     expect(state.selectedWorkspaceId.value).toBe(null)

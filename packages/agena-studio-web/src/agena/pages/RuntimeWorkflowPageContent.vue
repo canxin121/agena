@@ -22,6 +22,7 @@ const props = defineProps<{
     :open-selected-session-in-chat="props.workflow.openSelectedSessionInChat"
     :select-workspace="props.workflow.selectWorkspace"
     :select-session="props.workflow.selectSession"
+    :edit-permission-request="props.workflow.editPermissionRequest"
     :approve-permission="props.workflow.approvePermission"
   />
 </template>

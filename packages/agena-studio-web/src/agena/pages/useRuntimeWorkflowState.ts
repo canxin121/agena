@@ -1,6 +1,12 @@
 import type { ComputedRef, Ref } from 'vue'
 
-import type { SessionExecutionResource, SessionResource, TimelineEventRecord, WorkspaceResource } from '../lib/agenaApi'
+import type {
+  PermissionRequest,
+  SessionExecutionResource,
+  SessionResource,
+  TimelineEventRecord,
+  WorkspaceResource,
+} from '../lib/agenaApi'
 import type { SessionExecutionFact, TimelineSummaryItem } from './runtimePageModel'
 
 export type RuntimeWorkflowStateInput = {
@@ -9,6 +15,7 @@ export type RuntimeWorkflowStateInput = {
     kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
     scope?: 'session' | 'workspace' | 'global',
   ) => void | Promise<void>
+  editPermissionRequest: (request: PermissionRequest) => void
   executionFacts: ComputedRef<SessionExecutionFact[]>
   openSelectedSessionInChat: () => void
   selectSession: (sessionId: number) => void | Promise<void>
@@ -27,6 +34,7 @@ export type RuntimeWorkflowStateInput = {
 export function useRuntimeWorkflowState(input: RuntimeWorkflowStateInput) {
   return {
     approvePermission: input.approvePermission,
+    editPermissionRequest: input.editPermissionRequest,
     executionFacts: input.executionFacts,
     openSelectedSessionInChat: input.openSelectedSessionInChat,
     selectSession: input.selectSession,

@@ -68,6 +68,7 @@ use crate::transport::inproc::InProcessTransport;
 pub struct LoadedPlugin {
     pub id: String,
     pub kind: &'static str,
+    pub entry: crate::config::PluginEntry,
     pub manifest: PluginManifest,
     pub transport: Arc<dyn PluginTransport>,
     pub trust_level: String,
@@ -77,6 +78,10 @@ pub struct LoadedPlugin {
 impl LoadedPlugin {
     pub fn transport(&self) -> Arc<dyn PluginTransport> {
         Arc::clone(&self.transport)
+    }
+
+    pub fn entry(&self) -> &crate::config::PluginEntry {
+        &self.entry
     }
 
     pub fn authority_summary(&self) -> PluginAuthoritySummary {
@@ -126,6 +131,7 @@ impl LoadedPlugin {
     pub fn new(
         id: String,
         kind: &'static str,
+        entry: crate::config::PluginEntry,
         transport: Arc<dyn PluginTransport>,
         manifest: PluginManifest,
         trust_level: String,
@@ -134,6 +140,7 @@ impl LoadedPlugin {
         Self {
             id,
             kind,
+            entry,
             manifest,
             transport,
             trust_level,
@@ -217,6 +224,8 @@ pub struct PluginInspect {
     pub manifest: Option<PluginManifest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority: Option<PluginAuthoritySummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<crate::config::PluginEntry>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -438,10 +447,12 @@ impl PluginHost {
         let plugin = self.plugins_by_id.get(plugin_id);
         let manifest = plugin.as_ref().map(|plugin| plugin.manifest.clone());
         let authority = plugin.map(|plugin| plugin.authority_summary());
+        let entry = plugin.as_ref().map(|plugin| plugin.entry.clone());
         Some(PluginInspect {
             status,
             manifest,
             authority,
+            entry,
         })
     }
 
@@ -1820,6 +1831,7 @@ impl PluginHostBuilder {
             .or_insert_with(|| PluginEntry::Static {
                 options: serde_json::Value::Null,
                 timeouts: Default::default(),
+                disabled: false,
             });
         self
     }
@@ -1883,6 +1895,15 @@ impl PluginHostBuilder {
             .unwrap_or_default();
 
         for (idx, (id, entry)) in entries.into_iter().enumerate() {
+            if entry.disabled() {
+                tracing::info!(
+                    target: "agena_plugin_host",
+                    plugin = %id,
+                    kind = entry.kind_str(),
+                    "plugin disabled in config; skipping load"
+                );
+                continue;
+            }
             statuses_shared.set(crate::status::PluginStatus::initial(
                 id.clone(),
                 entry.kind_str(),
@@ -4586,6 +4607,18 @@ mod tests {
         assert_eq!(inspect.status.state, PluginRunState::Failed);
         assert_eq!(inspect.status.kind, "stdio");
         assert!(inspect.manifest.is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plugin_inspect_surfaces_loaded_config_entry() {
+        let host = build_permission_decision_host(true).await;
+        let inspect = host
+            .plugin_inspect("permission-decision-fixture")
+            .expect("plugin inspect should exist");
+
+        let entry = inspect.entry.expect("loaded plugin entry should exist");
+        assert_eq!(entry.kind_str(), "static");
+        assert!(!entry.disabled());
     }
 
     #[test]

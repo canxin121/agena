@@ -4,6 +4,7 @@ import { usePluginsInstalledState } from './usePluginsInstalledState'
 import { useRuntimeSectionState, type RuntimeSectionSharedState } from './useRuntimeSectionState'
 
 export type PluginsInstalledPageStateSource = {
+  canTogglePluginConfig: Parameters<typeof usePluginsInstalledState>[0]['canTogglePluginConfig']
   loadPluginDetails: Parameters<typeof usePluginsInstalledState>[0]['loadPluginDetails']
   openPluginLogsWorkspacePath: Parameters<typeof usePluginsInstalledState>[0]['openPluginLogsWorkspacePath']
   openPluginManifestInWorkspace: Parameters<typeof usePluginsInstalledState>[0]['openPluginManifestInWorkspace']
@@ -11,6 +12,7 @@ export type PluginsInstalledPageStateSource = {
   pluginLogs: Parameters<typeof usePluginsInstalledState>[0]['pluginLogs']
   plugins: Parameters<typeof usePluginsInstalledState>[0]['plugins']
   selectedPlugin: Parameters<typeof usePluginsInstalledState>[0]['selectedPlugin']
+  setSelectedPluginDisabled: Parameters<typeof usePluginsInstalledState>[0]['setSelectedPluginDisabled']
 }
 
 export type PluginsInstalledPageStateDeps = {
@@ -34,6 +36,7 @@ const defaultDeps: PluginsInstalledPageStateDeps = {
 
 export function createPluginsInstalledPanelState(state: PluginsInstalledPageStateSource) {
   return usePluginsInstalledState({
+    canTogglePluginConfig: state.canTogglePluginConfig,
     loadPluginDetails: state.loadPluginDetails,
     openPluginLogsWorkspacePath: state.openPluginLogsWorkspacePath,
     openPluginManifestInWorkspace: state.openPluginManifestInWorkspace,
@@ -41,6 +44,7 @@ export function createPluginsInstalledPanelState(state: PluginsInstalledPageStat
     pluginLogs: state.pluginLogs,
     plugins: state.plugins,
     selectedPlugin: state.selectedPlugin,
+    setSelectedPluginDisabled: state.setSelectedPluginDisabled,
   })
 }
 

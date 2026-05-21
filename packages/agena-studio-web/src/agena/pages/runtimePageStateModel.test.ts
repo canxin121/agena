@@ -134,7 +134,7 @@ describe('runtimePageStateModel', () => {
 
   test('section tab registries and guards stay in sync', () => {
     expect(runtimeTabs.map((tab) => tab.id)).toEqual(['overview', 'workflow', 'mcp', 'lsp', 'skills', 'operator'])
-    expect(settingsTabs.map((tab) => tab.id)).toEqual(['providers', 'permissions', 'desktop'])
+    expect(settingsTabs.map((tab) => tab.id)).toEqual(['providers', 'agents', 'plugins', 'permissions', 'desktop'])
     expect(pluginsTabs.map((tab) => tab.id)).toEqual(['installed', 'marketplace'])
     expect(defaultTabForSection('runtime')).toBe('overview')
     expect(defaultTabForSection('settings')).toBe('providers')
@@ -160,6 +160,8 @@ describe('runtimePageStateModel', () => {
       'nav.plugins.installed',
       'nav.plugins.marketplace',
       'nav.settings.providers',
+      'nav.settings.agents',
+      'nav.settings.plugins',
       'nav.settings.permissions',
       'nav.settings.desktop',
     ])
@@ -170,9 +172,12 @@ describe('runtimePageStateModel', () => {
     expect(sectionDescriptions.runtime.includes('runtime state')).toBe(true)
     expect(sectionDescriptions.plugins.includes('installed plugins')).toBe(true)
     expect(sectionDescriptions.settings.includes('providers')).toBe(true)
+    expect(sectionDescriptions.settings.includes('agents')).toBe(true)
+    expect(sectionDescriptions.settings.includes('plugins')).toBe(true)
     expect(isRuntimeTab('skills')).toBe(true)
     expect(isRuntimeTab('desktop')).toBe(false)
     expect(isSettingsTab('desktop')).toBe(true)
+    expect(isSettingsTab('plugins')).toBe(true)
     expect(isSettingsTab('marketplace')).toBe(false)
     expect(isPluginsTab('installed')).toBe(true)
     expect(isPluginsTab('overview')).toBe(false)

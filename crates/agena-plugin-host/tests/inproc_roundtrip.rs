@@ -107,6 +107,7 @@ async fn host_with_capability_plugin(
         PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
@@ -274,6 +275,7 @@ async fn static_plugin_round_trips_every_hook() {
         PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
@@ -986,6 +988,7 @@ async fn manifest_ui_contributions_surface_in_unified_catalog() {
         PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
@@ -1045,6 +1048,7 @@ async fn per_entry_capability_scope_isolates_entries() {
         PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
@@ -1105,6 +1109,7 @@ async fn quota_burst_then_throttles() {
         PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let mut quotas = BTreeMap::new();
@@ -1198,6 +1203,7 @@ async fn permission_ui_handler_dispatch_routes_to_plugin() {
         PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")

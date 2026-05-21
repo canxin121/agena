@@ -952,6 +952,7 @@ async fn build_session_start_plugin_host(
         crate::plugin::PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let config = crate::plugin::PluginsConfig {
@@ -984,6 +985,7 @@ async fn build_session_end_plugin_host(
         crate::plugin::PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let config = crate::plugin::PluginsConfig {
@@ -1013,6 +1015,7 @@ async fn build_host_invoke_plugin_host(
         crate::plugin::PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     list.insert(
@@ -1020,6 +1023,7 @@ async fn build_host_invoke_plugin_host(
         crate::plugin::PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let config = crate::plugin::PluginsConfig {
@@ -1055,6 +1059,7 @@ async fn build_streaming_plugin_host(
         crate::plugin::PluginEntry::Static {
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let config = crate::plugin::PluginsConfig {

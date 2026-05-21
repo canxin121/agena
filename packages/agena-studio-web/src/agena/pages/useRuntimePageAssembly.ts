@@ -89,7 +89,9 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
 
   const pluginDetails = useRuntimePluginDetails({
     actionError: input.actionError,
+    actionMessage: input.actionMessage,
     activePluginsTab: input.activePluginsTab,
+    loadPageState,
     pluginLoading: input.pluginLoading,
     pluginLogs: input.pluginLogs,
     pluginLogPollTimer: input.pluginLogPollTimer,
@@ -166,7 +168,13 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
 
   const { loadDesktopPanel } = desktopActions
   const { loadMarketplacePanel } = marketplaceActions
-  const { loadPluginDetails, stopPluginLogPolling, syncPluginLogPolling } = pluginDetails
+  const {
+    canTogglePluginConfig,
+    loadPluginDetails,
+    stopPluginLogPolling,
+    syncPluginLogPolling,
+    setSelectedPluginDisabled,
+  } = pluginDetails
 
   const sectionLoadActions = useRuntimeSectionLoadActions({
     actionError: input.actionError,
@@ -184,6 +192,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     permissionSearch: input.permissionSearch,
     pluginLogs: input.pluginLogs,
     plugins: input.plugins,
+    settingsPlugins: input.settingsPlugins,
     providers: input.providers,
     replaceProviderModels: (nextProviderModels) => replaceProviderModelsRecord(input.providerModels, nextProviderModels),
     routeSection: input.routeSection,
@@ -227,9 +236,11 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     navigation,
     permissionActions,
     pluginDetails,
+    canTogglePluginConfig,
     providerActions,
     routeState,
     sectionLoadActions,
     sessionWorkflowActions,
+    setSelectedPluginDisabled,
   }
 }

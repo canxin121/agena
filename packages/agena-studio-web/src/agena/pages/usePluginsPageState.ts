@@ -13,6 +13,7 @@ export function usePluginsPageState(input: {
   const { shared, state } = useRuntimeSectionState({ ...input, section: 'plugins' })
 
   const installed = createPluginsInstalledPanelState({
+    canTogglePluginConfig: state.canTogglePluginConfig,
     loadPluginDetails: state.loadPluginDetails,
     openPluginLogsWorkspacePath: state.openPluginLogsWorkspacePath,
     openPluginManifestInWorkspace: state.openPluginManifestInWorkspace,
@@ -20,6 +21,7 @@ export function usePluginsPageState(input: {
     pluginLogs: state.pluginLogs,
     plugins: state.plugins,
     selectedPlugin: state.selectedPlugin,
+    setSelectedPluginDisabled: state.setSelectedPluginDisabled,
   })
 
   const marketplace = createPluginsMarketplacePanelState({

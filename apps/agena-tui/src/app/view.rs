@@ -148,7 +148,7 @@ impl App {
     }
 
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
-        let status_rows = u16::from(!self.current_session_status_parts().is_empty());
+        let status_rows = u16::from(!self.composer_status_parts().is_empty());
         let (composer_area, status_area) = if status_rows > 0 && area.height > status_rows {
             let rows = Layout::default()
                 .direction(Direction::Vertical)
@@ -177,22 +177,22 @@ impl App {
 
         let item_count = self.composer_items.len();
         let item_rows = u16::from(item_count > 0);
-        let suggestion_rows = min(
-            self.slash_command_suggestion_rows(),
+        let popup_rows = min(
+            self.composer_popup_rows(),
             inner.height.saturating_sub(item_rows).saturating_sub(1),
         );
         let editor_rows = inner
             .height
             .saturating_sub(item_rows)
-            .saturating_sub(suggestion_rows)
+            .saturating_sub(popup_rows)
             .max(1);
 
         let mut constraints = Vec::new();
         if item_rows > 0 {
             constraints.push(Constraint::Length(item_rows));
         }
-        if suggestion_rows > 0 {
-            constraints.push(Constraint::Length(suggestion_rows));
+        if popup_rows > 0 {
+            constraints.push(Constraint::Length(popup_rows));
         }
         constraints.push(Constraint::Length(editor_rows));
         let rows = Layout::default()
@@ -208,7 +208,7 @@ impl App {
         } else {
             None
         };
-        let suggestion_row = if suggestion_rows > 0 {
+        let popup_row = if popup_rows > 0 {
             let row = Some(rows[next_row]);
             next_row += 1;
             row
@@ -220,8 +220,8 @@ impl App {
         if let Some(item_row) = item_row {
             self.render_composer_items_row(frame, item_row);
         }
-        if let Some(suggestion_row) = suggestion_row {
-            self.render_slash_command_suggestions(frame, suggestion_row);
+        if let Some(popup_row) = popup_row {
+            self.render_active_composer_popup(frame, popup_row);
         }
 
         let editor_width = editor_row.width.saturating_sub(2);
@@ -255,7 +255,11 @@ impl App {
             );
         }
 
-        if self.overlay.is_none() && self.focus == Focus::Composer {
+        if self.overlay.is_none()
+            && self.focus == Focus::Composer
+            && self.prompt_history_search.is_none()
+            && self.selected_composer_item.is_none()
+        {
             frame.set_cursor_position((
                 editor_x.saturating_add(editor_view.cursor_x),
                 editor_row.y.saturating_add(editor_view.cursor_y),
@@ -264,6 +268,16 @@ impl App {
 
         if let Some(status_area) = status_area {
             self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
+        }
+    }
+
+    fn render_active_composer_popup(&self, frame: &mut Frame, area: Rect) {
+        if self.prompt_history_search.is_some() {
+            self.render_prompt_history_search(frame, area);
+        } else if self.file_mention_suggestions.is_some() {
+            self.render_file_mention_suggestions(frame, area);
+        } else {
+            self.render_slash_command_suggestions(frame, area);
         }
     }
 
@@ -349,8 +363,163 @@ impl App {
         frame.render_widget(Paragraph::new(Text::from(lines)), area);
     }
 
+    fn render_file_mention_suggestions(&self, frame: &mut Frame, area: Rect) {
+        let Some(state) = self.file_mention_suggestions.as_ref() else {
+            return;
+        };
+        if area.width == 0 || area.height == 0 || state.items.is_empty() {
+            return;
+        }
+
+        let selected = min(state.selected, state.items.len().saturating_sub(1));
+        let visible_rows = min(
+            area.height as usize,
+            min(MAX_FILE_MENTION_SUGGESTIONS, state.items.len()),
+        );
+        let start = selected.saturating_add(1).saturating_sub(visible_rows);
+        let width = area.width as usize;
+        let lines = state
+            .items
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(visible_rows)
+            .map(|(index, item)| {
+                let is_selected = index == selected;
+                let base_style = if is_selected {
+                    selection_highlight_style()
+                } else {
+                    Style::default()
+                };
+                let name_style = if is_selected {
+                    base_style
+                } else {
+                    Style::default()
+                        .fg(self.theme_color("flash_info", Color::Cyan))
+                        .add_modifier(Modifier::BOLD)
+                };
+                let detail_style = if is_selected {
+                    base_style
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+
+                let marker = if is_selected { "@ " } else { "  " };
+                let marker_width = UnicodeWidthStr::width(marker);
+                let name_max = min(28, width.saturating_sub(marker_width));
+                let name = truncate_display_text(
+                    sanitize_display_text(item.label.as_str()).as_str(),
+                    name_max,
+                );
+                let name_width = UnicodeWidthStr::width(name.as_str());
+                let detail_max = width
+                    .saturating_sub(marker_width)
+                    .saturating_sub(name_width)
+                    .saturating_sub(2);
+
+                let mut spans = vec![
+                    Span::styled(marker, base_style),
+                    Span::styled(name, name_style),
+                ];
+                let mut used_width = marker_width.saturating_add(name_width);
+                if detail_max > 0 {
+                    let detail = truncate_display_text(
+                        sanitize_display_text(item.detail.as_str()).as_str(),
+                        detail_max,
+                    );
+                    if !detail.is_empty() {
+                        let detail_width = UnicodeWidthStr::width(detail.as_str());
+                        spans.push(Span::styled("  ", base_style));
+                        spans.push(Span::styled(detail, detail_style));
+                        used_width = used_width.saturating_add(2).saturating_add(detail_width);
+                    }
+                }
+                if is_selected && used_width < width {
+                    spans.push(Span::styled(" ".repeat(width - used_width), base_style));
+                }
+
+                Line::from(spans)
+            })
+            .collect::<Vec<_>>();
+
+        frame.render_widget(Paragraph::new(Text::from(lines)), area);
+    }
+
+    fn render_prompt_history_search(&self, frame: &mut Frame, area: Rect) {
+        let Some(search) = self.prompt_history_search.as_ref() else {
+            return;
+        };
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let row_count = max(1, area.height as usize);
+        let result_rows = row_count.saturating_sub(1);
+        let query = sanitize_display_text(search.query.text());
+        let mut lines = vec![Line::from(vec![
+            Span::styled(
+                "history> ",
+                Style::default()
+                    .fg(self.theme_color("accent", Color::Cyan))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(query.clone()),
+        ])];
+
+        if result_rows > 0 {
+            if search.results.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  no prompt history matches",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            } else {
+                let selected = min(search.selected, search.results.len().saturating_sub(1));
+                let visible_rows = min(result_rows, search.results.len());
+                let start = selected.saturating_add(1).saturating_sub(visible_rows);
+                for (index, result) in search
+                    .results
+                    .iter()
+                    .enumerate()
+                    .skip(start)
+                    .take(visible_rows)
+                {
+                    let is_selected = index == selected;
+                    let base_style = if is_selected {
+                        selection_highlight_style()
+                    } else {
+                        Style::default()
+                    };
+                    let marker = if is_selected { "> " } else { "  " };
+                    let prefix = format!("#{:<3} ", result.history_index + 1);
+                    lines.push(Line::from(vec![
+                        Span::styled(marker, base_style),
+                        Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            truncate_display_text(
+                                sanitize_display_text(result.text.as_str()).as_str(),
+                                area.width.saturating_sub(7) as usize,
+                            ),
+                            base_style,
+                        ),
+                    ]));
+                }
+            }
+        }
+
+        frame.render_widget(Paragraph::new(Text::from(lines.clone())), area);
+
+        if self.overlay.is_none() && self.focus == Focus::Composer {
+            let query_width = UnicodeWidthStr::width(query.as_str()) as u16;
+            frame.set_cursor_position((
+                area.x.saturating_add(9).saturating_add(query_width),
+                area.y,
+            ));
+        }
+    }
+
     fn composer_panel_title(&self) -> String {
         let mut title = ui_text::composer_title(&self.i18n, self.transcript.session_id);
+        title.push_str(format!("[{}] ", self.composer_mode.status_label()).as_str());
         if self.transcript.submitting {
             title.push_str(ui_text::t(&self.i18n, "transcript-header-busy").as_str());
         }
@@ -368,10 +537,12 @@ impl App {
             if index > 0 {
                 spans.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
             }
-            spans.push(Span::styled(
-                format!("[{}]", item.short_label()),
-                self.composer_item_style(item),
-            ));
+            let style = if self.selected_composer_item == Some(index) {
+                selection_highlight_style().add_modifier(Modifier::BOLD)
+            } else {
+                self.composer_item_style(item)
+            };
+            spans.push(Span::styled(format!("[{}]", item.short_label()), style));
         }
 
         frame.render_widget(
@@ -464,9 +635,20 @@ impl App {
         }
     }
 
-    fn slash_command_suggestion_rows(&self) -> u16 {
+    fn composer_popup_rows(&self) -> u16 {
         if self.overlay.is_some() || self.focus != Focus::Composer {
             return 0;
+        }
+        if let Some(search) = self.prompt_history_search.as_ref() {
+            let result_rows = if search.results.is_empty() {
+                1
+            } else {
+                min(MAX_PROMPT_HISTORY_SEARCH_RESULTS, search.results.len())
+            };
+            return (result_rows + 1) as u16;
+        }
+        if let Some(state) = self.file_mention_suggestions.as_ref() {
+            return min(MAX_FILE_MENTION_SUGGESTIONS, state.items.len()) as u16;
         }
         self.slash_command_suggestions
             .as_ref()
@@ -525,7 +707,7 @@ impl App {
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let text = self.current_session_status_parts().join("  |  ");
+        let text = self.composer_status_parts().join("  |  ");
         let lines = self.wrap_styled_text(
             text.as_str(),
             area.width,
@@ -535,6 +717,68 @@ impl App {
             Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
             area,
         );
+    }
+
+    fn composer_status_parts(&self) -> Vec<String> {
+        let mut parts = self.current_session_status_parts();
+        if self.composer_mode.is_vim() {
+            parts.push(format!("mode {}", self.composer_mode.status_label()));
+        }
+        if let Some(selected) = self
+            .selected_composer_item
+            .and_then(|index| self.composer_items.get(index).map(|item| (index, item)))
+        {
+            parts.push(format!(
+                "item {}/{} {}",
+                selected.0 + 1,
+                self.composer_items.len(),
+                selected.1.short_label()
+            ));
+        }
+        if let Some(search) = self.prompt_history_search.as_ref() {
+            let query = search.query.text().trim();
+            let selection = min(search.selected + 1, search.results.len().max(1));
+            parts.push(format!(
+                "history {selection}/{}{}",
+                search.results.len(),
+                if query.is_empty() {
+                    String::new()
+                } else {
+                    format!(" query={query}")
+                }
+            ));
+        } else if let Some(state) = self.file_mention_suggestions.as_ref() {
+            let query = state.query.trim();
+            let suffix = if query.is_empty() {
+                "@".to_string()
+            } else {
+                format!("@{query}")
+            };
+            parts.push(format!("mention {suffix}"));
+        } else if let Some(state) = self.slash_command_suggestions.as_ref() {
+            let query = state.query.trim();
+            let suffix = if query.is_empty() {
+                "/".to_string()
+            } else {
+                format!("/{query}")
+            };
+            parts.push(format!("slash {suffix}"));
+        }
+        if let Some(execution) = self.transcript.execution.as_ref() {
+            if !execution.pending_user_input_requests.is_empty() {
+                parts.push(format!(
+                    "input {} pending (Alt+U)",
+                    execution.pending_user_input_requests.len()
+                ));
+            }
+            if !execution.pending_permission_requests.is_empty() {
+                parts.push(format!(
+                    "approval {} pending (Alt+P)",
+                    execution.pending_permission_requests.len()
+                ));
+            }
+        }
+        parts
     }
 
     fn theme_color(&self, key: &str, fallback: Color) -> Color {
@@ -972,8 +1216,8 @@ impl App {
     }
 
     fn render_user_input_overlay(&self, frame: &mut Frame, area: Rect, dialog: &UserInputOverlay) {
-        let height = min(18, area.height.saturating_sub(4));
-        let area = centered_rect(area, 84, height);
+        let height = min(20, area.height.saturating_sub(4));
+        let area = centered_rect(area, 92, height);
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(
@@ -986,73 +1230,208 @@ impl App {
 
         let rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(8),
-                Constraint::Length(3),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Min(10), Constraint::Length(2)])
             .split(inner);
 
-        let mut lines = Vec::new();
-        lines.push(Line::from(Span::styled(
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(34), Constraint::Min(32)])
+            .split(rows[0]);
+
+        let mut question_lines = vec![Line::from(Span::styled(
             sanitize_display_text(self.i18n.text_args(
                 "overlay-user-input-request-id",
                 &crate::fl_args!("request_id" => dialog.request.request_id.clone()),
             )),
             Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(""));
-        for question in &dialog.request.questions {
-            lines.push(Line::from(Span::styled(
-                sanitize_display_text(format!("{} ({})", question.question, question.id)),
+        ))];
+        question_lines.push(Line::from(""));
+        for (index, question) in dialog.request.questions.iter().enumerate() {
+            let values = dialog
+                .answers
+                .get(&question.id)
+                .map(|draft| user_input_answer_values(question, draft))
+                .unwrap_or_default();
+            let summary = if values.is_empty() {
+                "unanswered".to_string()
+            } else {
+                truncate_display_text(values.join(", ").as_str(), 22)
+            };
+            let marker = if index == dialog.selected_question {
+                "> "
+            } else {
+                "  "
+            };
+            let style = if index == dialog.selected_question {
+                selection_highlight_style()
+            } else {
+                Style::default()
+            };
+            question_lines.push(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(
+                    sanitize_display_text(user_input_question_label(question)),
+                    style.add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            question_lines.push(Line::from(Span::styled(
+                format!("    {summary}"),
+                if values.is_empty() {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(self.theme_color("flash_info", Color::Cyan))
+                },
+            )));
+        }
+
+        frame.render_widget(
+            Paragraph::new(Text::from(question_lines))
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::ALL).title(" Questions ")),
+            columns[0],
+        );
+
+        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+            frame.render_widget(
+                Paragraph::new("No questions.")
+                    .block(Block::default().borders(Borders::ALL).title(" Detail ")),
+                columns[1],
+            );
+            return;
+        };
+
+        let detail_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(8),
+                Constraint::Length(3),
+                Constraint::Length(2),
+            ])
+            .split(columns[1]);
+
+        let draft = dialog
+            .answers
+            .get(&question.id)
+            .cloned()
+            .unwrap_or_default();
+        let mut detail_lines = vec![
+            Line::from(Span::styled(
+                sanitize_display_text(question.question.as_str()),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                sanitize_display_text(format!(
+                    "id={}{}",
+                    question.id,
+                    if question.multiple {
+                        " · multiple"
+                    } else {
+                        ""
+                    }
+                )),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+        ];
+        for (index, option) in question.options.iter().enumerate() {
+            let picked = draft.option_indexes.contains(&index);
+            let focused = index == dialog.selected_option && !dialog.editing_custom;
+            let prefix = if question.multiple {
+                if picked { "[x]" } else { "[ ]" }
+            } else if picked {
+                "(x)"
+            } else {
+                "( )"
+            };
+            let style = if focused {
+                selection_highlight_style()
+            } else {
+                Style::default()
+            };
+            let mut line = vec![
+                Span::styled(format!("{prefix} "), style),
+                Span::styled(
+                    sanitize_display_text(option.label.as_str()),
+                    style.add_modifier(Modifier::BOLD),
+                ),
+            ];
+            if !option.description.trim().is_empty() {
+                line.push(Span::styled("  ", style));
+                line.push(Span::styled(
+                    truncate_display_text(
+                        sanitize_display_text(option.description.as_str()).as_str(),
+                        detail_rows[0].width.saturating_sub(10) as usize,
+                    ),
+                    if focused {
+                        style
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    },
+                ));
+            }
+            detail_lines.push(Line::from(line));
+        }
+        if question.allow_custom {
+            detail_lines.push(Line::from(""));
+            detail_lines.push(Line::from(Span::styled(
+                "Custom",
                 Style::default().add_modifier(Modifier::BOLD),
             )));
-            for option in &question.options {
-                let mut text = format!("  - {}", sanitize_display_text(option.label.as_str()));
-                if !option.description.trim().is_empty() {
-                    text.push_str(
-                        format!(" | {}", sanitize_display_text(option.description.as_str()))
-                            .as_str(),
-                    );
-                }
-                lines.push(Line::from(text));
-            }
-            if question.allow_custom {
-                lines.push(Line::from(format!(
-                    "  - {}",
-                    ui_text::t(&self.i18n, "overlay-user-input-custom-allowed")
-                )));
-            }
-            lines.push(Line::from(""));
+            detail_lines.push(Line::from(Span::styled(
+                sanitize_display_text(if draft.custom_values.is_empty() {
+                    "custom answer not set".to_string()
+                } else {
+                    draft.custom_values.join(", ")
+                }),
+                if draft.custom_values.is_empty() {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default().fg(self.theme_color("flash_info", Color::Cyan))
+                },
+            )));
         }
-        lines.push(Line::from(ui_text::t(
-            &self.i18n,
-            "overlay-user-input-reply-format",
-        )));
-        lines.push(Line::from(ui_text::t(
-            &self.i18n,
-            "overlay-user-input-cancel-hint",
-        )));
-
         frame.render_widget(
-            Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
-            rows[0],
+            Paragraph::new(Text::from(detail_lines))
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::ALL).title(" Detail ")),
+            detail_rows[0],
         );
 
-        let view = dialog.input.render_view(rows[1].width, rows[1].height);
+        let custom_view = dialog
+            .custom_input
+            .render_view(detail_rows[1].width.saturating_sub(2), 1);
         frame.render_widget(
-            Paragraph::new(Text::from(view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
+            Paragraph::new(Text::from(custom_view.lines.clone())).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(if dialog.editing_custom {
+                        " Custom Input "
+                    } else {
+                        " Custom Input (press e) "
+                    }),
+            ),
+            detail_rows[1],
+        );
+        frame.render_widget(
+            Paragraph::new(
+                "j/k question  h/l option  space select  e custom  c clear  enter submit  ctrl+d cancel",
+            )
+            .wrap(Wrap { trim: false }),
             rows[1],
         );
-        frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-user-input-footer")),
-            rows[2],
-        );
-        frame.set_cursor_position((
-            rows[1].x.saturating_add(1).saturating_add(view.cursor_x),
-            rows[1].y.saturating_add(1).saturating_add(view.cursor_y),
-        ));
+
+        if dialog.editing_custom {
+            frame.set_cursor_position((
+                detail_rows[1]
+                    .x
+                    .saturating_add(1)
+                    .saturating_add(custom_view.cursor_x),
+                detail_rows[1]
+                    .y
+                    .saturating_add(1)
+                    .saturating_add(custom_view.cursor_y),
+            ));
+        }
     }
 
     fn render_confirm_overlay(&self, frame: &mut Frame, area: Rect, dialog: &ConfirmOverlay) {
@@ -2516,9 +2895,9 @@ impl App {
     fn composer_height(&self) -> u16 {
         let line_count = max(1, self.composer.logical_line_count());
         let item_rows = u16::from(!self.composer_items.is_empty());
-        let status_rows = u16::from(!self.current_session_status_parts().is_empty());
-        let suggestion_rows = self.slash_command_suggestion_rows();
-        let chrome_rows = 2_u16 + item_rows + suggestion_rows + status_rows;
+        let status_rows = u16::from(!self.composer_status_parts().is_empty());
+        let popup_rows = self.composer_popup_rows();
+        let chrome_rows = 2_u16 + item_rows + popup_rows + status_rows;
         min(12, line_count as u16 + chrome_rows)
     }
 }

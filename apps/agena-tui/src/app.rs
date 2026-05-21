@@ -13,7 +13,7 @@ use agena::{
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
         AttachmentKind, ExecutionStatus, MessagePart, MessageStatus, OperationPart, PartContent,
-        ToolInvocation, UserInputReply, UserInputReplyKind, UserInputRequest,
+        ToolInvocation, UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputRequest,
     },
     model::ModelRef,
     permission::{
@@ -66,7 +66,7 @@ use crate::external_pager::page_text;
 use crate::i18n::{I18n, SUPPORTED_LOCALES};
 use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
-use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
+use crate::tui_config::{TuiComposerMode, TuiConfig, TuiStatusLineConfig};
 use crate::ui_text;
 use agena_api_server::local_api::{
     ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse,
@@ -100,6 +100,8 @@ const TOOL_CARD_PREVIEW_LINES: usize = 8;
 const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
 const PROMPT_SUMMARY_TAG: &str = "prompt_summary";
 const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
+const MAX_FILE_MENTION_SUGGESTIONS: usize = 8;
+const MAX_PROMPT_HISTORY_SEARCH_RESULTS: usize = 6;
 const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;
 const AWS_REGION_CHOICES: &[&str] = &[
     "us-east-1",
@@ -327,6 +329,34 @@ enum PromptHistoryDirection {
     Newer,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComposerMode {
+    Emacs,
+    VimInsert,
+    VimNormal,
+}
+
+impl ComposerMode {
+    fn from_config(mode: TuiComposerMode) -> Self {
+        match mode {
+            TuiComposerMode::Emacs => Self::Emacs,
+            TuiComposerMode::Vim => Self::VimInsert,
+        }
+    }
+
+    fn is_vim(self) -> bool {
+        matches!(self, Self::VimInsert | Self::VimNormal)
+    }
+
+    fn status_label(self) -> &'static str {
+        match self {
+            Self::Emacs => "EMACS",
+            Self::VimInsert => "INSERT",
+            Self::VimNormal => "NORMAL",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct StatusLineState {
     command: String,
@@ -367,6 +397,11 @@ pub struct App {
     composer_items: Vec<ComposerItem>,
     slash_command_suggestions: Option<SlashCommandSuggestionState>,
     dismissed_slash_command_suggestions_for: Option<String>,
+    file_mention_suggestions: Option<FileMentionSuggestionState>,
+    dismissed_file_mention_suggestions_for: Option<String>,
+    prompt_history_search: Option<PromptHistorySearchState>,
+    selected_composer_item: Option<usize>,
+    composer_mode: ComposerMode,
     draft_store: DraftStore,
     draft_store_path: PathBuf,
     draft_store_dirty: bool,
@@ -789,7 +824,11 @@ enum PermissionRuleSubjectKind {
 struct UserInputOverlay {
     session_id: i64,
     request: UserInputRequest,
-    input: Editor,
+    answers: BTreeMap<String, UserInputAnswerDraft>,
+    selected_question: usize,
+    selected_option: usize,
+    editing_custom: bool,
+    custom_input: Editor,
 }
 
 #[derive(Debug, Clone)]
@@ -1229,6 +1268,49 @@ struct SlashCommandSuggestionContext {
     name_range: Range<usize>,
 }
 
+#[derive(Debug, Clone)]
+struct FileMentionSuggestionState {
+    query: String,
+    fingerprint: String,
+    mention_range: Range<usize>,
+    items: Vec<FileMentionSuggestionItem>,
+    selected: usize,
+}
+
+#[derive(Debug, Clone)]
+struct FileMentionSuggestionItem {
+    path: PathBuf,
+    label: String,
+    detail: String,
+}
+
+#[derive(Debug, Clone)]
+struct FileMentionSuggestionContext {
+    query: String,
+    fingerprint: String,
+    mention_range: Range<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct PromptHistorySearchState {
+    query: Editor,
+    results: Vec<PromptHistorySearchResult>,
+    selected: usize,
+    original: ComposerDraft,
+}
+
+#[derive(Debug, Clone)]
+struct PromptHistorySearchResult {
+    history_index: usize,
+    text: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct UserInputAnswerDraft {
+    option_indexes: BTreeSet<usize>,
+    custom_values: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 struct PersistentDraftStore {
     #[serde(default = "persistent_draft_store_version")]
@@ -1404,6 +1486,11 @@ impl App {
             composer_items: Vec::new(),
             slash_command_suggestions: None,
             dismissed_slash_command_suggestions_for: None,
+            file_mention_suggestions: None,
+            dismissed_file_mention_suggestions_for: None,
+            prompt_history_search: None,
+            selected_composer_item: None,
+            composer_mode: ComposerMode::from_config(launch.tui_config.composer_mode),
             draft_store,
             draft_store_path,
             draft_store_dirty: false,
@@ -1872,27 +1959,35 @@ impl App {
         key: KeyEvent,
         dialog: &mut UserInputOverlay,
     ) -> bool {
+        if dialog.editing_custom {
+            return match key.code {
+                KeyCode::Esc => {
+                    dialog.editing_custom = false;
+                    false
+                }
+                KeyCode::Enter => {
+                    Self::commit_user_input_custom_values(dialog);
+                    false
+                }
+                _ => {
+                    dialog.custom_input.handle_line_input_key(key);
+                    false
+                }
+            };
+        }
+
         match key.code {
             KeyCode::Esc => true,
-            KeyCode::Enter => {
-                dialog.input.flush_all_pending_input();
-                match parse_user_input_answers(&self.i18n, dialog.input.text(), &dialog.request) {
-                    Ok(answers) => {
-                        let reply = UserInputReply {
-                            request_id: dialog.request.request_id.clone(),
-                            kind: UserInputReplyKind::Submit,
-                            answers,
-                            reason: None,
-                        };
-                        self.request_user_input_reply(dialog.session_id, reply);
-                        true
-                    }
-                    Err(error) => {
-                        self.flash_warning(error);
-                        false
-                    }
+            KeyCode::Enter => match Self::build_structured_user_input_reply(dialog) {
+                Ok(reply) => {
+                    self.request_user_input_reply(dialog.session_id, reply);
+                    true
                 }
-            }
+                Err(error) => {
+                    self.flash_warning(error);
+                    false
+                }
+            },
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let reply = UserInputReply {
                     request_id: dialog.request.request_id.clone(),
@@ -1903,11 +1998,190 @@ impl App {
                 self.request_user_input_reply(dialog.session_id, reply);
                 true
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
+            KeyCode::Up | KeyCode::Char('k') => {
+                Self::move_user_input_question(dialog, -1);
                 false
             }
+            KeyCode::Down | KeyCode::Char('j') => {
+                Self::move_user_input_question(dialog, 1);
+                false
+            }
+            KeyCode::PageUp => {
+                Self::move_user_input_question(dialog, -5);
+                false
+            }
+            KeyCode::PageDown => {
+                Self::move_user_input_question(dialog, 5);
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected_question = 0;
+                Self::sync_user_input_option_selection(dialog);
+                false
+            }
+            KeyCode::End => {
+                dialog.selected_question = dialog.request.questions.len().saturating_sub(1);
+                Self::sync_user_input_option_selection(dialog);
+                false
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                Self::move_user_input_option(dialog, -1);
+                false
+            }
+            KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => {
+                Self::move_user_input_option(dialog, 1);
+                false
+            }
+            KeyCode::Char(' ') => {
+                Self::toggle_user_input_option(dialog);
+                false
+            }
+            KeyCode::Char('e') => {
+                Self::begin_user_input_custom_edit(dialog);
+                false
+            }
+            KeyCode::Char('c') | KeyCode::Delete | KeyCode::Backspace => {
+                Self::clear_user_input_answer(dialog);
+                false
+            }
+            _ => false,
         }
+    }
+
+    fn move_user_input_question(dialog: &mut UserInputOverlay, delta: isize) {
+        if dialog.request.questions.is_empty() {
+            dialog.selected_question = 0;
+            dialog.selected_option = 0;
+            return;
+        }
+        let len = dialog.request.questions.len() as isize;
+        dialog.selected_question =
+            (dialog.selected_question as isize + delta).clamp(0, len - 1) as usize;
+        Self::sync_user_input_option_selection(dialog);
+    }
+
+    fn sync_user_input_option_selection(dialog: &mut UserInputOverlay) {
+        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+            dialog.selected_option = 0;
+            return;
+        };
+        dialog.selected_option = min(
+            dialog.selected_option,
+            question.options.len().saturating_sub(1),
+        );
+    }
+
+    fn move_user_input_option(dialog: &mut UserInputOverlay, delta: isize) {
+        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+            return;
+        };
+        if question.options.is_empty() {
+            return;
+        }
+        let len = question.options.len() as isize;
+        dialog.selected_option =
+            (dialog.selected_option as isize + delta).clamp(0, len - 1) as usize;
+    }
+
+    fn toggle_user_input_option(dialog: &mut UserInputOverlay) {
+        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+            return;
+        };
+        if question.options.is_empty() {
+            if question.allow_custom {
+                Self::begin_user_input_custom_edit(dialog);
+            }
+            return;
+        }
+        let draft = dialog.answers.entry(question.id.clone()).or_default();
+        if question.multiple {
+            if !draft.option_indexes.insert(dialog.selected_option) {
+                draft.option_indexes.remove(&dialog.selected_option);
+            }
+        } else {
+            draft.option_indexes.clear();
+            draft.option_indexes.insert(dialog.selected_option);
+            draft.custom_values.clear();
+        }
+    }
+
+    fn begin_user_input_custom_edit(dialog: &mut UserInputOverlay) {
+        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+            return;
+        };
+        if !question.allow_custom {
+            return;
+        }
+        let existing = dialog
+            .answers
+            .get(&question.id)
+            .map(|draft| draft.custom_values.join(", "))
+            .unwrap_or_default();
+        dialog.custom_input.set_text(existing);
+        dialog.editing_custom = true;
+    }
+
+    fn commit_user_input_custom_values(dialog: &mut UserInputOverlay) {
+        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+            dialog.editing_custom = false;
+            return;
+        };
+        dialog.custom_input.flush_all_pending_input();
+        let parsed = dialog
+            .custom_input
+            .text()
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let draft = dialog.answers.entry(question.id.clone()).or_default();
+        draft.custom_values = if question.multiple {
+            parsed
+        } else {
+            parsed.into_iter().take(1).collect()
+        };
+        if !draft.custom_values.is_empty() && !question.multiple {
+            draft.option_indexes.clear();
+        }
+        dialog.editing_custom = false;
+    }
+
+    fn clear_user_input_answer(dialog: &mut UserInputOverlay) {
+        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+            return;
+        };
+        dialog.answers.remove(&question.id);
+        dialog.custom_input.clear();
+        dialog.editing_custom = false;
+    }
+
+    fn build_structured_user_input_reply(
+        dialog: &mut UserInputOverlay,
+    ) -> std::result::Result<UserInputReply, String> {
+        let mut answers = BTreeMap::new();
+        for index in 0..dialog.request.questions.len() {
+            let question = &dialog.request.questions[index];
+            let values = dialog
+                .answers
+                .get(&question.id)
+                .map(|draft| user_input_answer_values(question, draft))
+                .unwrap_or_default();
+            if values.is_empty() {
+                let label = user_input_question_label(question).to_string();
+                dialog.selected_question = index;
+                Self::sync_user_input_option_selection(dialog);
+                return Err(format!("missing answer for {label}"));
+            }
+            answers.insert(question.id.clone(), values);
+        }
+
+        Ok(UserInputReply {
+            request_id: dialog.request.request_id.clone(),
+            kind: UserInputReplyKind::Submit,
+            answers,
+            reason: None,
+        })
     }
 
     fn handle_permission_overlay_key(
@@ -2847,8 +3121,11 @@ impl App {
                     dialog.selected = min(dialog.selected, dialog.results.len().saturating_sub(1));
                 }
                 Overlay::UserInputReply(dialog) => {
-                    dialog.input.flush_all_pending_input();
-                    dialog.input.insert_str(text.as_str());
+                    if !dialog.editing_custom {
+                        Self::begin_user_input_custom_edit(dialog);
+                    }
+                    dialog.custom_input.flush_all_pending_input();
+                    dialog.custom_input.insert_str(text.as_str());
                 }
                 Overlay::Picker(dialog) => {
                     dialog.input.flush_all_pending_input();
@@ -2902,8 +3179,7 @@ impl App {
             } else {
                 self.composer.insert_str(text.as_str());
             }
-            self.sync_composer_items_with_editor();
-            self.sync_slash_command_suggestions();
+            self.after_composer_text_mutated();
         }
     }
 
@@ -3003,13 +3279,30 @@ impl App {
     }
 
     fn handle_composer_key(&mut self, key: KeyEvent) {
+        if self.handle_prompt_history_search_key(key) {
+            return;
+        }
+        if self.handle_file_mention_suggestion_key(key) {
+            return;
+        }
         if self.handle_slash_command_suggestion_key(key) {
+            return;
+        }
+        if self.handle_selected_composer_item_key(key) {
             return;
         }
         // Esc handling is special — double-tap clears the input. We track
         // it before consulting the configurable bindings.
         if matches!(key.code, KeyCode::Esc) && key.modifiers.is_empty() {
+            if self.composer_mode == ComposerMode::VimInsert {
+                self.composer_mode = ComposerMode::VimNormal;
+                self.sync_composer_suggestions();
+                return;
+            }
             self.handle_composer_esc();
+            return;
+        }
+        if self.composer_mode == ComposerMode::VimNormal && self.handle_vim_normal_key(key) {
             return;
         }
         if matches!(key.code, KeyCode::Up) && key.modifiers.contains(KeyModifiers::ALT) {
@@ -3036,58 +3329,600 @@ impl App {
                 ComposerAction::Newline => {
                     self.reset_prompt_history_recall();
                     self.composer.insert_explicit_newline();
-                    self.sync_slash_command_suggestions();
+                    self.after_composer_text_mutated();
                     return;
                 }
                 ComposerAction::EditQueue => {
                     if self.try_pop_queue_into_editor() {
                         self.reset_prompt_history_recall();
-                        self.sync_slash_command_suggestions();
+                        self.after_composer_text_mutated();
                         return;
                     }
                     // Fall through to normal cursor-up behavior when queue
                     // is empty.
                 }
+                ComposerAction::HistorySearch => {
+                    self.open_prompt_history_search();
+                    return;
+                }
+                ComposerAction::FocusItems => {
+                    if self.toggle_composer_item_selection() {
+                        return;
+                    }
+                }
+                ComposerAction::AttachFile => {
+                    self.reset_prompt_history_recall();
+                    self.open_file_attach_overlay();
+                    return;
+                }
+                ComposerAction::ExternalEditor => {
+                    self.reset_prompt_history_recall();
+                    self.composer.flush_all_pending_input();
+                    self.pending_ui_action = Some(UiAction::EditComposerExternally);
+                    return;
+                }
+                ComposerAction::AttachClipboardImage => {
+                    self.reset_prompt_history_recall();
+                    self.pending_ui_action = Some(UiAction::AttachClipboardImage);
+                    return;
+                }
+                ComposerAction::OpenPendingUserInput => {
+                    self.open_user_input_overlay();
+                    return;
+                }
+                ComposerAction::OpenPendingPermission => {
+                    self.open_permission_overlay();
+                    return;
+                }
             }
         }
-        match key.code {
-            KeyCode::F(3) => {
-                self.reset_prompt_history_recall();
-                self.open_file_attach_overlay();
+        self.reset_prompt_history_recall();
+        self.composer.handle_multiline_input_key(key);
+        self.after_composer_text_mutated();
+    }
+
+    fn after_composer_text_mutated(&mut self) {
+        self.sync_composer_items_with_editor();
+        self.clamp_selected_composer_item();
+        self.sync_composer_suggestions();
+    }
+
+    fn sync_composer_suggestions(&mut self) {
+        if self.prompt_history_search.is_some() {
+            self.slash_command_suggestions = None;
+            self.file_mention_suggestions = None;
+            return;
+        }
+        self.sync_file_mention_suggestions();
+        self.sync_slash_command_suggestions();
+    }
+
+    fn toggle_composer_item_selection(&mut self) -> bool {
+        if self.composer_items.is_empty() {
+            self.selected_composer_item = None;
+            return false;
+        }
+        self.selected_composer_item = match self.selected_composer_item {
+            Some(_) => None,
+            None => Some(0),
+        };
+        true
+    }
+
+    fn clamp_selected_composer_item(&mut self) {
+        self.selected_composer_item = self
+            .selected_composer_item
+            .and_then(|index| (!self.composer_items.is_empty()).then_some(index))
+            .map(|index| min(index, self.composer_items.len().saturating_sub(1)));
+    }
+
+    fn handle_selected_composer_item_key(&mut self, key: KeyEvent) -> bool {
+        let Some(index) = self.selected_composer_item else {
+            return false;
+        };
+        match key {
+            KeyEvent {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.selected_composer_item = None;
+                true
             }
-            KeyCode::F(4) => {
-                self.reset_prompt_history_recall();
-                self.composer.flush_all_pending_input();
-                self.pending_ui_action = Some(UiAction::EditComposerExternally);
+            KeyEvent {
+                code: KeyCode::BackTab,
+                ..
             }
-            KeyCode::F(6) => {
-                self.reset_prompt_history_recall();
-                self.pending_ui_action = Some(UiAction::AttachClipboardImage);
+            | KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
             }
-            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.reset_prompt_history_recall();
-                self.open_file_attach_overlay();
+            | KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.selected_composer_item = Some(index.saturating_sub(1));
+                true
             }
-            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => {
-                self.reset_prompt_history_recall();
-                self.composer.flush_all_pending_input();
-                self.pending_ui_action = Some(UiAction::EditComposerExternally);
+            KeyEvent {
+                code: KeyCode::Tab, ..
             }
-            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::ALT) => {
-                self.reset_prompt_history_recall();
-                self.open_file_attach_overlay();
+            | KeyEvent {
+                code: KeyCode::Right,
+                modifiers: KeyModifiers::NONE,
+                ..
             }
-            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::ALT) => {
-                self.reset_prompt_history_recall();
-                self.pending_ui_action = Some(UiAction::AttachClipboardImage);
+            | KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.selected_composer_item =
+                    Some(min(index + 1, self.composer_items.len().saturating_sub(1)));
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Delete | KeyCode::Backspace,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.remove_composer_item(index);
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.open_selected_composer_item(index);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_vim_normal_key(&mut self, key: KeyEvent) -> bool {
+        match key {
+            KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_left();
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('j'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_down();
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('k'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_up();
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_right();
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('w'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_word_right();
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_word_left();
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('0'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_home(false);
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('$'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => {
+                self.composer.move_end(false);
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.delete();
+                self.after_composer_text_mutated();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('i'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer_mode = ComposerMode::VimInsert;
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_right();
+                self.composer_mode = ComposerMode::VimInsert;
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('I'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => {
+                self.composer.move_home(false);
+                self.composer_mode = ComposerMode::VimInsert;
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('A'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => {
+                self.composer.move_end(false);
+                self.composer_mode = ComposerMode::VimInsert;
+                self.sync_composer_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.composer.move_end(false);
+                self.composer.insert_explicit_newline();
+                self.composer_mode = ComposerMode::VimInsert;
+                self.after_composer_text_mutated();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('O'),
+                modifiers: KeyModifiers::SHIFT,
+                ..
+            } => {
+                let line_start = self.composer.current_line_start();
+                self.composer.insert_str_at(line_start, "\n");
+                self.composer.cursor = line_start;
+                self.composer_mode = ComposerMode::VimInsert;
+                self.after_composer_text_mutated();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn remove_composer_item(&mut self, index: usize) {
+        let Some(range) = self.composer.draft_elements().get(index).cloned() else {
+            return;
+        };
+        self.composer.remove_range(range.start, range.end);
+        self.after_composer_text_mutated();
+    }
+
+    fn open_selected_composer_item(&mut self, index: usize) {
+        let Some(item) = self.composer_items.get(index) else {
+            return;
+        };
+        match item {
+            ComposerItem::Attachment(attachment) => {
+                self.pending_ui_action = Some(UiAction::OpenPath {
+                    path: attachment.path.clone(),
+                });
+            }
+            ComposerItem::LargePaste(_) => {
+                self.flash_info("large paste snippets can be removed, but do not have a file view");
+            }
+        }
+    }
+
+    fn handle_prompt_history_search_key(&mut self, key: KeyEvent) -> bool {
+        let Some(mut search) = self.prompt_history_search.take() else {
+            return false;
+        };
+        let close = match key {
+            KeyEvent {
+                code: KeyCode::Esc,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.replace_composer_draft(search.original.clone());
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                if let Some(result) = search.results.get(search.selected).cloned() {
+                    self.replace_composer_draft(ComposerDraft {
+                        text: result.text,
+                        ..ComposerDraft::default()
+                    });
+                }
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Char('r'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                if !search.results.is_empty() {
+                    search.selected = min(
+                        search.selected.saturating_add(1),
+                        search.results.len().saturating_sub(1),
+                    );
+                }
+                false
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                search.selected = search.selected.saturating_sub(1);
+                false
             }
             _ => {
-                self.reset_prompt_history_recall();
-                self.composer.handle_multiline_input_key(key);
-                self.sync_composer_items_with_editor();
-                self.sync_slash_command_suggestions();
+                search.query.handle_line_input_key(key);
+                Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
+                false
             }
+        };
+
+        if !close {
+            self.prompt_history_search = Some(search);
         }
+        true
+    }
+
+    fn open_prompt_history_search(&mut self) {
+        self.composer.flush_all_pending_input();
+        self.after_composer_text_mutated();
+        let mut search = PromptHistorySearchState {
+            query: Editor::default(),
+            results: Vec::new(),
+            selected: 0,
+            original: self.current_composer_draft(),
+        };
+        Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
+        self.slash_command_suggestions = None;
+        self.file_mention_suggestions = None;
+        self.selected_composer_item = None;
+        self.prompt_history_search = Some(search);
+    }
+
+    fn refresh_prompt_history_search(
+        prompt_history: &PromptHistory,
+        search: &mut PromptHistorySearchState,
+    ) {
+        search.query.flush_all_pending_input();
+        let query = search.query.text().trim().to_ascii_lowercase();
+        search.results = prompt_history
+            .entries
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, entry)| query.is_empty() || entry.to_ascii_lowercase().contains(&query))
+            .take(MAX_PROMPT_HISTORY_SEARCH_RESULTS)
+            .map(|(history_index, text)| PromptHistorySearchResult {
+                history_index,
+                text: text.clone(),
+            })
+            .collect();
+        search.selected = min(search.selected, search.results.len().saturating_sub(1));
+    }
+
+    fn handle_file_mention_suggestion_key(&mut self, key: KeyEvent) -> bool {
+        if self.file_mention_suggestions.is_none() {
+            return false;
+        }
+
+        match key {
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_file_mention_suggestion(-1);
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_file_mention_suggestion(1);
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                self.dismiss_file_mention_suggestions();
+                true
+            }
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                self.complete_selected_file_mention();
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn move_file_mention_suggestion(&mut self, delta: isize) {
+        let Some(state) = self.file_mention_suggestions.as_mut() else {
+            return;
+        };
+        if state.items.is_empty() {
+            state.selected = 0;
+            return;
+        }
+        let len = state.items.len() as isize;
+        state.selected = (state.selected as isize + delta).rem_euclid(len) as usize;
+    }
+
+    fn dismiss_file_mention_suggestions(&mut self) {
+        if let Some(state) = self.file_mention_suggestions.take() {
+            self.dismissed_file_mention_suggestions_for = Some(state.fingerprint);
+        }
+    }
+
+    fn complete_selected_file_mention(&mut self) {
+        let Some(state) = self.file_mention_suggestions.clone() else {
+            return;
+        };
+        let Some(item) = state.items.get(state.selected).cloned() else {
+            return;
+        };
+
+        self.file_mention_suggestions = None;
+        self.dismissed_file_mention_suggestions_for = None;
+        self.composer
+            .remove_range(state.mention_range.start, state.mention_range.end);
+        if let Err(error) = self.stage_attachment_from_path(item.path.as_path(), false) {
+            self.flash_error(error);
+            return;
+        }
+        let after_cursor_is_space = self.composer.text()[self.composer.cursor..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace);
+        if !after_cursor_is_space {
+            self.composer.insert_char(' ');
+        }
+        self.after_composer_text_mutated();
+    }
+
+    fn sync_file_mention_suggestions(&mut self) {
+        let Some(context) = self.file_mention_suggestion_context() else {
+            self.file_mention_suggestions = None;
+            return;
+        };
+        if self.dismissed_file_mention_suggestions_for.as_deref()
+            == Some(context.fingerprint.as_str())
+        {
+            self.file_mention_suggestions = None;
+            return;
+        }
+
+        let items = self.file_mention_suggestion_items(context.query.as_str());
+        if items.is_empty() {
+            self.file_mention_suggestions = None;
+            return;
+        }
+
+        let selected = self
+            .file_mention_suggestions
+            .as_ref()
+            .filter(|state| state.query == context.query)
+            .map(|state| min(state.selected, items.len().saturating_sub(1)))
+            .unwrap_or(0);
+        self.file_mention_suggestions = Some(FileMentionSuggestionState {
+            query: context.query,
+            fingerprint: context.fingerprint,
+            mention_range: context.mention_range,
+            items,
+            selected,
+        });
+    }
+
+    fn file_mention_suggestion_context(&self) -> Option<FileMentionSuggestionContext> {
+        if self.focus != Focus::Composer || self.overlay.is_some() {
+            return None;
+        }
+        if self.prompt_history_search.is_some() {
+            return None;
+        }
+        file_mention_suggestion_context_for_text(self.composer.text(), self.composer.cursor)
+    }
+
+    fn file_mention_suggestion_items(&self, query: &str) -> Vec<FileMentionSuggestionItem> {
+        self.backend
+            .search_workspace_files(query, MAX_FILE_MENTION_SUGGESTIONS)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|path| {
+                let label = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| path.display().to_string());
+                FileMentionSuggestionItem {
+                    detail: path.display().to_string(),
+                    label,
+                    path,
+                }
+            })
+            .collect()
     }
 
     fn handle_slash_command_suggestion_key(&mut self, key: KeyEvent) -> bool {
@@ -3173,7 +4008,7 @@ impl App {
         if submit {
             self.submit_composer();
         } else {
-            self.sync_slash_command_suggestions();
+            self.sync_composer_suggestions();
         }
     }
 
@@ -3207,7 +4042,7 @@ impl App {
         if !after_cursor_is_space {
             self.composer.insert_char(' ');
         }
-        self.sync_composer_items_with_editor();
+        self.after_composer_text_mutated();
     }
 
     fn sync_slash_command_suggestions(&mut self) {
@@ -3300,11 +4135,21 @@ impl App {
             self.composer_items.clear();
             self.slash_command_suggestions = None;
             self.dismissed_slash_command_suggestions_for = None;
+            self.file_mention_suggestions = None;
+            self.dismissed_file_mention_suggestions_for = None;
+            self.prompt_history_search = None;
+            self.selected_composer_item = None;
+            if self.composer_mode.is_vim() {
+                self.composer_mode = ComposerMode::VimInsert;
+            }
             self.last_esc_at = None;
             return;
         }
         self.last_esc_at = Some(now);
         self.slash_command_suggestions = None;
+        self.file_mention_suggestions = None;
+        self.prompt_history_search = None;
+        self.selected_composer_item = None;
         self.focus = Focus::Transcript;
     }
 
@@ -4997,7 +5842,11 @@ impl App {
         self.overlay = Some(Overlay::UserInputReply(UserInputOverlay {
             session_id,
             request,
-            input: Editor::default(),
+            answers: BTreeMap::new(),
+            selected_question: 0,
+            selected_option: 0,
+            editing_custom: false,
+            custom_input: Editor::default(),
         }));
     }
 
@@ -7397,7 +8246,7 @@ impl App {
                 self.composer
                     .set_text(format!("/{entry_name} ").trim_end().to_string());
                 self.focus = Focus::Composer;
-                self.sync_slash_command_suggestions();
+                self.sync_composer_suggestions();
             }
             (PickerKind::WorkspaceSessions, PickerValue::Session(session_id)) => {
                 self.open_session(
@@ -8396,7 +9245,11 @@ impl App {
 
     fn flush_input_buffers_if_due(&mut self, now: Instant) {
         self.composer.flush_pending_input_if_due(now);
-        self.sync_slash_command_suggestions();
+        if let Some(search) = self.prompt_history_search.as_mut() {
+            search.query.flush_pending_input_if_due(now);
+            Self::refresh_prompt_history_search(&self.prompt_history, search);
+        }
+        self.sync_composer_suggestions();
         if let Some(overlay) = &mut self.overlay {
             match overlay {
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
@@ -8417,7 +9270,11 @@ impl App {
                     dialog.input.flush_pending_input_if_due(now);
                 }
                 Overlay::FileAttach(dialog) => dialog.input.flush_pending_input_if_due(now),
-                Overlay::UserInputReply(dialog) => dialog.input.flush_pending_input_if_due(now),
+                Overlay::UserInputReply(dialog) => {
+                    if dialog.editing_custom {
+                        dialog.custom_input.flush_pending_input_if_due(now);
+                    }
+                }
                 Overlay::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::SessionModelChooser(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
@@ -8596,6 +9453,13 @@ impl App {
         self.composer_items.clear();
         self.slash_command_suggestions = None;
         self.dismissed_slash_command_suggestions_for = None;
+        self.file_mention_suggestions = None;
+        self.dismissed_file_mention_suggestions_for = None;
+        self.prompt_history_search = None;
+        self.selected_composer_item = None;
+        if self.composer_mode.is_vim() {
+            self.composer_mode = ComposerMode::VimInsert;
+        }
     }
 
     fn current_composer_draft(&mut self) -> ComposerDraft {
@@ -8814,7 +9678,7 @@ impl App {
                 .set_elements(elements.into_iter().map(|element| element.range).collect());
             self.composer_items = items;
             self.sync_composer_items_with_editor();
-            self.sync_slash_command_suggestions();
+            self.sync_composer_suggestions();
         }
     }
 
@@ -8845,7 +9709,7 @@ impl App {
         self.composer.set_text(text);
         self.composer.set_elements(ranges);
         self.composer_items = kept;
-        self.sync_slash_command_suggestions();
+        self.sync_composer_suggestions();
     }
 
     fn build_submission_parts(&self, draft: &ComposerDraft) -> UiResult<Vec<PartContent>> {
@@ -12892,6 +13756,42 @@ fn parse_user_input_answers(
     Ok(answers)
 }
 
+fn user_input_answer_values(
+    question: &UserInputQuestion,
+    draft: &UserInputAnswerDraft,
+) -> Vec<String> {
+    let mut values = draft
+        .option_indexes
+        .iter()
+        .filter_map(|index| question.options.get(*index))
+        .map(|option| option.label.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    values.extend(
+        draft
+            .custom_values
+            .iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+    );
+    if question.multiple {
+        values
+    } else {
+        values.into_iter().take(1).collect()
+    }
+}
+
+fn user_input_question_label(question: &UserInputQuestion) -> &str {
+    let header = question.header.trim();
+    if !header.is_empty() {
+        header
+    } else if !question.question.trim().is_empty() {
+        question.question.trim()
+    } else {
+        question.id.as_str()
+    }
+}
+
 fn contains_case_insensitive(text: &str, query: &str) -> bool {
     let trimmed = query.trim();
     !trimmed.is_empty()
@@ -14044,6 +14944,28 @@ fn runtime_entry_matches_slash_query(label: &str, query: &str) -> bool {
     label == query || label.starts_with(query.as_str())
 }
 
+fn file_mention_suggestion_context_for_text(
+    text: &str,
+    cursor: usize,
+) -> Option<FileMentionSuggestionContext> {
+    let token_start = text[..cursor]
+        .rfind(char::is_whitespace)
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let token = text.get(token_start..cursor)?;
+    if !token.starts_with('@') || token.starts_with("@@") {
+        return None;
+    }
+    if token[1..].contains('@') || token.contains('\n') {
+        return None;
+    }
+    Some(FileMentionSuggestionContext {
+        query: token[1..].to_string(),
+        fingerprint: format!("{token}:{cursor}"),
+        mention_range: token_start..cursor,
+    })
+}
+
 fn slash_command_suggestion_context_for_text(
     text: &str,
     cursor: usize,
@@ -14191,6 +15113,21 @@ mod tests {
     }
 
     #[test]
+    fn file_mention_context_detects_inline_tokens() {
+        let text = "open @apps/agena-tui/src/app.rs";
+        let context = file_mention_suggestion_context_for_text(text, text.len())
+            .expect("mention should parse");
+        assert_eq!(context.query, "apps/agena-tui/src/app.rs");
+        assert_eq!(context.mention_range, 5..text.len());
+    }
+
+    #[test]
+    fn file_mention_context_rejects_double_at_and_embedded_at() {
+        assert!(file_mention_suggestion_context_for_text("@@literal", 9).is_none());
+        assert!(file_mention_suggestion_context_for_text("@a@b", 4).is_none());
+    }
+
+    #[test]
     fn parse_user_input_reply_pairs() {
         let request = UserInputRequest {
             request_id: "req".to_string(),
@@ -14227,6 +15164,36 @@ mod tests {
         .expect("reply should parse");
         assert_eq!(answers["lang"], vec!["Rust"]);
         assert_eq!(answers["libs"], vec!["ratatui", "crossterm"]);
+    }
+
+    #[test]
+    fn user_input_answer_values_merge_selected_options_and_custom_values() {
+        let question = UserInputQuestion {
+            id: "libs".to_string(),
+            header: String::new(),
+            question: "libs?".to_string(),
+            options: vec![
+                UserInputOption {
+                    label: "ratatui".to_string(),
+                    description: String::new(),
+                },
+                UserInputOption {
+                    label: "crossterm".to_string(),
+                    description: String::new(),
+                },
+            ],
+            multiple: true,
+            allow_custom: true,
+        };
+        let draft = UserInputAnswerDraft {
+            option_indexes: [0_usize].into_iter().collect(),
+            custom_values: vec!["serde".to_string()],
+        };
+
+        assert_eq!(
+            user_input_answer_values(&question, &draft),
+            vec!["ratatui".to_string(), "serde".to_string()]
+        );
     }
 
     #[test]

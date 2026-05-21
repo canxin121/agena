@@ -75,6 +75,17 @@ function createDeps(overrides: Partial<Parameters<typeof useRuntimeSectionLoadAc
     }),
     loadSettingsSectionData: async () => ({
       authProviders: [],
+      settingsPlugins: {
+        configPath: '/repo/.agena/config.json',
+        configFound: true,
+        enabled: true,
+        defaultMode: 'detailed',
+        fileEnabled: null,
+        fileDefaultMode: null,
+        pluginEntries: [],
+        toolPresentationPluginOverridesCount: 0,
+        toolPresentationToolOverridesCount: 0,
+      },
       runtime: sampleRuntimeStatus(),
       providers: [],
       providerModels: {},
@@ -112,6 +123,17 @@ function createState(section: RuntimeRouteSection = 'runtime') {
       { seq: 1, plugin_id: 'demo/plugin', level: 'info', message: 'old', timestamp_ms: 1 },
     ]),
     plugins: ref<PluginStatus[]>([]),
+    settingsPlugins: ref({
+      configPath: '/repo/.agena/config.json',
+      configFound: true,
+      enabled: true,
+      defaultMode: 'detailed',
+      fileEnabled: null,
+      fileDefaultMode: null,
+      pluginEntries: [],
+      toolPresentationPluginOverridesCount: 0,
+      toolPresentationToolOverridesCount: 0,
+    }),
     providers: ref<ProviderSummary[]>([]),
     replaceProviderModels: (providerModels: Record<string, ProviderModel[]>) => {
       calls.push(`replaceProviderModels:${Object.keys(providerModels).join(',')}`)
@@ -233,6 +255,17 @@ describe('useRuntimeSectionLoadActions', () => {
           calls.push(`loadSettingsSectionData:${search}`)
           return {
             authProviders: [{ provider_id: 'anthropic', configured: true, credential_present: true }],
+            settingsPlugins: {
+              configPath: '/repo/.agena/config.json',
+              configFound: true,
+              enabled: false,
+              defaultMode: 'help',
+              fileEnabled: true,
+              fileDefaultMode: 'detailed',
+              pluginEntries: [],
+              toolPresentationPluginOverridesCount: 1,
+              toolPresentationToolOverridesCount: 2,
+            },
             runtime: sampleRuntimeStatus({
               model_catalog: {
                 entry_count: 1,

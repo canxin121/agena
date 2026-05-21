@@ -1178,7 +1178,10 @@ impl App {
         frame.render_stateful_widget(list, rows[1], &mut state);
 
         frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-permission-footer")),
+            Paragraph::new(format!(
+                "{} · e edit rule",
+                ui_text::t(&self.i18n, "overlay-permission-footer")
+            )),
             rows[2],
         );
     }
@@ -2391,18 +2394,33 @@ impl App {
         item_state.select(has_items.then_some(dialog.selected_item));
         frame.render_stateful_widget(item_list, right_rows[1], &mut item_state);
 
-        let detail_text = selected_item
-            .map(|item| {
-                if item.value.trim().is_empty() {
-                    format!("{}\nEnter opens or edits this setting.", item.detail)
-                } else {
-                    format!(
-                        "{}\nCurrent value: {}\nEnter opens or edits this setting.",
-                        item.detail, item.value
-                    )
-                }
-            })
-            .unwrap_or_else(|| "Select a section and an option to inspect or edit it.".to_string());
+        let detail_text = match current_section.map(|section| section.id) {
+            Some(SettingsStudioSectionId::Agents) => selected_item
+                .and_then(|item| match &item.action {
+                    SettingsPickerAction::OpenAgent(agent) => {
+                        Some(settings_studio_agent_detail_text(
+                            agent,
+                            dialog.default_agent_name.as_deref(),
+                        ))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| "Select an agent to inspect or edit it.".to_string()),
+            _ => selected_item
+                .map(|item| {
+                    if item.value.trim().is_empty() {
+                        format!("{}\nEnter opens or edits this setting.", item.detail)
+                    } else {
+                        format!(
+                            "{}\nCurrent value: {}\nEnter opens or edits this setting.",
+                            item.detail, item.value
+                        )
+                    }
+                })
+                .unwrap_or_else(|| {
+                    "Select a section and an option to inspect or edit it.".to_string()
+                }),
+        };
         frame.render_widget(
             Paragraph::new(sanitize_display_text(detail_text))
                 .block(

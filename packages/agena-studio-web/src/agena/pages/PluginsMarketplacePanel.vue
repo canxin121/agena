@@ -201,21 +201,17 @@ const emit = defineEmits<{
         <div v-for="plugin in props.filteredMarketplacePlugins" :key="plugin.plugin_id" class="list-item">
           <div class="page-header" style="align-items: flex-start">
             <div>
-              <div>
+              <div class="button-row" style="align-items: center; flex-wrap: wrap">
                 <strong>{{ plugin.plugin_id }}</strong>
+                <span class="badge">{{ plugin.latest_kind || 'unknown' }}</span>
+                <span class="badge">{{ plugin.latest_platform || 'any' }}</span>
+                <span v-if="props.installedMarketplacePluginIds.has(plugin.plugin_id)" class="badge success">installed</span>
+                <span v-else class="badge">registry</span>
               </div>
               <div class="muted">{{ plugin.name || plugin.description || 'No description' }}</div>
-              <div class="muted mono">
-                latest={{ plugin.latest_version || 'n/a' }} · kind={{ plugin.latest_kind || 'n/a' }} · platform={{
-                  plugin.latest_platform || 'n/a'
-                }}
-                · versions={{ plugin.version_count }}
-              </div>
+              <div class="muted mono">latest={{ plugin.latest_version || 'n/a' }} · versions={{ plugin.version_count }}</div>
               <div v-if="plugin.homepage" class="muted mono">{{ plugin.homepage }}</div>
             </div>
-            <span class="badge">{{
-              props.installedMarketplacePluginIds.has(plugin.plugin_id) ? 'installed' : 'registry'
-            }}</span>
           </div>
           <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
             <button
@@ -265,14 +261,16 @@ const emit = defineEmits<{
         <div v-for="plugin in props.marketplaceInstalled" :key="plugin.plugin_id" class="list-item">
           <div class="page-header" style="align-items: flex-start">
             <div>
-              <div>
+              <div class="button-row" style="align-items: center; flex-wrap: wrap">
                 <strong>{{ plugin.plugin_id }}</strong>
+                <span class="badge">{{ plugin.kind }}</span>
+                <span class="badge">{{ plugin.platform }}</span>
+                <span class="badge success">installed</span>
               </div>
-              <div class="muted">v{{ plugin.version }} · {{ plugin.kind }} · {{ plugin.platform }}</div>
+              <div class="muted">v{{ plugin.version }}</div>
               <div class="muted mono">config={{ plugin.config_path }}</div>
               <div v-if="plugin.registry_url" class="muted mono">registry={{ plugin.registry_url }}</div>
             </div>
-            <span class="badge">installed</span>
           </div>
           <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
             <button
@@ -305,8 +303,9 @@ const emit = defineEmits<{
         <div v-for="plugin in props.marketplaceOutdated" :key="plugin.plugin_id" class="list-item">
           <div class="page-header" style="align-items: flex-start">
             <div>
-              <div>
+              <div class="button-row" style="align-items: center; flex-wrap: wrap">
                 <strong>{{ plugin.plugin_id }}</strong>
+                <span class="badge warn">outdated</span>
               </div>
               <div class="muted">installed {{ plugin.installed_version }} → latest {{ plugin.latest_version }}</div>
             </div>

@@ -5,6 +5,7 @@ import { useRuntimeWorkflowState } from './useRuntimeWorkflowState'
 
 export type RuntimeWorkflowPageStateSource = {
   approvePermission: Parameters<typeof useRuntimeWorkflowState>[0]['approvePermission']
+  editPermissionRequest: Parameters<typeof useRuntimeWorkflowState>[0]['editPermissionRequest']
   executionFacts: Parameters<typeof useRuntimeWorkflowState>[0]['executionFacts']
   openSelectedSessionInChat: Parameters<typeof useRuntimeWorkflowState>[0]['openSelectedSessionInChat']
   selectSession: Parameters<typeof useRuntimeWorkflowState>[0]['selectSession']
@@ -41,6 +42,7 @@ const defaultDeps: RuntimeWorkflowPageStateDeps = {
 export function createRuntimeWorkflowPanelState(state: RuntimeWorkflowPageStateSource) {
   return useRuntimeWorkflowState({
     approvePermission: state.approvePermission,
+    editPermissionRequest: state.editPermissionRequest,
     executionFacts: state.executionFacts,
     openSelectedSessionInChat: state.openSelectedSessionInChat,
     selectSession: state.selectSession,

@@ -9,6 +9,7 @@ use std::{
 };
 
 use agena::{
+    agents::AgentDescriptor,
     config::get_json_path,
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
@@ -44,7 +45,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value as JsonValue;
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     time::interval,
@@ -665,6 +666,9 @@ struct SettingsStudioOverlay {
     selected_section: usize,
     selected_item: usize,
     focus: SettingsStudioFocus,
+    default_agent_name: Option<String>,
+    plugins_enabled: bool,
+    plugins_default_mode: String,
 }
 
 #[derive(Debug, Clone)]
@@ -694,6 +698,9 @@ enum SettingsStudioFocus {
 enum SettingsStudioSectionId {
     General,
     Runtime,
+    Plugins,
+    PluginEntries,
+    Agents,
     Providers,
     ModelCatalog,
     Permissions,
@@ -773,6 +780,14 @@ enum SettingsFieldKind {
 enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditRuntimeSetting(RuntimeSettingSpec),
+    TogglePluginsEnabled,
+    ToggleToolDescriptionMode,
+    TogglePluginEntryDisabled {
+        plugin_id: String,
+        entry: JsonValue,
+        disabled: bool,
+    },
+    OpenAgent(AgentDescriptor),
     OpenProviderWorkbench,
     OpenProviderWorkbenchFor(String),
     OpenModelCatalogWorkbench,
@@ -809,6 +824,7 @@ struct PermissionRuleEditOverlay {
     prompt: String,
     input: Editor,
     return_query: String,
+    return_overlay: Option<Box<Overlay>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2507,6 +2523,15 @@ impl App {
                 );
                 true
             }
+            KeyCode::Char('e') => {
+                let return_overlay = Overlay::Permission(dialog.clone());
+                self.overlay_stack.push(return_overlay.clone());
+                self.open_permission_rule_editor_from_request(&dialog.request);
+                if let Some(Overlay::PermissionRuleEdit(edit)) = self.overlay.as_mut() {
+                    edit.return_overlay = Some(Box::new(return_overlay));
+                }
+                true
+            }
             _ => false,
         }
     }
@@ -2538,6 +2563,83 @@ impl App {
             KeyCode::Esc => true,
             KeyCode::Char('r') => {
                 self.refresh_settings_studio_overlay(dialog);
+                false
+            }
+            KeyCode::Char('d')
+                if dialog.focus == SettingsStudioFocus::Items
+                    && matches!(
+                        dialog.sections.get(dialog.selected_section),
+                        Some(section) if section.id == SettingsStudioSectionId::Agents
+                    ) =>
+            {
+                let Some(item) = dialog
+                    .sections
+                    .get(dialog.selected_section)
+                    .and_then(|section| section.items.get(dialog.selected_item))
+                    .cloned()
+                else {
+                    return false;
+                };
+                let SettingsPickerAction::OpenAgent(agent) = item.action else {
+                    return false;
+                };
+                self.set_default_agent(agent.name.as_str(), dialog);
+                false
+            }
+            KeyCode::Char('t')
+                if dialog.focus == SettingsStudioFocus::Items
+                    && matches!(
+                        dialog.sections.get(dialog.selected_section),
+                        Some(section) if section.id == SettingsStudioSectionId::Agents
+                    ) =>
+            {
+                let Some(item) = dialog
+                    .sections
+                    .get(dialog.selected_section)
+                    .and_then(|section| section.items.get(dialog.selected_item))
+                    .cloned()
+                else {
+                    return false;
+                };
+                let SettingsPickerAction::OpenAgent(agent) = item.action else {
+                    return false;
+                };
+                if agent.source_path.is_some()
+                    || !matches!(agent.scope, agena::agents::AgentScope::Project)
+                {
+                    self.flash_warning(format!(
+                        "agent {} is not stored in the current config file; open the source file to edit it",
+                        agent.name
+                    ));
+                    return false;
+                }
+                self.toggle_agent_hidden(agent.name.as_str(), agent.hidden, dialog);
+                false
+            }
+            KeyCode::Char('t') | KeyCode::Char('d')
+                if dialog.focus == SettingsStudioFocus::Items
+                    && matches!(
+                        dialog.sections.get(dialog.selected_section),
+                        Some(section) if section.id == SettingsStudioSectionId::PluginEntries
+                    ) =>
+            {
+                let Some(item) = dialog
+                    .sections
+                    .get(dialog.selected_section)
+                    .and_then(|section| section.items.get(dialog.selected_item))
+                    .cloned()
+                else {
+                    return false;
+                };
+                let SettingsPickerAction::TogglePluginEntryDisabled {
+                    plugin_id,
+                    entry,
+                    disabled,
+                } = item.action
+                else {
+                    return false;
+                };
+                self.toggle_plugin_entry_disabled(plugin_id.as_str(), entry, disabled, dialog);
                 false
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l')
@@ -2744,7 +2846,12 @@ impl App {
                             "flash-permission-rule-saved",
                             &crate::fl_args!("name" => permission_rule_label(&rule)),
                         ));
-                        self.open_permission_rule_picker(dialog.return_query.as_str());
+                        if let Some(return_overlay) = dialog.return_overlay.take() {
+                            self.overlay_stack.pop();
+                            self.overlay = Some(*return_overlay);
+                        } else {
+                            self.open_permission_rule_picker(dialog.return_query.as_str());
+                        }
                         true
                     }
                     Err(error) => {
@@ -3095,7 +3202,7 @@ impl App {
                 false
             }
             KeyCode::Char('n') if matches!(dialog.kind, PickerKind::PermissionRules) => {
-                self.open_permission_rule_editor(None, dialog.input.text());
+                self.open_permission_rule_editor(None, dialog.input.text(), None);
                 true
             }
             KeyCode::Char('d') if matches!(dialog.kind, PickerKind::PermissionRules) => {
@@ -3116,11 +3223,15 @@ impl App {
                 if matches!(dialog.kind, PickerKind::PermissionRules) {
                     match item.value {
                         PickerValue::PermissionRuleCreate => {
-                            self.open_permission_rule_editor(None, dialog.input.text());
+                            self.open_permission_rule_editor(None, dialog.input.text(), None);
                             return true;
                         }
                         PickerValue::PermissionRule(rule) => {
-                            self.open_permission_rule_editor(Some(&rule), dialog.input.text());
+                            self.open_permission_rule_editor(
+                                Some(&rule),
+                                dialog.input.text(),
+                                None,
+                            );
                             return true;
                         }
                         _ => {}
@@ -6610,6 +6721,11 @@ impl App {
             .backend
             .config_json_sources()
             .map_err(|error| error.to_string())?;
+        let agents = self.backend.list_agent_descriptors();
+        let default_agent = self.backend.default_agent_name();
+        let plugins_enabled = settings_studio_plugins_enabled(&sources);
+        let plugins_default_mode = settings_studio_plugins_default_mode(&sources);
+        let plugin_entry_items = settings_studio_plugin_entry_items(&sources);
         let configured_providers = self.backend.list_configured_providers();
         let permission_rule_count = self
             .block_on_async(self.backend.list_permission_rules())
@@ -6622,9 +6738,21 @@ impl App {
 
         let general_items = settings_studio_general_items(&sources);
         let runtime_items = settings_studio_runtime_items(&self.run_options);
+        let plugin_items = settings_studio_plugin_items(&sources);
+        let agent_items = settings_studio_agent_items(&agents, default_agent.as_deref());
         let provider_items = settings_studio_provider_items(&configured_providers);
         let model_catalog_items = settings_studio_model_catalog_items(&model_catalog);
         let file_items = settings_studio_file_items(&sources);
+        let agent_count = agents.len();
+        let agent_primary_count = agents
+            .iter()
+            .filter(|agent| agent.mode.allows_root())
+            .count();
+        let agent_subagent_count = agents
+            .iter()
+            .filter(|agent| agent.mode.allows_subagent())
+            .count();
+        let agent_hidden_count = agents.iter().filter(|agent| agent.hidden).count();
         let mut sections = vec![
             SettingsStudioSection {
                 id: SettingsStudioSectionId::General,
@@ -6643,6 +6771,50 @@ impl App {
                     "These settings affect the current session only. Provider and model actions open the existing pickers."
                         .to_string(),
                 items: runtime_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::Plugins,
+                label: "Plugins".to_string(),
+                summary: format!(
+                    "{} · default {}",
+                    if plugins_enabled { "enabled" } else { "disabled" },
+                    plugins_default_mode
+                ),
+                description:
+                    "Control global plugin loading and the model-visible tool description mode."
+                        .to_string(),
+                items: plugin_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::PluginEntries,
+                label: "Plugin Entries".to_string(),
+                summary: format!(
+                    "{} entries · {} disabled",
+                    plugin_entry_items.len(),
+                    settings_studio_plugin_entry_disabled_count(&plugin_entry_items)
+                ),
+                description:
+                    "Toggle individual plugins.list entries. Disabled entries stay in config and are skipped on reload."
+                        .to_string(),
+                items: plugin_entry_items,
+            },
+            SettingsStudioSection {
+                id: SettingsStudioSectionId::Agents,
+                label: "Agents".to_string(),
+                summary: match default_agent.as_deref() {
+                    Some(default) => format!(
+                        "{} agent profiles · default {} · {} hidden",
+                        agent_count, default, agent_hidden_count
+                    ),
+                    None => format!(
+                        "{} agent profiles · {} primary · {} subagent · {} hidden",
+                        agent_count, agent_primary_count, agent_subagent_count, agent_hidden_count
+                    ),
+                },
+                description:
+                    "Browse discovered agent profiles. Enter opens the source file or runtime config, d makes the selected agent default, and t toggles hidden for config-owned profiles."
+                        .to_string(),
+                items: agent_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Providers,
@@ -6729,6 +6901,9 @@ impl App {
             selected_section,
             selected_item,
             focus,
+            default_agent_name: default_agent,
+            plugins_enabled,
+            plugins_default_mode,
         })
     }
 
@@ -6839,6 +7014,26 @@ impl App {
                     .push(Overlay::SettingsStudio(dialog.clone()));
                 self.open_runtime_setting_editor(field, "");
                 true
+            }
+            SettingsPickerAction::TogglePluginsEnabled => {
+                self.toggle_plugins_enabled(dialog);
+                false
+            }
+            SettingsPickerAction::ToggleToolDescriptionMode => {
+                self.toggle_tool_description_mode(dialog);
+                false
+            }
+            SettingsPickerAction::TogglePluginEntryDisabled {
+                plugin_id,
+                entry,
+                disabled,
+            } => {
+                self.toggle_plugin_entry_disabled(plugin_id.as_str(), entry, disabled, dialog);
+                false
+            }
+            SettingsPickerAction::OpenAgent(agent) => {
+                self.open_agent_source(agent);
+                false
             }
             SettingsPickerAction::OpenProviderWorkbench => {
                 self.overlay_stack
@@ -7387,6 +7582,112 @@ impl App {
         self.pending_ui_action = Some(UiAction::OpenPath { path });
     }
 
+    fn open_agent_source(&mut self, agent: AgentDescriptor) {
+        if let Some(path) = agent.source_path.clone() {
+            self.pending_ui_action = Some(UiAction::OpenPath { path });
+        } else {
+            self.open_runtime_config_in_editor();
+        }
+    }
+
+    fn toggle_plugins_enabled(&mut self, dialog: &mut SettingsStudioOverlay) {
+        let next = !dialog.plugins_enabled;
+        match self.block_on_async(
+            self.backend
+                .set_config_setting("plugins.enabled", JsonValue::Bool(next)),
+        ) {
+            Ok(_) => {
+                self.flash_success(if next {
+                    "enabled plugins"
+                } else {
+                    "disabled plugins"
+                });
+                self.refresh_settings_studio_overlay(dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn toggle_tool_description_mode(&mut self, dialog: &mut SettingsStudioOverlay) {
+        let next = if dialog.plugins_default_mode == "help" {
+            "detailed"
+        } else {
+            "help"
+        };
+        match self.block_on_async(self.backend.set_config_setting(
+            "plugins.tool_presentation.default_mode",
+            JsonValue::String(next.to_string()),
+        )) {
+            Ok(_) => {
+                self.flash_success(format!("set tool description mode to {next}"));
+                self.refresh_settings_studio_overlay(dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn toggle_plugin_entry_disabled(
+        &mut self,
+        plugin_id: &str,
+        entry: JsonValue,
+        disabled: bool,
+        dialog: &mut SettingsStudioOverlay,
+    ) {
+        let Some(mut entry_object) = entry.as_object().cloned() else {
+            self.flash_error(format!(
+                "plugin entry {plugin_id} is not a JSON object and cannot be rewritten"
+            ));
+            return;
+        };
+        entry_object.insert("disabled".to_string(), JsonValue::Bool(!disabled));
+        match self.block_on_async(self.backend.set_config_setting(
+            &format!("plugins.list.{}", quoted_settings_segment(plugin_id)),
+            JsonValue::Object(entry_object),
+        )) {
+            Ok(_) => {
+                self.flash_success(if disabled {
+                    format!("enabled plugin {plugin_id}; config kept and runtime reloaded")
+                } else {
+                    format!("disabled plugin {plugin_id}; config kept and runtime reloaded")
+                });
+                self.refresh_settings_studio_overlay(dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn set_default_agent(&mut self, agent_name: &str, dialog: &mut SettingsStudioOverlay) {
+        match self.block_on_async(
+            self.backend
+                .set_config_setting("default.agent", JsonValue::String(agent_name.to_string())),
+        ) {
+            Ok(_) => {
+                self.flash_success(format!("set default.agent to {agent_name}"));
+                self.refresh_settings_studio_overlay(dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn toggle_agent_hidden(
+        &mut self,
+        agent_name: &str,
+        hidden: bool,
+        dialog: &mut SettingsStudioOverlay,
+    ) {
+        match self.block_on_async(self.backend.set_agent_hidden(agent_name, !hidden)) {
+            Ok(_) => {
+                self.flash_success(if hidden {
+                    format!("unhid agent {agent_name}")
+                } else {
+                    format!("hid agent {agent_name}")
+                });
+                self.refresh_settings_studio_overlay(dialog);
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
     fn open_inspector_picker(
         &mut self,
         title: String,
@@ -7453,6 +7754,7 @@ impl App {
         &mut self,
         rule: Option<&PermissionRuleResource>,
         return_query: &str,
+        return_overlay: Option<Overlay>,
     ) {
         let (rule_id, title, input) = match rule {
             Some(rule) => {
@@ -7480,6 +7782,20 @@ impl App {
             prompt: ui_text::t(&self.i18n, "overlay-permission-rule-prompt"),
             input,
             return_query: return_query.to_string(),
+            return_overlay: return_overlay.map(Box::new),
+        }));
+    }
+
+    fn open_permission_rule_editor_from_request(&mut self, request: &PermissionRequest) {
+        let draft = permission_rule_draft_from_request(request);
+        let input = Editor::from_text(render_permission_rule_draft(&draft));
+        self.overlay = Some(Overlay::PermissionRuleEdit(PermissionRuleEditOverlay {
+            rule_id: None,
+            title: ui_text::t(&self.i18n, "overlay-permission-rule-create-title"),
+            prompt: ui_text::t(&self.i18n, "overlay-permission-rule-prompt"),
+            input,
+            return_query: String::new(),
+            return_overlay: None,
         }));
     }
 
@@ -8935,10 +9251,10 @@ impl App {
                 self.focus = Focus::Transcript;
             }
             (PickerKind::PermissionRules, PickerValue::PermissionRuleCreate) => {
-                self.open_permission_rule_editor(None, "");
+                self.open_permission_rule_editor(None, "", None);
             }
             (PickerKind::PermissionRules, PickerValue::PermissionRule(rule)) => {
-                self.open_permission_rule_editor(Some(&rule), "");
+                self.open_permission_rule_editor(Some(&rule), "", None);
             }
             (PickerKind::Inspector, PickerValue::Inspector) => {}
             _ => {}
@@ -10885,6 +11201,382 @@ fn settings_studio_runtime_items(run_options: &RunOptionsState) -> Vec<SettingsS
         action: SettingsPickerAction::EditRuntimeSetting(*field),
     }));
     items
+}
+
+fn settings_studio_tool_description_mode_label(mode: &str) -> &'static str {
+    match mode {
+        "help" => "help",
+        _ => "detailed",
+    }
+}
+
+fn quoted_settings_segment(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn settings_studio_plugins_enabled(sources: &ConfigJsonSources) -> bool {
+    get_json_path(&sources.effective, Some("plugins.enabled"))
+        .unwrap_or(JsonValue::Bool(true))
+        .as_bool()
+        .unwrap_or(true)
+}
+
+fn settings_studio_plugins_default_mode(sources: &ConfigJsonSources) -> String {
+    get_json_path(
+        &sources.effective,
+        Some("plugins.tool_presentation.default_mode"),
+    )
+    .unwrap_or(JsonValue::String("detailed".to_string()))
+    .as_str()
+    .unwrap_or("detailed")
+    .to_string()
+}
+
+fn settings_studio_plugins_count(sources: &ConfigJsonSources, path: &str) -> usize {
+    get_json_path(&sources.effective, Some(path))
+        .unwrap_or(JsonValue::Null)
+        .as_object()
+        .map(|object| object.len())
+        .unwrap_or(0)
+}
+
+fn settings_studio_plugin_entry_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
+    let plugin_entries_value =
+        get_json_path(&sources.effective, Some("plugins.list")).unwrap_or(JsonValue::Null);
+    let Some(plugin_entries) = plugin_entries_value.as_object() else {
+        return Vec::new();
+    };
+    let file_entries_value =
+        get_json_path(&sources.file, Some("plugins.list")).unwrap_or(JsonValue::Null);
+    let file_entries = file_entries_value.as_object().cloned().unwrap_or_default();
+
+    let mut items = plugin_entries
+        .iter()
+        .filter_map(|(plugin_id, entry)| {
+            let entry_object = entry.as_object()?;
+            let kind = entry_object
+                .get("kind")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("unknown");
+            let disabled = entry_object
+                .get("disabled")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false);
+            let source = if file_entries.contains_key(plugin_id) {
+                "file"
+            } else {
+                "runtime"
+            };
+            let value = [
+                kind.to_string(),
+                source.to_string(),
+                if disabled {
+                    "disabled · skipped on reload".to_string()
+                } else {
+                    "enabled · loads on reload".to_string()
+                },
+            ]
+            .join(" · ");
+            Some(SettingsStudioItem {
+                label: plugin_id.clone(),
+                value,
+                detail: plugin_entry_detail_text(entry_object, source, disabled),
+                action: SettingsPickerAction::TogglePluginEntryDisabled {
+                    plugin_id: plugin_id.clone(),
+                    entry: entry.clone(),
+                    disabled,
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| left.label.cmp(&right.label));
+    items
+}
+
+fn plugin_entry_detail_text(
+    entry: &JsonMap<String, JsonValue>,
+    source: &str,
+    disabled: bool,
+) -> String {
+    let kind = entry
+        .get("kind")
+        .and_then(JsonValue::as_str)
+        .unwrap_or("unknown");
+    let mut parts = vec![format!("kind={kind}"), format!("source={source}")];
+    parts.push(if disabled {
+        "disabled entries stay in config and are skipped on reload".to_string()
+    } else {
+        "enabled entries load on the next runtime reload".to_string()
+    });
+    parts.push("Enter or t toggles the entry".to_string());
+    parts.join(" · ")
+}
+
+fn settings_studio_plugin_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
+    let enabled = settings_studio_plugins_enabled(sources);
+    let default_mode = settings_studio_plugins_default_mode(sources);
+    let plugin_override_count =
+        settings_studio_plugins_count(sources, "plugins.tool_presentation.plugins");
+    let tool_override_count =
+        settings_studio_plugins_count(sources, "plugins.tool_presentation.tools");
+    vec![
+        SettingsStudioItem {
+            label: "plugins.enabled".to_string(),
+            value: if enabled { "on".to_string() } else { "off".to_string() },
+            detail:
+                "Turns all plugin hooks and tools on or off. The runtime reloads after the change."
+                    .to_string(),
+            action: SettingsPickerAction::TogglePluginsEnabled,
+        },
+        SettingsStudioItem {
+            label: "plugins.tool_presentation.default_mode".to_string(),
+            value: settings_studio_tool_description_mode_label(default_mode.as_str()).to_string(),
+            detail:
+                "Sets the default tool description mode. Help stays short and moves details into help output."
+                    .to_string(),
+            action: SettingsPickerAction::ToggleToolDescriptionMode,
+        },
+        SettingsStudioItem {
+            label: "plugins.tool_presentation.plugins".to_string(),
+            value: format!("{plugin_override_count} override(s)"),
+            detail:
+                "Per-plugin description mode overrides. Edit the raw config file for individual entries."
+                    .to_string(),
+            action: SettingsPickerAction::OpenConfigFile,
+        },
+        SettingsStudioItem {
+            label: "plugins.tool_presentation.tools".to_string(),
+            value: format!("{tool_override_count} override(s)"),
+            detail:
+                "Per-tool description mode overrides. Edit the raw config file for individual entries."
+                    .to_string(),
+            action: SettingsPickerAction::OpenConfigFile,
+        },
+    ]
+}
+
+fn settings_studio_plugin_entry_disabled_count(items: &[SettingsStudioItem]) -> usize {
+    items
+        .iter()
+        .filter(|item| {
+            matches!(
+                &item.action,
+                SettingsPickerAction::TogglePluginEntryDisabled { disabled: true, .. }
+            )
+        })
+        .count()
+}
+
+fn agent_mode_label(mode: agena::agent::AgentMode) -> &'static str {
+    match mode {
+        agena::agent::AgentMode::Primary => "primary",
+        agena::agent::AgentMode::Subagent => "subagent",
+        agena::agent::AgentMode::All => "all",
+    }
+}
+
+fn agent_default_summary(default: &agena::agents::AgentDefaultModelConfig) -> String {
+    let mut parts = Vec::new();
+    if let Some(provider) = default
+        .provider
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format!("provider={provider}"));
+    }
+    if let Some(adapter) = default
+        .adapter
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format!("adapter={adapter}"));
+    }
+    if let Some(model) = default
+        .model
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format!("model={model}"));
+    }
+    if parts.is_empty() {
+        "inherits runtime model defaults".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn agent_permission_summary(permission: &agena::agent::AgentPermissionConfig) -> String {
+    if permission.is_empty() {
+        return "inherits runtime defaults".to_string();
+    }
+
+    let mut parts = Vec::new();
+    let inherit_off = [
+        (!permission.inherit.path(), "path"),
+        (!permission.inherit.tools(), "tools"),
+        (!permission.inherit.network(), "network"),
+        (!permission.inherit.plugin_tools(), "plugin-tools"),
+    ]
+    .into_iter()
+    .filter_map(|(disabled, label)| disabled.then_some(label))
+    .collect::<Vec<_>>();
+    if !inherit_off.is_empty() {
+        parts.push(format!("inherit off: {}", inherit_off.join(", ")));
+    }
+
+    if let Some(path) = permission.path.as_ref() {
+        let mut detail: Vec<String> = Vec::new();
+        if path.workspace.is_some() {
+            detail.push("workspace".to_string());
+        }
+        if path.external.is_some() {
+            detail.push("external".to_string());
+        }
+        if !path.rules.is_empty() {
+            detail.push(format!("{} rule(s)", path.rules.len()));
+        }
+        parts.push(format!(
+            "path={}",
+            if detail.is_empty() {
+                "custom".to_string()
+            } else {
+                detail.join(" · ")
+            }
+        ));
+    }
+    if let Some(network) = permission.network.as_ref() {
+        let mut detail: Vec<String> = Vec::new();
+        if !network.rules.is_empty() {
+            detail.push(format!("{} rule(s)", network.rules.len()));
+        }
+        parts.push(format!(
+            "network={}",
+            if detail.is_empty() {
+                "custom".to_string()
+            } else {
+                detail.join(" · ")
+            }
+        ));
+    }
+    if let Some(tools) = permission.tools.as_ref() {
+        let mut detail: Vec<String> = Vec::new();
+        if !tools.tags.is_empty() {
+            detail.push(format!("{} tag(s)", tools.tags.len()));
+        }
+        if !tools.names.is_empty() {
+            detail.push(format!("{} name(s)", tools.names.len()));
+        }
+        if !tools.plugin.is_empty() {
+            detail.push(format!("{} plugin override(s)", tools.plugin.len()));
+        }
+        if !tools.rules.is_empty() {
+            detail.push(format!("{} rule set(s)", tools.rules.len()));
+        }
+        parts.push(format!(
+            "tools={}",
+            if detail.is_empty() {
+                "custom".to_string()
+            } else {
+                detail.join(" · ")
+            }
+        ));
+    }
+
+    if parts.is_empty() {
+        "inherits runtime defaults".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn settings_studio_agent_items(
+    agents: &[AgentDescriptor],
+    default_agent: Option<&str>,
+) -> Vec<SettingsStudioItem> {
+    let mut items = agents
+        .iter()
+        .map(|agent| {
+            let source = agent
+                .source_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "runtime config".to_string());
+            let mut badges = vec![
+                agent.scope.as_str().to_string(),
+                agent_mode_label(agent.mode).to_string(),
+            ];
+            if agent.hidden {
+                badges.push("hidden".to_string());
+            }
+            if default_agent.is_some_and(|name| name == agent.name.as_str()) {
+                badges.push("default".to_string());
+            }
+            let value = badges.join(" · ");
+            let detail = if agent.description.trim().is_empty() {
+                format!("No description provided. source={source}")
+            } else {
+                format!("{} · source={source}", agent.description)
+            };
+            SettingsStudioItem {
+                label: agent.name.clone(),
+                value,
+                detail,
+                action: SettingsPickerAction::OpenAgent(agent.clone()),
+            }
+        })
+        .collect::<Vec<_>>();
+    items.sort_by(|left, right| left.label.cmp(&right.label));
+    items
+}
+
+fn settings_studio_agent_detail_text(
+    agent: &AgentDescriptor,
+    default_agent: Option<&str>,
+) -> String {
+    let mut lines = vec![
+        format!("scope: {}", agent.scope.as_str()),
+        format!("mode: {}", agent_mode_label(agent.mode)),
+        format!(
+            "visibility: {}",
+            if agent.hidden { "hidden" } else { "visible" }
+        ),
+        format!(
+            "default: {}",
+            if default_agent.is_some_and(|name| name == agent.name.as_str()) {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
+        format!(
+            "source: {}",
+            agent
+                .source_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "runtime config".to_string())
+        ),
+        format!(
+            "permission: {}",
+            agent_permission_summary(&agent.permission)
+        ),
+        format!("model: {}", agent_default_summary(&agent.default)),
+    ];
+    if !agent.aliases.is_empty() {
+        lines.push(format!("aliases: {}", agent.aliases.join(", ")));
+    }
+    if !agent.allowed_tools.is_empty() {
+        lines.push(format!("tools: {}", agent.allowed_tools.join(", ")));
+    }
+    if !agent.description.trim().is_empty() {
+        lines.push(String::new());
+        lines.push(agent.description.clone());
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "Enter opens the source file or config file. d makes this the default agent. t toggles hidden when the profile is owned by the current config file."
+    ));
+    lines.join("\n")
 }
 
 fn settings_studio_provider_items(
@@ -13502,17 +14194,11 @@ fn format_plugin_inspector_detail(
             lines.push(format!("hooks: {:?}", manifest.hooks));
             lines.push(format!("entries: {}", manifest.entries.len()));
             for entry in manifest.entries.iter().take(5) {
-                let tags = if entry.tags.is_empty() {
-                    "untagged".to_string()
-                } else {
-                    entry
-                        .tags
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                };
-                lines.push(format!("  - {} [{}]", entry.name, tags));
+                lines.extend(
+                    format_plugin_entry_summary_lines(entry)
+                        .into_iter()
+                        .map(|line| format!("  {line}")),
+                );
             }
             if manifest.entries.len() > 5 {
                 lines.push(format!("  - ... +{} more", manifest.entries.len() - 5));
@@ -13554,6 +14240,68 @@ fn format_plugin_inspector_detail(
     }
 
     lines.join("\n")
+}
+
+fn format_plugin_entry_summary_lines(entry: &agena::plugin::PluginToolDecl) -> Vec<String> {
+    let mut lines = vec![format!("{}", entry.name)];
+    if let Some(description) = entry.description_text().trim().split('\n').next() {
+        if !description.trim().is_empty() {
+            lines.push(format!("description: {}", description.trim()));
+        }
+    }
+    if let Some(summary) = entry.summary_text() {
+        lines.push(format!("summary: {summary}"));
+    }
+    if let Some(help) = entry.help_text() {
+        lines.push(format!("help: {help}"));
+    }
+    let mut facts = Vec::new();
+    if let Some(mode) = entry.description_mode {
+        let mode_label = match mode {
+            agena::plugin::ToolDescriptionMode::Detailed => "detailed",
+            agena::plugin::ToolDescriptionMode::Help => "help",
+        };
+        facts.push(format!("mode={mode_label}"));
+    }
+    facts.push(format!("priority={:?}", entry.load_priority));
+    if entry.strict {
+        facts.push("strict".to_string());
+    }
+    if matches!(
+        entry.streaming,
+        agena::plugin::sdk::ToolStreamingMode::Streaming
+    ) {
+        facts.push("streaming".to_string());
+    }
+    if entry.concurrency_safe {
+        facts.push("concurrency-safe".to_string());
+    }
+    if !entry.tags.is_empty() {
+        facts.push(format!(
+            "tags={}",
+            entry
+                .tags
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !facts.is_empty() {
+        lines.push(format!("facts: {}", facts.join(" · ")));
+    }
+    if !entry.host_capabilities.is_empty() {
+        lines.push(format!(
+            "host_caps: {}",
+            entry
+                .host_capabilities
+                .iter()
+                .map(|capability| format!("{capability:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    lines
 }
 
 fn format_plugin_inspector_logs(entries: &[agena::plugin::PluginLogEntry]) -> String {
@@ -15191,6 +15939,56 @@ fn permission_rule_draft_from_resource(rule: &PermissionRuleResource) -> Permiss
         session_id: rule.session_id.map(|id| id.to_string()).unwrap_or_default(),
         mode: rule.mode,
     }
+}
+
+fn permission_rule_draft_from_request(request: &PermissionRequest) -> PermissionRuleDraft {
+    let mut draft = PermissionRuleDraft {
+        mode: PermissionMode::Allow,
+        scope: request
+            .scope
+            .map(|scope| scope.to_string())
+            .unwrap_or_else(|| {
+                if request.session_id.is_some() {
+                    "session".to_string()
+                } else {
+                    "workspace".to_string()
+                }
+            }),
+        session_id: request
+            .session_id
+            .map(|session_id| session_id.to_string())
+            .unwrap_or_default(),
+        ..PermissionRuleDraft::default()
+    };
+    match &request.action {
+        PermissionAction::Tool {
+            tool_name,
+            qualifier,
+        } => {
+            draft.subject_kind = PermissionRuleSubjectKind::Tool;
+            draft.tool_name = tool_name.clone();
+            draft.qualifier = qualifier.clone().unwrap_or_default();
+        }
+        PermissionAction::PathAccess {
+            access_kind,
+            workspace_root,
+            target_path,
+        } => {
+            draft.subject_kind = PermissionRuleSubjectKind::PathAccess;
+            draft.path_access_kind = access_kind.clone();
+            draft.workspace_root = workspace_root.clone();
+            draft.target_path = target_path.clone();
+        }
+        PermissionAction::NetworkAccess {
+            target,
+            host: _,
+            port: _,
+        } => {
+            draft.subject_kind = PermissionRuleSubjectKind::NetworkAccess;
+            draft.network_target = target.clone();
+        }
+    }
+    draft
 }
 
 fn permission_rule_label(rule: &PermissionRuleResource) -> String {
@@ -17355,6 +18153,7 @@ mod tests {
                 status,
                 manifest: Some(manifest),
                 authority: None,
+                entry: None,
             }),
             logs,
         );
@@ -17372,6 +18171,68 @@ mod tests {
         assert!(item.search_text.contains("request failed"));
         assert!(item.copy_text.contains("Recent logs"));
         assert_eq!(item.state, agena::plugin::status::PluginRunState::Failed);
+    }
+
+    #[test]
+    fn plugin_inspector_detail_includes_tool_help_and_modes() {
+        let status = agena::plugin::status::PluginStatus {
+            plugin_id: "ops.plugin".to_string(),
+            kind: "stdio",
+            state: agena::plugin::status::PluginRunState::Running,
+            pid: Some(22),
+            restart_count: 0,
+            last_exit_code: None,
+            last_restart_at_ms: None,
+            last_error: None,
+        };
+        let manifest = agena::plugin::PluginManifest::builder("ops-plugin", "1.2.3")
+            .description("Operator surface")
+            .tool(
+                agena::plugin::PluginToolDecl::new("inspect", json!({"type": "object"}))
+                    .description("Inspect current status")
+                    .summary("Inspect status")
+                    .help("Inspect the current status and return a compact summary.")
+                    .description_mode(agena::plugin::ToolDescriptionMode::Help)
+                    .always_load()
+                    .concurrency_safe(true)
+                    .strict(true)
+                    .streaming(agena::plugin::sdk::ToolStreamingMode::Streaming)
+                    .tag(agena::plugin::sdk::ToolTag::Task)
+                    .host_capabilities([
+                        agena::plugin::sdk::HostCapability::PluginStatus,
+                        agena::plugin::sdk::HostCapability::ReadConfig,
+                    ]),
+            )
+            .build();
+
+        let item = build_plugin_inspector_item(
+            status,
+            Some(agena::plugin::PluginInspect {
+                status: agena::plugin::status::PluginStatus {
+                    plugin_id: "ops.plugin".to_string(),
+                    kind: "stdio",
+                    state: agena::plugin::status::PluginRunState::Running,
+                    pid: Some(22),
+                    restart_count: 0,
+                    last_exit_code: None,
+                    last_restart_at_ms: None,
+                    last_error: None,
+                },
+                manifest: Some(manifest),
+                authority: None,
+                entry: None,
+            }),
+            Vec::new(),
+        );
+
+        assert!(item.detail.contains("summary: Inspect status"));
+        assert!(item.detail.contains("help: Inspect the current status"));
+        assert!(item.detail.contains("mode=help"));
+        assert!(item.detail.contains("priority=Always"));
+        assert!(item.detail.contains("strict"));
+        assert!(item.detail.contains("streaming"));
+        assert!(item.detail.contains("concurrency-safe"));
+        assert!(item.detail.contains("host_caps: PluginStatus, ReadConfig"));
     }
 
     #[test]
@@ -17463,6 +18324,259 @@ mod tests {
         assert!(thinking.detail.contains("thinking mode"));
         assert_eq!(parallel.value, "override on");
     }
+
+    #[test]
+    fn settings_studio_agent_items_include_source_default_and_hidden_state() {
+        let agent = AgentDescriptor {
+            name: "build".to_string(),
+            description: "Primary coding agent".to_string(),
+            mode: agena::agent::AgentMode::Primary,
+            hidden: false,
+            color: None,
+            temperature: None,
+            max_output_tokens: None,
+            steps: None,
+            allowed_tools: vec!["tools".to_string()],
+            permission: Default::default(),
+            default: Default::default(),
+            aliases: vec!["builder".to_string()],
+            scope: agena::agents::AgentScope::Project,
+            source_path: Some(PathBuf::from("/tmp/build.md")),
+        };
+
+        let items = settings_studio_agent_items(&[agent], Some("build"));
+        let item = items
+            .iter()
+            .find(|item| item.label == "build")
+            .expect("agent item should exist");
+
+        assert!(item.value.contains("project"));
+        assert!(item.value.contains("default"));
+        assert!(item.detail.contains("source=/tmp/build.md"));
+        assert!(matches!(item.action, SettingsPickerAction::OpenAgent(_)));
+    }
+
+    #[test]
+    fn settings_studio_plugin_items_show_enabled_and_tool_description_mode() {
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena.json"),
+            config_found: true,
+            file: serde_json::json!({
+                "plugins": {
+                    "enabled": true,
+                    "tool_presentation": {
+                        "default_mode": "detailed",
+                        "plugins": { "ops.plugin": "help" },
+                        "tools": { "shell": "help" }
+                    }
+                }
+            }),
+            effective: serde_json::json!({
+                "plugins": {
+                    "enabled": false,
+                    "tool_presentation": {
+                        "default_mode": "help",
+                        "plugins": { "ops.plugin": "help" },
+                        "tools": { "shell": "help" }
+                    }
+                }
+            }),
+        };
+
+        let items = settings_studio_plugin_items(&sources);
+        let enabled = items
+            .iter()
+            .find(|item| item.label == "plugins.enabled")
+            .expect("enabled item should exist");
+        let mode = items
+            .iter()
+            .find(|item| item.label == "plugins.tool_presentation.default_mode")
+            .expect("default mode item should exist");
+        let plugin_overrides = items
+            .iter()
+            .find(|item| item.label == "plugins.tool_presentation.plugins")
+            .expect("plugin override item should exist");
+        let tool_overrides = items
+            .iter()
+            .find(|item| item.label == "plugins.tool_presentation.tools")
+            .expect("tool override item should exist");
+
+        assert_eq!(enabled.value, "off");
+        assert!(enabled.detail.contains("plugin hooks and tools"));
+        assert!(matches!(
+            enabled.action,
+            SettingsPickerAction::TogglePluginsEnabled
+        ));
+        assert_eq!(mode.value, "help");
+        assert!(mode.detail.contains("default tool description mode"));
+        assert!(matches!(
+            mode.action,
+            SettingsPickerAction::ToggleToolDescriptionMode
+        ));
+        assert_eq!(plugin_overrides.value, "1 override(s)");
+        assert_eq!(tool_overrides.value, "1 override(s)");
+        assert!(matches!(
+            plugin_overrides.action,
+            SettingsPickerAction::OpenConfigFile
+        ));
+        assert!(matches!(
+            tool_overrides.action,
+            SettingsPickerAction::OpenConfigFile
+        ));
+    }
+
+    #[test]
+    fn settings_studio_plugin_entry_items_show_enabled_state_and_source() {
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena.json"),
+            config_found: true,
+            file: serde_json::json!({
+                "plugins": {
+                    "list": {
+                        "shell": {
+                            "kind": "static",
+                            "options": null,
+                            "timeouts": {},
+                            "disabled": false
+                        }
+                    }
+                }
+            }),
+            effective: serde_json::json!({
+                "plugins": {
+                    "list": {
+                        "ops.plugin": {
+                            "kind": "http",
+                            "url": "https://example.com",
+                            "auth": {"kind": "none"},
+                            "options": null,
+                            "timeouts": {},
+                            "disabled": false
+                        },
+                        "shell": {
+                            "kind": "static",
+                            "options": null,
+                            "timeouts": {},
+                            "disabled": true
+                        }
+                    }
+                }
+            }),
+        };
+
+        let items = settings_studio_plugin_entry_items(&sources);
+        let shell = items
+            .iter()
+            .find(|item| item.label == "shell")
+            .expect("shell plugin entry should exist");
+        let remote = items
+            .iter()
+            .find(|item| item.label == "ops.plugin")
+            .expect("runtime plugin entry should exist");
+
+        assert!(shell.value.contains("static"));
+        assert!(shell.value.contains("disabled"));
+        assert!(shell.value.contains("file"));
+        assert!(shell.detail.contains("skipped on reload"));
+        assert!(matches!(
+            shell.action,
+            SettingsPickerAction::TogglePluginEntryDisabled { disabled: true, .. }
+        ));
+        assert!(remote.value.contains("http"));
+        assert!(remote.value.contains("enabled"));
+        assert!(remote.value.contains("runtime"));
+        assert!(matches!(
+            remote.action,
+            SettingsPickerAction::TogglePluginEntryDisabled {
+                disabled: false,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn permission_rule_draft_from_request_maps_request_actions() {
+        let request = PermissionRequest {
+            request_id: "req-1".to_string(),
+            session_id: Some(42),
+            action: PermissionAction::Tool {
+                tool_name: "bash".to_string(),
+                qualifier: Some("npm test".to_string()),
+            },
+            reason: "run test suite".to_string(),
+            explanation: String::new(),
+            source: None,
+            scope: Some(PermissionScope::Session),
+            operator: None,
+            risk: PermissionRiskLevel::Medium,
+            trace: Vec::new(),
+            created_at: Utc::now(),
+        };
+
+        let draft = permission_rule_draft_from_request(&request);
+        assert_eq!(draft.subject_kind, PermissionRuleSubjectKind::Tool);
+        assert_eq!(draft.tool_name, "bash");
+        assert_eq!(draft.qualifier, "npm test");
+        assert_eq!(draft.scope, "session");
+        assert_eq!(draft.session_id, "42");
+        assert_eq!(draft.mode, PermissionMode::Allow);
+    }
+
+    #[test]
+    fn permission_rule_draft_from_request_maps_path_and_network_actions() {
+        let path_request = PermissionRequest {
+            request_id: "req-2".to_string(),
+            session_id: None,
+            action: PermissionAction::PathAccess {
+                access_kind: "read".to_string(),
+                workspace_root: "/tmp/ws".to_string(),
+                target_path: "src".to_string(),
+            },
+            reason: "read source".to_string(),
+            explanation: String::new(),
+            source: None,
+            scope: Some(PermissionScope::Workspace),
+            operator: None,
+            risk: PermissionRiskLevel::Medium,
+            trace: Vec::new(),
+            created_at: Utc::now(),
+        };
+        let path_draft = permission_rule_draft_from_request(&path_request);
+        assert_eq!(
+            path_draft.subject_kind,
+            PermissionRuleSubjectKind::PathAccess
+        );
+        assert_eq!(path_draft.path_access_kind, "read");
+        assert_eq!(path_draft.target_path, "src");
+        assert_eq!(path_draft.workspace_root, "/tmp/ws");
+        assert_eq!(path_draft.scope, "workspace");
+
+        let network_request = PermissionRequest {
+            request_id: "req-3".to_string(),
+            session_id: None,
+            action: PermissionAction::NetworkAccess {
+                target: "api.example.com:443".to_string(),
+                host: "api.example.com".to_string(),
+                port: Some(443),
+            },
+            reason: "call api".to_string(),
+            explanation: String::new(),
+            source: None,
+            scope: Some(PermissionScope::Global),
+            operator: None,
+            risk: PermissionRiskLevel::Medium,
+            trace: Vec::new(),
+            created_at: Utc::now(),
+        };
+        let network_draft = permission_rule_draft_from_request(&network_request);
+        assert_eq!(
+            network_draft.subject_kind,
+            PermissionRuleSubjectKind::NetworkAccess
+        );
+        assert_eq!(network_draft.network_target, "api.example.com:443");
+        assert_eq!(network_draft.scope, "global");
+    }
+
     #[test]
     fn settings_value_edit_prompt_breaks_context_into_multiple_lines() {
         let field = SETTINGS_FIELDS

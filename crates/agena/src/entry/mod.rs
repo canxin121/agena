@@ -168,6 +168,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
             crate::plugin::PluginEntry::Static {
                 options: serde_json::Value::Null,
                 timeouts: Default::default(),
+                disabled: false,
             },
         );
     }
@@ -2300,6 +2301,7 @@ mod tests {
                 PluginEntry::Static {
                     options: serde_json::Value::Null,
                     timeouts: Default::default(),
+                    disabled: false,
                 },
             );
         }
@@ -2362,6 +2364,7 @@ mod tests {
                 PluginEntry::Static {
                     options: serde_json::Value::Null,
                     timeouts: Default::default(),
+                    disabled: false,
                 },
             );
         }

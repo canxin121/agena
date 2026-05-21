@@ -255,6 +255,7 @@ pub async fn load_entry(
     Ok(LoadedPlugin::new(
         plugin_id.to_string(),
         entry.kind_str(),
+        entry.clone(),
         transport,
         outcome.manifest,
         trust_level,

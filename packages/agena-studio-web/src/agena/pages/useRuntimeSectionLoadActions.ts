@@ -20,6 +20,7 @@ import {
   loadRuntimeSectionData,
   loadSettingsSectionData,
 } from './runtimePageLoaders'
+import type { SettingsPluginsConfigSnapshot } from './runtimePageLoaders'
 import type { PluginsTab, SettingsTab } from './runtimePageStateModel'
 
 export type RuntimeSectionLoadActionsInput = {
@@ -38,6 +39,7 @@ export type RuntimeSectionLoadActionsInput = {
   permissionSearch: Ref<string>
   pluginLogs: Ref<PluginLogEntry[]>
   plugins: Ref<PluginStatus[]>
+  settingsPlugins: Ref<SettingsPluginsConfigSnapshot | null>
   providers: Ref<ProviderSummary[]>
   replaceProviderModels: (providerModels: Record<string, ProviderModel[]>) => void
   routeSection: Ref<'runtime' | 'settings' | 'plugins'>
@@ -99,6 +101,7 @@ export function useRuntimeSectionLoadActions(
     input.providers.value = data.providers
     input.replaceProviderModels(data.providerModels)
     input.permissionRules.value = data.permissionRules
+    input.settingsPlugins.value = data.settingsPlugins
 
     if (input.activeSettingsTab.value === 'desktop' && input.desktopEnabled.value) {
       await input.loadDesktopPanel()

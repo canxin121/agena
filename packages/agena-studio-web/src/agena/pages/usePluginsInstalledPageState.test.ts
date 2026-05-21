@@ -6,6 +6,7 @@ import { createPluginsInstalledPanelState, usePluginsInstalledPageState } from '
 describe('usePluginsInstalledPageState', () => {
   test('assembles installed panel state from provided plugins source', () => {
     const installed = createPluginsInstalledPanelState({
+      canTogglePluginConfig: ref(false),
       loadPluginDetails: async () => {},
       openPluginLogsWorkspacePath: () => {},
       openPluginManifestInWorkspace: () => {},
@@ -13,6 +14,7 @@ describe('usePluginsInstalledPageState', () => {
       pluginLogs: ref([]),
       plugins: ref([]),
       selectedPlugin: ref(null),
+      setSelectedPluginDisabled: async () => {},
     })
 
     expect(installed.pluginLoading.value).toBe(false)
@@ -39,6 +41,7 @@ describe('usePluginsInstalledPageState', () => {
           return {
             shared,
             state: {
+              canTogglePluginConfig: ref(false),
               loadPluginDetails: async () => {},
               openPluginLogsWorkspacePath: () => {},
               openPluginManifestInWorkspace: () => {},
@@ -46,6 +49,7 @@ describe('usePluginsInstalledPageState', () => {
               pluginLogs: ref([]),
               plugins: ref([]),
               selectedPlugin: ref(null),
+              setSelectedPluginDisabled: async () => {},
             },
           }
         },

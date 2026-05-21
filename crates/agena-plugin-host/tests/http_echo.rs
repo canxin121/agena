@@ -267,6 +267,7 @@ async fn http_transport_round_trip_via_plugin_host() {
             auth: agena_plugin_host::HttpAuth::None,
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
@@ -314,6 +315,7 @@ async fn http_transport_streams_via_callbacks() {
             auth: agena_plugin_host::HttpAuth::None,
             options: serde_json::Value::Null,
             timeouts: Default::default(),
+            disabled: false,
         },
     );
     let host = PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")

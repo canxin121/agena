@@ -5,6 +5,7 @@ import { routerKey } from 'vue-router'
 import { runPluginUiAction, type PluginInspect, type PluginLogEntry, type PluginStatus } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
+  canTogglePluginConfig: boolean
   plugins: PluginStatus[]
   selectedPlugin: PluginInspect | null
   pluginLogs: PluginLogEntry[]
@@ -12,6 +13,7 @@ const props = defineProps<{
   loadPluginDetails: (pluginId: string) => void | Promise<void>
   openPluginManifestInWorkspace: () => void
   openPluginLogsWorkspacePath: () => void
+  setSelectedPluginDisabled: (disabled: boolean) => void | Promise<void>
 }>()
 
 type ManifestStudioUiAction = { kind: string; [key: string]: unknown }
@@ -35,13 +37,124 @@ type ManifestStudioUiItem = {
   controls?: ManifestStudioUiItem[]
 }
 
+type ManifestFact = {
+  label: string
+  value: string
+}
+
+type ManifestEntrySummary = {
+  name: string
+  description: string
+  help: string
+  summary: string
+  tags: string[]
+  facts: string[]
+}
+
 const pluginUiMessage = ref('')
 const pluginUiError = ref('')
 const controlDrafts = ref<Record<string, unknown>>({})
 const router = inject(routerKey, null)
+const manifest = computed(() => props.selectedPlugin?.manifest ?? null)
+const authority = computed(() => props.selectedPlugin?.authority ?? null)
+const selectedPluginDisabled = computed(() => readRecord(props.selectedPlugin?.entry).disabled === true)
+const selectedPluginEntryKind = computed(() => {
+  const kind = readRecord(props.selectedPlugin?.entry).kind
+  return typeof kind === 'string' && kind.trim() ? kind.trim() : 'unknown'
+})
+
+function readString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function readArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function readStringArray(value: unknown): string[] {
+  return readArray(value)
+    .map((item) => readString(item))
+    .filter((item) => item.length > 0)
+}
+
+const manifestFacts = computed<ManifestFact[]>(() => {
+  const data = manifest.value
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return []
+  const manifestRecord = data as Record<string, unknown>
+  const entries = readArray(manifestRecord.entries)
+  const ui = readRecord(manifestRecord.ui)
+  const studio = readRecord(ui.studio)
+  const tui = readRecord(ui.tui)
+  return [
+    { label: 'Name', value: readString(manifestRecord.name) || 'n/a' },
+    { label: 'Version', value: readString(manifestRecord.version) || 'n/a' },
+    { label: 'Description', value: readString(manifestRecord.description) || 'n/a' },
+    { label: 'Authors', value: readStringArray(manifestRecord.authors).join(', ') || 'n/a' },
+    { label: 'Transports', value: readStringArray(manifestRecord.transports).join(', ') || 'n/a' },
+    { label: 'Hooks', value: readStringArray(manifestRecord.hooks).join(', ') || 'n/a' },
+    { label: 'Entries', value: String(entries.length) },
+    {
+      label: 'Studio UI',
+      value: `${readArray(studio.commands).length} commands · ${readArray(studio.controls).length} controls · ${readArray(studio.views).length} views`,
+    },
+    {
+      label: 'TUI UI',
+      value: `${readArray(tui.statusline_segments).length} statusline · ${readArray(tui.themes).length} themes · ${readArray(tui.content_blocks).length} blocks`,
+    },
+  ]
+})
+
+const authorityFacts = computed<ManifestFact[]>(() => {
+  const data = authority.value
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return []
+  const authorityRecord = data as Record<string, unknown>
+  const entryCapabilities = readRecord(authorityRecord.entry_capabilities)
+  return [
+    { label: 'Trust Level', value: readString(authorityRecord.trust_level) || 'n/a' },
+    { label: 'Provenance', value: readStringArray(authorityRecord.provenance).join(', ') || 'n/a' },
+    {
+      label: 'Plugin Capabilities',
+      value: readStringArray(authorityRecord.plugin_capabilities).join(', ') || 'n/a',
+    },
+    {
+      label: 'Entry Capability Sets',
+      value: String(Object.keys(entryCapabilities).length),
+    },
+  ]
+})
+
+const manifestEntries = computed<ManifestEntrySummary[]>(() => {
+  const data = manifest.value
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return []
+  const manifestRecord = data as Record<string, unknown>
+  return readArray(manifestRecord.entries)
+    .map((entry) => readRecord(entry))
+    .map((entry) => {
+      const tags = readStringArray(entry.tags)
+      const facts = [
+        entry.strict === true ? 'strict' : null,
+        entry.streaming === true ? 'streaming' : null,
+        entry.concurrency_safe === true ? 'concurrency-safe' : null,
+        readString(entry.load_priority) ? `priority=${readString(entry.load_priority)}` : null,
+        readString(entry.description_mode) ? `mode=${readString(entry.description_mode)}` : null,
+      ].filter(Boolean) as string[]
+      return {
+        name: readString(entry.name) || 'unnamed entry',
+        description: readString(entry.description) || readString(entry.summary) || 'No description provided.',
+        summary: readString(entry.summary) || 'n/a',
+        help: readString(entry.help) || '',
+        tags,
+        facts,
+      }
+    })
+})
 
 const studioUi = computed(() => {
-  const ui = props.selectedPlugin?.manifest?.ui
+  const ui = manifest.value && typeof manifest.value === 'object' && !Array.isArray(manifest.value) ? (manifest.value as Record<string, unknown>).ui : null
   if (!ui || typeof ui !== 'object' || Array.isArray(ui)) {
     return { commands: [], controls: [], views: [] } as {
       commands: ManifestStudioUiItem[]
@@ -64,6 +177,7 @@ const studioUi = computed(() => {
 const hasStudioUi = computed(
   () => studioUi.value.commands.length > 0 || studioUi.value.controls.length > 0 || studioUi.value.views.length > 0,
 )
+const hasManifestEntries = computed(() => manifestEntries.value.length > 0)
 
 function controlKind(control: ManifestStudioUiItem): string {
   return String(control.kind || 'button')
@@ -193,15 +307,64 @@ async function runStudioUiControl(control: ManifestStudioUiItem) {
           <button class="button" :disabled="!props.selectedPlugin" @click="props.openPluginLogsWorkspacePath">
             Open Logs Dir
           </button>
+          <button
+            class="button warn"
+            :disabled="!props.selectedPlugin || !props.canTogglePluginConfig"
+            @click="props.setSelectedPluginDisabled(!selectedPluginDisabled)"
+          >
+            {{ selectedPluginDisabled ? 'Enable Plugin' : 'Disable Plugin' }}
+          </button>
         </div>
       </div>
-      <div v-if="props.selectedPlugin" class="stack">
-        <div><strong>ID:</strong> {{ props.selectedPlugin.status.plugin_id }}</div>
-        <div><strong>Kind:</strong> {{ props.selectedPlugin.status.kind }}</div>
-        <div><strong>State:</strong> {{ props.selectedPlugin.status.state }}</div>
-        <div><strong>PID:</strong> {{ props.selectedPlugin.status.pid ?? 'n/a' }}</div>
-        <div><strong>Last Exit:</strong> {{ props.selectedPlugin.status.last_exit_code ?? 'n/a' }}</div>
-        <div><strong>Last Restart:</strong> {{ props.selectedPlugin.status.last_restart_at_ms ?? 'n/a' }}</div>
+      <p v-if="props.selectedPlugin && !props.canTogglePluginConfig" class="muted">
+        This plugin does not expose a writable config entry.
+      </p>
+        <div v-if="props.selectedPlugin" class="stack">
+          <div><strong>ID:</strong> {{ props.selectedPlugin.status.plugin_id }}</div>
+          <div><strong>Kind:</strong> {{ props.selectedPlugin.status.kind }}</div>
+          <div><strong>State:</strong> {{ props.selectedPlugin.status.state }}</div>
+          <div class="button-row" style="align-items: center; flex-wrap: wrap">
+            <strong>Config:</strong>
+            <span class="badge">{{ selectedPluginEntryKind }}</span>
+            <span v-if="selectedPluginDisabled" class="badge warn">disabled</span>
+            <span v-else class="badge success">enabled</span>
+          </div>
+          <div><strong>PID:</strong> {{ props.selectedPlugin.status.pid ?? 'n/a' }}</div>
+          <div><strong>Last Exit:</strong> {{ props.selectedPlugin.status.last_exit_code ?? 'n/a' }}</div>
+          <div><strong>Last Restart:</strong> {{ props.selectedPlugin.status.last_restart_at_ms ?? 'n/a' }}</div>
+        <div v-if="manifestFacts.length" class="stack">
+          <div><strong>Manifest Summary:</strong></div>
+          <div v-for="fact in manifestFacts" :key="fact.label" class="muted">
+            <strong>{{ fact.label }}:</strong> {{ fact.value }}
+          </div>
+        </div>
+        <div v-if="authorityFacts.length" class="stack">
+          <div><strong>Authority:</strong></div>
+          <div v-for="fact in authorityFacts" :key="fact.label" class="muted">
+            <strong>{{ fact.label }}:</strong> {{ fact.value }}
+          </div>
+        </div>
+        <div v-if="hasManifestEntries" class="stack">
+          <div><strong>Tool Entries:</strong></div>
+          <div class="list">
+            <div v-for="entry in manifestEntries" :key="entry.name" class="list-item">
+              <div class="page-header" style="align-items: flex-start">
+                <div>
+                  <div class="button-row" style="align-items: center; flex-wrap: wrap">
+                    <strong>{{ entry.name }}</strong>
+                    <span v-if="entry.facts.includes('strict')" class="badge warn">strict</span>
+                    <span v-if="entry.facts.includes('streaming')" class="badge">streaming</span>
+                  </div>
+                  <div class="muted">{{ entry.description }}</div>
+                  <div class="muted">{{ entry.summary }}</div>
+                  <div v-if="entry.help" class="muted mono" style="white-space: pre-wrap">{{ entry.help }}</div>
+                  <div v-if="entry.tags.length" class="muted mono">tags={{ entry.tags.join(', ') }}</div>
+                  <div v-if="entry.facts.length" class="muted mono">{{ entry.facts.join(' · ') }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <div v-if="hasStudioUi" class="stack">
           <div><strong>Studio UI:</strong></div>
           <p v-if="pluginUiMessage" class="muted">{{ pluginUiMessage }}</p>

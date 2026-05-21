@@ -5,7 +5,7 @@ import {
   permissionReplyPreview,
   permissionRiskLabel,
 } from '@/agena/lib/permissionFormatting'
-import type { SessionExecutionResource, SessionResource, WorkspaceResource } from '@/agena/lib/agenaApi'
+import type { PermissionRequest, SessionExecutionResource, SessionResource, WorkspaceResource } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
   selectedWorkspaceId: number | null
@@ -20,6 +20,7 @@ const props = defineProps<{
   openSelectedSessionInChat: () => void
   selectWorkspace: (workspaceId: number) => void | Promise<void>
   selectSession: (sessionId: number) => void | Promise<void>
+  editPermissionRequest: (request: PermissionRequest) => void
   approvePermission: (
     requestId: string,
     kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
@@ -105,6 +106,7 @@ const props = defineProps<{
           </div>
           <div class="muted mono">{{ permissionActionView(request.action).details.join(' · ') }}</div>
           <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
+            <button class="button" @click="props.editPermissionRequest(request)">Edit Rule</button>
             <button class="button primary" @click="props.approvePermission(request.request_id, 'allow_once')">Allow Once</button>
             <button class="button" @click="props.approvePermission(request.request_id, 'allow_always', 'session')">Allow Always (Session)</button>
             <button class="button" @click="props.approvePermission(request.request_id, 'allow_always', 'workspace')">Allow Always (Workspace)</button>

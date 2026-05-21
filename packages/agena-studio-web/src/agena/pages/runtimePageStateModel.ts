@@ -9,7 +9,7 @@ import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 export type RuntimeRouteSection = 'runtime' | 'plugins' | 'settings'
 export type RuntimeTab = 'overview' | 'workflow' | 'mcp' | 'lsp' | 'skills' | 'operator'
-export type SettingsTab = 'providers' | 'permissions' | 'desktop'
+export type SettingsTab = 'providers' | 'agents' | 'plugins' | 'permissions' | 'desktop'
 export type PluginsTab = 'installed' | 'marketplace'
 export type SectionTabOption<TTab extends string = string> = { id: TTab; label: string }
 
@@ -24,6 +24,8 @@ export const runtimeTabs: SectionTabOption<RuntimeTab>[] = [
 
 export const settingsTabs: SectionTabOption<SettingsTab>[] = [
   { id: 'providers', label: 'Providers' },
+  { id: 'agents', label: 'Agents' },
+  { id: 'plugins', label: 'Plugins' },
   { id: 'permissions', label: 'Guardrails' },
   { id: 'desktop', label: 'Desktop' },
 ]
@@ -42,7 +44,7 @@ export const sectionTitles: Record<RuntimeRouteSection, string> = {
 export const sectionDescriptions: Record<RuntimeRouteSection, string> = {
   runtime: 'Inspect runtime state, workflows, MCP, LSP, skills, and operator snapshots.',
   plugins: 'Inspect installed plugins, marketplace readiness, manifests, and retained logs.',
-  settings: 'Configure Agena providers, runtime guardrails, and desktop services.',
+  settings: 'Configure Agena providers, agents, plugins, runtime guardrails, and desktop services.',
 }
 
 export const sectionPagePaths: Record<RuntimeRouteSection, string> = {
@@ -167,6 +169,26 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
     slash: '/settings-providers',
     aliases: ['providers', 'credentials', 'api keys'],
     shortcutSlash: '/providers',
+  },
+  {
+    id: 'nav.settings.agents',
+    title: 'Open Agent Settings',
+    description: 'Inspect runtime agent profiles, default selection, and visibility controls.',
+    section: 'settings',
+    tab: 'agents',
+    slash: '/settings-agents',
+    aliases: ['agents', 'agent profiles', 'default agent'],
+    shortcutSlash: '/agents',
+  },
+  {
+    id: 'nav.settings.plugins',
+    title: 'Open Plugin Settings',
+    description: 'Control plugin loading and the default tool description mode.',
+    section: 'settings',
+    tab: 'plugins',
+    slash: '/settings-plugins',
+    aliases: ['plugins', 'tool descriptions', 'help mode'],
+    shortcutSlash: '/plugins-settings',
   },
   {
     id: 'nav.settings.permissions',

@@ -65,6 +65,7 @@ export function useRuntimePageState(input: {
     pluginLogPollTimer,
     pluginLogs,
     plugins,
+    settingsPlugins,
     providerModels,
     providers,
     runtime,
@@ -199,6 +200,7 @@ export function useRuntimePageState(input: {
     pluginLogPollTimer,
     pluginLogs,
     plugins,
+    settingsPlugins,
     providerModels,
     providers,
     routePath: computed(() => input.route.path),
@@ -245,11 +247,14 @@ export function useRuntimePageState(input: {
   } = marketplaceActions
 
   const {
+    canTogglePluginConfig,
     loadPluginDetails,
+    setSelectedPluginDisabled,
   } = pluginDetails
 
   const {
     approvePermission,
+    editPermissionRequest,
     deletePermissionRuleAction,
     editPermissionRule,
     permissionRuleFacts,
@@ -289,6 +294,7 @@ export function useRuntimePageState(input: {
     actionError,
     actionMessage,
     approvePermission,
+    editPermissionRequest,
     authProviders,
     browserAuthCodeDrafts,
     browserAuthInstanceDrafts,
@@ -343,7 +349,9 @@ export function useRuntimePageState(input: {
     globalEventSummaries,
     load: loadPageState,
     loadDesktopPanel,
+    canTogglePluginConfig,
     loadPluginDetails,
+    setSelectedPluginDisabled,
     loading,
     marketplaceQuery,
     mcpQuery,
@@ -374,6 +382,7 @@ export function useRuntimePageState(input: {
     pluginLoading,
     pluginLogs,
     plugins,
+    settingsPlugins,
     providers,
     providerModels,
     refreshCredential,

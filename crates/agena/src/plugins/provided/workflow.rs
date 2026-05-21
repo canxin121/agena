@@ -4,6 +4,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -35,30 +36,62 @@ use crate::plugin::sdk::{
 
 pub(crate) const WORKFLOW_PLUGIN_ID: &str = "agena.workflow";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum WorkflowUpdateGoalStatus {
-    Complete,
-}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+struct CompleteGoalToolInput {}
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-struct WorkflowUpdateGoalToolInput {
-    pub status: WorkflowUpdateGoalStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "workflow",
+    description = "Workflow prompt command. Use action `init`, `review`, or `security_review`; pass any workflow arguments directly on the action payload.",
+    tags(ToolTag::ReadOnly),
+    host_capabilities(HostCapability::AgentRegistry),
+    concurrency_safe = true,
+    load = "always",
+    fallback = parse_legacy_workflow_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum WorkflowToolInput {
-    Init(WorkflowPromptToolInput),
-    Review(WorkflowPromptToolInput),
-    SecurityReview(WorkflowPromptToolInput),
+    #[tool(exec = "init")]
+    Init {
+        #[serde(flatten)]
+        args: WorkflowPromptToolInput,
+    },
+    #[tool(exec = "review")]
+    Review {
+        #[serde(flatten)]
+        args: WorkflowPromptToolInput,
+    },
+    #[tool(exec = "security_review")]
+    SecurityReview {
+        #[serde(flatten)]
+        args: WorkflowPromptToolInput,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "tools",
+    description = "Tool catalog command. Use action `search` to find or load deferred tools, or `help` to fetch detailed usage for a tool.",
+    summary = "Search tools or fetch detailed tool help.",
+    help = "Use action `search` with `query`, optional `load`, and optional `limit` to discover tools and load deferred tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. Legacy `command/args` inputs are still accepted for compatibility.",
+    tags(ToolTag::ReadOnly, ToolTag::Discovery),
+    host_capabilities(HostCapability::ListTools),
+    concurrency_safe = true,
+    load = "always",
+    fallback = parse_legacy_tools_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum ToolsToolInput {
-    Search(ToolSearchToolInput),
-    Help(ToolsHelpInput),
+    #[tool(exec = "search")]
+    Search {
+        #[serde(flatten)]
+        args: ToolSearchToolInput,
+    },
+    #[tool(exec = "help")]
+    Help {
+        #[serde(flatten)]
+        args: ToolsHelpInput,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -72,17 +105,64 @@ fn default_include_schema() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "agent",
+    description = "Runtime agent command. Use action `switch` or `restore`; pass any action payload directly on the request.",
+    host_capabilities(HostCapability::AgentRegistry),
+    concurrency_safe = false,
+    load = "always",
+    fallback = parse_legacy_agent_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum AgentToolInput {
-    Switch(AgentSwitchToolInput),
-    Restore(AgentRestoreToolInput),
+    #[tool(exec = "switch")]
+    Switch {
+        #[serde(flatten)]
+        args: AgentSwitchToolInput,
+    },
+    #[tool(exec = "restore")]
+    Restore {
+        #[serde(flatten)]
+        args: AgentRestoreToolInput,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "todo",
+    description = "Todo command. Use action `write` to replace the session todo list.",
+    tags(ToolTag::Mutating, ToolTag::Planning),
+    concurrency_safe = false,
+    load = "always",
+    fallback = parse_legacy_todo_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum TodoToolInput {
-    Write(TodoWriteToolInput),
+    #[tool(exec = "write")]
+    Write {
+        #[serde(flatten)]
+        args: TodoWriteToolInput,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "task",
+    description = "Task command. Use action `run` to create or resume a typed subagent task session for explore, implement, or verify delegated work.",
+    tags(ToolTag::Task, ToolTag::Subtask),
+    host_capabilities(HostCapability::SpawnSubtask),
+    concurrency_safe = false,
+    load = "deferred",
+    fallback = parse_legacy_task_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum TaskEntryToolInput {
+    #[tool(exec = "run")]
+    Run {
+        #[serde(flatten)]
+        args: TaskToolInput,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -90,45 +170,388 @@ struct SessionRenameToolInput {
     pub title: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "session",
+    description = "Session command. Use action `get` to inspect the current session metadata or `rename` to update the session title.",
+    tags(ToolTag::ReadOnly, ToolTag::Mutating),
+    host_capabilities(HostCapability::SessionRegistry),
+    concurrency_safe = false,
+    load = "always",
+    legacy_entries("session_edit"),
+    fallback = parse_legacy_session_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum SessionToolInput {
+    #[tool(exec = "get")]
     Get,
-    Rename(SessionRenameToolInput),
+    #[tool(exec = "rename")]
+    Rename {
+        #[serde(flatten)]
+        args: SessionRenameToolInput,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "goal",
+    description = "Goal command. Use action `get`, `create`, `clear`, or `complete`. Use `complete` only once the objective is actually finished.",
+    tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Goal),
+    host_capabilities(HostCapability::GoalRegistry),
+    concurrency_safe = false,
+    load = "always",
+    legacy_entries("goal_edit"),
+    fallback = parse_legacy_goal_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum GoalToolInput {
-    Get(GetGoalToolInput),
+    #[tool(exec = "get")]
+    Get {
+        #[serde(flatten)]
+        args: GetGoalToolInput,
+    },
+    #[tool(exec = "create")]
+    Create {
+        #[serde(flatten)]
+        args: CreateGoalToolInput,
+    },
+    #[tool(exec = "clear")]
+    Clear {
+        #[serde(flatten)]
+        args: ClearGoalToolInput,
+    },
+    #[tool(exec = "complete")]
+    Complete {
+        #[serde(flatten)]
+        args: CompleteGoalToolInput,
+    },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum GoalEditToolInput {
-    Create(CreateGoalToolInput),
-    Clear(ClearGoalToolInput),
-    Update(WorkflowUpdateGoalToolInput),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "user",
+    description = "User interaction command. Use action `request_input` to request structured short answers.",
+    tags(ToolTag::ReadOnly, ToolTag::Interactive),
+    host_capabilities(HostCapability::AskUser),
+    concurrency_safe = false,
+    load = "always",
+    fallback = parse_legacy_user_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum UserToolInput {
-    Ask(AskUserToolInput),
+    #[serde(alias = "ask")]
+    #[tool(exec = "request_input")]
+    RequestInput(AskUserToolInput),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "plan",
+    description = "Plan mode command. Use action `enter` or `exit`; `enter` allocates a plan markdown file under .agena/plans/ and `exit` asks the user to approve the plan.",
+    tags(ToolTag::ReadOnly, ToolTag::Planning, ToolTag::FilesystemWrite),
+    host_capabilities(HostCapability::PlanRegistry, HostCapability::AgentRegistry),
+    concurrency_safe = true,
+    load = "always",
+    fallback = parse_legacy_plan_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum PlanToolInput {
-    Enter(EnterPlanModeToolInput),
-    Exit(ExitPlanModeToolInput),
+    #[tool(exec = "enter")]
+    Enter {
+        #[serde(flatten)]
+        args: EnterPlanModeToolInput,
+    },
+    #[tool(exec = "exit")]
+    Exit {
+        #[serde(flatten)]
+        args: ExitPlanModeToolInput,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "worktree",
+    description = "Worktree command. Use action `enter` or `exit`; `enter` uses `target = new|existing` to create or attach to a git worktree and `exit` uses enum `exit_action = keep|remove`.",
+    tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree),
+    host_capabilities(HostCapability::WorktreeRegistry),
+    concurrency_safe = false,
+    load = "deferred",
+    fallback = parse_legacy_worktree_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum WorktreeToolInput {
+    #[tool(exec = "enter")]
+    Enter {
+        #[serde(flatten)]
+        args: EnterWorktreeCommandInput,
+    },
+    #[tool(exec = "exit")]
+    Exit {
+        #[serde(flatten)]
+        args: ExitWorktreeCommandInput,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum WorktreeToolInput {
-    Enter(EnterWorktreeToolInput),
-    Exit(ExitWorktreeToolInput),
+#[serde(tag = "target", rename_all = "snake_case")]
+enum EnterWorktreeCommandInput {
+    New {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    Existing {
+        path: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ExitWorktreeAction {
+    Keep,
+    Remove,
+}
+
+impl ExitWorktreeAction {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+struct ExitWorktreeCommandInput {
+    #[serde(rename = "exit_action", alias = "action")]
+    exit_action: ExitWorktreeAction,
+    #[serde(default)]
+    discard_changes: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+struct LegacyGoalUpdateInput {
+    status: LegacyGoalUpdateStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum LegacyGoalUpdateStatus {
+    Complete,
+}
+
+fn legacy_command_args_to_action_value(
+    input: serde_json::Value,
+    primary: &PluginError,
+) -> SdkResult<serde_json::Value> {
+    let Some(command) = input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .filter(|command| !command.trim().is_empty())
+    else {
+        return Err(primary.clone());
+    };
+    let args = input
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut args = match args {
+        serde_json::Value::Object(map) => map,
+        serde_json::Value::Null => serde_json::Map::new(),
+        _ => return Err(primary.clone()),
+    };
+    args.insert(
+        "action".to_string(),
+        serde_json::Value::String(command.to_string()),
+    );
+    Ok(serde_json::Value::Object(args))
+}
+
+fn parse_legacy_workflow_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    WorkflowToolInput::resolve_entry(
+        "workflow",
+        legacy_command_args_to_action_value(input, &primary)?,
+    )
+}
+
+fn parse_legacy_tools_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    ToolsToolInput::resolve_entry(
+        "tools",
+        legacy_command_args_to_action_value(input, &primary)?,
+    )
+}
+
+fn parse_legacy_agent_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    AgentToolInput::resolve_entry(
+        "agent",
+        legacy_command_args_to_action_value(input, &primary)?,
+    )
+}
+
+fn parse_legacy_todo_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    TodoToolInput::resolve_entry(
+        "todo",
+        legacy_command_args_to_action_value(input, &primary)?,
+    )
+}
+
+fn parse_legacy_task_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    if let Ok(action_input) = legacy_command_args_to_action_value(input.clone(), &primary) {
+        return TaskEntryToolInput::resolve_entry("task", action_input);
+    }
+    let serde_json::Value::Object(mut action_input) = input else {
+        return Err(primary);
+    };
+    action_input.insert(
+        "action".to_string(),
+        serde_json::Value::String("run".to_string()),
+    );
+    TaskEntryToolInput::resolve_entry("task", serde_json::Value::Object(action_input))
+}
+
+fn parse_legacy_session_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    SessionToolInput::resolve_entry(
+        "session",
+        legacy_command_args_to_action_value(input, &primary)?,
+    )
+}
+
+fn parse_legacy_goal_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    let command = input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if command == "update" {
+        let args = input
+            .get("args")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        let legacy =
+            serde_json::from_value::<LegacyGoalUpdateInput>(args).map_err(|_| primary.clone())?;
+        return match legacy.status {
+            LegacyGoalUpdateStatus::Complete => {
+                GoalToolInput::resolve_entry("goal", serde_json::json!({ "action": "complete" }))
+            }
+        };
+    }
+    GoalToolInput::resolve_entry(
+        "goal",
+        legacy_command_args_to_action_value(input, &primary)?,
+    )
+}
+
+fn parse_legacy_user_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    UserToolInput::resolve_entry(
+        "user",
+        legacy_command_args_to_action_value(input, &primary)?,
+    )
+}
+
+fn parse_legacy_plan_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    PlanToolInput::resolve_entry(
+        "plan",
+        legacy_command_args_to_action_value(input, &primary)?,
+    )
+}
+
+fn parse_worktree_enter_input(input: serde_json::Value) -> SdkResult<EnterWorktreeToolInput> {
+    match serde_json::from_value::<EnterWorktreeCommandInput>(input.clone()) {
+        Ok(EnterWorktreeCommandInput::New { name }) => {
+            Ok(EnterWorktreeToolInput { name, path: None })
+        }
+        Ok(EnterWorktreeCommandInput::Existing { path }) => Ok(EnterWorktreeToolInput {
+            name: None,
+            path: Some(path),
+        }),
+        Err(primary) => {
+            let primary = PluginError::invalid_params(primary.to_string());
+            serde_json::from_value::<EnterWorktreeToolInput>(input).map_err(|_| primary)
+        }
+    }
+}
+
+fn parse_worktree_exit_input(input: serde_json::Value) -> SdkResult<ExitWorktreeToolInput> {
+    match serde_json::from_value::<ExitWorktreeCommandInput>(input.clone()) {
+        Ok(parsed) => Ok(ExitWorktreeToolInput {
+            action: parsed.exit_action.as_str().to_string(),
+            discard_changes: parsed.discard_changes,
+        }),
+        Err(primary) => {
+            let primary = PluginError::invalid_params(primary.to_string());
+            serde_json::from_value::<ExitWorktreeToolInput>(input).map_err(|_| primary)
+        }
+    }
+}
+
+fn parse_legacy_worktree_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    let command = input
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let args = input
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut args = match args {
+        serde_json::Value::Object(map) => map,
+        _ => return Err(primary),
+    };
+
+    match command {
+        "enter" => {
+            if !args.contains_key("target") {
+                if let Some(path) = args.remove("path") {
+                    args.insert(
+                        "target".to_string(),
+                        serde_json::Value::String("existing".to_string()),
+                    );
+                    args.insert("path".to_string(), path);
+                } else {
+                    args.insert(
+                        "target".to_string(),
+                        serde_json::Value::String("new".to_string()),
+                    );
+                }
+            }
+        }
+        "exit" => {}
+        _ => return Err(primary),
+    }
+
+    args.insert(
+        "action".to_string(),
+        serde_json::Value::String(command.to_string()),
+    );
+    WorktreeToolInput::resolve_entry("worktree", serde_json::Value::Object(args))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -436,17 +859,15 @@ impl WorkflowPlugin {
             .with_payload(payload))
     }
 
-    async fn invoke_update_goal(
+    async fn invoke_complete_goal(
         &self,
-        input: &WorkflowUpdateGoalToolInput,
+        _input: &CompleteGoalToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let response = self
             .host()?
             .update_goal(HostUpdateGoalRequest {
                 objective: None,
-                status: Some(match input.status {
-                    WorkflowUpdateGoalStatus::Complete => HostGoalStatus::Completed,
-                }),
+                status: Some(HostGoalStatus::Completed),
             })
             .await?;
         let payload = Self::goal_tool_payload(Some(response.goal.clone()))?;
@@ -724,102 +1145,251 @@ impl Plugin for WorkflowPlugin {
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         match input.tool_name.as_str() {
             "task" => {
-                self.invoke_task(&serde_json::from_value(input.input)?)
-                    .await
+                let (action, action_input) =
+                    TaskEntryToolInput::resolve_entry("task", input.input)?;
+                match action.as_str() {
+                    "run" => {
+                        self.invoke_task(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown task action '{other}'"
+                    ))),
+                }
             }
-            "tools" => match serde_json::from_value::<ToolsToolInput>(input.input)? {
-                ToolsToolInput::Search(args) => self.invoke_tool_search(&args).await,
-                ToolsToolInput::Help(args) => self.invoke_tool_help(&args).await,
-            },
-            "agent" => match serde_json::from_value::<AgentToolInput>(input.input)? {
-                AgentToolInput::Switch(args) => self.invoke_agent_switch(&args).await,
-                AgentToolInput::Restore(args) => self.invoke_agent_restore(&args).await,
-            },
-            "todo" => match serde_json::from_value::<TodoToolInput>(input.input)? {
-                TodoToolInput::Write(args) => {
-                    self.host()?
-                        .todo_write(HostTodoWriteRequest {
-                            items: args.items.iter().map(Self::host_todo_item).collect(),
-                        })
+            "tools" => {
+                let (action, action_input) = ToolsToolInput::resolve_entry("tools", input.input)?;
+                match action.as_str() {
+                    "search" => {
+                        self.invoke_tool_search(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
                         .await
-                }
-            },
-            "session" => match serde_json::from_value::<SessionToolInput>(input.input)? {
-                SessionToolInput::Get => self.invoke_get_session().await,
-                SessionToolInput::Rename(args) => self.invoke_rename_session(&args).await,
-            },
-            "goal" => match serde_json::from_value::<GoalToolInput>(input.input)? {
-                GoalToolInput::Get(args) => self.invoke_get_goal(&args).await,
-            },
-            "goal_edit" => match serde_json::from_value::<GoalEditToolInput>(input.input)? {
-                GoalEditToolInput::Create(args) => self.invoke_create_goal(&args).await,
-                GoalEditToolInput::Clear(args) => self.invoke_clear_goal(&args).await,
-                GoalEditToolInput::Update(args) => self.invoke_update_goal(&args).await,
-            },
-            "user" => match serde_json::from_value::<UserToolInput>(input.input)? {
-                UserToolInput::Ask(args) => self.invoke_ask_user(&args).await,
-            },
-            "plan" => match serde_json::from_value::<PlanToolInput>(input.input)? {
-                PlanToolInput::Enter(_) => {
-                    let switch = self
-                        .switch_agent_for_tool(Some("planner".to_string()), true)
-                        .await?;
-                    let mut output = self
-                        .host()?
-                        .enter_plan_mode(HostEnterPlanModeRequest::default())
-                        .await?;
-                    output = output
-                        .with_metadata("workflow_agent", "planner")
-                        .with_metadata("agent_stack_depth", switch.stack_depth.to_string());
-                    if let Some(previous) = switch.previous_agent {
-                        output = output.with_metadata("previous_agent", previous);
                     }
-                    Ok(output)
-                }
-                PlanToolInput::Exit(_) => {
-                    let mut output = self
-                        .host()?
-                        .exit_plan_mode(HostExitPlanModeRequest::default())
-                        .await?;
-                    let restore = self.restore_agent_for_tool().await?;
-                    output = output
-                        .with_metadata("agent_restored", restore.restored.to_string())
-                        .with_metadata("agent_stack_depth", restore.stack_depth.to_string());
-                    if let Some(current) = restore.current_agent {
-                        output = output.with_metadata("current_agent", current);
+                    "help" => {
+                        self.invoke_tool_help(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
                     }
-                    Ok(output)
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown tools action '{other}'"
+                    ))),
                 }
-            },
-            "worktree" => match serde_json::from_value::<WorktreeToolInput>(input.input)? {
-                WorktreeToolInput::Enter(args) => {
-                    self.host()?
-                        .enter_worktree(HostEnterWorktreeRequest {
-                            name: args.name,
-                            path: args.path,
-                        })
+            }
+            "agent" => {
+                let (action, action_input) = AgentToolInput::resolve_entry("agent", input.input)?;
+                match action.as_str() {
+                    "switch" => {
+                        self.invoke_agent_switch(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
                         .await
-                }
-                WorktreeToolInput::Exit(args) => {
-                    self.host()?
-                        .exit_worktree(HostExitWorktreeRequest {
-                            action: args.action,
-                            discard_changes: args.discard_changes,
-                        })
+                    }
+                    "restore" => {
+                        self.invoke_agent_restore(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
                         .await
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown agent action '{other}'"
+                    ))),
                 }
-            },
-            "workflow" => match serde_json::from_value::<WorkflowToolInput>(input.input)? {
-                WorkflowToolInput::Init(args) => self.invoke_provided_workflow("init", &args).await,
-                WorkflowToolInput::Review(args) => {
-                    self.invoke_agent_workflow("review", "reviewer", &args)
+            }
+            "todo" => {
+                let (action, action_input) = TodoToolInput::resolve_entry("todo", input.input)?;
+                match action.as_str() {
+                    "write" => {
+                        let args: TodoWriteToolInput = serde_json::from_value(action_input)
+                            .map_err(|err| PluginError::invalid_params(err.to_string()))?;
+                        self.host()?
+                            .todo_write(HostTodoWriteRequest {
+                                items: args.items.iter().map(Self::host_todo_item).collect(),
+                            })
+                            .await
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown todo action '{other}'"
+                    ))),
+                }
+            }
+            "session" | "session_edit" => {
+                let (action, action_input) =
+                    SessionToolInput::resolve_entry(input.tool_name.as_str(), input.input)?;
+                match action.as_str() {
+                    "get" => self.invoke_get_session().await,
+                    "rename" => {
+                        self.invoke_rename_session(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
                         .await
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown session action '{other}'"
+                    ))),
                 }
-                WorkflowToolInput::SecurityReview(args) => {
-                    self.invoke_agent_workflow("security-review", "reviewer", &args)
+            }
+            "goal" | "goal_edit" => {
+                let (action, action_input) =
+                    GoalToolInput::resolve_entry(input.tool_name.as_str(), input.input)?;
+                match action.as_str() {
+                    "get" => {
+                        self.invoke_get_goal(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
                         .await
+                    }
+                    "create" => {
+                        self.invoke_create_goal(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "clear" => {
+                        self.invoke_clear_goal(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "complete" => {
+                        self.invoke_complete_goal(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown goal action '{other}'"
+                    ))),
                 }
-            },
+            }
+            "user" => {
+                let (action, action_input) = UserToolInput::resolve_entry("user", input.input)?;
+                match action.as_str() {
+                    "request_input" => {
+                        self.invoke_ask_user(
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown user action '{other}'"
+                    ))),
+                }
+            }
+            "plan" => {
+                let (action, _action_input) = PlanToolInput::resolve_entry("plan", input.input)?;
+                match action.as_str() {
+                    "enter" => {
+                        let switch = self
+                            .switch_agent_for_tool(Some("planner".to_string()), true)
+                            .await?;
+                        let mut output = self
+                            .host()?
+                            .enter_plan_mode(HostEnterPlanModeRequest::default())
+                            .await?;
+                        output = output
+                            .with_metadata("workflow_agent", "planner")
+                            .with_metadata("agent_stack_depth", switch.stack_depth.to_string());
+                        if let Some(previous) = switch.previous_agent {
+                            output = output.with_metadata("previous_agent", previous);
+                        }
+                        Ok(output)
+                    }
+                    "exit" => {
+                        let mut output = self
+                            .host()?
+                            .exit_plan_mode(HostExitPlanModeRequest::default())
+                            .await?;
+                        let restore = self.restore_agent_for_tool().await?;
+                        output = output
+                            .with_metadata("agent_restored", restore.restored.to_string())
+                            .with_metadata("agent_stack_depth", restore.stack_depth.to_string());
+                        if let Some(current) = restore.current_agent {
+                            output = output.with_metadata("current_agent", current);
+                        }
+                        Ok(output)
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown plan action '{other}'"
+                    ))),
+                }
+            }
+            "worktree" => {
+                let (action, action_input) =
+                    WorktreeToolInput::resolve_entry("worktree", input.input)?;
+                match action.as_str() {
+                    "enter" => {
+                        let args = parse_worktree_enter_input(action_input)?;
+                        self.host()?
+                            .enter_worktree(HostEnterWorktreeRequest {
+                                name: args.name,
+                                path: args.path,
+                            })
+                            .await
+                    }
+                    "exit" => {
+                        let args = parse_worktree_exit_input(action_input)?;
+                        self.host()?
+                            .exit_worktree(HostExitWorktreeRequest {
+                                action: args.action,
+                                discard_changes: args.discard_changes,
+                            })
+                            .await
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown worktree action '{other}'"
+                    ))),
+                }
+            }
+            "workflow" => {
+                let (action, action_input) =
+                    WorkflowToolInput::resolve_entry("workflow", input.input)?;
+                match action.as_str() {
+                    "init" => {
+                        self.invoke_provided_workflow(
+                            "init",
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "review" => {
+                        self.invoke_agent_workflow(
+                            "review",
+                            "reviewer",
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    "security_review" => {
+                        self.invoke_agent_workflow(
+                            "security_review",
+                            "reviewer",
+                            &serde_json::from_value(action_input)
+                                .map_err(|err| PluginError::invalid_params(err.to_string()))?,
+                        )
+                        .await
+                    }
+                    other => Err(PluginError::invalid_params(format!(
+                        "unknown workflow action '{other}'"
+                    ))),
+                }
+            }
             other => Err(PluginError::invalid_params(format!(
                 "unknown workflow plugin tool '{other}'"
             ))),
@@ -833,9 +1403,12 @@ impl Plugin for WorkflowPlugin {
     ) -> SdkResult<Vec<PathRequest>> {
         match tool_name {
             "worktree" => {
-                let WorktreeToolInput::Enter(input) = serde_json::from_value(input.clone())? else {
+                let (action, action_input) =
+                    WorktreeToolInput::resolve_entry("worktree", input.clone())?;
+                if action != "enter" {
                     return Ok(Vec::new());
-                };
+                }
+                let input = parse_worktree_enter_input(action_input)?;
                 if let Some(path) = input.path.filter(|path| !path.trim().is_empty()) {
                     return Ok(vec![
                         PathRequest::read(path.clone()),
@@ -883,123 +1456,19 @@ impl Plugin for WorkflowPlugin {
 
 fn entries() -> Vec<PluginToolDecl> {
     vec![
-        PluginToolDecl::new(
-            "workflow",
-            crate::entry::definition::json_schema_for::<WorkflowToolInput>(),
-        )
-        .description(
-            "Workflow prompt command. Set command to init, review, or security_review; pass that command's payload in args.",
-        )
-        .tag(ToolTag::ReadOnly)
-        .always_load()
-        .concurrency_safe(true)
-        .host_capability(HostCapability::AgentRegistry),
-        PluginToolDecl::new(
-            "tools",
-            crate::entry::definition::json_schema_for::<ToolsToolInput>(),
-        )
-        .description("Tool catalog command. Set command to search to find/load deferred tools, or help to fetch detailed usage for a tool.")
-        .summary("Search tools or fetch detailed tool help.")
-        .help("Use command `search` with query/load/limit to discover tools and load deferred tools. Use command `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool.")
-        .tags([ToolTag::ReadOnly, ToolTag::Discovery])
-        .always_load()
-        .concurrency_safe(true)
-        .host_capability(HostCapability::ListTools),
-        PluginToolDecl::new(
-            "task",
-            crate::entry::definition::json_schema_for::<TaskToolInput>(),
-        )
-        .description(
-            "Create or resume a typed subagent task session for explore, implement, or verify delegated work.",
-        )
-        .tags([ToolTag::Task, ToolTag::Subtask])
-        .concurrency_safe(false)
-        .deferred_load()
-        .host_capability(HostCapability::SpawnSubtask),
-        PluginToolDecl::new(
-            "agent",
-            crate::entry::definition::json_schema_for::<AgentToolInput>(),
-        )
-        .description(
-            "Runtime agent command. Set command to switch or restore; pass that command's payload in args.",
-        )
-        .always_load()
-        .concurrency_safe(false)
-        .host_capability(HostCapability::AgentRegistry),
-        PluginToolDecl::new(
-            "todo",
-            crate::entry::definition::json_schema_for::<TodoToolInput>(),
-        )
-        .description("Todo command. Set command to write to replace the session todo list.")
-        .tags([ToolTag::Mutating, ToolTag::Planning])
-        .always_load(),
-        PluginToolDecl::new(
-            "session",
-            crate::entry::definition::json_schema_for::<SessionToolInput>(),
-        )
-        .description(
-            "Session metadata command. Set command to get the current session metadata or rename to update the session title.",
-        )
-        .tags([ToolTag::ReadOnly, ToolTag::Mutating])
-        .always_load()
-        .concurrency_safe(false)
-        .host_capability(HostCapability::SessionRegistry),
-        PluginToolDecl::new(
-            "goal",
-            crate::entry::definition::json_schema_for::<GoalToolInput>(),
-        )
-        .description("Goal read command. Set command to get to inspect the current runtime goal.")
-        .tags([ToolTag::ReadOnly, ToolTag::Goal])
-        .always_load()
-        .concurrency_safe(true)
-        .host_capability(HostCapability::GoalRegistry),
-        PluginToolDecl::new(
-            "goal_edit",
-            crate::entry::definition::json_schema_for::<GoalEditToolInput>(),
-        )
-        .description(
-            "Goal mutation command. Set command to create, clear, or update; use update only to mark a goal complete once the objective is actually finished.",
-        )
-        .tags([ToolTag::Mutating, ToolTag::Goal])
-        .always_load()
-        .concurrency_safe(false)
-        .host_capability(HostCapability::GoalRegistry),
-        PluginToolDecl::new(
-            "user",
-            crate::entry::definition::json_schema_for::<UserToolInput>(),
-        )
-        .description("User interaction command. Set command to ask to request short answers.")
-        .tags([ToolTag::ReadOnly, ToolTag::Interactive])
-        .always_load()
-        .concurrency_safe(false)
-        .host_capability(HostCapability::AskUser),
-        PluginToolDecl::new(
-            "plan",
-            crate::entry::definition::json_schema_for::<PlanToolInput>(),
-        )
-        .description(
-            "Plan mode command. Set command to enter or exit; enter allocates a plan markdown file under .agena/plans/ and exit asks the user to approve the plan.",
-        )
-        .tags([ToolTag::ReadOnly, ToolTag::Planning])
-        .tag(ToolTag::FilesystemWrite)
-        .path_access(PathAccessSpec {
+        WorkflowToolInput::tool_decl(),
+        ToolsToolInput::tool_decl(),
+        TaskEntryToolInput::tool_decl(),
+        AgentToolInput::tool_decl(),
+        TodoToolInput::tool_decl(),
+        SessionToolInput::tool_decl(),
+        GoalToolInput::tool_decl(),
+        UserToolInput::tool_decl(),
+        PlanToolInput::tool_decl().path_access(PathAccessSpec {
             path: ".agena/plans".to_string(),
             kind: PathKind::Write,
-        })
-        .always_load()
-        .concurrency_safe(true)
-        .host_capabilities([HostCapability::PlanRegistry, HostCapability::AgentRegistry]),
-        PluginToolDecl::new(
-            "worktree",
-            crate::entry::definition::json_schema_for::<WorktreeToolInput>(),
-        )
-        .description(
-            "Worktree command. Set command to enter or exit; enter creates or attaches to a git worktree and exit leaves it.",
-        )
-        .tags([ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree])
-        .concurrency_safe(false)
-        .deferred_load()
-        .host_capability(HostCapability::WorktreeRegistry),
+        }),
+        WorktreeToolInput::tool_decl(),
     ]
 }
 
@@ -1410,13 +1879,31 @@ mod tests {
         )
     }
 
+    fn invoke_action<T: serde::Serialize>(
+        tool_name: &str,
+        action: &str,
+        args: T,
+    ) -> ToolInvokeInput {
+        let args = serde_json::to_value(args).expect("serialize action args");
+        let mut args = match args {
+            serde_json::Value::Object(map) => map,
+            serde_json::Value::Null => serde_json::Map::new(),
+            other => panic!("action args must serialize to an object, got {other:?}"),
+        };
+        args.insert(
+            "action".to_string(),
+            serde_json::Value::String(action.to_string()),
+        );
+        invoke_input(tool_name, serde_json::Value::Object(args))
+    }
+
     #[tokio::test]
     async fn ask_user_invokes_host_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "user",
-                "ask",
+                "request_input",
                 AskUserToolInput {
                     questions: vec![crate::message::UserInputQuestion {
                         id: "color".to_string(),
@@ -1450,7 +1937,7 @@ mod tests {
     async fn get_goal_invokes_host_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_command("goal", "get", GetGoalToolInput::default()))
+            .tool_invoke(invoke_action("goal", "get", GetGoalToolInput::default()))
             .await
             .expect("get_goal host invoke");
 
@@ -1480,8 +1967,8 @@ mod tests {
     async fn create_goal_invokes_host_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_command(
-                "goal_edit",
+            .tool_invoke(invoke_action(
+                "goal",
                 "create",
                 CreateGoalToolInput {
                     objective: "ship it".to_string(),
@@ -1504,8 +1991,8 @@ mod tests {
     async fn clear_goal_invokes_host_without_executor_context() {
         let (plugin, host) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_command(
-                "goal_edit",
+            .tool_invoke(invoke_action(
+                "goal",
                 "clear",
                 ClearGoalToolInput::default(),
             ))
@@ -1524,18 +2011,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_goal_invokes_host_without_executor_context() {
+    async fn complete_goal_invokes_host_without_executor_context() {
         let (plugin, host) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_command(
-                "goal_edit",
-                "update",
-                WorkflowUpdateGoalToolInput {
-                    status: WorkflowUpdateGoalStatus::Complete,
-                },
+            .tool_invoke(invoke_action(
+                "goal",
+                "complete",
+                CompleteGoalToolInput::default(),
             ))
             .await
-            .expect("update_goal host invoke");
+            .expect("complete_goal host invoke");
 
         assert!(output.output_text.contains("Goal 7 is completed"));
         assert_eq!(
@@ -1554,71 +2039,43 @@ mod tests {
         );
     }
 
-    #[test]
-    fn update_goal_command_schema_only_exposes_complete_status() {
-        let schema = crate::entry::definition::json_schema_for::<WorkflowUpdateGoalToolInput>();
-        let properties = schema
-            .get("properties")
-            .and_then(|value| value.as_object())
-            .expect("update_goal properties should be an object");
+    #[tokio::test]
+    async fn legacy_goal_edit_update_still_completes_goal() {
+        let (plugin, host) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_command(
+                "goal_edit",
+                "update",
+                serde_json::json!({ "status": "complete" }),
+            ))
+            .await
+            .expect("legacy goal_edit update invoke");
 
-        assert!(properties.contains_key("status"));
-        assert!(!properties.contains_key("objective"));
-        assert!(!properties.contains_key("token_budget"));
-        let status_schema = properties
-            .get("status")
-            .expect("status schema should exist");
-        let status_schema = if status_schema.get("enum").is_some()
-            || status_schema.get("const").is_some()
-        {
-            status_schema
-        } else if let Some(reference) = status_schema.get("$ref").and_then(|value| value.as_str()) {
-            let definition_name = reference
-                .rsplit('/')
-                .next()
-                .expect("status schema ref should have a definition name");
-            schema
-                .get("$defs")
-                .and_then(|defs| defs.get(definition_name))
-                .or_else(|| {
-                    schema
-                        .get("definitions")
-                        .and_then(|defs| defs.get(definition_name))
-                })
-                .expect("status schema ref should resolve")
-        } else {
-            panic!("status schema should be inline or a local ref: {status_schema:?}");
-        };
-        let status_values = status_schema
-            .get("enum")
-            .and_then(|value| value.as_array())
-            .map(|values| {
-                values
-                    .iter()
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .expect("enum values should be strings")
-                            .to_string()
-                    })
-                    .collect::<Vec<_>>()
+        assert!(output.output_text.contains("Goal 7 is completed"));
+        assert_eq!(
+            host.recorded_update_goal_request(),
+            Some(RecordedUpdateGoalRequest {
+                objective: None,
+                status: Some(HostGoalStatus::Completed),
             })
-            .or_else(|| {
-                status_schema
-                    .get("const")
-                    .and_then(|value| value.as_str())
-                    .map(|value| vec![value.to_string()])
-            })
-            .expect("status schema should enumerate a string value");
-        assert_eq!(status_values, vec!["complete".to_string()]);
+        );
+    }
+
+    #[test]
+    fn goal_command_schema_exposes_complete_command() {
+        let schema = crate::entry::definition::json_schema_for::<GoalToolInput>();
+        let rendered = serde_json::to_string(&schema).expect("serialize goal schema");
+        assert!(rendered.contains("\"complete\""));
+        assert!(!rendered.contains("\"update\""));
     }
 
     #[tokio::test]
     async fn task_invokes_host_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input(
+            .tool_invoke(invoke_action(
                 "task",
+                "run",
                 TaskToolInput {
                     description: "inspect".to_string(),
                     prompt: "look around".to_string(),
@@ -1652,7 +2109,7 @@ mod tests {
     async fn todo_write_invokes_explicit_host_api() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "todo",
                 "write",
                 TodoWriteToolInput {
@@ -1685,10 +2142,7 @@ mod tests {
     async fn session_get_invokes_host_without_executor_context() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_input(
-                "session",
-                serde_json::json!({ "command": "get" }),
-            ))
+            .tool_invoke(invoke_action("session", "get", serde_json::json!({})))
             .await
             .expect("session get host invoke");
 
@@ -1710,7 +2164,7 @@ mod tests {
     async fn session_rename_invokes_host_without_executor_context() {
         let (plugin, host) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "session",
                 "rename",
                 SessionRenameToolInput {
@@ -1736,11 +2190,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_session_edit_rename_alias_still_works() {
+        let (plugin, host) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_command(
+                "session_edit",
+                "rename",
+                SessionRenameToolInput {
+                    title: "Compat rename".to_string(),
+                },
+            ))
+            .await
+            .expect("legacy session_edit rename invoke");
+
+        assert!(
+            output
+                .output_text
+                .contains("Renamed session #1 to Compat rename.")
+        );
+        assert_eq!(host.current_session().title, "Compat rename");
+    }
+
+    #[tokio::test]
     async fn plan_and_worktree_entries_invoke_explicit_host_apis() {
         let (plugin, host) = initialized_plugin().await;
 
         let enter_plan = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "plan",
                 "enter",
                 EnterPlanModeToolInput::default(),
@@ -1765,12 +2241,11 @@ mod tests {
         assert!(switches[0].push_previous);
 
         let enter_worktree = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "worktree",
                 "enter",
-                EnterWorktreeToolInput {
+                EnterWorktreeCommandInput::New {
                     name: Some("demo".to_string()),
-                    path: None,
                 },
             ))
             .await
@@ -1789,11 +2264,11 @@ mod tests {
         }
 
         let exit_worktree = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "worktree",
                 "exit",
-                ExitWorktreeToolInput {
-                    action: "keep".to_string(),
+                ExitWorktreeCommandInput {
+                    exit_action: ExitWorktreeAction::Keep,
                     discard_changes: false,
                 },
             ))
@@ -1813,7 +2288,7 @@ mod tests {
         }
 
         let exit_plan = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "plan",
                 "exit",
                 ExitPlanModeToolInput::default(),
@@ -1840,10 +2315,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_search_invokes_host_catalog_without_executor_context() {
+    async fn legacy_worktree_command_args_shape_still_works() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
             .tool_invoke(invoke_command(
+                "worktree",
+                "enter",
+                EnterWorktreeToolInput {
+                    name: Some("demo".to_string()),
+                    path: None,
+                },
+            ))
+            .await
+            .expect("legacy worktree enter invoke");
+        let output = crate::plugins::provided::router::payload_to_tool_output(
+            "enter_worktree",
+            output.payload.as_ref(),
+        )
+        .unwrap();
+        match output {
+            ToolPayloadOutput::EnterWorktree { path, branch } => {
+                assert_eq!(path, "/tmp/wt");
+                assert_eq!(branch, "agena/demo");
+            }
+            other => panic!("unexpected output: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_search_invokes_host_catalog_without_executor_context() {
+        let (plugin, _) = initialized_plugin().await;
+        let output = plugin
+            .tool_invoke(invoke_action(
                 "tools",
                 "search",
                 ToolSearchToolInput {
@@ -1871,7 +2374,7 @@ mod tests {
     async fn tools_help_returns_registered_help_and_schema() {
         let (plugin, _) = initialized_plugin().await;
         let output = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "tools",
                 "help",
                 ToolsHelpInput {
@@ -1912,7 +2415,7 @@ mod tests {
         let (plugin, host) = initialized_plugin().await;
 
         let review = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "workflow",
                 "review",
                 WorkflowPromptToolInput {
@@ -1935,7 +2438,7 @@ mod tests {
         );
 
         let init = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "workflow",
                 "init",
                 WorkflowPromptToolInput::default(),
@@ -1946,14 +2449,14 @@ mod tests {
         assert!(init.output_text.contains("Save the result to AGENA.md"));
 
         let security = plugin
-            .tool_invoke(invoke_command(
+            .tool_invoke(invoke_action(
                 "workflow",
                 "security_review",
                 WorkflowPromptToolInput::default(),
             ))
             .await
             .expect("workflow_security_review invoke");
-        assert_eq!(security.title, "security-review workflow");
+        assert_eq!(security.title, "security_review workflow");
         assert!(
             security
                 .output_text

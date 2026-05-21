@@ -10,7 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use agena_skills::bundled as packaged_skills;
 use agena_skills::discovery::{default_command_roots, default_roots, scan, scan_commands};
 use agena_skills::skill::Skill;
 use async_trait::async_trait;
@@ -24,6 +23,21 @@ use crate::plugin::sdk::{
 };
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
+
+#[derive(Debug, Clone, serde::Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum SkillToolInput {
+    Run {
+        #[serde(flatten)]
+        args: WorkflowPromptToolInput,
+    },
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum LegacySkillToolInput {
+    Run(WorkflowPromptToolInput),
+}
 
 #[derive(Clone)]
 enum DiscoveredEntryKind {
@@ -72,6 +86,19 @@ impl SkillsPlugin {
         }
     }
 
+    fn parse_skill_input(input: serde_json::Value) -> SdkResult<WorkflowPromptToolInput> {
+        match serde_json::from_value::<SkillToolInput>(input.clone()) {
+            Ok(SkillToolInput::Run { args }) => Ok(args),
+            Err(primary) => {
+                let primary = PluginError::invalid_params(primary.to_string());
+                match serde_json::from_value::<LegacySkillToolInput>(input) {
+                    Ok(LegacySkillToolInput::Run(args)) => Ok(args),
+                    Err(_) => Err(primary),
+                }
+            }
+        }
+    }
+
     fn entry_decl(name: &str, entry: &DiscoveredEntry) -> PluginToolDecl {
         let category = match entry.kind {
             DiscoveredEntryKind::Skill => "workflow",
@@ -97,7 +124,7 @@ impl SkillsPlugin {
         };
         PluginToolDecl::new(
             name.to_string(),
-            crate::entry::definition::json_schema_for::<WorkflowPromptToolInput>(),
+            crate::entry::definition::json_schema_for::<SkillToolInput>(),
         )
         .description(description.clone())
         .summary(description)
@@ -113,18 +140,11 @@ impl SkillsPlugin {
         let roots = default_roots(workspace.as_deref());
         let command_roots = default_command_roots(workspace.as_deref());
 
-        let mut skills_by_name: BTreeMap<String, Skill> = scan(&roots)
+        let skills_by_name: BTreeMap<String, Skill> = scan(&roots)
             .unwrap_or_default()
             .into_iter()
             .map(|skill| (skill.frontmatter.name.clone(), skill))
             .collect();
-        if let Ok(packaged) = packaged_skills::all() {
-            for skill in packaged {
-                skills_by_name
-                    .entry(skill.frontmatter.name.clone())
-                    .or_insert(skill);
-            }
-        }
 
         let mut entries = BTreeMap::new();
         for skill in skills_by_name.into_values() {
@@ -227,7 +247,7 @@ impl Plugin for SkillsPlugin {
     }
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
-        let workflow_input: WorkflowPromptToolInput = serde_json::from_value(input.input)?;
+        let workflow_input = Self::parse_skill_input(input.input.clone())?;
         let entry = self
             .entries
             .read()
@@ -249,5 +269,42 @@ impl Plugin for SkillsPlugin {
             .with_title(entry.skill.frontmatter.name.clone())
             .with_metadata("workflow", entry.skill.frontmatter.name)
             .with_metadata("skill_entry_kind", kind))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_skill_input_accepts_action_shape() {
+        let input = SkillsPlugin::parse_skill_input(serde_json::json!({
+            "action": "run",
+            "args": "inspect auth flow"
+        }))
+        .expect("action-shaped skill input should parse");
+
+        assert_eq!(input.args.as_deref(), Some("inspect auth flow"));
+    }
+
+    #[test]
+    fn parse_skill_input_accepts_legacy_command_args_shape() {
+        let input = SkillsPlugin::parse_skill_input(serde_json::json!({
+            "command": "run",
+            "args": {
+                "args": "inspect auth flow"
+            }
+        }))
+        .expect("legacy command/args skill input should parse");
+
+        assert_eq!(input.args.as_deref(), Some("inspect auth flow"));
+    }
+
+    #[test]
+    fn skill_input_schema_uses_action_discriminator() {
+        let schema = crate::entry::definition::json_schema_for::<SkillToolInput>();
+        let rendered = serde_json::to_string(&schema).expect("skill schema should serialize");
+        assert!(rendered.contains("\"action\""));
+        assert!(rendered.contains("\"run\""));
     }
 }

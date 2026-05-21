@@ -56,11 +56,23 @@ pub struct BashToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ReadToolInput {
+    #[serde(alias = "path")]
     pub file_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub mode: ReadMode,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadMode {
+    Text,
+    Attachment,
+    #[default]
+    Auto,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]

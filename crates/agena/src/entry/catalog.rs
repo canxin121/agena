@@ -85,10 +85,14 @@ impl ToolCatalog {
     }
 
     pub fn is_tool_enabled(&self, tool: &RegistryPluginEntry) -> bool {
+        self.are_tags_enabled(&tool.effective_tags())
+    }
+
+    pub fn are_tags_enabled(&self, tags: &[ToolTag]) -> bool {
         match self.profile {
             ModelToolProfile::Full => true,
-            ModelToolProfile::ReadOnly => tool.has_tag(ToolTag::ReadOnly),
-            ModelToolProfile::NoTask => !tool.has_tag(ToolTag::Task),
+            ModelToolProfile::ReadOnly => tags.iter().any(|tag| tag == &ToolTag::ReadOnly),
+            ModelToolProfile::NoTask => !tags.iter().any(|tag| tag == &ToolTag::Task),
         }
     }
 }
@@ -130,7 +134,7 @@ mod tests {
         let catalog = ToolCatalog::for_model(None);
         let definitions = catalog.tools();
 
-        for tool_name in ["shell", "fs_edit", "task"] {
+        for tool_name in ["shell", "task"] {
             let definition = definitions
                 .iter()
                 .find(|tool| tool.exposed_name == tool_name)

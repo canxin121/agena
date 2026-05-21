@@ -18,6 +18,7 @@ members = [
     "crates/agena-marketplace-server",
     "crates/agena-plugin-host",
     "crates/agena-plugin-marketplace",
+    "crates/agena-macros",
     "crates/agena-plugin-sdk",
     "crates/agena-rollout",
     "crates/agena-scheduler",
@@ -40,6 +41,7 @@ agena-api = { path = "crates/agena-api" }
 agena-api-server = { path = "crates/agena-api-server" }
 agena-keyring-store = { path = "crates/agena-keyring-store" }
 agena-lsp = { path = "crates/agena-lsp" }
+agena-macros = { path = "crates/agena-macros" }
 agena-mcp-client = { path = "crates/agena-mcp-client" }
 agena-mcp-server = { path = "crates/agena-mcp-server" }
 agena-otel = { path = "crates/agena-otel" }

@@ -1,9 +1,11 @@
 use std::cmp::min;
 use std::fs;
 
-use crate::message::ReadToolInput;
+use crate::message::{ReadMode, ReadToolInput};
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
+use super::{
+    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput, view_file,
+};
 
 const DEFAULT_OFFSET: usize = 1;
 const DEFAULT_LIMIT: usize = 2000;
@@ -28,11 +30,19 @@ pub(super) fn execute(
     let display_path = executor.display_path(&target);
 
     if target.is_dir() {
+        if matches!(input.mode, ReadMode::Attachment) {
+            return Err(ToolError::InvalidInput(format!(
+                "read mode=attachment does not support directories: {}",
+                input.file_path
+            )));
+        }
+
         let (preview, truncated, count) = read_directory_listing(&target, offset, limit)?;
         let output = ToolPayloadOutput::Read {
             preview: Some(preview.clone()),
             truncated: Some(truncated),
             loaded_paths: vec![display_path.clone()],
+            attachment: None,
         };
 
         let mut view = ToolExecutionView::simple(format!("Read {}", display_path), preview);
@@ -49,9 +59,13 @@ pub(super) fn execute(
     }
 
     let content = fs::read(&target)?;
+    if should_attach(content.as_slice(), &target, input.mode) {
+        return view_file::execute_for_read_attachment(executor, input.file_path.as_str());
+    }
+
     let text = String::from_utf8(content).map_err(|_| {
         ToolError::InvalidInput(format!(
-            "read tool currently supports UTF-8 text files only: {}",
+            "read tool currently supports UTF-8 text files only; use mode=attachment or mode=auto for binary files: {}",
             input.file_path
         ))
     })?;
@@ -62,6 +76,7 @@ pub(super) fn execute(
         preview: Some(preview.clone()),
         truncated: Some(truncated),
         loaded_paths: vec![display_path.clone()],
+        attachment: None,
     };
 
     let mut view = ToolExecutionView::simple(format!("Read {}", display_path), preview);
@@ -77,6 +92,14 @@ pub(super) fn execute(
         .insert("truncated".to_string(), truncated.to_string());
 
     Ok(ToolPayloadExecution::new(output, view))
+}
+
+fn should_attach(bytes: &[u8], path: &std::path::Path, mode: ReadMode) -> bool {
+    match mode {
+        ReadMode::Text => false,
+        ReadMode::Attachment => true,
+        ReadMode::Auto => view_file::should_attach_in_read_auto(path, bytes),
+    }
 }
 
 fn parse_offset(value: Option<u32>) -> usize {

@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -40,12 +41,50 @@ impl LspPlugin {
     }
 }
 
-#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
 struct LspServersInput {}
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Deserialize, schemars::JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "lsp",
+    description = "LSP command dispatcher. Set action to servers, definition, references, hover, or diagnostics.",
+    summary = "Query configured language servers.",
+    help = "Use action `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics. Legacy `command/args` inputs are still accepted for compatibility.",
+    tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
+    host_capabilities(HostCapability::LspRegistry),
+    concurrency_safe = true,
+    load = "always",
+    fallback = parse_legacy_lsp_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum LspToolInput {
+    #[tool(exec = "lsp_servers")]
+    Servers,
+    #[tool(exec = "lsp_definition")]
+    Definition {
+        #[serde(flatten)]
+        args: LspDefinitionToolInput,
+    },
+    #[tool(exec = "lsp_references")]
+    References {
+        #[serde(flatten)]
+        args: LspReferencesToolInput,
+    },
+    #[tool(exec = "lsp_hover")]
+    Hover {
+        #[serde(flatten)]
+        args: LspHoverToolInput,
+    },
+    #[tool(exec = "lsp_diagnostics")]
+    Diagnostics {
+        #[serde(flatten)]
+        args: LspDiagnosticsToolInput,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+enum LegacyLspToolInput {
     Servers(LspServersInput),
     Definition(LspDefinitionToolInput),
     References(LspReferencesToolInput),
@@ -91,8 +130,8 @@ impl Plugin for LspPlugin {
                 input.tool_name
             )));
         }
-        match serde_json::from_value::<LspToolInput>(input.input)? {
-            LspToolInput::Servers(_) => {
+        match parse_lsp_input(input.input)? {
+            LspToolInput::Servers => {
                 let HostLspListServersResponse { servers } =
                     self.host()?.lsp_list_servers().await?;
                 let summary = LspServersOutput {
@@ -117,7 +156,7 @@ impl Plugin for LspPlugin {
                     attachments: Vec::new(),
                 })
             }
-            LspToolInput::Definition(args) => {
+            LspToolInput::Definition { args } => {
                 let _ = self.host()?;
                 router::invoke_tool(
                     "lsp_definition",
@@ -127,7 +166,7 @@ impl Plugin for LspPlugin {
                     input.call_id,
                 )
             }
-            LspToolInput::References(args) => {
+            LspToolInput::References { args } => {
                 let _ = self.host()?;
                 router::invoke_tool(
                     "lsp_references",
@@ -137,7 +176,7 @@ impl Plugin for LspPlugin {
                     input.call_id,
                 )
             }
-            LspToolInput::Hover(args) => {
+            LspToolInput::Hover { args } => {
                 let _ = self.host()?;
                 router::invoke_tool(
                     "lsp_hover",
@@ -147,7 +186,7 @@ impl Plugin for LspPlugin {
                     input.call_id,
                 )
             }
-            LspToolInput::Diagnostics(args) => {
+            LspToolInput::Diagnostics { args } => {
                 let _ = self.host()?;
                 router::invoke_tool(
                     "lsp_diagnostics",
@@ -174,29 +213,11 @@ impl Plugin for LspPlugin {
 }
 
 pub(crate) fn lsp_decl() -> PluginToolDecl {
-    PluginToolDecl::new(
-        "lsp",
-        crate::entry::definition::json_schema_for::<LspToolInput>(),
-    )
-    .description(
-        "LSP command dispatcher. Set command to servers, definition, references, hover, or diagnostics; pass that command's payload in args.",
-    )
-    .summary("Query configured language servers.")
-    .help("Use command `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics. Pass the selected command payload under `args`.")
-    .tags([ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp])
-    .concurrency_safe(true)
-    .always_load()
-    .host_capability(HostCapability::LspRegistry)
+    LspToolInput::tool_decl()
 }
 
 fn lsp_route(input: serde_json::Value) -> SdkResult<(String, serde_json::Value)> {
-    match serde_json::from_value::<LspToolInput>(input)? {
-        LspToolInput::Servers(_) => Ok(("lsp_servers".to_string(), serde_json::json!({}))),
-        LspToolInput::Definition(args) => tool_args("lsp_definition", args),
-        LspToolInput::References(args) => tool_args("lsp_references", args),
-        LspToolInput::Hover(args) => tool_args("lsp_hover", args),
-        LspToolInput::Diagnostics(args) => tool_args("lsp_diagnostics", args),
-    }
+    LspToolInput::resolve_entry("lsp", input)
 }
 
 fn tool_args<T: serde::Serialize>(tool: &str, args: T) -> SdkResult<(String, serde_json::Value)> {
@@ -204,6 +225,39 @@ fn tool_args<T: serde::Serialize>(tool: &str, args: T) -> SdkResult<(String, ser
         tool.to_string(),
         serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
     ))
+}
+
+fn parse_lsp_input(input: serde_json::Value) -> SdkResult<LspToolInput> {
+    match serde_json::from_value::<LspToolInput>(input.clone()) {
+        Ok(parsed) => Ok(parsed),
+        Err(primary) => {
+            let primary = PluginError::invalid_params(primary.to_string());
+            match serde_json::from_value::<LegacyLspToolInput>(input) {
+                Ok(LegacyLspToolInput::Servers(_)) => Ok(LspToolInput::Servers),
+                Ok(LegacyLspToolInput::Definition(args)) => Ok(LspToolInput::Definition { args }),
+                Ok(LegacyLspToolInput::References(args)) => Ok(LspToolInput::References { args }),
+                Ok(LegacyLspToolInput::Hover(args)) => Ok(LspToolInput::Hover { args }),
+                Ok(LegacyLspToolInput::Diagnostics(args)) => Ok(LspToolInput::Diagnostics { args }),
+                Err(_) => Err(primary),
+            }
+        }
+    }
+}
+
+fn parse_legacy_lsp_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    match serde_json::from_value::<LegacyLspToolInput>(input) {
+        Ok(LegacyLspToolInput::Servers(_)) => {
+            Ok(("lsp_servers".to_string(), serde_json::json!({})))
+        }
+        Ok(LegacyLspToolInput::Definition(args)) => tool_args("lsp_definition", args),
+        Ok(LegacyLspToolInput::References(args)) => tool_args("lsp_references", args),
+        Ok(LegacyLspToolInput::Hover(args)) => tool_args("lsp_hover", args),
+        Ok(LegacyLspToolInput::Diagnostics(args)) => tool_args("lsp_diagnostics", args),
+        Err(_) => Err(primary),
+    }
 }
 
 #[cfg(test)]
@@ -301,8 +355,7 @@ mod tests {
                 call_id: 1,
                 workspace_root: "/tmp".to_string(),
                 input: serde_json::json!({
-                    "command": "servers",
-                    "args": {}
+                    "action": "servers"
                 }),
             })
             .await

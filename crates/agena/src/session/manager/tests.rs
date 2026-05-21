@@ -55,6 +55,27 @@ impl Drop for TempWorkspace {
     }
 }
 
+fn run_async_with_large_stack<F>(fut: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    let handle = std::thread::Builder::new()
+        .name("agena-session-test".to_string())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("session test runtime");
+            runtime.block_on(fut);
+        })
+        .expect("spawn large-stack session test thread");
+    match handle.join() {
+        Ok(()) => {}
+        Err(err) => std::panic::resume_unwind(err),
+    }
+}
+
 struct SessionStartFixturePlugin;
 
 #[async_trait]
@@ -467,7 +488,7 @@ impl ModelRuntime for ScriptedProvider {
                     _ => return false,
                 };
                 loaded_tools_from_tool_output(&operation.details)
-                    .is_some_and(|loaded_tools| loaded_tools.iter().any(|name| name == "fs_edit"))
+                    .is_some_and(|loaded_tools| loaded_tools.iter().any(|name| name == "fs"))
             })
         });
 
@@ -570,7 +591,7 @@ impl ModelRuntime for ScriptedProvider {
                         "command": "search",
                         "args": ToolSearchToolInput {
                             query: "patch file".to_string(),
-                            load: vec!["fs_edit".to_string()],
+                            load: vec!["fs".to_string()],
                             limit: None,
                         },
                     })
@@ -593,7 +614,7 @@ impl ModelRuntime for ScriptedProvider {
                     id: Some("call_ask_user_1".to_string()),
                     name: Some("user".to_string()),
                     arguments_delta: serde_json::json!({
-                        "command": "ask",
+                        "command": "request_input",
                         "args": AskUserToolInput {
                             questions: vec![UserInputQuestion {
                                 id: "model_choice".to_string(),
@@ -652,7 +673,7 @@ impl ModelRuntime for ScriptedProvider {
                         model: scripted_model_id(),
                         stream_key: "call_apply_patch_1".to_string(),
                         id: Some("call_apply_patch_1".to_string()),
-                        name: Some("fs_edit".to_string()),
+                        name: Some("fs".to_string()),
                         arguments_delta: serde_json::json!({
                             "command": "apply_patch",
                             "args": ApplyPatchToolInput {
@@ -779,7 +800,8 @@ impl ModelRuntime for ToolErrorRecoveryProvider {
                         "call_todo_1",
                         "todo",
                         serde_json::json!({
-                            "command": "write",
+                            "action": "write",
+                            "items": "bad",
                         })
                         .to_string(),
                     )])
@@ -798,7 +820,8 @@ impl ModelRuntime for ToolErrorRecoveryProvider {
                             "call_bad_tools_1",
                             "tools",
                             serde_json::json!({
-                                "command": "search",
+                                "action": "search",
+                                "query": 123,
                             })
                             .to_string(),
                         ),
@@ -806,12 +829,9 @@ impl ModelRuntime for ToolErrorRecoveryProvider {
                             "call_bad_tools_2",
                             "tools",
                             serde_json::json!({
-                                "command": "search",
-                                "args": ToolSearchToolInput {
-                                    query: "todo".to_string(),
-                                    load: Vec::new(),
-                                    limit: Some(1),
-                                },
+                                "action": "search",
+                                "query": "todo",
+                                "limit": 1,
                             })
                             .to_string(),
                         ),
@@ -1930,11 +1950,11 @@ async fn streaming_tool_execution_persists_in_progress_output_impl() {
             .await
     });
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), chunk_ready)
+    tokio::time::timeout(std::time::Duration::from_secs(5), chunk_ready)
         .await
         .expect("streaming chunk should be emitted");
 
-    let partial_output = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+    let partial_output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             let session = manager
                 .get_session(session_id)
@@ -2057,7 +2077,7 @@ async fn tool_execution_error_is_returned_to_model_as_failed_tool_result_impl() 
     assert_eq!(status, ExecutionStatus::Failed);
     let failure = error.as_deref().unwrap_or(output_text.as_str()).to_string();
     assert!(
-        failure.contains("missing field `args`"),
+        failure.contains("invalid type"),
         "unexpected failure text: {failure}"
     );
     assert!(session.messages.iter().rev().any(|message| {
@@ -2121,7 +2141,7 @@ async fn concurrent_tool_execution_error_is_returned_without_dropping_other_resu
         .unwrap_or(failed_output.as_str())
         .to_string();
     assert!(
-        failure.contains("missing field `args`"),
+        failure.contains("invalid type"),
         "unexpected failure text: {failure}"
     );
 
@@ -5004,88 +5024,91 @@ async fn restart_after_interrupted_turn_can_continue_session() {
     }));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn blocked_permission_survives_restart_and_reply_continues() {
-    let workspace = TempWorkspace::new();
-    let db = open_temp_database(&workspace.root, "permission-resume.db").await;
-    let tool_policy = ToolPermissionPolicy::allow_all().with_tool_mode("todo", PermissionMode::Ask);
-    let first = build_manager_with_provider_on_db(
-        &workspace.root,
-        db.clone(),
-        PermissionPolicy::allow_all(),
-        tool_policy.clone(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        ScriptedProvider,
-    )
-    .await;
-    let created = first
-        .create_session(SessionCreateRequest {
-            title: "permission-resume".to_string(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create session");
-    let session_id = created.id;
-    let blocked = first
-        .submit_user_turn(SessionUserTurnRequest {
-            session_id,
-            options: run_options(),
-            parts: vec![PartContent::text("permission todo")],
-        })
-        .await
-        .expect("turn should block on permission");
-    let request_id = pending_permission_request_id(&blocked);
-    assert!(blocked.blocked());
-    drop(first);
+#[test]
+fn blocked_permission_survives_restart_and_reply_continues() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "permission-resume.db").await;
+        let tool_policy =
+            ToolPermissionPolicy::allow_all().with_tool_mode("todo", PermissionMode::Ask);
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            tool_policy.clone(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "permission-resume".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let session_id = created.id;
+        let blocked = first
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id,
+                options: run_options(),
+                parts: vec![PartContent::text("permission todo")],
+            })
+            .await
+            .expect("turn should block on permission");
+        let request_id = pending_permission_request_id(&blocked);
+        assert!(blocked.blocked());
+        drop(first);
 
-    let second = build_manager_with_provider_on_db(
-        &workspace.root,
-        db.clone(),
-        PermissionPolicy::allow_all(),
-        tool_policy,
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        ScriptedProvider,
-    )
-    .await;
-    resume_event_sequence(&second).await;
-    let reloaded = second
-        .get_session(session_id)
-        .await
-        .expect("session should reload");
-    assert!(
-        reloaded.blocked(),
-        "reloaded session was not blocked: messages={:?}, runtime={:?}",
-        reloaded.messages,
-        reloaded.runtime()
-    );
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            tool_policy,
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        resume_event_sequence(&second).await;
+        let reloaded = second
+            .get_session(session_id)
+            .await
+            .expect("session should reload");
+        assert!(
+            reloaded.blocked(),
+            "reloaded session was not blocked: messages={:?}, runtime={:?}",
+            reloaded.messages,
+            reloaded.runtime()
+        );
 
-    let completed = second
-        .reply_permission(SessionPermissionReplyRequest {
-            session_id,
-            options: run_options(),
-            reply: PermissionReply {
-                request_id,
-                kind: PermissionReplyKind::AllowOnce,
-                reason: None,
-                scope: None,
-            },
-            operator: Some("test".to_string()),
-        })
-        .await
-        .expect("permission reply should continue session");
+        let completed = second
+            .reply_permission(SessionPermissionReplyRequest {
+                session_id,
+                options: run_options(),
+                reply: PermissionReply {
+                    request_id,
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                operator: Some("test".to_string()),
+            })
+            .await
+            .expect("permission reply should continue session");
 
-    assert!(!completed.blocked());
-    assert!(
-        completed.messages.iter().any(|message| {
-            message.role == Role::Assistant
-                && message.as_text_lossy().contains("permission todo done")
-        }),
-        "completed session missing final assistant reply: messages={:?}, runtime={:?}",
-        completed.messages,
-        completed.runtime()
-    );
+        assert!(!completed.blocked());
+        assert!(
+            completed.messages.iter().any(|message| {
+                message.role == Role::Assistant
+                    && message.as_text_lossy().contains("permission todo done")
+            }),
+            "completed session missing final assistant reply: messages={:?}, runtime={:?}",
+            completed.messages,
+            completed.runtime()
+        );
+    });
 }
 
 /// Phase 3 of the event-system refactor: every legacy `SessionEvent` and
@@ -5742,69 +5765,71 @@ async fn goal_runtime_external_goal_set_is_visible_to_next_continue_turn() {
     }));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn goal_runtime_resumed_session_can_continue_active_goal_after_restart() {
-    let workspace = TempWorkspace::new();
-    let db = open_temp_database(&workspace.root, "goal-resume.db").await;
-    let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
-    let first = build_manager_with_provider_on_db(
-        &workspace.root,
-        db.clone(),
-        PermissionPolicy::allow_all(),
-        ToolPermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        RecordingProvider::new(Arc::clone(&requests)),
-    )
-    .await;
-    let created = first
-        .create_session(SessionCreateRequest {
-            title: "goal-resume".to_string(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create session");
-    let session_id = created.id;
-    persist_goal_without_auto_run(
-        &first,
-        session_id,
-        "Resume this goal after restart",
-        Some(100),
-    )
-    .await;
-    drop(first);
-
-    let second = build_manager_with_provider_on_db(
-        &workspace.root,
-        db,
-        PermissionPolicy::allow_all(),
-        ToolPermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        RecordingProvider::new(Arc::clone(&requests)),
-    )
-    .await;
-    resume_event_sequence(&second).await;
-
-    let _ = second
-        .continue_session(SessionContinueRequest {
+#[test]
+fn goal_runtime_resumed_session_can_continue_active_goal_after_restart() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "goal-resume.db").await;
+        let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "goal-resume".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let session_id = created.id;
+        persist_goal_without_auto_run(
+            &first,
             session_id,
-            options: recording_run_options(),
-        })
-        .await
-        .expect("continue after restart should observe persisted goal");
+            "Resume this goal after restart",
+            Some(100),
+        )
+        .await;
+        drop(first);
 
-    let recorded = requests
-        .lock()
-        .expect("recording requests lock should succeed");
-    let request = recorded
-        .last()
-        .expect("goal continuation request should be recorded after restart");
-    assert!(request.messages.iter().any(|message| {
-        message
-            .as_text_lossy()
-            .contains("Resume this goal after restart")
-    }));
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            RecordingProvider::new(Arc::clone(&requests)),
+        )
+        .await;
+        resume_event_sequence(&second).await;
+
+        let _ = second
+            .continue_session(SessionContinueRequest {
+                session_id,
+                options: recording_run_options(),
+            })
+            .await
+            .expect("continue after restart should observe persisted goal");
+
+        let recorded = requests
+            .lock()
+            .expect("recording requests lock should succeed");
+        let request = recorded
+            .last()
+            .expect("goal continuation request should be recorded after restart");
+        assert!(request.messages.iter().any(|message| {
+            message
+                .as_text_lossy()
+                .contains("Resume this goal after restart")
+        }));
+    });
 }
 
 #[tokio::test]

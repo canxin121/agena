@@ -5,6 +5,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -23,15 +24,46 @@ pub(crate) struct CronPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
+#[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
+#[tool_surface(
+    entry = "schedule",
+    description = "Schedule command. Set action to list, create, delete, or wakeup.",
+    summary = "List, create, delete, or trigger scheduled work.",
+    help = "Use action `list` to inspect registered cron jobs and one-shot wakeups, `create` for cron jobs, `delete` to remove a scheduled job, and `wakeup` for a one-shot wakeup. Legacy `command/args` inputs are still accepted for compatibility.",
+    tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Scheduler),
+    host_capabilities(HostCapability::Scheduler),
+    concurrency_safe = false,
+    load = "always",
+    fallback = parse_legacy_schedule_entry
+)]
+#[serde(tag = "action", rename_all = "snake_case")]
 enum ScheduleToolInput {
-    List(crate::message::CronListToolInput),
+    #[tool(exec = "cron_list")]
+    List {
+        #[serde(flatten)]
+        args: crate::message::CronListToolInput,
+    },
+    #[tool(exec = "cron_create")]
+    Create {
+        #[serde(flatten)]
+        args: crate::message::CronCreateToolInput,
+    },
+    #[tool(exec = "cron_delete")]
+    Delete {
+        #[serde(flatten)]
+        args: crate::message::CronDeleteToolInput,
+    },
+    #[tool(exec = "schedule_wakeup")]
+    Wakeup {
+        #[serde(flatten)]
+        args: crate::message::ScheduleWakeupToolInput,
+    },
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum ScheduleEditToolInput {
+enum LegacyScheduleToolInput {
+    List(crate::message::CronListToolInput),
     Create(crate::message::CronCreateToolInput),
     Delete(crate::message::CronDeleteToolInput),
     Wakeup(crate::message::ScheduleWakeupToolInput),
@@ -60,7 +92,6 @@ impl Plugin for CronPlugin {
             .description("Cron-style and one-shot wakeup scheduling tools.")
             .hooks(HookSubscription::TOOL_INVOKE)
             .tool(schedule_decl())
-            .tool(schedule_edit_decl())
             .build()
     }
 
@@ -74,72 +105,35 @@ impl Plugin for CronPlugin {
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         let _ = self.host()?;
-        match input.tool_name.as_str() {
-            "schedule" => match serde_json::from_value::<ScheduleToolInput>(input.input)? {
-                ScheduleToolInput::List(args) => {
-                    invoke("cron_list", args, input.session_id, input.call_id)
-                }
-            },
-            "schedule_edit" => {
-                match serde_json::from_value::<ScheduleEditToolInput>(input.input)? {
-                    ScheduleEditToolInput::Create(args) => {
-                        invoke("cron_create", args, input.session_id, input.call_id)
-                    }
-                    ScheduleEditToolInput::Delete(args) => {
-                        invoke("cron_delete", args, input.session_id, input.call_id)
-                    }
-                    ScheduleEditToolInput::Wakeup(args) => {
-                        invoke("schedule_wakeup", args, input.session_id, input.call_id)
-                    }
-                }
-            }
-            other => Err(PluginError::invalid_params(format!(
-                "unknown cron plugin tool '{other}'"
-            ))),
-        }
+        let (tool_name, tool_input) =
+            ScheduleToolInput::resolve_entry(input.tool_name.as_str(), input.input)?;
+        router::invoke_tool(&tool_name, tool_input, input.session_id, input.call_id)
     }
 }
 
-fn invoke<T: serde::Serialize>(
+fn schedule_decl() -> PluginToolDecl {
+    ScheduleToolInput::tool_decl()
+}
+
+fn parse_legacy_schedule_entry(
+    input: serde_json::Value,
+    primary: PluginError,
+) -> SdkResult<(String, serde_json::Value)> {
+    match serde_json::from_value::<LegacyScheduleToolInput>(input) {
+        Ok(LegacyScheduleToolInput::List(args)) => tool_args("cron_list", args),
+        Ok(LegacyScheduleToolInput::Create(args)) => tool_args("cron_create", args),
+        Ok(LegacyScheduleToolInput::Delete(args)) => tool_args("cron_delete", args),
+        Ok(LegacyScheduleToolInput::Wakeup(args)) => tool_args("schedule_wakeup", args),
+        Err(_) => Err(primary),
+    }
+}
+
+fn tool_args<T: serde::Serialize>(
     tool_name: &str,
     args: T,
-    session_id: i64,
-    call_id: i64,
-) -> SdkResult<ToolInvokeOutput> {
-    router::invoke_tool(
-        tool_name,
+) -> SdkResult<(String, serde_json::Value)> {
+    Ok((
+        tool_name.to_string(),
         serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
-        session_id,
-        call_id,
-    )
-}
-
-fn schedule_decl() -> PluginToolDecl {
-    PluginToolDecl::new(
-        "schedule",
-        crate::entry::definition::json_schema_for::<ScheduleToolInput>(),
-    )
-    .description("Schedule read command. Set command to list; pass that command's payload in args.")
-    .summary("List scheduled jobs and wakeups.")
-    .help("Use command `list` to inspect registered cron jobs and one-shot wakeups for the active runtime.")
-    .tags([ToolTag::ReadOnly, ToolTag::Scheduler])
-    .concurrency_safe(true)
-    .deferred_load()
-    .host_capability(HostCapability::Scheduler)
-}
-
-fn schedule_edit_decl() -> PluginToolDecl {
-    PluginToolDecl::new(
-        "schedule_edit",
-        crate::entry::definition::json_schema_for::<ScheduleEditToolInput>(),
-    )
-    .description(
-        "Schedule edit command. Set command to create, delete, or wakeup; pass that command's payload in args.",
-    )
-    .summary("Create, delete, or trigger scheduled work.")
-    .help("Use command `create` for cron jobs, `delete` to remove a scheduled job, and `wakeup` for a one-shot wakeup. This tool mutates scheduler state and remains deferred until loaded.")
-    .tags([ToolTag::Mutating, ToolTag::Scheduler])
-    .concurrency_safe(false)
-    .deferred_load()
-    .host_capability(HostCapability::Scheduler)
+    ))
 }

@@ -19,7 +19,7 @@ fn bundled_skills_include_expected_workflows() {
         .into_iter()
         .map(|skill| skill.frontmatter.name)
         .collect();
-    for required in ["init", "review", "security-review"] {
+    for required in ["init", "review", "security_review"] {
         assert!(names.contains(&required.to_string()), "missing {required}");
     }
 }

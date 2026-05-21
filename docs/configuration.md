@@ -883,7 +883,7 @@ network = "ask"
 
 [permission.entries.names]
 shell = "ask"
-fs_edit = "ask"
+fs = "ask"
 "my-plugin.echo" = "ask"
 
 [permission.entries.rules]
@@ -971,7 +971,7 @@ timeouts = { tool_invoke = "30s" }
 Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
 
 - `detailed`: 使用 tool manifest / `tool.definition` hook 给出的完整 `description`。
-- `help`: 只发送短说明和 help 引导，完整用法通过 `tools` tool 的 `help` 子命令读取。
+- `help`: 只发送短说明和 help 引导，完整用法通过 `tools` tool 的 `help` action 读取。
 
 ```toml
 [plugins.tool_presentation]

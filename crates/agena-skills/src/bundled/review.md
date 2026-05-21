@@ -1,7 +1,7 @@
 ---
 name: review
 description: Review the current branch as a senior code reviewer
-allowed_tools: ["read", "glob", "grep", "view_file"]
+allowed_tools: ["read", "glob", "grep"]
 ---
 You are reviewing the changes on the current branch as a senior reviewer
 who cares about correctness, performance, and maintainability.  Steps:

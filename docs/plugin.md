@@ -59,7 +59,7 @@ RuntimeConfigRegistry        PluginHostBuilder
 - `name`: plugin 内部 tool 名称。
 - `description`: 展示给模型和 UI 的说明。
 - `summary`: 简短说明。开启 help 模式时，模型只看到这个简短说明和 `tools help` 引导。
-- `help`: 详细帮助文本。不会直接进入 provider tool definition；需要时通过 `tools` 的 `help` 子命令获取。
+- `help`: 详细帮助文本。不会直接进入 provider tool definition；需要时通过 `tools` 的 `help` action 获取。
 - `description_mode`: tool 自己建议的模型可见说明模式，`detailed` 或 `help`。运行时配置可以覆盖它。
 - `input_schema`: JSON Schema，用来描述调用入参。
 - `input_paths`: 从调用入参中提取本地路径并做读写权限审计。
@@ -85,12 +85,12 @@ Tool 的模型可见名称由 tool registry 决定：
 Tool 的模型可见说明有两种模式：
 
 - `detailed`: 默认行为。Provider tool definition 使用 tool 的 `description`。
-- `help`: Provider tool definition 只使用短说明，并提示模型调用 `tools` 的 `help` 子命令获取完整帮助。
+- `help`: Provider tool definition 只使用短说明，并提示模型调用 `tools` 的 `help` action 获取完整帮助。
 
 详细帮助不随 provider 请求一起发送，避免把大量 tool、MCP server 或 skill 的长说明塞进每次模型调用。需要完整用法时，模型可以调用：
 
 ```json
-{"command": "help", "args": {"tool": "fs", "include_schema": true}}
+{"action": "help", "tool": "fs", "include_schema": true}
 ```
 
 其中 `tool` 是模型可见 tool 名称；如果有重名冲突，使用 registry 暴露出来的 `plugin_id/tool_name` 名称。`include_schema` 默认为 `true`，会把注册后的 input schema 一并返回。
@@ -117,7 +117,7 @@ fs = "detailed"
 "agena.workflow/tools" = "detailed"
 ```
 
-`tools` 的 `search` 子命令用于发现和加载 deferred tools；`help` 子命令用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `summary` 和 `help`，也可以通过 `tool.definition` hook 改写 `description`、`summary`、`help`、`description_mode` 和 `input_schema`。
+`tools` 的 `search` action 用于发现和加载 deferred tools；`help` action 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `summary` 和 `help`，也可以通过 `tool.definition` hook 改写 `description`、`summary`、`help`、`description_mode` 和 `input_schema`。
 
 ## Provided Static Plugins
 
@@ -128,7 +128,7 @@ Runtime build 注册：
 | Plugin id | 作用 |
 | --- | --- |
 | `agena.fs` | 文件系统读写相关 tools |
-| `agena.shell` | shell / powershell / monitor 相关 tools |
+| `agena.shell` | shell exec / monitor 相关 tools |
 | `agena.web` | web search / web fetch tools |
 | `agena.workflow` | plan mode、todo、worktree 等 workflow tools |
 | `agena.skills` | 扫描 `SKILL.md` 和 slash command，并动态注册 tools |
@@ -138,40 +138,38 @@ Runtime build 注册：
 | `agena.mcp` | 已配置 MCP server 的 tool/resource/prompt tools |
 | `agena.settings` | 读取、列出、校验和编辑当前 `config.json` 的 settings tools |
 
-内置 static plugin 使用少量领域级入口承载子命令，避免把每个动作都展开成独立 tool。常见入口：
+内置 static plugin 使用少量领域级入口承载 action，避免把每个动作都展开成独立 tool。常见入口：
 
-| Tool | 子命令 |
+| Tool | Action |
 | --- | --- |
-| `fs` | `read`, `view_file`, `glob`, `grep` |
-| `fs_edit` | `apply_patch`, `notebook_edit` |
-| `shell` | `bash`, `powershell`, `monitor` |
+| `fs` | `read`, `glob`, `grep`, `apply_patch`, `notebook_edit` |
+| `shell` | `exec`, `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` |
 | `web` | `fetch`, `search` |
 | `lsp` | `servers`, `definition`, `references`, `hover`, `diagnostics` |
-| `settings` | `get`, `list`, `validate` |
-| `settings_edit` | `set`, `delete`, `patch` |
-| `schedule` | `list` |
-| `schedule_edit` | `create`, `delete`, `wakeup` |
+| `settings` | `get`, `list`, `validate`, `set`, `delete`, `patch` |
+| `schedule` | `list`, `create`, `delete`, `wakeup` |
 | `workflow` | `init`, `review`, `security_review` |
 | `tools` | `search`, `help` |
+| `task` | `run` |
 | `agent` | `switch`, `restore` |
-| `goal` | `get` |
-| `goal_edit` | `create`, `clear`, `update` |
-| `user` | `ask` |
+| `todo` | `write` |
+| `session` | `get`, `rename` |
+| `goal` | `get`, `create`, `clear`, `complete` |
+| `user` | `request_input` |
 | `plan` | `enter`, `exit` |
 | `worktree` | `enter`, `exit` |
 
-这些入口统一使用 `{"command": "...", "args": {...}}` 形状。只读和写入类命令会拆成不同顶层 tool，例如 `fs` / `fs_edit`、`settings` / `settings_edit`，以保留 read-only 模型过滤、plan mode 拦截和权限 fallback 的语义边界。
+这些入口现在统一使用扁平 `{"action": "...", ...}` 形状；旧的 `{"command": "...", "args": {...}}` 仍会保留一段兼容期。当前内置 static plugin 倾向把同域动作尽量收进一个顶层 tool，再通过 action 区分读、写、调度或交互行为。
 
 `agena.mcp` 读取 MCP server snapshot，但不再把每个 MCP capability 展开成一个模型可见 tool：
 
 | Tool | 作用 |
 | --- | --- |
-| `mcp` | 只读 resource/prompt 命令：`resources_list`, `resources_read`, `prompts_list`, `prompts_get` |
-| `mcp_call` | 调用 MCP tool：`tool`，参数里包含 `server`, `tool`, `arguments` |
+| `mcp` | resource/prompt 读取和 MCP tool 调用：`list_resources`, `read_resource`, `list_prompts`, `get_prompt`, `call` |
 
 因此，MCP 对模型的可见面统一进入 plugin host 和 plugin tool registry，同时不会随 server/tool 数量线性膨胀。MCP 的网络权限按调用里的 `server` 动态审计。
 
-`agena.settings` 使用当前 runtime 的 active config path。`settings_edit` 子命令默认先校验再写入，并在有实际变更时通过 `host/config.reload` reload runtime；`dry_run=true` 会返回差异但不落盘、不 reload。
+`agena.settings` 使用当前 runtime 的 active config path。对 effective 读操作，推荐显式传 `scope = config|meta` 和相对 `path`，避免依赖 `config.` / `meta.` 前缀魔法。`settings` 里的写入类 action 默认先校验再写入，并在有实际变更时通过 `host/config.reload` reload runtime；`dry_run=true` 会返回差异但不落盘、不 reload。
 
 ## Transport
 
@@ -704,7 +702,7 @@ shell = "ask"
 
 [permission.entries.names]
 shell = "ask"
-fs_edit = "ask"
+fs = "ask"
 "my-plugin.echo" = "allow"
 ```
 

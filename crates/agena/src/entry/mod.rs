@@ -298,7 +298,7 @@ fn present_tool_entry(
 
 fn compact_tool_description(entry: &RegistryPluginEntry) -> String {
     format!(
-        "{} Full usage is available from the `tools` tool: call command `help` with tool `{}`.",
+        "{} Full usage is available from the `tools` tool: call action `help` with tool `{}`.",
         tool_summary(entry),
         entry.exposed_name
     )
@@ -455,7 +455,7 @@ impl ToolExecutor {
         let tool_name = invocation_name(invocation);
         let tags = self
             .invocation_definition(invocation)
-            .map(|entry| entry.effective_tags())
+            .map(|entry| invocation_effective_tags(&entry, invocation))
             .unwrap_or_default();
 
         if tags
@@ -610,11 +610,12 @@ impl ToolExecutor {
 
     pub fn is_concurrency_safe_invocation(&self, invocation: &ToolInvocation) -> bool {
         let invocation = PluginInvocation::from_tool_invocation(invocation);
-        self.catalogued_tools().into_iter().any(|entry| {
-            entry.exposed_name == invocation.entry_name
-                && entry.decl.concurrency_safe
-                && !entry.has_tag(crate::plugin::sdk::ToolTag::Interactive)
-        })
+        let Some(entry) = self.plugin_invocation_definition(&invocation) else {
+            return false;
+        };
+        entry.decl.concurrency_safe
+            && !entry.has_tag(crate::plugin::sdk::ToolTag::Interactive)
+            && is_concurrency_safe_entry_invocation(&entry, &invocation)
     }
 
     pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<RegistryPluginEntry> {
@@ -646,6 +647,12 @@ impl ToolExecutor {
         self.catalogued_tools()
             .into_iter()
             .find(|entry| entry.exposed_name == invocation.entry_name)
+            .or_else(|| {
+                let canonical = canonical_entry_name(invocation.entry_name.as_str());
+                self.catalogued_tools()
+                    .into_iter()
+                    .find(|entry| entry.exposed_name == canonical)
+            })
     }
 
     fn invocation_plugin_name_for(&self, invocation: &ToolInvocation) -> String {
@@ -674,8 +681,7 @@ impl ToolExecutor {
         &self,
         invocation: &PluginInvocation,
     ) -> Option<SdkEntryStreamingMode> {
-        self.plugins
-            .lookup_entry(invocation.entry_name.as_str())
+        self.plugin_resolution_for_plugin_invocation(invocation)
             .map(|entry| entry.decl.streaming)
     }
 
@@ -687,7 +693,8 @@ impl ToolExecutor {
         let definition = self
             .invocation_definition(invocation)
             .ok_or_else(|| ToolError::UnknownTool(tool_name.clone()))?;
-        if !self.tool_catalog().is_tool_enabled(&definition) {
+        let tags = invocation_effective_tags(&definition, invocation);
+        if !self.tool_catalog().are_tags_enabled(&tags) {
             return Err(ToolError::PermissionDenied(format!(
                 "tool '{tool_name}' disabled for current model profile"
             )));
@@ -695,11 +702,8 @@ impl ToolExecutor {
         let command = shell_command_from_invocation(invocation);
         Ok((
             tool_name.clone(),
-            self.agent.authorize_tool(
-                tool_name.as_str(),
-                command.as_deref(),
-                &definition.effective_tags(),
-            ),
+            self.agent
+                .authorize_tool(tool_name.as_str(), command.as_deref(), &tags),
         ))
     }
 
@@ -716,7 +720,12 @@ impl ToolExecutor {
         &self,
         invocation: &PluginInvocation,
     ) -> Option<crate::plugin::registry::PluginEntry> {
-        self.plugins.lookup_entry(invocation.entry_name.as_str())
+        self.plugins
+            .lookup_entry(invocation.entry_name.as_str())
+            .or_else(|| {
+                self.plugins
+                    .lookup_entry(canonical_entry_name(invocation.entry_name.as_str()))
+            })
     }
 
     fn collect_declared_path_checks(
@@ -825,9 +834,24 @@ impl ToolExecutor {
     ) -> Result<(), ToolError> {
         if let Some(effects) = filesystem_effects_from_input(input)? {
             let command = input
-                .get("command")
-                .filter(|value| !matches!(value.as_str(), Some("bash" | "powershell" | "monitor")))
-                .or_else(|| input.pointer("/args/command"))
+                .pointer("/args/command")
+                .or_else(|| {
+                    input.get("command").filter(|value| {
+                        !matches!(
+                            value.as_str(),
+                            Some(
+                                "bash"
+                                    | "powershell"
+                                    | "exec"
+                                    | "monitor"
+                                    | "monitor_start"
+                                    | "monitor_list"
+                                    | "monitor_read"
+                                    | "monitor_stop"
+                            )
+                        )
+                    })
+                })
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
             if !command.is_empty() {
@@ -1008,12 +1032,11 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
-        if invocation.name.rsplit('/').next() != Some("bash") {
+        let Some(ToolPayloadInput::Bash(bash_input)) =
+            ToolPayloadInput::from_invocation(invocation)
+        else {
             return Ok((invocation.clone(), None));
-        }
-        let mut input_value = invocation_input_value(invocation);
-        let bash_input: crate::message::BashToolInput = serde_json::from_value(input_value.clone())
-            .map_err(|err| ToolError::InvalidInput(format!("bash input: {err}")))?;
+        };
         let prepared_shell = self.prepare_shell_command(&bash_input, session_id, call_id)?;
         let Some(prepared_shell) = prepared_shell.clone() else {
             return Ok((invocation.clone(), None));
@@ -1023,8 +1046,13 @@ impl ToolExecutor {
         }
         let mut rewritten = bash_input;
         rewritten.command = prepared_shell.command.clone();
-        input_value = serde_json::to_value(rewritten)
-            .map_err(|err| ToolError::InvalidInput(format!("bash input: {err}")))?;
+        let input_value = if invocation.name.rsplit('/').next() == Some("bash") {
+            serde_json::to_value(rewritten)
+                .map_err(|err| ToolError::InvalidInput(format!("bash input: {err}")))?
+        } else {
+            let rewritten_invocation = ToolPayloadInput::Bash(rewritten).into_invocation();
+            serde_json::Value::from(rewritten_invocation.input)
+        };
         let input = StructuredObject::try_from(input_value)
             .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
         Ok((
@@ -1132,8 +1160,7 @@ impl ToolExecutor {
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
 
         let resolution = self
-            .plugins
-            .lookup_entry(plugin_invocation.entry_name.as_str())
+            .plugin_resolution_for_plugin_invocation(&plugin_invocation)
             .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.entry_name.clone()))?;
         let _executor_guard = in_process_router::install_executor_context(
             self,
@@ -1230,8 +1257,7 @@ impl ToolExecutor {
             tracing::info_span!("tool.call", session_id, call_id, tool = tool_name.as_str(),)
                 .entered();
         let resolution = self
-            .plugins
-            .lookup_entry(plugin_invocation.entry_name.as_str())
+            .plugin_resolution_for_plugin_invocation(&plugin_invocation)
             .ok_or_else(|| ToolError::UnknownTool(plugin_invocation.entry_name.clone()))?;
         let _executor_guard = in_process_router::install_executor_context(
             self,
@@ -1672,6 +1698,131 @@ fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
     invocation.entry_name.clone()
 }
 
+fn canonical_entry_name(name: &str) -> &str {
+    match name {
+        "fs_edit" => "fs",
+        "settings_edit" => "settings",
+        "schedule_edit" => "schedule",
+        "session_edit" => "session",
+        "goal_edit" => "goal",
+        "mcp_call" => "mcp",
+        _ => name,
+    }
+}
+
+fn command_from_input(input: &StructuredObject) -> Option<&str> {
+    input
+        .get("action")
+        .and_then(crate::message::StructuredValue::as_text)
+        .or_else(|| {
+            input
+                .get("command")
+                .and_then(crate::message::StructuredValue::as_text)
+        })
+}
+
+fn invocation_effective_tags(
+    definition: &RegistryPluginEntry,
+    invocation: &ToolInvocation,
+) -> Vec<crate::plugin::sdk::ToolTag> {
+    let mut tags = definition.effective_tags();
+    let Some(command) = command_from_input(&invocation.input) else {
+        return tags;
+    };
+
+    match (
+        canonical_entry_name(definition.exposed_name.as_str()),
+        command,
+    ) {
+        ("fs", "read" | "view_file" | "glob" | "grep") => {
+            set_invocation_access_tags(&mut tags, true, false, true, false)
+        }
+        ("fs", "apply_patch" | "notebook_edit") => {
+            set_invocation_access_tags(&mut tags, false, true, false, true)
+        }
+        ("settings", "get" | "list" | "validate") => {
+            set_invocation_access_tags(&mut tags, true, false, false, false)
+        }
+        ("settings", "set" | "delete" | "patch") => {
+            set_invocation_access_tags(&mut tags, false, true, false, true)
+        }
+        ("schedule", "list") => set_invocation_access_tags(&mut tags, true, false, false, false),
+        ("schedule", "create" | "delete" | "wakeup") => {
+            set_invocation_access_tags(&mut tags, false, true, false, false)
+        }
+        ("session", "get") => set_invocation_access_tags(&mut tags, true, false, false, false),
+        ("session", "rename") => set_invocation_access_tags(&mut tags, false, true, false, false),
+        ("goal", "get") => set_invocation_access_tags(&mut tags, true, false, false, false),
+        ("goal", "create" | "clear" | "complete" | "update") => {
+            set_invocation_access_tags(&mut tags, false, true, false, false)
+        }
+        ("mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
+            set_invocation_access_tags(&mut tags, true, false, false, false)
+        }
+        ("mcp", "call" | "tool") => {
+            set_invocation_access_tags(&mut tags, false, true, false, false)
+        }
+        _ => {}
+    }
+
+    tags
+}
+
+fn set_invocation_access_tags(
+    tags: &mut Vec<crate::plugin::sdk::ToolTag>,
+    read_only: bool,
+    mutating: bool,
+    filesystem_read: bool,
+    filesystem_write: bool,
+) {
+    tags.retain(|tag| {
+        !matches!(
+            tag,
+            crate::plugin::sdk::ToolTag::ReadOnly
+                | crate::plugin::sdk::ToolTag::Mutating
+                | crate::plugin::sdk::ToolTag::FilesystemRead
+                | crate::plugin::sdk::ToolTag::FilesystemWrite
+        )
+    });
+    if read_only {
+        tags.push(crate::plugin::sdk::ToolTag::ReadOnly);
+    }
+    if mutating {
+        tags.push(crate::plugin::sdk::ToolTag::Mutating);
+    }
+    if filesystem_read {
+        tags.push(crate::plugin::sdk::ToolTag::FilesystemRead);
+    }
+    if filesystem_write {
+        tags.push(crate::plugin::sdk::ToolTag::FilesystemWrite);
+    }
+}
+
+fn is_concurrency_safe_entry_invocation(
+    entry: &RegistryPluginEntry,
+    invocation: &PluginInvocation,
+) -> bool {
+    let Some(command) = command_from_input(&invocation.input) else {
+        return entry.decl.concurrency_safe;
+    };
+
+    match (canonical_entry_name(entry.exposed_name.as_str()), command) {
+        ("fs", "read" | "view_file" | "glob" | "grep") => true,
+        ("fs", "apply_patch" | "notebook_edit") => false,
+        ("settings", "get" | "list" | "validate") => true,
+        ("settings", "set" | "delete" | "patch") => false,
+        ("schedule", "list") => true,
+        ("schedule", "create" | "delete" | "wakeup") => false,
+        ("session", "get") => true,
+        ("session", "rename") => false,
+        ("goal", "get") => true,
+        ("goal", "create" | "clear" | "complete" | "update") => false,
+        ("mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => true,
+        ("mcp", "call" | "tool") => false,
+        _ => entry.decl.concurrency_safe,
+    }
+}
+
 fn apply_patch_execution_from_tool_output(output: &ToolOutput) -> Option<ApplyPatchExecution> {
     let payload = output.to_json_payload()?;
     let operation_id = payload.get("operation_id")?.as_str()?.to_string();
@@ -2049,7 +2200,7 @@ mod tests {
 
         async fn list_tools(&self) -> SdkResult<Vec<ToolDescriptor>> {
             Ok(vec![ToolDescriptor {
-                name: "fs_edit".to_string(),
+                name: "fs".to_string(),
                 description: Some("Patch files in the workspace".to_string()),
                 summary: Some("Patch files".to_string()),
                 help: Some("Patch files in the workspace.".to_string()),
@@ -2451,6 +2602,7 @@ mod tests {
                 file_path: "notes.txt".to_string(),
                 offset: Some(2),
                 limit: Some(2),
+                mode: crate::message::ReadMode::Auto,
             }))
             .expect("read default tool should succeed");
 
@@ -2459,12 +2611,14 @@ mod tests {
                 preview,
                 truncated,
                 loaded_paths,
+                attachment,
             } => {
                 let preview = preview.expect("preview must exist");
                 assert!(preview.contains("2: two"));
                 assert!(preview.contains("3: three"));
                 assert_eq!(truncated, Some(false));
                 assert_eq!(loaded_paths, vec!["notes.txt".to_string()]);
+                assert!(attachment.is_none());
             }
             other => panic!("expected read output, got {other:?}"),
         }
@@ -2560,41 +2714,43 @@ mod tests {
     }
 
     #[test]
-    fn view_file_provided_returns_metadata_and_attachment() {
+    fn read_provided_auto_attaches_image_file() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("pixel.png");
         fs::write(&file_path, sample_png_bytes()).expect("failed to seed png");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::ViewFile(ViewFileToolInput {
-                path: "pixel.png".to_string(),
+            .execute_tool_payload_detailed(&ToolPayloadInput::Read(ReadToolInput {
+                file_path: "pixel.png".to_string(),
+                offset: None,
+                limit: None,
+                mode: crate::message::ReadMode::Auto,
             }))
-            .expect("view_file should succeed");
+            .expect("read should attach image files in auto mode");
 
         match result.output {
-            ToolPayloadOutput::ViewFile {
-                path,
-                kind,
-                mime,
-                size_bytes,
-                filename,
-                width,
-                height,
-                duration_ms,
-                page_count,
+            ToolPayloadOutput::Read {
+                preview,
+                truncated,
+                loaded_paths,
+                attachment,
             } => {
-                assert_eq!(path, "pixel.png");
-                assert_eq!(kind, crate::message::AttachmentKind::Image);
-                assert_eq!(mime, "image/png");
-                assert!(size_bytes > 0);
-                assert_eq!(filename.as_deref(), Some("pixel.png"));
-                assert_eq!(width, Some(1));
-                assert_eq!(height, Some(1));
-                assert_eq!(duration_ms, None);
-                assert_eq!(page_count, None);
+                assert!(preview.is_none());
+                assert!(truncated.is_none());
+                assert_eq!(loaded_paths, vec!["pixel.png".to_string()]);
+                let attachment = attachment.expect("attachment metadata should exist");
+                assert_eq!(attachment.path, "pixel.png");
+                assert_eq!(attachment.kind, crate::message::AttachmentKind::Image);
+                assert_eq!(attachment.mime, "image/png");
+                assert!(attachment.size_bytes > 0);
+                assert_eq!(attachment.filename.as_deref(), Some("pixel.png"));
+                assert_eq!(attachment.width, Some(1));
+                assert_eq!(attachment.height, Some(1));
+                assert_eq!(attachment.duration_ms, None);
+                assert_eq!(attachment.page_count, None);
             }
-            other => panic!("expected view_file output, got {other:?}"),
+            other => panic!("expected read output, got {other:?}"),
         }
 
         assert_eq!(result.view.attachments.len(), 1);
@@ -2609,36 +2765,40 @@ mod tests {
     }
 
     #[test]
-    fn view_file_provided_attaches_generic_text_file() {
+    fn read_provided_attachment_mode_attaches_text_file() {
         let workspace = TempWorkspace::new();
         let file_path = workspace.root.join("notes.txt");
         fs::write(&file_path, "hello from agena\n").expect("failed to seed text file");
 
         let executor = build_executor(&workspace.root);
         let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::ViewFile(ViewFileToolInput {
-                path: "notes.txt".to_string(),
+            .execute_tool_payload_detailed(&ToolPayloadInput::Read(ReadToolInput {
+                file_path: "notes.txt".to_string(),
+                offset: None,
+                limit: None,
+                mode: crate::message::ReadMode::Attachment,
             }))
-            .expect("view_file should succeed for text file");
+            .expect("read attachment mode should succeed for text files");
 
         match result.output {
-            ToolPayloadOutput::ViewFile {
-                path,
-                kind,
-                mime,
-                filename,
-                width,
-                height,
-                ..
+            ToolPayloadOutput::Read {
+                preview,
+                truncated,
+                loaded_paths,
+                attachment,
             } => {
-                assert_eq!(path, "notes.txt");
-                assert_eq!(kind, crate::message::AttachmentKind::File);
-                assert_eq!(mime, "text/plain");
-                assert_eq!(filename.as_deref(), Some("notes.txt"));
-                assert_eq!(width, None);
-                assert_eq!(height, None);
+                assert!(preview.is_none());
+                assert!(truncated.is_none());
+                assert_eq!(loaded_paths, vec!["notes.txt".to_string()]);
+                let attachment = attachment.expect("attachment metadata should exist");
+                assert_eq!(attachment.path, "notes.txt");
+                assert_eq!(attachment.kind, crate::message::AttachmentKind::File);
+                assert_eq!(attachment.mime, "text/plain");
+                assert_eq!(attachment.filename.as_deref(), Some("notes.txt"));
+                assert_eq!(attachment.width, None);
+                assert_eq!(attachment.height, None);
             }
-            other => panic!("expected view_file output, got {other:?}"),
+            other => panic!("expected read output, got {other:?}"),
         }
 
         assert_eq!(result.view.attachments.len(), 1);
@@ -2648,6 +2808,31 @@ mod tests {
         match &attachment.source {
             crate::message::AttachmentSource::Base64 { data } => assert!(!data.is_empty()),
             other => panic!("expected base64 attachment source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn view_file_compatibility_alias_still_attaches_files() {
+        let workspace = TempWorkspace::new();
+        let file_path = workspace.root.join("pixel.png");
+        fs::write(&file_path, sample_png_bytes()).expect("failed to seed png");
+
+        let executor = build_executor(&workspace.root);
+        let result = executor
+            .execute_tool_payload_detailed(&ToolPayloadInput::ViewFile(ViewFileToolInput {
+                path: "pixel.png".to_string(),
+            }))
+            .expect("legacy view_file alias should still succeed");
+
+        match result.output {
+            ToolPayloadOutput::ViewFile {
+                path, kind, mime, ..
+            } => {
+                assert_eq!(path, "pixel.png");
+                assert_eq!(kind, crate::message::AttachmentKind::Image);
+                assert_eq!(mime, "image/png");
+            }
+            other => panic!("expected view_file output, got {other:?}"),
         }
     }
 
@@ -2750,7 +2935,7 @@ mod tests {
         let result = executor
             .execute_tool_payload_detailed(&ToolPayloadInput::ToolSearch(ToolSearchToolInput {
                 query: "patch files".to_string(),
-                load: vec!["fs_edit".to_string()],
+                load: vec!["fs".to_string()],
                 limit: None,
             }))
             .expect("tool_search should succeed");
@@ -2760,8 +2945,8 @@ mod tests {
                 results,
                 loaded_tools,
             } => {
-                assert!(results.iter().any(|name| name == "fs_edit"));
-                assert_eq!(loaded_tools, vec!["fs_edit".to_string()]);
+                assert!(results.iter().any(|name| name == "fs"));
+                assert_eq!(loaded_tools, vec!["fs".to_string()]);
             }
             other => panic!("expected tool_search output, got {other:?}"),
         }
@@ -2825,7 +3010,7 @@ mod tests {
             .expect("plugin_echo should be model-visible");
         assert_eq!(
             visible.description_text(),
-            "Echo a plugin message. Full usage is available from the `tools` tool: call command `help` with tool `plugin_echo`."
+            "Echo a plugin message. Full usage is available from the `tools` tool: call action `help` with tool `plugin_echo`."
         );
         assert!(
             visible.decl.help.is_none(),
@@ -2972,6 +3157,48 @@ mod tests {
     }
 
     #[test]
+    fn shell_exec_grouped_bash_invocation_runs_command() {
+        if cfg!(windows) {
+            return;
+        }
+
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root);
+        let invocation = ToolPayloadInput::Bash(BashToolInput {
+            command: "echo hello_shell_exec".to_string(),
+            description: "grouped shell exec".to_string(),
+            timeout_ms: Some(30_000),
+            workdir: None,
+            filesystem_effects: Vec::new(),
+        })
+        .into_invocation();
+        assert_eq!(invocation.name, "shell");
+
+        let prepared = executor
+            .prepare_invocation(&invocation, 7, 9)
+            .expect("prepare should succeed for shell.exec");
+        let payload = serde_json::Value::from(prepared.invocation.input.clone());
+        assert_eq!(payload["action"], "exec");
+        assert_eq!(payload["shell"], "bash");
+        assert_eq!(payload["command"], "echo hello_shell_exec");
+
+        let execution = executor
+            .execute_invocation_detailed(&prepared.invocation, 7, 9)
+            .expect("grouped shell exec should succeed");
+
+        match ToolPayloadOutput::from_tool_output("bash", &execution.output) {
+            Some(ToolPayloadOutput::Bash { output, .. }) => {
+                let output = output
+                    .as_deref()
+                    .expect("output should exist")
+                    .to_ascii_lowercase();
+                assert!(output.contains("hello_shell_exec"));
+            }
+            other => panic!("expected bash output, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn bash_provided_explains_no_match_exit_codes() {
         if cfg!(windows) {
             return;
@@ -3104,7 +3331,7 @@ mod tests {
     }
 
     #[test]
-    fn readonly_model_profile_disables_apply_patch_and_task_tools() {
+    fn readonly_model_profile_keeps_fs_tool_and_disables_task_tool() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root).with_model_id("gpt-readonly");
 
@@ -3115,8 +3342,15 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
 
         assert!(names.contains("fs"));
-        assert!(!names.contains("fs_edit"));
         assert!(!names.contains("task"));
+
+        let err = executor
+            .execute_tool_payload_detailed(&ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
+                patch: "*** Begin Patch\n*** Add File: blocked.txt\n+nope\n*** End Patch"
+                    .to_string(),
+            }))
+            .expect_err("readonly profile should reject mutating fs subcommands");
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
     }
 
     #[test]
@@ -3171,13 +3405,14 @@ mod tests {
     }
 
     #[test]
-    fn prepare_invocation_keeps_provided_calls_in_custom_wire_shape() {
+    fn prepare_invocation_keeps_provided_calls_in_action_wire_shape() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
         let invocation = ToolPayloadInput::Read(ReadToolInput {
             file_path: "notes.txt".to_string(),
             offset: Some(3),
             limit: Some(5),
+            mode: crate::message::ReadMode::Auto,
         })
         .into_invocation();
 
@@ -3193,10 +3428,10 @@ mod tests {
         assert_eq!(name, "fs");
         assert_eq!(plugin_name.as_deref(), Some(super::fs_plugin_id()));
         let payload = serde_json::Value::from(input);
-        assert_eq!(payload["command"], "read");
-        assert_eq!(payload["args"]["file_path"], "notes.txt");
-        assert_eq!(payload["args"]["offset"], 3);
-        assert_eq!(payload["args"]["limit"], 5);
+        assert_eq!(payload["action"], "read");
+        assert_eq!(payload["file_path"], "notes.txt");
+        assert_eq!(payload["offset"], 3);
+        assert_eq!(payload["limit"], 5);
     }
 
     #[test]
@@ -3748,11 +3983,34 @@ mod tests {
         executor
             .enforce_plan_mode_for(&bash_input("ls -la"), 7)
             .expect("ls -la is read-only and should be allowed");
+        executor
+            .enforce_plan_mode_for(
+                &ToolPayloadInput::Read(ReadToolInput {
+                    file_path: "Cargo.toml".to_string(),
+                    offset: None,
+                    limit: None,
+                    mode: crate::message::ReadMode::Auto,
+                })
+                .into_invocation(),
+                7,
+            )
+            .expect("fs read is read-only and should be allowed");
 
         // Mutating bash is blocked.
         let err = executor
             .enforce_plan_mode_for(&bash_input("rm -rf node_modules"), 7)
             .unwrap_err();
+        assert!(matches!(err, ToolError::PermissionDenied(_)));
+        let err = executor
+            .enforce_plan_mode_for(
+                &ToolPayloadInput::ApplyPatch(ApplyPatchToolInput {
+                    patch: "*** Begin Patch\n*** Add File: plan-mode.txt\n+blocked\n*** End Patch"
+                        .to_string(),
+                })
+                .into_invocation(),
+                7,
+            )
+            .expect_err("mutating fs subcommands should be blocked in plan mode");
         assert!(matches!(err, ToolError::PermissionDenied(_)));
 
         // Unknown / unclassified bash is blocked (safety default).

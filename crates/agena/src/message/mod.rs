@@ -19,12 +19,12 @@ pub use part::{
     MonitorStream, MonitorSummary, MonitorToolInput, NotebookCellType, NotebookEditMode,
     NotebookEditToolInput, OperationBlock, OperationError, OperationPart, PartContent, PartKind,
     PartStateTransitionError, PermissionRequestPart, PluginInvocation, PowerShellToolInput,
-    ReadToolInput, ReasoningPart, RequestPart, RequestUserInputToolInput, ScheduleWakeupToolInput,
-    SearchResultItem, StructuredField, StructuredObject, StructuredValue, TableColumn,
-    TaskSubagentType, TaskToolInput, TextPart, TimeRange, TodoItem, TodoPriority, TodoStatus,
-    TodoWriteToolInput, ToolAttachment, ToolInvocation, ToolOutput, ToolSearchToolInput,
-    UpdateGoalStatus, UpdateGoalToolInput, UserInputOption, UserInputQuestion, UserInputReply,
-    UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput,
+    ReadMode, ReadToolInput, ReasoningPart, RequestPart, RequestUserInputToolInput,
+    ScheduleWakeupToolInput, SearchResultItem, StructuredField, StructuredObject, StructuredValue,
+    TableColumn, TaskSubagentType, TaskToolInput, TextPart, TimeRange, TodoItem, TodoPriority,
+    TodoStatus, TodoWriteToolInput, ToolAttachment, ToolInvocation, ToolOutput,
+    ToolSearchToolInput, UpdateGoalStatus, UpdateGoalToolInput, UserInputOption, UserInputQuestion,
+    UserInputReply, UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput,
     WebFetchToolInput, WebSearchResult, WebSearchToolInput, WorkflowPromptToolInput,
 };
 pub(crate) use part::{deserialize_user_input_answers, user_input_answers_is_empty};

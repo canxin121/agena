@@ -463,6 +463,15 @@ pub struct SessionExecutionContextResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionPromptUsageResource {
+    pub current_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_context_window_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionExecutionResource {
     pub session: SessionResource,
     pub blocked: bool,
@@ -476,6 +485,8 @@ pub struct SessionExecutionResource {
     pub pending_user_input_requests: Vec<UserInputRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub goal: Option<SessionGoalResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_usage: Option<SessionPromptUsageResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

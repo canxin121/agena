@@ -241,6 +241,7 @@ impl ApiService {
                 Some(goal) => Some(self.session_goal_resource(manager, session, goal).await?),
                 None => None,
             },
+            prompt_usage: session_prompt_usage_resource(session),
         })
     }
 
@@ -262,6 +263,65 @@ impl ApiService {
             updated_at: goal.updated_at,
             completed_at: goal.completed_at,
         })
+    }
+}
+
+fn session_prompt_usage_resource(session: &Session) -> Option<SessionPromptUsageResource> {
+    session_prompt_usage_from_runtime(
+        &session.runtime().prompt_tokens,
+        session.runtime().execution.agent_run.max_output_tokens,
+    )
+}
+
+fn session_prompt_usage_from_runtime(
+    prompt_tokens: &agena::session::PromptTokenRuntime,
+    max_output_tokens: Option<u32>,
+) -> Option<SessionPromptUsageResource> {
+    let current_tokens = prompt_tokens.prompt_tokens()?;
+    let model_context_window_tokens = prompt_tokens.model_context_window_tokens;
+    let budget_tokens = Some(agena::session::estimate_prompt_budget_threshold_tokens(
+        model_context_window_tokens,
+        max_output_tokens,
+    ))
+    .filter(|tokens| *tokens > 0);
+
+    Some(SessionPromptUsageResource {
+        current_tokens,
+        budget_tokens,
+        model_context_window_tokens,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_prompt_usage_from_runtime;
+    use agena::session::{
+        PromptTokenRuntime, PromptTokenUsageSnapshot, estimate_prompt_budget_threshold_tokens,
+    };
+
+    #[test]
+    fn session_prompt_usage_resource_counts_only_prompt_side_tokens() {
+        let runtime = PromptTokenRuntime {
+            last_successful_usage: Some(PromptTokenUsageSnapshot {
+                input_tokens: 1_200,
+                output_tokens: 600,
+                reasoning_tokens: 400,
+                cache_write_tokens: 30,
+                cache_read_tokens: 20,
+            }),
+            model_context_window_tokens: Some(8_192),
+            ..Default::default()
+        };
+        let usage = session_prompt_usage_from_runtime(&runtime, Some(512)).expect("prompt usage");
+        assert_eq!(usage.current_tokens, 1_250);
+        assert_eq!(
+            usage.budget_tokens,
+            Some(estimate_prompt_budget_threshold_tokens(
+                Some(8_192),
+                Some(512)
+            ))
+        );
+        assert_eq!(usage.model_context_window_tokens, Some(8_192));
     }
 }
 

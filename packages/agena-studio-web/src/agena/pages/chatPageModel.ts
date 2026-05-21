@@ -245,14 +245,6 @@ function patchSessionStateFromEvent(
         },
         shouldRefresh: false,
       }
-    case 'message_revised':
-      return {
-        state: {
-          ...state,
-          timelineEvents: nextTimelineEvents,
-        },
-        shouldRefresh: true,
-      }
     default:
       return {
         state: {
@@ -287,7 +279,6 @@ export function applySessionEvent(state: ChatEventState, event: SessionEventReco
     case 'turn_completed':
     case 'turn_aborted':
     case 'assistant_message_completed':
-    case 'message_revised':
       return patchSessionStateFromEvent(state, event, payload)
     default:
       return {

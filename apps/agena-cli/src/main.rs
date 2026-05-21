@@ -27,8 +27,11 @@ use async_trait::async_trait;
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[tokio::main]
-async fn main() -> Result<(), agena::AppError> {
+fn main() -> Result<(), agena::AppError> {
+    agena::runtime::build_app_runtime()?.block_on(async_main())
+}
+
+async fn async_main() -> Result<(), agena::AppError> {
     let cli = AgenaCli::parse();
     if let Some(args) = tui_launch_args(&cli) {
         return agena_tui::run_with_load_request(

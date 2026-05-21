@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-use crate::hooks::ChatMessage;
-
 // ── turn lifecycle ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,41 +17,6 @@ pub struct PostTurnInput {
     pub message_count: usize,
 }
 
-// ── session.compacting ─────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionCompactingInput {
-    pub session_id: i64,
-    pub messages: Vec<ChatMessage>,
-    pub strategy: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SessionCompactingPatch {
-    /// Replace the message list that will be handed to the compaction
-    /// strategy. If `None`, the original list is used unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub messages: Option<Vec<ChatMessage>>,
-    /// Replace the auto-generated summary entirely. Use this to wire an
-    /// LLM-backed summarizer or a remote compaction service: the host
-    /// will skip its built-in heuristic and write this text into the
-    /// transcript instead.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary: Option<String>,
-}
-
-// ── session.compacted ──────────────────────────────────────────────────────
-
-/// Fired after compaction completes. Notification — no patch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionCompactedInput {
-    pub session_id: i64,
-    pub strategy: String,
-    pub summary: String,
-    pub messages_before: usize,
-    pub messages_after: usize,
-}
-
 // ── session.start ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -62,7 +25,6 @@ pub enum SessionStartSource {
     Startup,
     Resume,
     Clear,
-    Compact,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

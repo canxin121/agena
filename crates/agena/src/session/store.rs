@@ -1106,7 +1106,7 @@ impl SessionStore {
             || !meta.runtime_state.provider_anchors.is_empty()
             || !meta.runtime_state.execution.is_empty()
             || !meta.runtime_state.goal.is_empty()
-            || meta.runtime_state.prompt_window.generation > 0
+            || !meta.runtime_state.prompt_window.is_empty()
         {
             let runtime = meta.runtime_state.clone();
             let updated = with_transaction_and_effects(&self.db, move |txn, _effects| {
@@ -1204,12 +1204,6 @@ impl SessionStore {
         } else {
             self.history.append_items(session_id, items, now).await?;
         }
-
-        // Re-project from the unified store and update session state.
-        let events = self.history.list_session_events(session_id).await?;
-        let view = super::history::fold_session_view(events.as_slice())
-            .map_err(|err| AppError::Internal(format!("failed to project session view: {err}")))?;
-
         let updated = with_transaction_and_effects(&self.db, move |txn, _effects| {
             let runtime = runtime_to_persist.clone();
             Box::pin(async move {
@@ -1221,11 +1215,14 @@ impl SessionStore {
         })
         .await?;
 
+        let projection = self
+            .history
+            .load_projection(session_id, updated.runtime.clone())
+            .await?;
         session.apply_persisted_metadata(&updated);
         session.goal = load_session_goal(&self.db, session_id).await?;
-        session.replace_messages(view.messages);
-        session.runtime = updated.runtime.clone();
-        session.refresh_derived();
+        session.replace_messages(projection.messages);
+        session.runtime = projection.runtime;
 
         let session_for_cache = session.clone();
         with_cache(self.cache.as_ref(), |guard| {
@@ -1264,7 +1261,6 @@ impl SessionStore {
                 }));
             }
         }
-
         let cache = Arc::clone(&self.cache);
         let session_for_cache = session.clone();
         let session_goal = session.goal.clone();
@@ -1759,7 +1755,6 @@ fn event_targets_message(kind: &EventKind, message_id: i64) -> bool {
         EventKind::ToolCallIssued(payload) => payload.message_id.raw() == message_id,
         EventKind::ToolCallCompleted(payload) => payload.message_id.raw() == message_id,
         EventKind::SystemNoticeAppended(payload) => payload.message_id.raw() == message_id,
-        EventKind::MessageRevised(payload) => payload.target_message_id == message_id,
         _ => false,
     }
 }
@@ -1803,12 +1798,16 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
             }
         }
         EventKind::ToolCallIssued(p) => visit(p.message_id.raw()),
-        EventKind::ToolCallCompleted(p) => visit(p.message_id.raw()),
+        EventKind::ToolCallCompleted(p) => {
+            visit(p.message_id.raw());
+            if let Some(part) = &p.part {
+                visit(part.message_id);
+            }
+        }
         EventKind::SystemNoticeAppended(p) => {
             visit(p.message_id.raw());
             visit_rewind_checkpoint_ids(p, &mut visit);
         }
-        EventKind::MessageRevised(p) => visit(p.target_message_id),
         EventKind::MessagePartUpdated(p) => {
             visit(p.message_id);
             visit(p.part.message_id);
@@ -1873,11 +1872,6 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         EventKind::MessagePartUpdated(p) => {
             visit(p.part.id);
         }
-        EventKind::MessageRevised(p) => {
-            if let super::history::RevisionKind::AttachmentStripped { part_id } = &p.kind {
-                visit(*part_id);
-            }
-        }
         EventKind::RunStarted(_)
         | EventKind::RunFailed(_)
         | EventKind::StreamError(_)
@@ -1896,8 +1890,12 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::TurnAborted(_)
         | EventKind::PluginEvent(_)
         | EventKind::ToolCallIssued(_)
-        | EventKind::ToolCallCompleted(_)
         | EventKind::SystemNoticeAppended(_) => {}
+        EventKind::ToolCallCompleted(p) => {
+            if let Some(part) = &p.part {
+                visit(part.id);
+            }
+        }
     }
 }
 
@@ -1925,13 +1923,13 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         }
         EventKind::ToolCallCompleted(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
+            if let Some(part) = &mut p.part {
+                part.message_id = f(part.message_id);
+            }
         }
         EventKind::SystemNoticeAppended(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
             rewrite_rewind_checkpoint_ids(p, &mut f);
-        }
-        EventKind::MessageRevised(p) => {
-            p.target_message_id = f(p.target_message_id);
         }
         EventKind::MessagePartUpdated(p) => {
             p.message_id = f(p.message_id);
@@ -2003,11 +2001,6 @@ fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
         EventKind::MessagePartUpdated(p) => {
             p.part.id = f(p.part.id);
         }
-        EventKind::MessageRevised(p) => {
-            if let super::history::RevisionKind::AttachmentStripped { part_id } = &mut p.kind {
-                *part_id = f(*part_id);
-            }
-        }
         EventKind::RunStarted(_)
         | EventKind::RunFailed(_)
         | EventKind::StreamError(_)
@@ -2025,9 +2018,13 @@ fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
         | EventKind::TurnCompleted(_)
         | EventKind::TurnAborted(_)
         | EventKind::ToolCallIssued(_)
-        | EventKind::ToolCallCompleted(_)
         | EventKind::SystemNoticeAppended(_)
         | EventKind::PluginEvent(_) => {}
+        EventKind::ToolCallCompleted(p) => {
+            if let Some(part) = &mut p.part {
+                part.id = f(part.id);
+            }
+        }
     }
 }
 
@@ -2059,7 +2056,6 @@ fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         | EventKind::ToolCallIssued(_)
         | EventKind::ToolCallCompleted(_)
         | EventKind::SystemNoticeAppended(_)
-        | EventKind::MessageRevised(_)
         | EventKind::PluginEvent(_) => {}
     }
 }

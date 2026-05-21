@@ -377,6 +377,23 @@ impl ModelRuntime for NamedProvider {
         Ok(response)
     }
 
+    async fn compact_conversation(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.target.compact_conversation(request).await
+    }
+
+    async fn compact_conversation_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.target
+            .compact_conversation_for_adapter(adapter_id, request)
+            .await
+    }
+
     async fn complete_stream(
         &self,
         request: CompletionRequest,

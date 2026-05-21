@@ -195,10 +195,6 @@ impl<P: Plugin> PluginDispatcher<P> {
                 let i: ConfigInput = serde_json::from_value(params)?;
                 ok_json(&plugin.config_resolved(i).await?)
             }
-            method::HOOK_SESSION_COMPACTING => {
-                let i: SessionCompactingInput = serde_json::from_value(params)?;
-                ok_json(&plugin.session_compacting(i).await?)
-            }
             method::HOOK_PRE_TURN => {
                 let i: PreTurnInput = serde_json::from_value(params)?;
                 plugin.pre_turn(i).await?;
@@ -216,11 +212,6 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_SESSION_END => {
                 let i: SessionEndInput = serde_json::from_value(params)?;
                 plugin.session_end(i).await?;
-                Ok(Value::Object(Default::default()))
-            }
-            method::HOOK_SESSION_COMPACTED => {
-                let i: SessionCompactedInput = serde_json::from_value(params)?;
-                plugin.session_compacted(i).await?;
                 Ok(Value::Object(Default::default()))
             }
             method::HOOK_USER_PROMPT_SUBMIT => {

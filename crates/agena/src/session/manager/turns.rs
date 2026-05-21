@@ -183,17 +183,6 @@ impl SessionManager {
         result
     }
 
-    pub async fn compact_session(
-        &self,
-        _session_id: i64,
-        _options: SessionRunOptions,
-    ) -> Result<Session, AppError> {
-        Err(AppError::Internal(
-            "prompt compaction is disabled because provider prompts are append-only for cache stability"
-                .to_string(),
-        ))
-    }
-
     pub async fn spawn_subtask(
         &self,
         request: SessionSubtaskRequest,

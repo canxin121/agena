@@ -211,10 +211,6 @@ function createDeps(): ChatSessionActionsDeps & { calls: string[] } {
       )
       return sessionState({ run_state: 'awaiting_model' })
     },
-    unrewindSession: async ({ sessionId, messageId }) => {
-      calls.push(`unrewindSession:${sessionId}:${messageId}`)
-      return sessionState()
-    },
     updateSession: async ({ sessionId, title, parentId, version }) => {
       calls.push(`updateSession:${sessionId}:${title}:${parentId || ''}:${version || ''}`)
       return {
@@ -620,14 +616,4 @@ describe('useChatSessionActions', () => {
     expect(input.localCommandNotice.value).toBe('Cancellation requested for session #3.')
   })
 
-  test('unrewindToMessage undoes a rewind and refreshes conversation', async () => {
-    const deps = createDeps()
-    const { input, refreshCalls } = createInput()
-
-    const actions = useChatSessionActions(input, deps)
-    await actions.unrewindToMessage(21)
-
-    expect(deps.calls.includes('unrewindSession:3:21')).toBe(true)
-    expect(refreshCalls).toEqual([true])
-  })
 })

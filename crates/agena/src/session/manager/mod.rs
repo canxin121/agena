@@ -46,7 +46,8 @@ use super::history::{
     TurnAborted, TurnCompleted, TurnId as HistoryTurnId, TurnStarted, UserMessageAppended,
 };
 use super::model::{
-    GoalStatus, GoalSteeringKind, ProviderPromptAnchor, SessionGoal, SessionListRequest,
+    GoalStatus, GoalSteeringKind, PromptCompactionRuntime, PromptCompactionStrategy,
+    ProviderPromptAnchor, SessionExecutionContext, SessionGoal, SessionListRequest,
     SessionPendingTool, SessionStatus, SessionSummary, validate_session_goal_objective,
 };
 use super::processor::SessionRunRequest;
@@ -173,6 +174,12 @@ pub struct SessionContinueRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionCompactRequest {
+    pub session_id: i64,
+    pub options: SessionRunOptions,
+}
+
+#[derive(Debug, Clone)]
 pub struct SessionForkRequest {
     pub session_id: i64,
     /// Fork point. `None` clones the entire history; `Some(id)` clones every
@@ -187,17 +194,6 @@ pub struct SessionForkRequest {
 
 #[derive(Debug, Clone)]
 pub struct SessionRewindRequest {
-    pub session_id: i64,
-    pub message_id: i64,
-    #[doc(hidden)]
-    pub expected_version: Option<i64>,
-}
-
-/// Legacy request shape for undoing a rewind. Rewinds now create a forked
-/// session instead of mutating the source session's provider-visible prompt,
-/// so unrewind is intentionally a no-op on the source session.
-#[derive(Debug, Clone)]
-pub struct SessionUnrewindRequest {
     pub session_id: i64,
     pub message_id: i64,
     #[doc(hidden)]
@@ -299,6 +295,7 @@ struct SessionManagerState {
     config: SessionManagerConfig,
 }
 
+mod compact;
 mod goals;
 mod history;
 mod replies;

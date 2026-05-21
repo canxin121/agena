@@ -33,18 +33,6 @@ impl ProviderTranscript {
         self.fragments.push(fragment);
     }
 
-    pub fn extend<I: IntoIterator<Item = TranscriptFragment>>(&mut self, iter: I) {
-        self.fragments.extend(iter);
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.fragments.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.fragments.len()
-    }
-
     /// Canonical, cache-stable digest of the transcript.
     ///
     /// Encoding rules — these are *the* contract with prompt-cache stability,
@@ -288,7 +276,6 @@ impl TranscriptToolCall {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TranscriptToolOutput {
     Text { text: String },
-    Pruned { replacement: String },
     Error { message: String },
 }
 
@@ -296,17 +283,14 @@ impl TranscriptToolOutput {
     fn discriminant(&self) -> u8 {
         match self {
             Self::Text { .. } => 0x20,
-            Self::Pruned { .. } => 0x21,
-            Self::Error { .. } => 0x22,
+            Self::Error { .. } => 0x21,
         }
     }
 
     fn hash_into(&self, hasher: &mut blake3::Hasher) {
         hasher.update(&[self.discriminant()]);
         match self {
-            Self::Text { text }
-            | Self::Pruned { replacement: text }
-            | Self::Error { message: text } => hash_str(hasher, text),
+            Self::Text { text } | Self::Error { message: text } => hash_str(hasher, text),
         }
     }
 }
@@ -367,25 +351,21 @@ fn hash_opt_str(hasher: &mut blake3::Hasher, value: Option<&str>) {
 
 // ─── HistoryFold-driven builder ────────────────────────────────────────────
 
+#[cfg(test)]
 use std::collections::{HashMap, HashSet};
 
+#[cfg(test)]
 use super::{
     event::{
-        AssistantMessageCompleted, MessageRevised, RevisionKind, SystemNoticeAppended,
-        ToolCallCompleted, ToolCallIssued, TurnAborted, TurnCompleted, TurnStarted,
-        UserMessageAppended,
+        AssistantMessageCompleted, SystemNoticeAppended, ToolCallCompleted, ToolCallIssued,
+        TurnAborted, TurnCompleted, TurnStarted, UserMessageAppended,
     },
     projection::HistoryFold,
 };
+#[cfg(test)]
 use crate::event::{DomainEvent, EventKind};
+#[cfg(test)]
 use crate::session::ids::{MessageId, TurnId};
-
-/// Errors raised while folding history events into a [`ProviderTranscript`].
-#[derive(Debug, thiserror::Error)]
-pub enum ProviderTranscriptError {
-    #[error("tool_call_completed for unknown call_id={0}")]
-    UnknownToolCall(ToolCallId),
-}
 
 /// HistoryFold implementation projecting the append-only event log into a
 /// stable [`ProviderTranscript`].
@@ -394,14 +374,7 @@ pub enum ProviderTranscriptError {
 /// * Events from a turn that ended with `TurnAborted` are dropped wholesale.
 /// * Events from a turn that has not yet seen a `TurnCompleted` / `TurnAborted`
 ///   marker are also dropped (the turn is in-flight).
-/// * `MessageRevised { Compacted }` — the target message is dropped from the
-///   transcript at finalize. The compaction summary itself arrives as a
-///   `SystemNoticeAppended { CompactionSummary }`.
-/// * `MessageRevised { ToolResultPruned }` rewrites the matching `ToolResult`
-///   fragment's output to the supplied replacement text.
-/// * `MessageRevised { AttachmentStripped }` is recorded but currently
-///   informational — the attachment-bearing block has already been excluded
-///   from the transcript content by upstream serialization.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct ProviderTranscriptBuilder {
     /// Pending fragments emitted by each turn, keyed by turn id, in insertion
@@ -413,39 +386,35 @@ pub struct ProviderTranscriptBuilder {
     /// Closed turns, in insertion order, ready to be flattened on finish.
     closed_turn_order: Vec<TurnId>,
     closed_turns: HashMap<TurnId, Vec<PendingFragment>>,
-    /// Map from message_id → (turn_id, fragment index) so post-event mutators
-    /// (compaction, pruning) can locate fragments without rescanning.
+    /// Map from message_id → (turn_id, fragment index) so late-arriving tool
+    /// events can attach to their assistant fragment without rescanning.
     message_index: HashMap<MessageId, MessageLocation>,
-    /// Messages dropped by a `MessageRevised { Compacted }` revision.
-    compacted_messages: HashSet<i64>,
-    /// Tool-output rewrites applied at finalize.
-    tool_pruned: HashMap<ToolCallId, String>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 enum PendingFragment {
     Materialized(TranscriptFragment),
     AssistantWithCalls {
-        message_id: MessageId,
         content: TranscriptContent,
         tool_calls: Vec<TranscriptToolCall>,
     },
     UserMessage {
-        message_id: MessageId,
         content: TranscriptContent,
     },
     SystemNotice {
-        message_id: MessageId,
         text: String,
     },
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct MessageLocation {
     turn_id: TurnId,
     fragment_index: usize,
 }
 
+#[cfg(test)]
 impl ProviderTranscriptBuilder {
     fn record_turn(&mut self, turn_id: TurnId) {
         if let std::collections::hash_map::Entry::Vacant(e) = self.pending_turns.entry(turn_id) {
@@ -490,9 +459,10 @@ impl ProviderTranscriptBuilder {
     }
 }
 
+#[cfg(test)]
 impl HistoryFold for ProviderTranscriptBuilder {
-    type Output = Result<ProviderTranscript, ProviderTranscriptError>;
-    type Error = ProviderTranscriptError;
+    type Output = ProviderTranscript;
+    type Error = std::convert::Infallible;
 
     fn fold(&mut self, event: &DomainEvent) -> Result<(), Self::Error> {
         match &event.kind {
@@ -514,7 +484,6 @@ impl HistoryFold for ProviderTranscriptBuilder {
                 let idx = self.push_pending(
                     *turn_id,
                     PendingFragment::UserMessage {
-                        message_id: *message_id,
                         content: content.clone(),
                     },
                 );
@@ -529,7 +498,6 @@ impl HistoryFold for ProviderTranscriptBuilder {
                 let idx = self.push_pending(
                     *turn_id,
                     PendingFragment::AssistantWithCalls {
-                        message_id: *message_id,
                         content: content.clone(),
                         tool_calls: Vec::new(),
                     },
@@ -580,38 +548,11 @@ impl HistoryFold for ProviderTranscriptBuilder {
                 let synthetic = TurnId::new();
                 let idx = self.push_pending(
                     synthetic,
-                    PendingFragment::SystemNotice {
-                        message_id: *message_id,
-                        text: text.clone(),
-                    },
+                    PendingFragment::SystemNotice { text: text.clone() },
                 );
                 self.record_message_location(*message_id, synthetic, idx);
                 self.close_turn(synthetic);
             }
-            EventKind::MessageRevised(MessageRevised {
-                target_message_id,
-                kind,
-            }) => match kind {
-                RevisionKind::Compacted => {
-                    self.compacted_messages.insert(*target_message_id);
-                }
-                RevisionKind::Uncompacted => {
-                    self.compacted_messages.remove(target_message_id);
-                }
-                RevisionKind::ToolResultPruned {
-                    call_id,
-                    replacement,
-                } => {
-                    self.tool_pruned
-                        .insert(call_id.clone(), replacement.clone());
-                }
-                RevisionKind::AttachmentStripped { .. } => {
-                    // Stripping is recorded for audit but doesn't directly
-                    // edit the transcript: the transcript is built from the
-                    // current message blocks, which the upstream stripper has
-                    // already replaced with placeholders.
-                }
-            },
             // Runtime / UI projection events do not feed the provider
             // transcript.
             EventKind::RunStarted(_)
@@ -635,27 +576,10 @@ impl HistoryFold for ProviderTranscriptBuilder {
 
     fn finish(self) -> Self::Output {
         let ProviderTranscriptBuilder {
-            mut closed_turn_order,
+            closed_turn_order,
             mut closed_turns,
-            compacted_messages,
-            tool_pruned,
             ..
         } = self;
-
-        // Drop turns whose every message has been compacted away.
-        closed_turn_order.retain(|turn_id| {
-            let Some(fragments) = closed_turns.get(turn_id) else {
-                return false;
-            };
-            fragments.iter().any(|f| match f {
-                PendingFragment::UserMessage { message_id, .. }
-                | PendingFragment::SystemNotice { message_id, .. }
-                | PendingFragment::AssistantWithCalls { message_id, .. } => {
-                    !compacted_messages.contains(&message_id.raw())
-                }
-                PendingFragment::Materialized(_) => true,
-            })
-        });
 
         let mut transcript = ProviderTranscript::new();
         for turn_id in closed_turn_order {
@@ -664,59 +588,34 @@ impl HistoryFold for ProviderTranscriptBuilder {
             };
             for fragment in fragments {
                 match fragment {
-                    PendingFragment::Materialized(frag) => match frag {
-                        TranscriptFragment::ToolResult { call_id, output } => {
-                            let output = match tool_pruned.get(&call_id) {
-                                Some(replacement) => TranscriptToolOutput::Pruned {
-                                    replacement: replacement.clone(),
-                                },
-                                None => output,
-                            };
-                            transcript.push(TranscriptFragment::ToolResult { call_id, output });
-                        }
-                        other => transcript.push(other),
-                    },
-                    PendingFragment::UserMessage {
-                        message_id,
-                        content,
-                    } => {
-                        if compacted_messages.contains(&message_id.raw()) {
-                            continue;
-                        }
+                    PendingFragment::Materialized(frag) => transcript.push(frag),
+                    PendingFragment::UserMessage { content, .. } => {
                         transcript.push(TranscriptFragment::User { content });
                     }
                     PendingFragment::AssistantWithCalls {
-                        message_id,
                         content,
                         tool_calls,
                         ..
                     } => {
-                        if compacted_messages.contains(&message_id.raw()) {
-                            continue;
-                        }
                         transcript.push(TranscriptFragment::Assistant {
                             content,
                             tool_calls,
                         });
                     }
-                    PendingFragment::SystemNotice {
-                        message_id, text, ..
-                    } => {
-                        if compacted_messages.contains(&message_id.raw()) {
-                            continue;
-                        }
+                    PendingFragment::SystemNotice { text, .. } => {
                         transcript.push(TranscriptFragment::System { text });
                     }
                 }
             }
         }
 
-        Ok(transcript)
+        transcript
     }
 }
 
 /// Render a `serde_json::Value` to a deterministic, key-sorted string so the
 /// transcript digest does not drift on serialization order changes.
+#[cfg(test)]
 fn canonical_json_string(value: &serde_json::Value) -> String {
     fn write(value: &serde_json::Value, out: &mut String) {
         match value {
@@ -898,9 +797,8 @@ mod tests {
     #[test]
     fn builder_projects_complete_turn() {
         let records = turn(TurnId::new());
-        let transcript: ProviderTranscript = fold_history::<ProviderTranscriptBuilder>(&records)
-            .unwrap()
-            .unwrap();
+        let transcript: ProviderTranscript =
+            fold_history::<ProviderTranscriptBuilder>(&records).unwrap();
         assert_eq!(transcript.fragments.len(), 2);
         assert!(matches!(
             transcript.fragments[0],
@@ -916,9 +814,8 @@ mod tests {
     fn builder_drops_in_flight_turn() {
         let mut records = turn(TurnId::new());
         records.pop(); // remove TurnCompleted — turn is now in flight
-        let transcript: ProviderTranscript = fold_history::<ProviderTranscriptBuilder>(&records)
-            .unwrap()
-            .unwrap();
+        let transcript: ProviderTranscript =
+            fold_history::<ProviderTranscriptBuilder>(&records).unwrap();
         assert!(
             transcript.fragments.is_empty(),
             "in-flight turn must be skipped"
@@ -935,9 +832,8 @@ mod tests {
             reason: TurnAbortReason::ProcessRestart,
             message: None,
         })));
-        let transcript: ProviderTranscript = fold_history::<ProviderTranscriptBuilder>(&records)
-            .unwrap()
-            .unwrap();
+        let transcript: ProviderTranscript =
+            fold_history::<ProviderTranscriptBuilder>(&records).unwrap();
         assert!(transcript.fragments.is_empty());
     }
 
@@ -946,12 +842,8 @@ mod tests {
         // Two separate event sequences that vary only in turn_id, message_id
         // and timestamps — the resulting transcripts (and thus digests) must
         // be identical because none of those runtime fields enter the digest.
-        let a = fold_history::<ProviderTranscriptBuilder>(&turn(TurnId::new()))
-            .unwrap()
-            .unwrap();
-        let b = fold_history::<ProviderTranscriptBuilder>(&turn(TurnId::new()))
-            .unwrap()
-            .unwrap();
+        let a = fold_history::<ProviderTranscriptBuilder>(&turn(TurnId::new())).unwrap();
+        let b = fold_history::<ProviderTranscriptBuilder>(&turn(TurnId::new())).unwrap();
         assert_eq!(a.digest(), b.digest());
     }
 
@@ -992,6 +884,7 @@ mod tests {
                 call_id: call.clone(),
                 turn_id,
                 tool_name: SmolStr::new("read"),
+                part: None,
                 output: TranscriptToolOutput::Text { text: "ok".into() },
                 completed_at: Utc::now(),
             })),
@@ -1004,9 +897,7 @@ mod tests {
             .iter_mut()
             .enumerate()
             .for_each(|(i, r)| r.meta.seq_global = i as i64);
-        let transcript = fold_history::<ProviderTranscriptBuilder>(&records)
-            .unwrap()
-            .unwrap();
+        let transcript = fold_history::<ProviderTranscriptBuilder>(&records).unwrap();
         assert_eq!(transcript.fragments.len(), 2);
         match &transcript.fragments[0] {
             TranscriptFragment::Assistant { tool_calls, .. } => {

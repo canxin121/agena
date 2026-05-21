@@ -27,7 +27,7 @@ use agena::{
         AttachmentItem, AttachmentKind, AttachmentSource, EnterWorktreeToolInput,
         ExitWorktreeToolInput, PartContent, ToolInvocation, UserInputReply,
     },
-    model::{AdapterId, ModelRef, ModelSpeedModeRequestOverride},
+    model::ModelRef,
     model_catalog::{CatalogModelDefinition, catalog_definition_from_model},
     permission::PermissionReplyKind,
     provider::ProviderModel,
@@ -55,26 +55,12 @@ fn parse_worktree_payload(payload: Option<serde_json::Value>) -> Result<Worktree
     serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
 }
 
-fn resolve_mode_request_override(
-    base: &ModelSpeedModeRequestOverride,
-    request_override: &ModelSpeedModeRequestOverride,
-    adapter_overrides: &std::collections::BTreeMap<String, ModelSpeedModeRequestOverride>,
-    resolved_adapter_id: Option<&AdapterId>,
-) -> ModelSpeedModeRequestOverride {
-    let mut merged = base.merged_with(request_override);
-    if let Some(adapter_id) = resolved_adapter_id.map(AdapterId::as_str)
-        && let Some(adapter_override) = adapter_overrides.get(adapter_id)
-    {
-        merged = merged.merged_with(adapter_override);
-    }
-    merged
-}
-
 use agena_api::{
     commands::{
-        Command as ApiCommand, CommandResult, ContinueRunParams, CreateSessionParams,
-        ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
-        RewindSessionParams, SubmitTurnParams, UpdateSessionParams, UpsertPermissionRuleParams,
+        Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
+        CreateSessionParams, ReplacePermissionRuleParams, ReplyPermissionParams,
+        ReplyUserInputParams, RewindSessionParams, SubmitTurnParams, UpdateSessionParams,
+        UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
     queries::{
@@ -1552,6 +1538,28 @@ impl Backend {
         names
     }
 
+    pub fn default_agent_name(&self) -> Option<String> {
+        let snapshot = self.runtime.current_snapshot();
+        let configured = snapshot
+            .config_resolution()
+            .config
+            .default
+            .agent
+            .trim()
+            .to_owned();
+        let mut agents = snapshot.agents().list_descriptors();
+        agents.sort_by(|left, right| left.name.cmp(&right.name));
+
+        if !configured.is_empty() && agents.iter().any(|agent| agent.name == configured) {
+            return Some(configured);
+        }
+
+        agents
+            .into_iter()
+            .find(|agent| agent.mode.allows_root() && !agent.hidden)
+            .map(|agent| agent.name)
+    }
+
     pub fn list_aws_profile_names(&self) -> Vec<String> {
         let credentials_path = env::var("AWS_SHARED_CREDENTIALS_FILE")
             .ok()
@@ -2789,7 +2797,6 @@ impl Backend {
                         | EventKind::TurnCompleted(_)
                         | EventKind::TurnAborted(_)
                         | EventKind::SystemNoticeAppended(_)
-                        | EventKind::MessageRevised(_)
                         | EventKind::RunFailed(_)
                 );
                 let live = LiveEvent {
@@ -2988,14 +2995,20 @@ impl Backend {
         session_id: i64,
         request: RunOptions,
     ) -> Result<SessionExecutionResource> {
-        let options = self
-            .resolve_session_run_options(session_id, request)
-            .await?;
-        self.session_manager()?
-            .compact_session(session_id, options)
-            .await
-            .context("failed to compact session")?;
-        self.get_session_state(session_id).await
+        match dispatch::dispatch_command(
+            &self.app_state,
+            ApiCommand::CompactSession(CompactSessionParams {
+                session_id,
+                options: request,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to compact session")
     }
 
     /// Best-effort cancel of the in-flight turn for `session_id`. Forwards
@@ -3587,155 +3600,6 @@ impl Backend {
                 .ok_or_else(|| anyhow!("session not found: {parent_id}"))?;
         }
         Ok(current)
-    }
-
-    async fn resolve_session_run_options(
-        &self,
-        session_id: i64,
-        request: RunOptions,
-    ) -> Result<agena::session::SessionRunOptions> {
-        let RunOptions {
-            model,
-            thinking_mode,
-            speed_mode,
-            verbosity,
-            parallel_tool_calls,
-            agent_profile,
-            system,
-            temperature,
-            max_output_tokens,
-            max_turn_loops,
-        } = request;
-
-        let mut options = self
-            .session_manager()?
-            .resolve_scheduled_run_options(session_id)
-            .await
-            .context("failed to resolve session run options")?;
-
-        if let Some(model) = model {
-            options.model = model;
-        }
-        let resolved_adapter_id = options.model.adapter_id.clone().or_else(|| {
-            let snapshot = self.runtime.current_snapshot();
-            let provider_registry = snapshot.provider_registry();
-            provider_registry
-                .get(options.model.provider_id.as_str())
-                .and_then(|provider| provider.default_adapter().cloned())
-        });
-
-        if let Some(thinking_mode) = thinking_mode
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let snapshot = self.runtime.current_snapshot();
-            let provider_registry = snapshot.provider_registry();
-            let thinking_modes = provider_registry
-                .model_thinking_modes(&options.model)
-                .context("failed to resolve selected model thinking modes")?;
-            let definition = thinking_modes.get(thinking_mode).ok_or_else(|| {
-                anyhow!(
-                    "model {} has no thinking mode {thinking_mode}",
-                    options.model
-                )
-            })?;
-            options.thinking_mode = Some(thinking_mode.to_string());
-            options.thinking = definition.thinking.clone();
-            options.request_override = resolve_mode_request_override(
-                &options.request_override,
-                &definition.request_override,
-                &definition.adapter_overrides,
-                resolved_adapter_id.as_ref(),
-            );
-        }
-        if let Some(speed_mode) = speed_mode
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let snapshot = self.runtime.current_snapshot();
-            let provider_registry = snapshot.provider_registry();
-            let speed_modes = provider_registry
-                .model_speed_modes(&options.model)
-                .context("failed to resolve selected model speed modes")?;
-            let definition = speed_modes
-                .get(speed_mode)
-                .ok_or_else(|| anyhow!("model {} has no speed mode {speed_mode}", options.model))?;
-            options.speed_mode = Some(speed_mode.to_string());
-            options.request_override = resolve_mode_request_override(
-                &options.request_override,
-                &definition.request_override,
-                &definition.adapter_overrides,
-                resolved_adapter_id.as_ref(),
-            );
-        }
-        if let Some(verbosity) = verbosity
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let snapshot = self.runtime.current_snapshot();
-            let provider_registry = snapshot.provider_registry();
-            let metadata = provider_registry
-                .model_metadata(&options.model)
-                .context("failed to resolve selected model verbosity metadata")?;
-            if !metadata.supports_verbosity_level_for_model(&options.model.model_id, verbosity) {
-                let supported =
-                    metadata.supported_verbosity_levels_for_model(&options.model.model_id);
-                let supported_text = if supported.is_empty() {
-                    "none".to_owned()
-                } else {
-                    supported.join(", ")
-                };
-                return Err(anyhow!(
-                    "model {} does not support verbosity {verbosity}; supported values: {supported_text}",
-                    options.model
-                ));
-            }
-            options.verbosity = Some(verbosity.to_ascii_lowercase());
-        }
-        if let Some(parallel_tool_calls) = parallel_tool_calls {
-            let snapshot = self.runtime.current_snapshot();
-            let provider_registry = snapshot.provider_registry();
-            let metadata = provider_registry
-                .model_metadata(&options.model)
-                .context("failed to resolve selected model parallel tool call metadata")?;
-            if !metadata.supports_parallel_tool_calls_for_model() {
-                return Err(anyhow!(
-                    "model {} does not support parallel tool calls",
-                    options.model
-                ));
-            }
-            options
-                .request_override
-                .set_parallel_tool_calls(Some(parallel_tool_calls));
-        }
-
-        if let Some(system) = system {
-            options.system = Some(system);
-        }
-        if let Some(temperature) = temperature {
-            options.temperature = Some(temperature);
-        } else if options.temperature.is_none() {
-            let snapshot = self.runtime.current_snapshot();
-            let provider_registry = snapshot.provider_registry();
-            let metadata = provider_registry
-                .model_metadata(&options.model)
-                .context("failed to resolve selected model temperature metadata")?;
-            options.temperature = metadata.parsed_default_temperature();
-        }
-        if let Some(max_output_tokens) = max_output_tokens {
-            options.max_output_tokens = Some(max_output_tokens);
-        }
-        if let Some(agent_profile) = agent_profile {
-            options.agent_profile = Some(agent_profile);
-        }
-        if let Some(max_turn_loops) = max_turn_loops {
-            options.max_turn_loops = Some(max_turn_loops);
-        }
-
-        Ok(options)
     }
 
     fn session_manager(&self) -> Result<Arc<agena::session::SessionManager>> {

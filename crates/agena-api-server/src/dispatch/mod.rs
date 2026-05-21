@@ -21,21 +21,20 @@ use agena::event::{EventStore, StoreRange};
 use agena::{
     event::EventKind,
     session::{
-        SessionContinueRequest, SessionPermissionReplyRequest, SessionUserInputReplyRequest,
-        SessionUserTurnRequest,
+        SessionCompactRequest, SessionContinueRequest, SessionPermissionReplyRequest,
+        SessionUserInputReplyRequest, SessionUserTurnRequest,
     },
 };
 use agena_api::{
     commands::{
-        CancelTurnParams, ClearSessionGoalParams, Command, CommandResult,
+        CancelTurnParams, ClearSessionGoalParams, Command, CommandResult, CompactSessionParams,
         CompleteSessionGoalParams, ContinueRunParams, CreateSessionGoalParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
         ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
         RevokePermissionRuleParams, RewindSessionParams, SetSessionGoalParams, SubmitTurnParams,
-        UnrewindSessionParams, UpdateSessionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams,
+        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -52,7 +51,7 @@ use agena_api::{
         RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
         RuntimeStatusResponse, RuntimeTaskResource, SessionAutomationResource,
         SessionExecutionContextResource, SessionExecutionResource, SessionGoalResource,
-        SessionResource, SessionRunState, WorkspaceResource,
+        SessionPromptUsageResource, SessionResource, SessionRunState, WorkspaceResource,
     },
 };
 
@@ -273,6 +272,17 @@ fn session_execution_from_http(value: HttpSessionExecutionResource) -> SessionEx
         pending_permission_requests: value.pending_permission_requests,
         pending_user_input_requests: value.pending_user_input_requests,
         goal: value.goal.map(session_goal_from_http),
+        prompt_usage: value.prompt_usage.map(session_prompt_usage_from_http),
+    }
+}
+
+fn session_prompt_usage_from_http(
+    value: crate::local_api::SessionPromptUsageResource,
+) -> SessionPromptUsageResource {
+    SessionPromptUsageResource {
+        current_tokens: value.current_tokens,
+        budget_tokens: value.budget_tokens,
+        model_context_window_tokens: value.model_context_window_tokens,
     }
 }
 

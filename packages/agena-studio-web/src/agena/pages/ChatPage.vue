@@ -208,7 +208,6 @@ const {
   setSessionGoalAction,
   showSessionGoalAction,
   submitUserAnswers,
-  unrewindToMessage,
 } = useChatSessionActions({
   confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
   composer,
@@ -372,7 +371,6 @@ const pageContent = createChatPageContentState({
   providerAdapterOptions,
   providerDefaultAdapter,
   timelineEvents,
-  unrewindToMessage,
   updateUserAnswer,
 })
 </script>

@@ -685,11 +685,9 @@ bitflags::bitflags! {
         const COMMAND_BEFORE            = 1 << 13;
         const SHELL_ENV                 = 1 << 14;
         const CONFIG                    = 1 << 15;
-        const SESSION_COMPACTING        = 1 << 16;
         // new hooks
         const SESSION_START             = 1 << 18;
         const SESSION_END               = 1 << 19;
-        const SESSION_COMPACTED         = 1 << 20;
         const USER_PROMPT_SUBMIT        = 1 << 21;
         const TOOL_FAILURE              = 1 << 22;
         const AGENT_STOP                = 1 << 23;
@@ -764,8 +762,6 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("config", HookSubscription::CONFIG),
     ("session.start", HookSubscription::SESSION_START),
     ("session.end", HookSubscription::SESSION_END),
-    ("session.compacting", HookSubscription::SESSION_COMPACTING),
-    ("session.compacted", HookSubscription::SESSION_COMPACTED),
     ("user.prompt.submit", HookSubscription::USER_PROMPT_SUBMIT),
     ("agent.stop", HookSubscription::AGENT_STOP),
     ("pre_turn", HookSubscription::PRE_TURN),
@@ -778,8 +774,6 @@ fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
         .find_map(|(hook_name, flag)| (*hook_name == name).then_some(*flag))
         .or(match name {
             "permission_request" => Some(HookSubscription::PERMISSION_ASK),
-            "pre_compaction" => Some(HookSubscription::SESSION_COMPACTING),
-            "post_compaction" => Some(HookSubscription::SESSION_COMPACTED),
             _ => None,
         })
 }

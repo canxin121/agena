@@ -787,27 +787,20 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                         "invokes curl cookie-jar option that writes a local file".to_string(),
                     );
                 }
-                if arg.starts_with("-b") && arg.len() > 2 {
-                    if curl_cookie_option_uses_file(&arg[2..]) {
-                        return Some(
-                            "invokes curl cookie option that reads from a local file".to_string(),
-                        );
-                    }
+                if arg.starts_with("-b") && arg.len() > 2 && curl_cookie_option_uses_file(&arg[2..])
+                {
+                    return Some(
+                        "invokes curl cookie option that reads from a local file".to_string(),
+                    );
                 }
-                if arg.starts_with("-d") && arg.len() > 2 {
-                    if curl_data_option_uses_file(&arg[2..]) {
-                        return Some(
-                            "invokes curl data option that reads request data from a local file"
-                                .to_string(),
-                        );
-                    }
+                if arg.starts_with("-d") && arg.len() > 2 && curl_data_option_uses_file(&arg[2..]) {
+                    return Some(
+                        "invokes curl data option that reads request data from a local file"
+                            .to_string(),
+                    );
                 }
-                if arg.starts_with("-F") && arg.len() > 2 {
-                    if curl_form_option_uses_file(&arg[2..]) {
-                        return Some(
-                            "invokes curl form upload that reads a local file".to_string(),
-                        );
-                    }
+                if arg.starts_with("-F") && arg.len() > 2 && curl_form_option_uses_file(&arg[2..]) {
+                    return Some("invokes curl form upload that reads a local file".to_string());
                 }
             }
         }

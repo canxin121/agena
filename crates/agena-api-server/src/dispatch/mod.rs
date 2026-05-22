@@ -539,7 +539,14 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     let agents = {
         let mut entries = snapshot.agents().list_descriptors();
         entries.sort_by(|left, right| left.name.cmp(&right.name));
-        let default_agent = Some(resolution.config.default.agent.trim().to_owned())
+        let default_agent = resolution
+            .config
+            .default
+            .agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(ToOwned::to_owned)
             .filter(|name| entries.iter().any(|entry| entry.name == *name))
             .or_else(|| {
                 entries

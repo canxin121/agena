@@ -1578,6 +1578,8 @@ impl Backend {
             .config
             .default
             .agent
+            .as_deref()
+            .unwrap_or_default()
             .trim()
             .to_owned();
         let mut agents = snapshot.agents().list_descriptors();

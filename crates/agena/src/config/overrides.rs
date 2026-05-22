@@ -15,6 +15,10 @@ pub enum ConfigOverride {
     DefaultProvider(String),
     DefaultAdapter(String),
     DefaultModel(String),
+    DefaultThinkingMode(String),
+    DefaultSpeedMode(String),
+    DefaultVerbosity(String),
+    DefaultParallelToolCalls(bool),
     DefaultAgent(String),
     ProviderHttpTimeoutSecs(u64),
     ProviderConnectTimeoutSecs(u64),
@@ -72,6 +76,16 @@ impl FromStr for ConfigOverride {
             "default.provider" => Ok(Self::DefaultProvider(raw_value.to_owned())),
             "default.adapter" => Ok(Self::DefaultAdapter(raw_value.to_owned())),
             "default.model" => Ok(Self::DefaultModel(raw_value.to_owned())),
+            "default.thinking_mode" | "default.think" => {
+                Ok(Self::DefaultThinkingMode(raw_value.to_owned()))
+            }
+            "default.speed_mode" | "default.speed" => {
+                Ok(Self::DefaultSpeedMode(raw_value.to_owned()))
+            }
+            "default.verbosity" => Ok(Self::DefaultVerbosity(raw_value.to_owned())),
+            "default.parallel_tool_calls" => {
+                Ok(Self::DefaultParallelToolCalls(parse_bool(key, raw_value)?))
+            }
             "default.agent" => Ok(Self::DefaultAgent(raw_value.to_owned())),
             "runtime.provider_http.timeout_secs" => Ok(Self::ProviderHttpTimeoutSecs(
                 parse_numeric(raw_value, key)?,
@@ -143,6 +157,30 @@ impl ConfigOverride {
                     .default
                     .get_or_insert_with(RawDefaultConfig::default)
                     .model = Some(value.clone());
+            }
+            Self::DefaultThinkingMode(value) => {
+                config
+                    .default
+                    .get_or_insert_with(RawDefaultConfig::default)
+                    .thinking_mode = Some(value.clone());
+            }
+            Self::DefaultSpeedMode(value) => {
+                config
+                    .default
+                    .get_or_insert_with(RawDefaultConfig::default)
+                    .speed_mode = Some(value.clone());
+            }
+            Self::DefaultVerbosity(value) => {
+                config
+                    .default
+                    .get_or_insert_with(RawDefaultConfig::default)
+                    .verbosity = Some(value.clone());
+            }
+            Self::DefaultParallelToolCalls(value) => {
+                config
+                    .default
+                    .get_or_insert_with(RawDefaultConfig::default)
+                    .parallel_tool_calls = Some(*value);
             }
             Self::DefaultAgent(value) => {
                 config

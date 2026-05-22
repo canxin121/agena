@@ -62,6 +62,7 @@ pub struct SessionManagerConfig {
     pub cache_max_bytes: usize,
     pub max_turn_loops: usize,
     pub doom_loop: crate::session::DoomLoopPolicy,
+    pub default_selection: crate::execution_prefs::ExecutionSelection,
     pub default_agent: Option<String>,
     pub permission: crate::agent::PermissionConfig,
     pub auto_compaction: SessionAutoCompactionConfig,
@@ -109,6 +110,7 @@ impl Default for SessionManagerConfig {
             cache_max_bytes: 64 * 1024 * 1024,
             max_turn_loops: 16,
             doom_loop: crate::session::DoomLoopPolicy::default(),
+            default_selection: crate::execution_prefs::ExecutionSelection::default(),
             default_agent: None,
             permission: crate::agent::PermissionConfig::default(),
             auto_compaction: SessionAutoCompactionConfig::default(),
@@ -572,32 +574,6 @@ fn permission_subject(action: &PermissionAction) -> serde_json::Value {
             "port": port,
         }),
     }
-}
-
-fn infer_session_model(session: &Session) -> Result<Option<ModelRef>, AppError> {
-    let mut sorted: Vec<&Message> = session.messages.iter().collect();
-    sorted.sort_by(|a, b| {
-        (b.created_at.timestamp_millis(), b.id).cmp(&(a.created_at.timestamp_millis(), a.id))
-    });
-    for message in sorted {
-        let provider_id = message.metadata.model_provider_id.trim();
-        let adapter_id = message.metadata.model_adapter_id.as_deref().map(str::trim);
-        let model_id = message.metadata.model_id.trim();
-        if provider_id.is_empty() || model_id.is_empty() {
-            continue;
-        }
-        let model = match adapter_id.filter(|value| !value.is_empty()) {
-            Some(adapter_id) => ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id),
-            None => ModelRef::try_new(provider_id, model_id),
-        };
-        return model.map(Some).map_err(|error| {
-            AppError::Internal(format!(
-                "session {} contains invalid persisted model metadata: {error}",
-                session.id
-            ))
-        });
-    }
-    Ok(None)
 }
 
 fn turn_control_to_app_error(err: TurnControlError) -> AppError {

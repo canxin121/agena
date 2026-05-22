@@ -2914,7 +2914,11 @@ impl AgenaCli {
         let resolution = snapshot.config_resolution();
         let mut agents = snapshot.agents().list_descriptors();
         agents.sort_by(|left, right| left.name.cmp(&right.name));
-        let default_agent = Some(resolution.config.default.agent.clone())
+        let default_agent = resolution
+            .config
+            .default
+            .agent
+            .clone()
             .filter(|name| agents.iter().any(|entry| entry.name == *name))
             .or_else(|| {
                 agents

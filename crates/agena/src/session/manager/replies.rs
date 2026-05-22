@@ -1,5 +1,19 @@
 use super::*;
 
+fn mode_request_override_for_adapter(
+    request_override: &ModelSpeedModeRequestOverride,
+    adapter_overrides: &std::collections::BTreeMap<String, ModelSpeedModeRequestOverride>,
+    resolved_adapter_id: Option<&crate::model::AdapterId>,
+) -> ModelSpeedModeRequestOverride {
+    let mut merged = request_override.clone();
+    if let Some(adapter_id) = resolved_adapter_id.map(crate::model::AdapterId::as_str)
+        && let Some(adapter_override) = adapter_overrides.get(adapter_id)
+    {
+        merged = merged.merged_with(adapter_override);
+    }
+    merged
+}
+
 impl SessionManager {
     pub async fn reply_permission(
         &self,
@@ -2256,43 +2270,7 @@ impl SessionManager {
         session: &Session,
         mut options: SessionRunOptions,
     ) -> Result<SessionRunOptions, AppError> {
-        if let Some((provider_id, adapter_id, model_id)) = session.runtime.model_override() {
-            options.model = match adapter_id {
-                Some(adapter_id) => {
-                    ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
-                }
-                None => ModelRef::try_new(provider_id, model_id),
-            }
-            .map_err(|error| {
-                AppError::Internal(format!(
-                    "session {} contains invalid execution model override: {error}",
-                    session.id
-                ))
-            })?;
-        }
-        if options.thinking_mode.is_none() {
-            options.thinking_mode = session
-                .runtime
-                .model_thinking_mode_override()
-                .map(ToOwned::to_owned);
-        }
-        if options.speed_mode.is_none() {
-            options.speed_mode = session
-                .runtime
-                .model_speed_mode_override()
-                .map(ToOwned::to_owned);
-        }
-        if options.request_override.parallel_tool_calls().is_none() {
-            options
-                .request_override
-                .set_parallel_tool_calls(session.runtime.model_parallel_tool_calls_override());
-        }
-        if options.verbosity.is_none() {
-            options.verbosity = session
-                .runtime
-                .model_verbosity_override()
-                .map(ToOwned::to_owned);
-        }
+        self.apply_selection_modes_to_run_options(session, &mut options)?;
         if let Some(system) = session.runtime.execution.system_prompt_override.as_ref() {
             options.system = Some(system.clone());
         }
@@ -2318,9 +2296,172 @@ impl SessionManager {
             options.max_turn_loops = session.runtime.execution.agent_run.steps;
         }
         if options.agent_profile.is_none() {
-            options.agent_profile = session.runtime.execution.agent_profile.clone();
+            options.agent_profile = session.runtime.execution.selection.agent.clone();
         }
         Ok(options)
+    }
+
+    fn apply_selection_modes_to_run_options(
+        &self,
+        session: &Session,
+        options: &mut SessionRunOptions,
+    ) -> Result<(), AppError> {
+        let state = self.execution_state();
+        let effective_selection = state
+            .config
+            .default_selection
+            .overlay_with_cascade(&session.runtime.execution.selection);
+        let selection_model = effective_selection.model_ref().map_err(|error| {
+            AppError::Internal(format!(
+                "session {} contains invalid execution model selection: {error}",
+                session.id
+            ))
+        })?;
+        let modes_belong_to_options_model = selection_model
+            .as_ref()
+            .is_some_and(|model| model == &options.model);
+        if options.thinking_mode.is_none() {
+            options.thinking_mode = modes_belong_to_options_model
+                .then(|| effective_selection.thinking_mode.clone())
+                .flatten();
+        }
+        if options.speed_mode.is_none() {
+            options.speed_mode = modes_belong_to_options_model
+                .then(|| effective_selection.speed_mode.clone())
+                .flatten();
+        }
+        if options.request_override.parallel_tool_calls().is_none() {
+            options.request_override.set_parallel_tool_calls(
+                modes_belong_to_options_model
+                    .then_some(effective_selection.parallel_tool_calls)
+                    .flatten(),
+            );
+        }
+        if options.verbosity.is_none() {
+            options.verbosity = modes_belong_to_options_model
+                .then(|| effective_selection.verbosity.clone())
+                .flatten();
+        }
+        self.apply_model_mode_requests(options)
+    }
+
+    fn apply_model_mode_requests(&self, options: &mut SessionRunOptions) -> Result<(), AppError> {
+        let execution = self.execution_state();
+        let provider_registry = execution.processor.provider_registry();
+        let resolved_adapter_id = options.model.adapter_id.clone().or_else(|| {
+            provider_registry
+                .get(options.model.provider_id.as_str())
+                .and_then(|provider| provider.default_adapter().cloned())
+        });
+
+        let requested_parallel_tool_calls = options.request_override.parallel_tool_calls();
+        let mut merged_override = options.request_override.clone();
+        merged_override.set_parallel_tool_calls(None);
+        if let Some(thinking_mode_name) = options.thinking_mode.as_deref() {
+            let thinking_modes = provider_registry.model_thinking_modes(&options.model)?;
+            let thinking_mode = thinking_modes.get(thinking_mode_name).ok_or_else(|| {
+                AppError::Config(format!(
+                    "model `{}` has no thinking mode `{thinking_mode_name}`",
+                    options.model
+                ))
+            })?;
+            options.thinking = thinking_mode.thinking.clone();
+            merged_override = merged_override.merged_with(&mode_request_override_for_adapter(
+                &thinking_mode.request_override,
+                &thinking_mode.adapter_overrides,
+                resolved_adapter_id.as_ref(),
+            ));
+        }
+        if let Some(speed_mode_name) = options.speed_mode.as_deref() {
+            let speed_modes = provider_registry.model_speed_modes(&options.model)?;
+            let speed_mode = speed_modes.get(speed_mode_name).ok_or_else(|| {
+                AppError::Config(format!(
+                    "model `{}` has no speed mode `{speed_mode_name}`",
+                    options.model
+                ))
+            })?;
+            merged_override = merged_override.merged_with(&mode_request_override_for_adapter(
+                &speed_mode.request_override,
+                &speed_mode.adapter_overrides,
+                resolved_adapter_id.as_ref(),
+            ));
+        }
+        if requested_parallel_tool_calls.is_some() {
+            merged_override.set_parallel_tool_calls(requested_parallel_tool_calls);
+        }
+        options.request_override = merged_override;
+        Ok(())
+    }
+
+    fn session_permission_defaults(
+        &self,
+        session: &Session,
+        state: &SessionManagerState,
+    ) -> crate::agent::PermissionConfig {
+        let global_defaults = state
+            .config
+            .default_selection
+            .permission
+            .effective_with_defaults(&state.config.permission);
+        session
+            .runtime
+            .execution
+            .selection
+            .permission
+            .effective_with_defaults(&global_defaults)
+    }
+
+    fn model_from_session_selection(
+        &self,
+        session: &Session,
+    ) -> Result<Option<ModelRef>, AppError> {
+        session
+            .runtime
+            .execution
+            .selection
+            .model_ref()
+            .map_err(|error| {
+                AppError::Internal(format!(
+                    "session {} contains invalid execution model selection: {error}",
+                    session.id
+                ))
+            })
+    }
+
+    pub(super) fn default_model_from_config(
+        &self,
+        state: &SessionManagerState,
+    ) -> Result<Option<ModelRef>, AppError> {
+        let selection = &state.config.default_selection;
+        let Some(provider_id) = selection.provider.as_deref() else {
+            return Ok(None);
+        };
+        state
+            .processor
+            .provider_registry()
+            .resolve_model_selection(
+                provider_id,
+                selection.adapter.as_deref(),
+                selection.model.as_deref(),
+            )
+            .map(Some)
+    }
+
+    pub(super) fn model_from_session_or_default(
+        &self,
+        session: &Session,
+        state: &SessionManagerState,
+    ) -> Result<ModelRef, AppError> {
+        self.model_from_session_selection(session)?
+            .map(Ok)
+            .unwrap_or_else(|| {
+                self.default_model_from_config(state)?.ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "model is required for session {}; set a session model or global default model",
+                        session.id
+                    ))
+                })
+            })
     }
 
     pub(super) fn run_options_from_session(
@@ -2328,43 +2469,7 @@ impl SessionManager {
         session: &Session,
         state: Arc<SessionManagerState>,
     ) -> Result<SessionRunOptions, AppError> {
-        let model = session
-            .runtime
-            .model_override()
-            .map(|(provider_id, adapter_id, model_id)| {
-                let model = match adapter_id {
-                    Some(adapter_id) => {
-                        ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
-                    }
-                    None => ModelRef::try_new(provider_id, model_id),
-                };
-                model.map_err(|error| {
-                    AppError::Internal(format!(
-                        "session {} contains invalid execution model override: {error}",
-                        session.id
-                    ))
-                })
-            })
-            .transpose()?
-            .or_else(|| infer_session_model(session).ok().flatten())
-            .or_else(|| {
-                let provider_registry = state.processor.provider_registry();
-                let provider_ids = provider_registry.provider_ids();
-                if provider_ids.len() != 1 {
-                    return None;
-                }
-                let provider_id = provider_ids.into_iter().next()?;
-                let provider = provider_registry.get(provider_id.as_str())?;
-                let mut model = ModelRef::new(provider_id, provider.default_model().to_string());
-                model.adapter_id = provider.default_adapter().cloned();
-                Some(model)
-            })
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "model is required before switching agent for session {}",
-                    session.id
-                ))
-            })?;
+        let model = self.model_from_session_or_default(session, &state)?;
 
         self.apply_execution_context_to_run_options(
             session,
@@ -2389,13 +2494,14 @@ impl SessionManager {
         mut session: Session,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        session.runtime.execution.agent_profile = None;
+        session.runtime.execution.selection.agent = None;
         session.runtime.execution.agent_mode = None;
         session.runtime.execution.agent_hidden = false;
         session.runtime.execution.agent_color = None;
         session.runtime.execution.system_prompt_override = None;
         session.runtime.set_allowed_tools(Vec::new());
-        session.runtime.execution.agent_permission = state.config.permission.clone();
+        session.runtime.execution.agent_permission =
+            self.session_permission_defaults(&session, &state);
         session.runtime.execution.agent_run = crate::agent::AgentRunConfig::default();
         session.runtime.set_model_override(None, None, None);
         session
@@ -2419,7 +2525,8 @@ impl SessionManager {
         let persisted = session
             .runtime
             .execution
-            .agent_profile
+            .selection
+            .agent
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -2431,7 +2538,8 @@ impl SessionManager {
             .or_else(|| state.config.default_agent.clone());
         let Some(agent_name) = effective else {
             let mut session = session;
-            session.runtime.execution.agent_permission = state.config.permission.clone();
+            session.runtime.execution.agent_permission =
+                self.session_permission_defaults(&session, &state);
             return Ok(session);
         };
         let profile = state
@@ -2452,7 +2560,7 @@ impl SessionManager {
             )));
         }
         options.agent_profile = Some(profile.name.clone());
-        if session.runtime.execution.agent_profile.as_deref() == Some(profile.name.as_str())
+        if session.runtime.execution.selection.agent.as_deref() == Some(profile.name.as_str())
             && session.runtime.execution.system_prompt_override.is_some()
         {
             *options = self.apply_execution_context_to_run_options(&session, options.clone())?;
@@ -2477,10 +2585,11 @@ impl SessionManager {
         apply_profile_model_override: bool,
     ) -> Result<Session, AppError> {
         let next_allowed_tools = profile.frontmatter.allowed_tools.clone();
+        let permission_defaults = self.session_permission_defaults(&session, &state);
         let next_permission = profile
             .frontmatter
             .permission
-            .effective_with_defaults(&state.config.permission);
+            .effective_with_defaults(&permission_defaults);
         let next_system = profile.prompt.trim().to_string();
         let next_model = self.resolve_root_agent_model(
             &session,
@@ -2495,6 +2604,8 @@ impl SessionManager {
         let next_model_provider_id = next_model.provider_id.to_string();
         let next_model_adapter_id = next_model.adapter_id.as_ref().map(ToString::to_string);
         let next_model_id = next_model.model_id.to_string();
+        options.model = next_model.clone();
+        self.apply_selection_modes_to_run_options(&session, options)?;
         let next_thinking_mode = options.thinking_mode.clone();
         let next_speed_mode = options.speed_mode.clone();
         let next_verbosity = options.verbosity.clone();
@@ -2504,7 +2615,7 @@ impl SessionManager {
             max_output_tokens: profile.frontmatter.max_output_tokens,
             steps: profile.frontmatter.steps,
         };
-        let changed = session.runtime.execution.agent_profile.as_deref()
+        let changed = session.runtime.execution.selection.agent.as_deref()
             != Some(profile.name.as_str())
             || session.runtime.execution.agent_mode != Some(profile.frontmatter.mode)
             || session.runtime.execution.agent_hidden != profile.frontmatter.hidden
@@ -2513,17 +2624,17 @@ impl SessionManager {
                 != Some(next_system.as_str())
             || session.runtime.allowed_tools() != next_allowed_tools.as_slice()
             || session.runtime.execution.agent_permission != next_permission
-            || session.runtime.execution.model_provider_id.as_deref()
+            || session.runtime.execution.selection.provider.as_deref()
                 != Some(next_model_provider_id.as_str())
-            || session.runtime.execution.model_adapter_id.as_deref()
+            || session.runtime.execution.selection.adapter.as_deref()
                 != next_model_adapter_id.as_deref()
-            || session.runtime.execution.model_id.as_deref() != Some(next_model_id.as_str())
-            || session.runtime.execution.model_thinking_mode != next_thinking_mode
-            || session.runtime.execution.model_speed_mode != next_speed_mode
-            || session.runtime.execution.model_verbosity != next_verbosity
-            || session.runtime.execution.model_parallel_tool_calls != next_parallel_tool_calls
+            || session.runtime.execution.selection.model.as_deref() != Some(next_model_id.as_str())
+            || session.runtime.execution.selection.thinking_mode != next_thinking_mode
+            || session.runtime.execution.selection.speed_mode != next_speed_mode
+            || session.runtime.execution.selection.verbosity != next_verbosity
+            || session.runtime.execution.selection.parallel_tool_calls != next_parallel_tool_calls
             || session.runtime.execution.agent_run != next_run;
-        session.runtime.execution.agent_profile = Some(profile.name.clone());
+        session.runtime.execution.selection.agent = Some(profile.name.clone());
         session.runtime.execution.agent_mode = Some(profile.frontmatter.mode);
         session.runtime.execution.agent_hidden = profile.frontmatter.hidden;
         session.runtime.execution.agent_color = profile.frontmatter.color.clone();
@@ -2565,31 +2676,12 @@ impl SessionManager {
 
     fn resolve_root_agent_model(
         &self,
-        session: &Session,
+        _session: &Session,
         options: &SessionRunOptions,
         state: &SessionManagerState,
         requested_default: Option<&crate::agents::AgentDefaultModelConfig>,
     ) -> Result<ModelRef, AppError> {
-        let base_model = session
-            .runtime
-            .model_override()
-            .map(|(provider_id, adapter_id, model_id)| {
-                let model = match adapter_id {
-                    Some(adapter_id) => {
-                        ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
-                    }
-                    None => ModelRef::try_new(provider_id, model_id),
-                };
-                model.map_err(|error| {
-                    AppError::Internal(format!(
-                        "session {} contains invalid execution model override: {error}",
-                        session.id
-                    ))
-                })
-            })
-            .transpose()?
-            .or_else(|| infer_session_model(session).ok().flatten())
-            .unwrap_or_else(|| options.model.clone());
+        let base_model = options.model.clone();
         match requested_default.filter(|value| !value.is_empty()) {
             Some(default_config) => self.resolve_agent_default_model_ref(
                 &state.processor.provider_registry(),
@@ -2802,31 +2894,18 @@ impl SessionManager {
         let requested_model = requested_model
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let inherited = child
-            .runtime
-            .model_override()
-            .map(|(provider_id, adapter_id, model_id)| {
-                let model = match adapter_id {
-                    Some(adapter_id) => {
-                        ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
-                    }
-                    None => ModelRef::try_new(provider_id, model_id),
-                };
-                model.map_err(|error| {
-                    AppError::Internal(format!(
-                        "child session {} contains invalid model override: {error}",
-                        child.id
-                    ))
-                })
-            })
-            .transpose()?
-            .or_else(|| infer_session_model(child).ok().flatten())
-            .or_else(|| infer_session_model(parent).ok().flatten());
-        let base_model = inherited.ok_or_else(|| {
-            AppError::Internal(
-                "subtask requires a parent or child session model before it can run".to_string(),
-            )
-        })?;
+        let base_model = match self.model_from_session_selection(child)? {
+            Some(model) => model,
+            None => match self.model_from_session_selection(parent)? {
+                Some(model) => model,
+                None => self.default_model_from_config(state)?.ok_or_else(|| {
+                    AppError::Internal(
+                        "subtask requires a child, parent, or global default model before it can run"
+                            .to_string(),
+                    )
+                })?,
+            },
+        };
         let model = if let Some(model_id) = requested_model {
             self.resolve_requested_session_model_ref(&base_model, model_id)?
         } else if let Some(default_config) = requested_default.filter(|value| !value.is_empty()) {
@@ -2853,7 +2932,7 @@ impl SessionManager {
                 .temperature
                 .map(|value| value.0),
             max_output_tokens: child.runtime.execution.agent_run.max_output_tokens,
-            agent_profile: child.runtime.execution.agent_profile.clone(),
+            agent_profile: child.runtime.execution.selection.agent.clone(),
             max_turn_loops: child.runtime.execution.agent_run.steps,
         })
     }

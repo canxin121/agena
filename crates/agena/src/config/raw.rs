@@ -701,6 +701,13 @@ impl Merge for crate::agent::AgentPermissionConfig {
     }
 }
 
+fn agent_permission_config_merge(
+    base: &mut crate::agent::AgentPermissionConfig,
+    overlay: crate::agent::AgentPermissionConfig,
+) {
+    base.merge_from(overlay);
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
@@ -711,8 +718,21 @@ pub(crate) struct RawDefaultConfig {
     pub(crate) adapter: Option<String>,
     #[merge(strategy = option_override)]
     pub(crate) model: Option<String>,
+    #[serde(alias = "think")]
+    #[merge(strategy = option_override)]
+    pub(crate) thinking_mode: Option<String>,
+    #[serde(alias = "speed")]
+    #[merge(strategy = option_override)]
+    pub(crate) speed_mode: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) verbosity: Option<String>,
+    #[merge(strategy = option_override)]
+    pub(crate) parallel_tool_calls: Option<bool>,
     #[merge(strategy = option_override)]
     pub(crate) agent: Option<String>,
+    #[serde(default)]
+    #[merge(strategy = agent_permission_config_merge)]
+    pub(crate) permission: crate::agent::AgentPermissionConfig,
 }
 
 impl RawDefaultConfig {
@@ -721,7 +741,12 @@ impl RawDefaultConfig {
             provider: normalize_optional_string(self.provider),
             adapter: normalize_optional_string(self.adapter),
             model: normalize_optional_string(self.model),
-            agent: normalize_optional_string(self.agent).unwrap_or_else(|| "build".to_owned()),
+            thinking_mode: normalize_optional_string(self.thinking_mode),
+            speed_mode: normalize_optional_string(self.speed_mode),
+            verbosity: normalize_optional_string(self.verbosity),
+            parallel_tool_calls: self.parallel_tool_calls,
+            agent: normalize_optional_string(self.agent).or_else(|| Some("build".to_owned())),
+            permission: self.permission,
         }
     }
 

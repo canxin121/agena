@@ -273,7 +273,7 @@ impl SessionManager {
             .await?
         {
             let mut existing = existing;
-            existing.runtime.execution.agent_profile = Some(effective_profile_name.clone());
+            existing.runtime.execution.selection.agent = Some(effective_profile_name.clone());
             existing.runtime.execution.agent_mode = profile_mode;
             existing.runtime.execution.agent_hidden = profile_hidden;
             existing.runtime.execution.agent_color = profile_color.clone();
@@ -316,7 +316,7 @@ impl SessionManager {
                 state.cache_policy(),
             )
             .await?;
-        child.runtime.execution.agent_profile = Some(effective_profile_name.clone());
+        child.runtime.execution.selection.agent = Some(effective_profile_name.clone());
         child.runtime.execution.agent_mode = profile_mode;
         child.runtime.execution.agent_hidden = profile_hidden;
         child.runtime.execution.agent_color = profile_color;

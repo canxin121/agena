@@ -104,12 +104,18 @@ impl App {
     }
 
     fn transcript_surface_top_right(&self) -> Vec<String> {
-        let is_running = self.transcript.execution.as_ref().is_some_and(|execution| {
-            execution.run_state != SessionRunState::Idle || execution.blocked
-        });
         let mut top_right = Vec::new();
-        if is_running && !self.transcript.submitting {
-            top_right.push(ui_text::t(&self.i18n, "session-running"));
+        if let Some(wait_state) = self.current_session_wait_state_text() {
+            top_right.push(wait_state);
+        } else {
+            let is_running = self
+                .transcript
+                .execution
+                .as_ref()
+                .is_some_and(|execution| execution.run_state != SessionRunState::Idle);
+            if is_running && !self.transcript.submitting {
+                top_right.push(ui_text::t(&self.i18n, "session-running"));
+            }
         }
         if self.transcript.submitting {
             top_right.push(ui_text::t(&self.i18n, "transcript-header-busy"));
@@ -674,12 +680,16 @@ impl App {
 
     fn wrap_styled_text(&self, text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
         let sanitized = sanitize_terminal_text(text);
+        let normalized = trim_empty_line_edges(sanitized.as_str());
+        if normalized.is_empty() {
+            return Vec::new();
+        }
         let available = width.max(1) as usize;
         let options = textwrap::Options::new(available)
             .break_words(false)
             .word_splitter(textwrap::WordSplitter::NoHyphenation);
 
-        sanitized
+        normalized
             .split('\n')
             .flat_map(|line| {
                 let wrapped = textwrap::wrap(line, options.clone());
@@ -758,17 +768,27 @@ impl App {
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
             if !execution.pending_user_input_requests.is_empty() {
-                parts.push(format!(
-                    "input {} pending (Alt+U)",
-                    execution.pending_user_input_requests.len()
+                parts.push(self.i18n.text_args(
+                    "composer-status-pending-user-input",
+                    &crate::fl_args!(
+                        "count" => execution.pending_user_input_requests.len() as i64,
+                    ),
                 ));
             }
             if !execution.pending_permission_requests.is_empty() {
-                parts.push(format!(
-                    "approval {} pending (Alt+P)",
-                    execution.pending_permission_requests.len()
+                parts.push(self.i18n.text_args(
+                    "composer-status-pending-approval",
+                    &crate::fl_args!(
+                        "count" => execution.pending_permission_requests.len() as i64,
+                    ),
                 ));
             }
+        }
+        if self.has_suppressed_pending_interactive_overlay() {
+            parts.push(ui_text::t(
+                &self.i18n,
+                "composer-status-hidden-pending-dialog",
+            ));
         }
         parts
     }
@@ -918,7 +938,10 @@ impl App {
     }
 
     fn render_line_overlay(&self, frame: &mut Frame, area: Rect, dialog: &LineInputOverlay) {
-        let area = centered_rect(area, 88, 10);
+        let prompt_height =
+            wrapped_text_height(dialog.prompt.as_str(), adaptive_modal_width(area.width, 88))
+                .clamp(1, 2);
+        let area = preferred_overlay_rect(area, 88, prompt_height.saturating_add(6));
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -929,7 +952,7 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(2),
+                Constraint::Length(prompt_height),
                 Constraint::Length(3),
                 Constraint::Length(1),
             ])
@@ -963,7 +986,25 @@ impl App {
         area: Rect,
         dialog: &PermissionRuleEditOverlay,
     ) {
-        let area = centered_rect(area, 82, 11);
+        let target_width = adaptive_modal_width(area.width, 82);
+        let prompt_height =
+            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
+        let help_height =
+            overlay_text_height(permission_rule_edit_help().as_str(), target_width, 3, 6);
+        let preview_height = overlay_text_height(
+            render_permission_rule_preview(dialog.input.text()).as_str(),
+            target_width.saturating_sub(2),
+            2,
+            8,
+        );
+        let area = preferred_overlay_rect(
+            area,
+            82,
+            prompt_height
+                .saturating_add(help_height)
+                .saturating_add(3)
+                .saturating_add(preview_height),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -974,10 +1015,10 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
+                Constraint::Length(prompt_height),
+                Constraint::Length(help_height),
                 Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Min(2),
+                Constraint::Min(preview_height),
             ])
             .split(inner);
 
@@ -1014,7 +1055,28 @@ impl App {
         area: Rect,
         dialog: &FileAttachOverlay,
     ) {
-        let area = centered_rect(area, 88, 18);
+        let target_width = adaptive_modal_width(area.width, 88);
+        let prompt_height = overlay_text_height(
+            ui_text::t(&self.i18n, "overlay-attach-prompt").as_str(),
+            target_width.saturating_sub(2),
+            1,
+            2,
+        );
+        let footer_height = overlay_text_height(
+            ui_text::t(&self.i18n, "overlay-attach-footer").as_str(),
+            target_width.saturating_sub(2),
+            1,
+            2,
+        );
+        let list_height = list_panel_height(dialog.results.len().max(1), 1, 4, 10);
+        let area = preferred_overlay_rect(
+            area,
+            88,
+            prompt_height
+                .saturating_add(3)
+                .saturating_add(list_height)
+                .saturating_add(footer_height),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(
@@ -1028,10 +1090,10 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
+                Constraint::Length(prompt_height),
                 Constraint::Length(3),
-                Constraint::Min(6),
-                Constraint::Length(1),
+                Constraint::Min(list_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
 
@@ -1092,7 +1154,16 @@ impl App {
     }
 
     fn render_permission_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PermissionOverlay) {
-        let area = centered_rect(area, 84, 15);
+        let body_height =
+            permission_overlay_body_height(dialog, adaptive_modal_width(area.width, 84))
+                .clamp(4, 14);
+        let choices = permission_overlay_choices(&self.i18n);
+        let choices_height = list_panel_height(choices.len(), 1, 4, 8);
+        let area = preferred_overlay_rect(
+            area,
+            84,
+            body_height.saturating_add(choices_height).saturating_add(1),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(
@@ -1106,8 +1177,8 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(7),
-                Constraint::Length(4),
+                Constraint::Min(body_height),
+                Constraint::Length(choices_height),
                 Constraint::Length(1),
             ])
             .split(inner);
@@ -1164,7 +1235,6 @@ impl App {
             rows[0],
         );
 
-        let choices = permission_overlay_choices(&self.i18n);
         let items = choices
             .iter()
             .map(|label| ListItem::new(label.clone()))
@@ -1187,8 +1257,34 @@ impl App {
     }
 
     fn render_user_input_overlay(&self, frame: &mut Frame, area: Rect, dialog: &UserInputOverlay) {
-        let height = min(24, area.height.saturating_sub(4));
-        let area = centered_rect(area, 92, height);
+        let target_width = adaptive_modal_width(area.width, 92);
+        let nav_panel_height = user_input_nav_panel_height();
+        let footer_review = "j/k choose question  e edit  enter submit  esc close  ctrl+d cancel";
+        let footer_question = "j/k move  tab next  shift+tab prev  space select/toggle  enter choose/next  ctrl+d cancel";
+        let height = if dialog.screen == UserInputOverlayScreen::Review {
+            let summary_height = user_input_review_summary_height(dialog, target_width);
+            nav_panel_height
+                .saturating_add(summary_height)
+                .saturating_add(wrapped_text_height(
+                    footer_review,
+                    target_width.saturating_sub(2),
+                ))
+        } else if let Some(question) = dialog.request.questions.get(dialog.selected_question) {
+            let prompt_height = user_input_prompt_panel_height(question, target_width);
+            let choices_height = user_input_choices_panel_height(question, target_width);
+            let custom_height = if question.allow_custom { 3 } else { 0 };
+            nav_panel_height
+                .saturating_add(prompt_height)
+                .saturating_add(choices_height)
+                .saturating_add(custom_height)
+                .saturating_add(wrapped_text_height(
+                    footer_question,
+                    target_width.saturating_sub(2),
+                ))
+        } else {
+            12
+        };
+        let area = preferred_overlay_rect(area, 92, height);
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(
@@ -1201,12 +1297,16 @@ impl App {
 
         let nav_color = self.theme_color("flash_info", Color::Cyan);
         if dialog.screen == UserInputOverlayScreen::Review {
+            let summary_height = user_input_review_summary_height(dialog, inner.width);
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Min(10),
-                    Constraint::Length(2),
+                    Constraint::Length(nav_panel_height),
+                    Constraint::Length(summary_height),
+                    Constraint::Length(wrapped_text_height(
+                        footer_review,
+                        inner.width.saturating_sub(2),
+                    )),
                 ])
                 .split(inner);
             frame.render_widget(
@@ -1251,11 +1351,7 @@ impl App {
                 review_lines.push(Line::from(Span::styled(
                     format!(
                         "    {}",
-                        if answered {
-                            truncate_display_text(values.join(", ").as_str(), 72)
-                        } else {
-                            "unanswered".to_string()
-                        }
+                        user_input_review_answer_preview(values.as_slice())
                     ),
                     if answered {
                         Style::default().fg(nav_color)
@@ -1288,15 +1384,20 @@ impl App {
             );
             return;
         };
+        let prompt_panel_height = user_input_prompt_panel_height(question, inner.width);
+        let choices_panel_height = user_input_choices_panel_height(question, inner.width);
         let custom_height = if question.allow_custom { 3 } else { 0 };
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
-                Constraint::Length(5),
-                Constraint::Min(6),
+                Constraint::Length(nav_panel_height),
+                Constraint::Length(prompt_panel_height),
+                Constraint::Length(choices_panel_height),
                 Constraint::Length(custom_height),
-                Constraint::Length(2),
+                Constraint::Length(wrapped_text_height(
+                    footer_question,
+                    inner.width.saturating_sub(2),
+                )),
             ])
             .split(inner);
 
@@ -1387,9 +1488,9 @@ impl App {
                 option_lines.push(Line::from(Span::styled(
                     format!(
                         "    {}",
-                        truncate_display_text(
-                            sanitize_display_text(option.description.as_str()).as_str(),
-                            rows[2].width.saturating_sub(6) as usize,
+                        user_input_option_description_preview(
+                            option.description.as_str(),
+                            rows[2].width.saturating_sub(6),
                         )
                     ),
                     if focused {
@@ -1402,11 +1503,10 @@ impl App {
         }
         if question.allow_custom {
             let custom_row = question.options.len();
-            let custom_values = if draft.custom_values.is_empty() {
-                "Press Enter or e to type a custom answer".to_string()
-            } else {
-                draft.custom_values.join(", ")
-            };
+            let custom_values = user_input_custom_values_preview(
+                &draft.custom_values,
+                rows[2].width.saturating_sub(6),
+            );
             let custom_selected = custom_row == dialog.selected_option && !dialog.editing_custom;
             let custom_style = if custom_selected {
                 selection_highlight_style()
@@ -1427,13 +1527,7 @@ impl App {
                 Span::styled("Other", custom_style.add_modifier(Modifier::BOLD)),
             ]));
             option_lines.push(Line::from(Span::styled(
-                format!(
-                    "    {}",
-                    truncate_display_text(
-                        sanitize_display_text(custom_values.as_str()).as_str(),
-                        rows[2].width.saturating_sub(6) as usize,
-                    )
-                ),
+                format!("    {}", custom_values),
                 if draft.custom_values.is_empty() {
                     if custom_selected {
                         custom_style
@@ -1494,8 +1588,14 @@ impl App {
     }
 
     fn render_confirm_overlay(&self, frame: &mut Frame, area: Rect, dialog: &ConfirmOverlay) {
-        let body_height = dialog.body_lines.len() as u16;
-        let area = centered_rect(area, 76, max(8, body_height.saturating_add(4)));
+        let body_width = adaptive_modal_width(area.width, 76).saturating_sub(2);
+        let body_height = dialog
+            .body_lines
+            .iter()
+            .map(|line| wrapped_text_height(line.as_str(), body_width))
+            .sum::<u16>()
+            .clamp(2, 10);
+        let area = preferred_overlay_rect(area, 76, body_height.saturating_add(4));
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -1535,22 +1635,6 @@ impl App {
     }
 
     fn render_help_overlay(&self, frame: &mut Frame, area: Rect, dialog: &HelpOverlay) {
-        let area = centered_rect(area, 108, 28);
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(sanitize_display_text(format!(
-                " {} ",
-                ui_text::t(&self.i18n, "help-title")
-            )))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(8), Constraint::Length(1)])
-            .split(inner);
-
         let text = ui_text::help_lines(&self.i18n)
             .into_iter()
             .map(|line| match line.kind {
@@ -1568,6 +1652,36 @@ impl App {
                 ui_text::HelpLineKind::Spacer => Line::from(""),
             })
             .collect::<Vec<_>>();
+        let target_width = adaptive_modal_width(area.width, 108);
+        let body_height = help_overlay_body_height(text.as_slice(), target_width);
+        let footer_height = overlay_text_height(
+            ui_text::t(&self.i18n, "overlay-help-footer").as_str(),
+            target_width.saturating_sub(2),
+            1,
+            2,
+        );
+        let area = preferred_overlay_rect(
+            area,
+            108,
+            body_height.saturating_add(footer_height).saturating_add(2),
+        );
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(
+                " {} ",
+                ui_text::t(&self.i18n, "help-title")
+            )))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(body_height),
+                Constraint::Length(footer_height),
+            ])
+            .split(inner);
         frame.render_widget(
             Paragraph::new(Text::from(text))
                 .scroll((dialog.scroll, 0))
@@ -1588,7 +1702,33 @@ impl App {
         area: Rect,
         dialog: &SessionSearchOverlay,
     ) {
-        let area = centered_rect(area, 108, 24);
+        let target_width = adaptive_modal_width(area.width, 108);
+        let prompt_height =
+            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
+        let footer_height =
+            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let list_height = list_panel_height(
+            if dialog.loading || dialog.items.is_empty() {
+                1
+            } else {
+                dialog.items.len()
+            },
+            if dialog.loading || dialog.items.is_empty() {
+                1
+            } else {
+                2
+            },
+            5,
+            12,
+        );
+        let area = preferred_overlay_rect(
+            area,
+            108,
+            prompt_height
+                .saturating_add(3)
+                .saturating_add(list_height)
+                .saturating_add(footer_height),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -1599,10 +1739,10 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
+                Constraint::Length(prompt_height),
                 Constraint::Length(3),
-                Constraint::Min(10),
-                Constraint::Length(1),
+                Constraint::Min(list_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
 
@@ -1691,7 +1831,33 @@ impl App {
     }
 
     fn render_picker_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PickerOverlay) {
-        let area = centered_rect(area, 88, 18);
+        let target_width = adaptive_modal_width(area.width, 88);
+        let prompt_height =
+            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
+        let footer_height =
+            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let list_height = list_panel_height(
+            if dialog.loading || dialog.items.is_empty() {
+                1
+            } else {
+                dialog.items.len()
+            },
+            if dialog.loading || dialog.items.is_empty() {
+                1
+            } else {
+                2
+            },
+            4,
+            10,
+        );
+        let area = preferred_overlay_rect(
+            area,
+            88,
+            prompt_height
+                .saturating_add(3)
+                .saturating_add(list_height)
+                .saturating_add(footer_height),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -1702,10 +1868,10 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
+                Constraint::Length(prompt_height),
                 Constraint::Length(3),
-                Constraint::Min(6),
-                Constraint::Length(1),
+                Constraint::Min(list_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
 
@@ -1777,7 +1943,34 @@ impl App {
         area: Rect,
         dialog: &SessionModelChooserOverlay,
     ) {
-        let area = centered_rect(area, 108, 26);
+        let target_width = adaptive_modal_width(area.width, 108);
+        let prompt_height =
+            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
+        let footer_height =
+            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let visible_items = if dialog.loading || dialog.items.is_empty() {
+            1
+        } else {
+            dialog.page_size.max(1).min(dialog.items.len())
+        };
+        let list_height = list_panel_height(
+            visible_items,
+            if dialog.loading || dialog.items.is_empty() {
+                1
+            } else {
+                2
+            },
+            5,
+            12,
+        );
+        let area = preferred_overlay_rect(
+            area,
+            108,
+            prompt_height
+                .saturating_add(3)
+                .saturating_add(list_height)
+                .saturating_add(footer_height),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -1788,10 +1981,10 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
+                Constraint::Length(prompt_height),
                 Constraint::Length(3),
-                Constraint::Min(10),
-                Constraint::Length(1),
+                Constraint::Min(list_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
 
@@ -1877,7 +2070,21 @@ impl App {
     }
 
     fn render_choice_overlay(&self, frame: &mut Frame, area: Rect, dialog: &ChoiceOverlay) {
-        let area = top_centered_rect(area, 96, 24, 1);
+        let target_width = adaptive_modal_width(area.width, 96);
+        let prompt_height =
+            wrapped_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2)).clamp(1, 3);
+        let footer_height =
+            wrapped_text_height(dialog.footer.as_str(), target_width.saturating_sub(2)).clamp(1, 2);
+        let choice_rows = Self::choice_overlay_rows(dialog);
+        let list_height = choice_overlay_rows_height(choice_rows.as_slice());
+        let area = preferred_overlay_rect(
+            area,
+            96,
+            3_u16
+                .saturating_add(prompt_height)
+                .saturating_add(list_height)
+                .saturating_add(footer_height),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -1889,9 +2096,9 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Min(8),
-                Constraint::Length(1),
+                Constraint::Length(prompt_height),
+                Constraint::Min(list_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
 
@@ -1907,7 +2114,6 @@ impl App {
             rows[1],
         );
 
-        let choice_rows = Self::choice_overlay_rows(dialog);
         let has_rows = !choice_rows.is_empty();
         let result_items = if !has_rows {
             vec![ListItem::new(Line::from(Span::styled(
@@ -1970,7 +2176,21 @@ impl App {
     }
 
     fn render_timeline_overlay(&self, frame: &mut Frame, area: Rect, dialog: &TimelineOverlay) {
-        let area = centered_rect(area, 94, 24);
+        let target_width = adaptive_modal_width(area.width, 94);
+        let prompt_height =
+            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
+        let footer_height =
+            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let content_height =
+            timeline_overlay_content_height(dialog, target_width.saturating_sub(2));
+        let area = preferred_overlay_rect(
+            area,
+            94,
+            prompt_height
+                .saturating_add(3)
+                .saturating_add(content_height)
+                .saturating_add(footer_height),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -1981,10 +2201,10 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
+                Constraint::Length(prompt_height),
                 Constraint::Length(3),
-                Constraint::Min(10),
-                Constraint::Length(1),
+                Constraint::Min(content_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
 
@@ -2001,8 +2221,13 @@ impl App {
         );
 
         let stacked = should_stack_detail_layout(rows[2].width, 40, 46);
-        let stacked_constraints = [Constraint::Percentage(42), Constraint::Percentage(58)];
+        let (list_height, detail_height) =
+            timeline_overlay_panel_heights(dialog, rows[2].width.saturating_sub(2));
         let split_constraints = adaptive_detail_split(rows[2].width, 40, 46);
+        let stacked_constraints = [
+            Constraint::Length(list_height),
+            Constraint::Length(detail_height),
+        ];
         let content = Layout::default()
             .direction(if stacked {
                 Direction::Vertical
@@ -2015,6 +2240,14 @@ impl App {
                 split_constraints.as_ref()
             })
             .split(rows[2]);
+        let (list_area, detail_area) = if stacked {
+            (content[0], content[1])
+        } else {
+            (
+                top_aligned_panel_rect(content[0], list_height),
+                top_aligned_panel_rect(content[1], detail_height),
+            )
+        };
 
         let list_items = if dialog.loading {
             vec![ListItem::new(Line::from(Span::styled(
@@ -2046,7 +2279,7 @@ impl App {
             .highlight_symbol(">> ");
         let mut state = ListState::default();
         state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, content[0], &mut state);
+        frame.render_stateful_widget(list, list_area, &mut state);
 
         let detail = if dialog.loading {
             ui_text::t(&self.i18n, "overlay-picker-loading")
@@ -2068,7 +2301,7 @@ impl App {
                         .borders(Borders::ALL),
                 )
                 .wrap(Wrap { trim: false }),
-            content[1],
+            detail_area,
         );
 
         frame.render_widget(
@@ -2093,7 +2326,21 @@ impl App {
         area: Rect,
         dialog: &PluginInspectorOverlay,
     ) {
-        let area = centered_rect(area, 96, 28);
+        let target_width = adaptive_modal_width(area.width, 96);
+        let prompt_height =
+            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
+        let footer_height =
+            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let content_height =
+            plugin_inspector_content_height(dialog, target_width.saturating_sub(2));
+        let area = preferred_overlay_rect(
+            area,
+            96,
+            prompt_height
+                .saturating_add(3)
+                .saturating_add(content_height)
+                .saturating_add(footer_height),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -2104,10 +2351,10 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
+                Constraint::Length(prompt_height),
                 Constraint::Length(3),
-                Constraint::Min(12),
-                Constraint::Length(1),
+                Constraint::Min(content_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
 
@@ -2124,22 +2371,23 @@ impl App {
         );
 
         let stacked = should_stack_detail_layout(rows[2].width, 34, 48);
+        let (list_height, detail_height, logs_height) =
+            plugin_inspector_panel_heights(dialog, rows[2].width.saturating_sub(2));
         let (list_area, detail_area, logs_area) = if stacked {
-            let content = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(6), Constraint::Min(5), Constraint::Min(5)])
-                .split(rows[2]);
+            let content =
+                top_aligned_vertical_areas(rows[2], &[list_height, detail_height, logs_height]);
             (content[0], content[1], content[2])
         } else {
             let content = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(adaptive_detail_split(rows[2].width, 34, 48))
                 .split(rows[2]);
-            let right = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(adaptive_vertical_split(content[1].height, 7, 9))
-                .split(content[1]);
-            (content[0], right[0], right[1])
+            let right = top_aligned_vertical_areas(content[1], &[detail_height, logs_height]);
+            (
+                top_aligned_panel_rect(content[0], list_height),
+                right[0],
+                right[1],
+            )
         };
 
         let list_items = if dialog.items.is_empty() {
@@ -2248,7 +2496,17 @@ impl App {
         area: Rect,
         dialog: &SettingsStudioOverlay,
     ) {
-        let area = centered_rect(area, 122, 36);
+        let target_width = adaptive_modal_width(area.width, 122);
+        let content_width = target_width.saturating_sub(2);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
+        let content_height = settings_studio_content_height(dialog, content_width);
+        let area = preferred_overlay_rect(
+            area,
+            122,
+            content_height
+                .saturating_add(footer_height)
+                .saturating_add(3),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -2260,8 +2518,8 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
-                Constraint::Min(18),
-                Constraint::Length(1),
+                Constraint::Min(content_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
         let current_section = dialog.sections.get(dialog.selected_section);
@@ -2283,14 +2541,8 @@ impl App {
             .split(rows[1]);
         let nav_area = content[0];
         let right_area = content[1];
-        let right_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(4),
-                Constraint::Min(10),
-                Constraint::Length(7),
-            ])
-            .split(right_area);
+        let nav_panel_height = list_panel_height(dialog.sections.len().max(1), 2, 4, 12);
+        let nav_panel_area = top_aligned_panel_rect(nav_area, nav_panel_height);
 
         let nav_items = dialog
             .sections
@@ -2319,7 +2571,7 @@ impl App {
             .highlight_symbol(">> ");
         let mut nav_state = ListState::default();
         nav_state.select((!dialog.sections.is_empty()).then_some(dialog.selected_section));
-        frame.render_stateful_widget(nav_list, nav_area, &mut nav_state);
+        frame.render_stateful_widget(nav_list, nav_panel_area, &mut nav_state);
 
         let section_title = current_section
             .map(|section| section.label.clone())
@@ -2327,6 +2579,60 @@ impl App {
         let section_description = current_section
             .map(|section| section.description.clone())
             .unwrap_or_else(|| "No section selected.".to_string());
+        let selected_item =
+            current_section.and_then(|section| section.items.get(dialog.selected_item));
+        let detail_text = match current_section.map(|section| section.id) {
+            Some(SettingsStudioSectionId::Agents) => selected_item
+                .and_then(|item| match &item.action {
+                    SettingsPickerAction::OpenAgent(agent) => {
+                        Some(settings_studio_agent_detail_text(
+                            agent,
+                            dialog.default_agent_name.as_deref(),
+                        ))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| "Select an agent to inspect or edit it.".to_string()),
+            _ => selected_item
+                .map(|item| {
+                    if item.value.trim().is_empty() {
+                        format!("{}\nEnter opens or edits this setting.", item.detail)
+                    } else {
+                        format!(
+                            "{}\nCurrent value: {}\nEnter opens or edits this setting.",
+                            item.detail, item.value
+                        )
+                    }
+                })
+                .unwrap_or_else(|| {
+                    "Select a section and an option to inspect or edit it.".to_string()
+                }),
+        };
+        let section_panel_height =
+            bordered_paragraph_height(section_description.as_str(), right_area.width, 1, 3);
+        let item_list_height = list_panel_height(
+            current_section
+                .map(|section| section.items.len())
+                .unwrap_or(0)
+                .max(1),
+            if current_section
+                .map(|section| section.items.is_empty())
+                .unwrap_or(true)
+            {
+                1
+            } else {
+                2
+            },
+            4,
+            12,
+        );
+        let detail_panel_height =
+            bordered_paragraph_height(detail_text.as_str(), right_area.width, 3, 6);
+        let right_rows = top_aligned_vertical_areas(
+            right_area,
+            &[section_panel_height, item_list_height, detail_panel_height],
+        );
+
         frame.render_widget(
             Paragraph::new(sanitize_display_text(section_description))
                 .block(
@@ -2338,8 +2644,6 @@ impl App {
             right_rows[0],
         );
 
-        let selected_item =
-            current_section.and_then(|section| section.items.get(dialog.selected_item));
         let item_rows = current_section
             .map(|section| {
                 if section.items.is_empty() {
@@ -2394,33 +2698,6 @@ impl App {
         item_state.select(has_items.then_some(dialog.selected_item));
         frame.render_stateful_widget(item_list, right_rows[1], &mut item_state);
 
-        let detail_text = match current_section.map(|section| section.id) {
-            Some(SettingsStudioSectionId::Agents) => selected_item
-                .and_then(|item| match &item.action {
-                    SettingsPickerAction::OpenAgent(agent) => {
-                        Some(settings_studio_agent_detail_text(
-                            agent,
-                            dialog.default_agent_name.as_deref(),
-                        ))
-                    }
-                    _ => None,
-                })
-                .unwrap_or_else(|| "Select an agent to inspect or edit it.".to_string()),
-            _ => selected_item
-                .map(|item| {
-                    if item.value.trim().is_empty() {
-                        format!("{}\nEnter opens or edits this setting.", item.detail)
-                    } else {
-                        format!(
-                            "{}\nCurrent value: {}\nEnter opens or edits this setting.",
-                            item.detail, item.value
-                        )
-                    }
-                })
-                .unwrap_or_else(|| {
-                    "Select a section and an option to inspect or edit it.".to_string()
-                }),
-        };
         frame.render_widget(
             Paragraph::new(sanitize_display_text(detail_text))
                 .block(
@@ -2444,7 +2721,17 @@ impl App {
         area: Rect,
         dialog: &ProviderStudioOverlay,
     ) {
-        let area = centered_rect(area, 122, 38);
+        let target_width = adaptive_modal_width(area.width, 122);
+        let footer_height =
+            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let content_height = provider_studio_content_height(dialog, target_width);
+        let area = preferred_overlay_rect(
+            area,
+            122,
+            content_height
+                .saturating_add(footer_height)
+                .saturating_add(3),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -2456,8 +2743,8 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
-                Constraint::Min(18),
-                Constraint::Length(1),
+                Constraint::Min(content_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
 
@@ -2476,6 +2763,10 @@ impl App {
                 .constraints([Constraint::Length(28), Constraint::Min(54)])
                 .split(rows[1]);
             let providers_area = content[0];
+            let providers_panel_area = top_aligned_panel_rect(
+                providers_area,
+                list_panel_height(dialog.providers.len().max(1), 2, 4, 12),
+            );
             let provider_items = dialog
                 .providers
                 .iter()
@@ -2503,39 +2794,22 @@ impl App {
             let mut provider_state = ListState::default();
             provider_state
                 .select((!dialog.providers.is_empty()).then_some(dialog.selected_provider));
-            frame.render_stateful_widget(provider_list, providers_area, &mut provider_state);
+            frame.render_stateful_widget(provider_list, providers_panel_area, &mut provider_state);
             content[1]
         } else {
             rows[1]
         };
         let draft_fields = provider_studio_visible_fields(dialog);
-        let draft_panel_height = u16::try_from(draft_fields.len().saturating_add(3))
-            .unwrap_or(u16::MAX)
-            .clamp(8, 18);
-        let right_rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(draft_panel_height), Constraint::Min(10)])
-            .split(right_area);
+        let draft_panel_height = provider_studio_draft_panel_height(dialog, right_area.width);
+        let lower_panel_height = provider_studio_lower_content_height(dialog, right_area.width);
+        let right_rows =
+            top_aligned_vertical_areas(right_area, &[draft_panel_height, lower_panel_height]);
 
         let draft_lines = draft_fields
             .iter()
             .enumerate()
             .map(|(index, field)| {
-                let value = provider_studio_main_field_value(dialog, *field);
-                let display = match field {
-                    ProviderStudioField::ApiKey
-                    | ProviderStudioField::RefreshToken
-                    | ProviderStudioField::AccessToken
-                    | ProviderStudioField::AccessKeyId
-                    | ProviderStudioField::SecretAccessKey
-                    | ProviderStudioField::SessionToken
-                        if !value.trim().is_empty() =>
-                    {
-                        "********".to_owned()
-                    }
-                    _ if value.trim().is_empty() => "unset".to_owned(),
-                    _ => value,
-                };
+                let display = provider_studio_main_field_display(dialog, *field);
                 let selected = dialog.detail_page.is_none()
                     && dialog.focus == ProviderStudioFocus::Fields
                     && dialog.selected_field == index;
@@ -2562,10 +2836,15 @@ impl App {
             right_rows[0],
         );
 
+        let (adapter_height, model_height) =
+            provider_studio_adapter_model_heights(dialog, right_rows[1].width);
         let adapter_models_split = if should_stack_detail_layout(right_rows[1].width, 24, 28) {
             Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .constraints([
+                    Constraint::Length(adapter_height),
+                    Constraint::Length(model_height),
+                ])
                 .split(right_rows[1])
         } else {
             Layout::default()
@@ -2573,8 +2852,15 @@ impl App {
                 .constraints(adaptive_detail_split(right_rows[1].width, 24, 28))
                 .split(right_rows[1])
         };
-        let adapters_area = adapter_models_split[0];
-        let models_area = adapter_models_split[1];
+        let (adapters_area, models_area) =
+            if should_stack_detail_layout(right_rows[1].width, 24, 28) {
+                (adapter_models_split[0], adapter_models_split[1])
+            } else {
+                (
+                    top_aligned_panel_rect(adapter_models_split[0], adapter_height),
+                    top_aligned_panel_rect(adapter_models_split[1], model_height),
+                )
+            };
 
         let adapter_items = if dialog.adapter_candidate_ids.is_empty() {
             vec![ListItem::new(Line::from(Span::styled(
@@ -2749,111 +3035,92 @@ impl App {
         );
 
         if let Some(detail_page) = dialog.detail_page.as_ref() {
-            let detail_fields = provider_studio_detail_fields(dialog);
-            let auth_state_lines = provider_studio_auth_state_lines(dialog);
-            let detail_height = u16::try_from(
-                detail_fields
-                    .len()
-                    .saturating_add(auth_state_lines.len())
-                    .saturating_add(4),
-            )
-            .unwrap_or(u16::MAX)
-            .clamp(10, 24);
-            let detail_area = centered_rect(area, 92, detail_height);
+            let detail_lines = provider_studio_detail_page_lines(dialog);
+            let detail_height =
+                provider_studio_detail_page_height(dialog, adaptive_modal_width(area.width, 92));
+            let detail_area = preferred_overlay_rect(area, 92, detail_height);
             frame.render_widget(Clear, detail_area);
             let detail_block = Block::default()
                 .title(sanitize_display_text(format!(" {} ", detail_page.title)))
                 .borders(Borders::ALL);
             let detail_inner = detail_block.inner(detail_area);
             frame.render_widget(detail_block, detail_area);
+            let footer_height =
+                wrapped_text_height(detail_page.footer.as_str(), detail_inner.width.max(1))
+                    .clamp(1, 2);
             let detail_rows = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(6), Constraint::Length(1)])
+                .constraints([
+                    Constraint::Min(detail_inner.height.saturating_sub(footer_height)),
+                    Constraint::Length(footer_height),
+                ])
                 .split(detail_inner);
-
-            let mut lines = auth_state_lines
+            let detail_fields = provider_studio_detail_fields(dialog);
+            let auth_state_line_count = provider_studio_auth_state_lines(dialog).len();
+            let lines = detail_lines
                 .into_iter()
-                .map(|line| {
-                    Line::from(Span::styled(
-                        sanitize_display_text(line),
-                        Style::default().fg(Color::DarkGray),
-                    ))
+                .enumerate()
+                .map(|(index, line)| {
+                    if index == 0 {
+                        return Line::from(vec![
+                            Span::styled(
+                                format!(
+                                    "{:>16}",
+                                    provider_studio_field_label(ProviderStudioField::AuthStatus)
+                                ),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::raw("  "),
+                            Span::styled(
+                                sanitize_display_text(line),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ]);
+                    }
+                    if index <= auth_state_line_count {
+                        return Line::from(Span::styled(
+                            sanitize_display_text(line),
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
+                    let field_index = index.saturating_sub(auth_state_line_count + 1);
+                    let Some(field) = detail_fields.get(field_index).copied() else {
+                        return Line::from(sanitize_display_text(line));
+                    };
+                    let selected =
+                        dialog.editor.is_none() && detail_page.selected_field == field_index;
+                    let label_style = if selected {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else if provider_studio_field_editable(dialog, field) {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{:>16}", provider_studio_field_label(field)),
+                            label_style,
+                        ),
+                        Span::raw("  "),
+                        Span::styled(
+                            sanitize_display_text(line),
+                            if selected {
+                                Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD)
+                            } else if provider_studio_field_editable(dialog, field) {
+                                Style::default()
+                            } else {
+                                Style::default().fg(Color::DarkGray)
+                            },
+                        ),
+                    ])
                 })
                 .collect::<Vec<_>>();
-            lines.insert(
-                0,
-                Line::from(vec![
-                    Span::styled(
-                        format!(
-                            "{:>16}",
-                            provider_studio_field_label(ProviderStudioField::AuthStatus)
-                        ),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::raw("  "),
-                    Span::styled(
-                        provider_studio_auth_status_summary(dialog),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ]),
-            );
-            lines.extend(detail_fields.iter().enumerate().map(|(index, field)| {
-                let value = provider_studio_field_value(&dialog.draft, *field);
-                let display = match field {
-                    ProviderStudioField::ApiKey
-                    | ProviderStudioField::RefreshToken
-                    | ProviderStudioField::AccessToken
-                    | ProviderStudioField::AccessKeyId
-                    | ProviderStudioField::SecretAccessKey
-                    | ProviderStudioField::SessionToken
-                        if !value.trim().is_empty() =>
-                    {
-                        "********".to_owned()
-                    }
-                    _ if value.trim().is_empty() => "unset".to_owned(),
-                    _ => value,
-                };
-                let selected = dialog.editor.is_none() && detail_page.selected_field == index;
-                let label_style = if selected {
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD)
-                } else if provider_studio_field_editable(dialog, *field) {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-                Line::from(vec![
-                    Span::styled(
-                        format!("{:>16}", provider_studio_field_label(*field)),
-                        label_style,
-                    ),
-                    Span::raw("  "),
-                    Span::styled(
-                        sanitize_display_text(display),
-                        if selected {
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD)
-                        } else if provider_studio_field_editable(dialog, *field) {
-                            Style::default()
-                        } else {
-                            Style::default().fg(Color::DarkGray)
-                        },
-                    ),
-                ])
-            }));
             frame.render_widget(
-                Paragraph::new(Text::from(lines))
-                    .wrap(Wrap { trim: false })
-                    .block(
-                        Block::default()
-                            .title(sanitize_display_text(format!(
-                                " {} ",
-                                ui_text::t(&self.i18n, "overlay-provider-studio-detail")
-                            )))
-                            .borders(Borders::NONE),
-                    ),
+                Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }),
                 detail_rows[0],
             );
             frame.render_widget(
@@ -2863,11 +3130,23 @@ impl App {
         }
 
         if let Some(editor) = dialog.editor.as_ref() {
-            let area = if editor.multiline {
-                centered_rect(area, 92, 24)
-            } else {
-                centered_rect(area, 78, 7)
-            };
+            let target_width = if editor.multiline { 92 } else { 78 };
+            let prompt_height = wrapped_text_height(
+                editor.prompt.as_str(),
+                adaptive_modal_width(area.width, target_width).saturating_sub(2),
+            )
+            .clamp(1, 3);
+            let footer_height = wrapped_text_height(
+                editor.footer.as_str(),
+                adaptive_modal_width(area.width, target_width).saturating_sub(2),
+            )
+            .clamp(1, 2);
+            let input_height = editor_input_panel_height(&editor.input, editor.multiline);
+            let editor_height = prompt_height
+                .saturating_add(footer_height)
+                .saturating_add(input_height)
+                .saturating_add(2);
+            let area = preferred_overlay_rect(area, target_width, editor_height);
             frame.render_widget(Clear, area);
             let block = Block::default()
                 .title(sanitize_display_text(format!(" {} ", editor.title)))
@@ -2877,9 +3156,9 @@ impl App {
             let editor_rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(1),
-                    Constraint::Min(if editor.multiline { 8 } else { 3 }),
-                    Constraint::Length(1),
+                    Constraint::Length(prompt_height),
+                    Constraint::Length(input_height),
+                    Constraint::Length(footer_height),
                 ])
                 .split(inner);
             frame.render_widget(
@@ -2918,7 +3197,17 @@ impl App {
         area: Rect,
         dialog: &ModelCatalogStudioOverlay,
     ) {
-        let area = centered_rect(area, 116, 36);
+        let target_width = adaptive_modal_width(area.width, 116);
+        let footer_height =
+            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let content_height = model_catalog_content_height(dialog, target_width);
+        let area = preferred_overlay_rect(
+            area,
+            116,
+            content_height
+                .saturating_add(footer_height)
+                .saturating_add(3),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -2930,8 +3219,8 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
-                Constraint::Min(16),
-                Constraint::Length(1),
+                Constraint::Min(content_height),
+                Constraint::Length(footer_height),
             ])
             .split(inner);
         let summary = format!(
@@ -2956,16 +3245,29 @@ impl App {
             Style::default().fg(Color::DarkGray),
         );
 
-        let content = if should_stack_detail_layout(rows[1].width, 48, 34) {
-            Layout::default()
+        let stacked = should_stack_detail_layout(rows[1].width, 48, 34);
+        let (list_height, detail_height) =
+            model_catalog_panel_heights(dialog, rows[1].width.saturating_sub(2));
+        let (list_area, detail_area) = if stacked {
+            let (list_height, detail_height) =
+                model_catalog_panel_heights(dialog, rows[1].width.saturating_sub(2));
+            let content = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
-                .split(rows[1])
+                .constraints([
+                    Constraint::Length(list_height),
+                    Constraint::Length(detail_height),
+                ])
+                .split(rows[1]);
+            (content[0], content[1])
         } else {
-            Layout::default()
+            let content = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints(adaptive_detail_split(rows[1].width, 48, 34))
-                .split(rows[1])
+                .split(rows[1]);
+            (
+                top_aligned_panel_rect(content[0], list_height),
+                top_aligned_panel_rect(content[1], detail_height),
+            )
         };
 
         let list_items = if dialog.loading {
@@ -3015,7 +3317,7 @@ impl App {
             .highlight_symbol(">> ");
         let mut list_state = ListState::default();
         list_state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(catalog_list, content[0], &mut list_state);
+        frame.render_stateful_widget(catalog_list, list_area, &mut list_state);
 
         let detail = dialog
             .items
@@ -3066,7 +3368,7 @@ impl App {
                         .borders(Borders::ALL),
                 )
                 .wrap(Wrap { trim: false }),
-            content[1],
+            detail_area,
         );
 
         frame.render_widget(
@@ -3075,7 +3377,23 @@ impl App {
         );
 
         if let Some(editor) = dialog.editor.as_ref() {
-            let area = centered_rect(area, 78, 7);
+            let prompt_height = wrapped_text_height(
+                editor.prompt.as_str(),
+                adaptive_modal_width(area.width, 78).saturating_sub(2),
+            )
+            .clamp(1, 2);
+            let footer_height = wrapped_text_height(
+                ui_text::t(&self.i18n, "overlay-provider-studio-edit-footer").as_str(),
+                adaptive_modal_width(area.width, 78).saturating_sub(2),
+            )
+            .clamp(1, 2);
+            let area = preferred_overlay_rect(
+                area,
+                78,
+                prompt_height
+                    .saturating_add(footer_height)
+                    .saturating_add(5),
+            );
             frame.render_widget(Clear, area);
             let block = Block::default()
                 .title(sanitize_display_text(format!(" {} ", editor.title)))
@@ -3085,9 +3403,9 @@ impl App {
             let editor_rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(1),
+                    Constraint::Length(prompt_height),
                     Constraint::Length(3),
-                    Constraint::Length(1),
+                    Constraint::Length(footer_height),
                 ])
                 .split(inner);
             frame.render_widget(
@@ -3281,17 +3599,8 @@ fn parse_hex_color(value: &str) -> Option<Color> {
     Some(Color::Rgb(red, green, blue))
 }
 
-fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
-    let width = adaptive_modal_width(area.width, width);
-    let height = adaptive_modal_height(area.height, height);
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 2;
-    Rect {
-        x,
-        y,
-        width,
-        height,
-    }
+fn preferred_overlay_rect(area: Rect, width: u16, height: u16) -> Rect {
+    top_centered_rect(area, width, height, 1)
 }
 
 fn top_centered_rect(area: Rect, width: u16, height: u16, top_margin: u16) -> Rect {
@@ -3306,6 +3615,30 @@ fn top_centered_rect(area: Rect, width: u16, height: u16, top_margin: u16) -> Re
         width,
         height,
     }
+}
+
+fn top_aligned_vertical_areas(area: Rect, heights: &[u16]) -> Vec<Rect> {
+    let mut constraints = heights
+        .iter()
+        .copied()
+        .map(Constraint::Length)
+        .collect::<Vec<_>>();
+    constraints.push(Constraint::Min(0));
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area)
+        .iter()
+        .take(heights.len())
+        .copied()
+        .collect()
+}
+
+fn top_aligned_panel_rect(area: Rect, panel_height: u16) -> Rect {
+    top_aligned_vertical_areas(area, &[panel_height])
+        .into_iter()
+        .next()
+        .unwrap_or(area)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3383,6 +3716,18 @@ fn sanitize_display_text(text: impl AsRef<str>) -> String {
     sanitize_terminal_text(text.as_ref())
 }
 
+fn trim_empty_line_edges(text: &str) -> String {
+    let lines = text.split('\n').collect::<Vec<_>>();
+    let Some(first_non_empty) = lines.iter().position(|line| !line.trim().is_empty()) else {
+        return String::new();
+    };
+    let last_non_empty = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first_non_empty);
+    lines[first_non_empty..=last_non_empty].join("\n")
+}
+
 pub(super) fn adaptive_modal_width(total_width: u16, target: u16) -> u16 {
     let max_width = total_width.saturating_sub(2);
     if total_width <= 72 {
@@ -3413,7 +3758,11 @@ pub(super) fn adaptive_detail_split(
     if should_stack_detail_layout(total_width, left_min, right_min) {
         [Constraint::Percentage(50), Constraint::Percentage(50)]
     } else {
-        [Constraint::Min(left_min), Constraint::Min(right_min)]
+        let [left_pct, right_pct] = proportional_percentages(left_min, right_min);
+        [
+            Constraint::Percentage(left_pct),
+            Constraint::Percentage(right_pct),
+        ]
     }
 }
 
@@ -3422,15 +3771,595 @@ pub(super) fn should_stack_detail_layout(total_width: u16, left_min: u16, right_
     available < left_min.saturating_add(right_min).saturating_add(8)
 }
 
-pub(super) fn adaptive_vertical_split(
-    total_height: u16,
-    top_min: u16,
-    bottom_min: u16,
-) -> [Constraint; 2] {
-    let available = total_height.saturating_sub(2);
-    if available < top_min.saturating_add(bottom_min).saturating_add(3) {
-        [Constraint::Percentage(50), Constraint::Percentage(50)]
+fn proportional_percentages(first: u16, second: u16) -> [u16; 2] {
+    let total = u32::from(first.max(1)).saturating_add(u32::from(second.max(1)));
+    let first_pct = ((u32::from(first.max(1)) * 100) / total).clamp(1, 99) as u16;
+    [first_pct, 100_u16.saturating_sub(first_pct)]
+}
+
+fn wrapped_text_height(text: &str, width: u16) -> u16 {
+    let usable_width = usize::from(width.max(1));
+    text.lines()
+        .map(|line| {
+            let display_width = UnicodeWidthStr::width(line);
+            let rows = display_width.max(1).div_ceil(usable_width);
+            u16::try_from(rows).unwrap_or(u16::MAX)
+        })
+        .sum::<u16>()
+        .max(1)
+}
+
+fn bordered_paragraph_height(text: &str, width: u16, min_body: u16, max_body: u16) -> u16 {
+    wrapped_text_height(text, width.saturating_sub(2))
+        .clamp(min_body, max_body)
+        .saturating_add(2)
+}
+
+fn overlay_text_height(text: &str, width: u16, min_body: u16, max_body: u16) -> u16 {
+    wrapped_text_height(text, width).clamp(min_body, max_body)
+}
+
+fn list_panel_height(
+    entry_count: usize,
+    lines_per_entry: u16,
+    min_body: u16,
+    max_body: u16,
+) -> u16 {
+    let natural_lines = u16::try_from(entry_count)
+        .unwrap_or(u16::MAX)
+        .saturating_mul(lines_per_entry)
+        .max(1);
+    let relaxed_min_body =
+        min_body.min(natural_lines.saturating_add(lines_per_entry.saturating_sub(1)));
+    let lines = natural_lines.clamp(relaxed_min_body, max_body);
+    lines.saturating_add(2)
+}
+
+fn help_overlay_body_height(lines: &[Line<'static>], width: u16) -> u16 {
+    let body_width = width.saturating_sub(2);
+    lines
+        .iter()
+        .map(|line| {
+            let text = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            wrapped_text_height(text.as_str(), body_width)
+        })
+        .sum::<u16>()
+        .clamp(8, 22)
+}
+
+fn settings_studio_content_height(dialog: &SettingsStudioOverlay, width: u16) -> u16 {
+    let nav_height = list_panel_height(dialog.sections.len().max(1), 2, 4, 12);
+    let right_width = width.saturating_sub(28).max(1);
+    let current_section = dialog.sections.get(dialog.selected_section);
+    let selected_item = current_section.and_then(|section| section.items.get(dialog.selected_item));
+    let section_description = current_section
+        .map(|section| section.description.as_str())
+        .unwrap_or("No section selected.");
+    let detail_text = match current_section.map(|section| section.id) {
+        Some(SettingsStudioSectionId::Agents) => selected_item
+            .and_then(|item| match &item.action {
+                SettingsPickerAction::OpenAgent(agent) => Some(settings_studio_agent_detail_text(
+                    agent,
+                    dialog.default_agent_name.as_deref(),
+                )),
+                _ => None,
+            })
+            .unwrap_or_else(|| "Select an agent to inspect or edit it.".to_string()),
+        _ => selected_item
+            .map(|item| {
+                if item.value.trim().is_empty() {
+                    format!("{}\nEnter opens or edits this setting.", item.detail)
+                } else {
+                    format!(
+                        "{}\nCurrent value: {}\nEnter opens or edits this setting.",
+                        item.detail, item.value
+                    )
+                }
+            })
+            .unwrap_or_else(|| "Select a section and an option to inspect or edit it.".to_string()),
+    };
+    let section_panel_height = bordered_paragraph_height(section_description, right_width, 1, 3);
+    let item_list_height = list_panel_height(
+        current_section
+            .map(|section| section.items.len())
+            .unwrap_or(0)
+            .max(1),
+        if current_section
+            .map(|section| section.items.is_empty())
+            .unwrap_or(true)
+        {
+            1
+        } else {
+            2
+        },
+        4,
+        12,
+    );
+    let detail_panel_height = bordered_paragraph_height(detail_text.as_str(), right_width, 3, 6);
+    max(
+        nav_height,
+        section_panel_height
+            .saturating_add(item_list_height)
+            .saturating_add(detail_panel_height),
+    )
+}
+
+fn provider_studio_content_height(dialog: &ProviderStudioOverlay, width: u16) -> u16 {
+    let draft_panel_height = provider_studio_draft_panel_height(dialog, width);
+    let right_width = if dialog.show_provider_list {
+        width.saturating_sub(32).max(44)
     } else {
-        [Constraint::Min(top_min), Constraint::Min(bottom_min)]
+        width.saturating_sub(4).max(44)
+    };
+    let (adapter_height, model_height) = provider_studio_adapter_model_heights(dialog, right_width);
+    let lower_height = if should_stack_detail_layout(right_width, 24, 28) {
+        adapter_height.saturating_add(model_height)
+    } else {
+        max(adapter_height, model_height)
+    };
+    let right_total = draft_panel_height.saturating_add(lower_height);
+    if dialog.show_provider_list {
+        max(
+            list_panel_height(dialog.providers.len().max(1), 2, 4, 12),
+            right_total,
+        )
+    } else {
+        right_total
     }
+}
+
+fn provider_studio_lower_content_height(dialog: &ProviderStudioOverlay, width: u16) -> u16 {
+    let right_width = width.saturating_sub(2).max(40);
+    let (adapter_height, model_height) = provider_studio_adapter_model_heights(dialog, right_width);
+    if should_stack_detail_layout(right_width, 24, 28) {
+        adapter_height.saturating_add(model_height)
+    } else {
+        max(adapter_height, model_height)
+    }
+}
+
+fn model_catalog_content_height(dialog: &ModelCatalogStudioOverlay, width: u16) -> u16 {
+    let (list_height, detail_height) = model_catalog_panel_heights(dialog, width);
+    let stacked = should_stack_detail_layout(width.saturating_sub(2), 48, 34);
+    if stacked {
+        list_height.saturating_add(detail_height)
+    } else {
+        max(list_height, detail_height)
+    }
+}
+
+fn user_input_nav_panel_height() -> u16 {
+    4
+}
+
+fn user_input_review_summary_height(dialog: &UserInputOverlay, width: u16) -> u16 {
+    let content_width = width.saturating_sub(4).max(1);
+    let mut lines = wrapped_text_height("Review your answers before submitting.", content_width)
+        .saturating_add(1);
+    for question in &dialog.request.questions {
+        let values = dialog
+            .answers
+            .get(&question.id)
+            .map(|draft| user_input_answer_values(question, draft))
+            .unwrap_or_default();
+        let answered = !values.is_empty();
+        let question_line = format!(
+            "{} {}",
+            if answered { "[x]" } else { "[ ]" },
+            sanitize_display_text(user_input_question_label(question))
+        );
+        let answer_line = format!(
+            "    {}",
+            user_input_review_answer_preview(values.as_slice())
+        );
+        lines = lines.saturating_add(wrapped_text_height(question_line.as_str(), content_width));
+        lines = lines.saturating_add(wrapped_text_height(answer_line.as_str(), content_width));
+    }
+    lines.clamp(6, 14).saturating_add(2)
+}
+
+fn user_input_prompt_panel_height(question: &UserInputQuestion, width: u16) -> u16 {
+    let answer_hint = "Current answer:";
+    let content_width = width.saturating_sub(4);
+    let body_height = wrapped_text_height(question.question.as_str(), content_width)
+        .saturating_add(1)
+        .saturating_add(wrapped_text_height(
+            format!(
+                "{} · id={}",
+                if question.multiple {
+                    "Choose one or more"
+                } else {
+                    "Choose one"
+                },
+                question.id
+            )
+            .as_str(),
+            content_width,
+        ))
+        .saturating_add(wrapped_text_height(answer_hint, content_width));
+    body_height.clamp(3, 6).saturating_add(2)
+}
+
+fn user_input_choices_panel_height(question: &UserInputQuestion, width: u16) -> u16 {
+    let line_width = width.saturating_sub(4).max(1);
+    let description_width = width.saturating_sub(6);
+    let mut lines = 0_u16;
+    for option in &question.options {
+        let prefix = if question.multiple { "[ ]" } else { "( )" };
+        let label_line = format!("{prefix} {}", sanitize_display_text(option.label.as_str()));
+        lines = lines.saturating_add(wrapped_text_height(label_line.as_str(), line_width));
+        if !option.description.trim().is_empty() {
+            let description_line = format!(
+                "    {}",
+                user_input_option_description_preview(
+                    option.description.as_str(),
+                    description_width,
+                )
+            );
+            lines =
+                lines.saturating_add(wrapped_text_height(description_line.as_str(), line_width));
+        }
+    }
+    if question.allow_custom {
+        lines = lines
+            .saturating_add(1)
+            .saturating_add(wrapped_text_height("Other", line_width))
+            .saturating_add(wrapped_text_height(
+                format!(
+                    "    {}",
+                    user_input_custom_values_preview(&[], description_width)
+                )
+                .as_str(),
+                line_width,
+            ));
+    }
+    lines.clamp(4, 12).saturating_add(2)
+}
+
+fn user_input_review_answer_preview(values: &[String]) -> String {
+    if values.is_empty() {
+        "unanswered".to_string()
+    } else {
+        truncate_display_text(values.join(", ").as_str(), 72)
+    }
+}
+
+fn user_input_option_description_preview(description: &str, width: u16) -> String {
+    truncate_display_text(
+        sanitize_display_text(description).as_str(),
+        width.max(1) as usize,
+    )
+}
+
+fn user_input_custom_values_preview(values: &[String], width: u16) -> String {
+    if values.is_empty() {
+        "Press Enter or e to type a custom answer".to_string()
+    } else {
+        truncate_display_text(values.join(", ").as_str(), width.max(1) as usize)
+    }
+}
+
+fn choice_overlay_rows_height(rows: &[ChoiceRow]) -> u16 {
+    if rows.is_empty() {
+        return 5;
+    }
+    let line_count = rows.len().saturating_mul(2);
+    u16::try_from(line_count)
+        .unwrap_or(u16::MAX)
+        .clamp(3, 12)
+        .saturating_add(2)
+}
+
+fn timeline_overlay_content_height(dialog: &TimelineOverlay, width: u16) -> u16 {
+    let (list_height, detail_height) = timeline_overlay_panel_heights(dialog, width);
+    let stacked = should_stack_detail_layout(width, 40, 46);
+    if stacked {
+        list_height.saturating_add(detail_height)
+    } else {
+        max(list_height, detail_height)
+    }
+}
+
+fn plugin_inspector_content_height(dialog: &PluginInspectorOverlay, width: u16) -> u16 {
+    let (list_height, detail_height, logs_height) = plugin_inspector_panel_heights(dialog, width);
+    let stacked = should_stack_detail_layout(width, 34, 48);
+    if stacked {
+        list_height
+            .saturating_add(detail_height)
+            .saturating_add(logs_height)
+    } else {
+        max(list_height, detail_height.saturating_add(logs_height))
+    }
+}
+
+fn timeline_overlay_panel_heights(dialog: &TimelineOverlay, width: u16) -> (u16, u16) {
+    let list_height = list_panel_height(
+        if dialog.loading || dialog.items.is_empty() {
+            1
+        } else {
+            dialog.items.len()
+        },
+        1,
+        5,
+        10,
+    );
+    let detail_text = if dialog.loading {
+        "loading"
+    } else {
+        dialog
+            .items
+            .get(dialog.selected)
+            .map(|item| item.detail.as_str())
+            .unwrap_or(dialog.empty_message.as_str())
+    };
+    let detail_width = if should_stack_detail_layout(width, 40, 46) {
+        width
+    } else {
+        width.saturating_sub(42).max(24)
+    };
+    let detail_height = bordered_paragraph_height(detail_text, detail_width, 4, 12);
+    (list_height, detail_height)
+}
+
+fn plugin_inspector_panel_heights(dialog: &PluginInspectorOverlay, width: u16) -> (u16, u16, u16) {
+    let list_height = list_panel_height(
+        if dialog.items.is_empty() {
+            1
+        } else {
+            dialog.items.len()
+        },
+        1,
+        4,
+        10,
+    );
+    let detail_text = dialog
+        .items
+        .get(dialog.selected)
+        .map(|item| item.detail.as_str())
+        .unwrap_or(dialog.empty_message.as_str());
+    let logs_text = dialog
+        .items
+        .get(dialog.selected)
+        .map(|item| item.logs.as_str())
+        .unwrap_or(dialog.empty_message.as_str());
+    if should_stack_detail_layout(width, 34, 48) {
+        let detail_height = bordered_paragraph_height(detail_text, width, 3, 8);
+        let logs_height = bordered_paragraph_height(logs_text, width, 3, 8);
+        (list_height, detail_height, logs_height)
+    } else {
+        let right_width = width.saturating_sub(36).max(24);
+        let detail_height = bordered_paragraph_height(detail_text, right_width, 3, 7);
+        let logs_height = bordered_paragraph_height(logs_text, right_width, 3, 7);
+        (list_height, detail_height, logs_height)
+    }
+}
+
+fn provider_studio_main_field_display(
+    dialog: &ProviderStudioOverlay,
+    field: ProviderStudioField,
+) -> String {
+    let value = provider_studio_main_field_value(dialog, field);
+    match field {
+        ProviderStudioField::ApiKey
+        | ProviderStudioField::RefreshToken
+        | ProviderStudioField::AccessToken
+        | ProviderStudioField::AccessKeyId
+        | ProviderStudioField::SecretAccessKey
+        | ProviderStudioField::SessionToken
+            if !value.trim().is_empty() =>
+        {
+            "********".to_owned()
+        }
+        _ if value.trim().is_empty() => "unset".to_owned(),
+        _ => value,
+    }
+}
+
+fn provider_studio_draft_panel_height(dialog: &ProviderStudioOverlay, width: u16) -> u16 {
+    let content_width = width.saturating_sub(4).max(1);
+    let lines = provider_studio_visible_fields(dialog)
+        .iter()
+        .map(|field| {
+            wrapped_text_height(
+                format!(
+                    "{:>16}  {}",
+                    provider_studio_field_label(*field),
+                    provider_studio_main_field_display(dialog, *field),
+                )
+                .as_str(),
+                content_width,
+            )
+        })
+        .sum::<u16>();
+    lines.clamp(4, 16).saturating_add(2)
+}
+
+fn provider_studio_adapter_model_heights(
+    dialog: &ProviderStudioOverlay,
+    _width: u16,
+) -> (u16, u16) {
+    let adapter_height = list_panel_height(
+        dialog.adapter_candidate_ids.len().max(1),
+        if dialog.adapter_candidate_ids.is_empty() {
+            1
+        } else {
+            2
+        },
+        4,
+        10,
+    );
+    let model_height = provider_studio_selected_adapter_models(dialog)
+        .map(|adapter_models| {
+            list_panel_height(
+                adapter_models.models.len().max(1),
+                if adapter_models.models.is_empty() {
+                    1
+                } else {
+                    2
+                },
+                4,
+                10,
+            )
+        })
+        .unwrap_or_else(|| list_panel_height(1, 1, 4, 10));
+    (adapter_height, model_height)
+}
+
+fn provider_studio_detail_page_lines(dialog: &ProviderStudioOverlay) -> Vec<String> {
+    let mut lines = vec![provider_studio_auth_status_summary(dialog).to_owned()];
+    lines.extend(provider_studio_auth_state_lines(dialog));
+    lines.extend(
+        provider_studio_detail_fields(dialog)
+            .iter()
+            .map(|field| provider_studio_main_field_display(dialog, *field)),
+    );
+    lines
+}
+
+fn provider_studio_detail_page_height(dialog: &ProviderStudioOverlay, modal_width: u16) -> u16 {
+    let Some(detail_page) = dialog.detail_page.as_ref() else {
+        return 8;
+    };
+    let inner_width = modal_width.saturating_sub(2).max(1);
+    let body_height = provider_studio_detail_page_lines(dialog)
+        .iter()
+        .map(|line| wrapped_text_height(line.as_str(), inner_width))
+        .sum::<u16>()
+        .clamp(4, 20);
+    let footer_height = wrapped_text_height(detail_page.footer.as_str(), inner_width).clamp(1, 2);
+    body_height.saturating_add(footer_height).saturating_add(2)
+}
+
+fn model_catalog_panel_heights(dialog: &ModelCatalogStudioOverlay, width: u16) -> (u16, u16) {
+    let list_height = list_panel_height(
+        dialog.items.len().max(1),
+        if dialog.loading || dialog.items.is_empty() {
+            1
+        } else {
+            2
+        },
+        5,
+        14,
+    );
+    let detail = dialog
+        .items
+        .get(dialog.selected)
+        .map(|entry| {
+            [
+                format!("model_id: {}", entry.model_id),
+                format!(
+                    "display: {}",
+                    entry
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| "unset".to_owned())
+                ),
+                format!(
+                    "origin: {}",
+                    entry.origin.clone().unwrap_or_else(|| "unset".to_owned())
+                ),
+                format!(
+                    "limits: ctx {} · out {}",
+                    entry
+                        .context_window_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "?".to_owned()),
+                    entry
+                        .max_output_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "?".to_owned())
+                ),
+                format!("source: {:?}  ·  kind: {:?}", entry.source, entry.kind),
+                entry.description.clone().unwrap_or_default(),
+            ]
+            .into_iter()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+        })
+        .unwrap_or_else(|| {
+            dialog
+                .summary
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "No catalog entries.".to_string())
+        });
+    let detail_width = if should_stack_detail_layout(width.saturating_sub(2), 48, 34) {
+        width.saturating_sub(2)
+    } else {
+        width.saturating_sub(52).max(24)
+    };
+    let detail_height = bordered_paragraph_height(detail.as_str(), detail_width, 4, 12);
+    (list_height, detail_height)
+}
+
+fn editor_input_panel_height(editor: &Editor, multiline: bool) -> u16 {
+    if !multiline {
+        return 3;
+    }
+    u16::try_from(max(1, editor.logical_line_count()))
+        .unwrap_or(u16::MAX)
+        .clamp(4, 8)
+        .saturating_add(2)
+}
+
+fn permission_overlay_body_height(dialog: &PermissionOverlay, width: u16) -> u16 {
+    let content_width = width.saturating_sub(2);
+    let mut lines = 2_u16;
+    lines = lines.saturating_add(wrapped_text_height(
+        format!(
+            "Reason: {}",
+            sanitize_display_text(dialog.request.reason.as_str())
+        )
+        .as_str(),
+        content_width,
+    ));
+    if !dialog.request.explanation.trim().is_empty() {
+        lines = lines.saturating_add(wrapped_text_height(
+            format!(
+                "Explanation: {}",
+                sanitize_display_text(dialog.request.explanation.as_str())
+            )
+            .as_str(),
+            content_width,
+        ));
+    }
+
+    let mut facts = Vec::new();
+    facts.push(format!(
+        "risk={}",
+        permission_risk_label(dialog.request.risk)
+    ));
+    if let Some(source) = dialog.request.source.as_deref() {
+        facts.push(format!("source={}", sanitize_display_text(source)));
+    }
+    if let Some(scope) = dialog.request.scope {
+        facts.push(format!("scope={scope}"));
+    }
+    if let Some(operator) = dialog.request.operator.as_deref() {
+        facts.push(format!("operator={}", sanitize_display_text(operator)));
+    }
+    if !facts.is_empty() {
+        lines = lines.saturating_add(wrapped_text_height(
+            facts.join(" · ").as_str(),
+            content_width,
+        ));
+    }
+    if dialog.request.session_id.is_some() {
+        lines = lines.saturating_add(1);
+    }
+    if !dialog.request.trace.is_empty() {
+        lines = lines.saturating_add(1);
+        for step in &dialog.request.trace {
+            lines = lines.saturating_add(wrapped_text_height(
+                permission_trace_step_label(step).as_str(),
+                content_width,
+            ));
+        }
+    }
+    lines
 }

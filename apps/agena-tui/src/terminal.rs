@@ -1,5 +1,4 @@
 use std::{
-    fmt,
     io::{self, Stdout},
     panic,
     sync::Once,
@@ -7,12 +6,10 @@ use std::{
 
 use anyhow::Result;
 use crossterm::{
-    Command,
     cursor::{Hide, Show},
     event::{
-        DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-        EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        DisableBracketedPaste, DisableFocusChange, EnableBracketedPaste, EnableFocusChange,
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -97,13 +94,13 @@ pub fn resume_terminal<B: RatatuiBackend>(terminal: &mut Terminal<B>) -> Result<
 fn set_stdio_terminal() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
+    // Keep mouse capture off so dragging to select and copy behaves like a
+    // normal terminal. Transcript scrolling remains keyboard-driven.
     execute!(
         stdout,
         EnterAlternateScreen,
         EnableBracketedPaste,
         EnableFocusChange,
-        EnableMouseCapture,
-        EnableAlternateScroll,
         Hide
     )?;
     let _ = execute!(
@@ -124,53 +121,9 @@ fn restore_stdio_terminal() -> Result<()> {
     execute!(
         stdout,
         Show,
-        DisableMouseCapture,
         DisableFocusChange,
         DisableBracketedPaste,
-        DisableAlternateScroll,
         LeaveAlternateScreen
     )?;
     Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EnableAlternateScroll;
-
-impl Command for EnableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b[?1007h")
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> io::Result<()> {
-        Err(io::Error::other(
-            "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DisableAlternateScroll;
-
-impl Command for DisableAlternateScroll {
-    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        write!(f, "\x1b[?1007l")
-    }
-
-    #[cfg(windows)]
-    fn execute_winapi(&self) -> io::Result<()> {
-        Err(io::Error::other(
-            "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
-        ))
-    }
-
-    #[cfg(windows)]
-    fn is_ansi_code_supported(&self) -> bool {
-        true
-    }
 }

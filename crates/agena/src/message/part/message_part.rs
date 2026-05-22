@@ -185,13 +185,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
 fn summary_from_content(content: &PartContent) -> Option<String> {
     match content {
         PartContent::Text(text) => truncate_summary(&text.text),
-        PartContent::Reasoning(reasoning) => {
-            if !reasoning.summary.is_empty() {
-                truncate_summary(&reasoning.summary.join(" "))
-            } else {
-                truncate_summary(&reasoning.raw_content.join(" "))
-            }
-        }
+        PartContent::Reasoning(reasoning) => truncate_summary(&reasoning.preferred_text()),
         PartContent::Operation(operation) => {
             let invocation = operation.invocation();
             let candidate = operation

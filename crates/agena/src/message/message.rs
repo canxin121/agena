@@ -96,13 +96,8 @@ impl Message {
                     match content {
                         PartContent::Text(text) => Some(text.text.clone()),
                         PartContent::Reasoning(reasoning) => {
-                            if !reasoning.summary.is_empty() {
-                                Some(reasoning.summary.join(" "))
-                            } else if !reasoning.raw_content.is_empty() {
-                                Some(reasoning.raw_content.join(" "))
-                            } else {
-                                None
-                            }
+                            let text = reasoning.preferred_text();
+                            (!text.is_empty()).then_some(text)
                         }
                         PartContent::Operation(tool) => tool_text_lossy(tool),
                         _ => part.summary.clone(),

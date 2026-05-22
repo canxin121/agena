@@ -713,10 +713,9 @@ fn assistant_reasoning_text(message: &Message) -> String {
             continue;
         };
         if let crate::message::PartContent::Reasoning(reasoning) = content {
-            if !reasoning.summary.is_empty() {
-                chunks.push(reasoning.summary.join(""));
-            } else if !reasoning.raw_content.is_empty() {
-                chunks.push(reasoning.raw_content.join(""));
+            let text = reasoning.preferred_text();
+            if !text.is_empty() {
+                chunks.push(text);
             }
         }
     }

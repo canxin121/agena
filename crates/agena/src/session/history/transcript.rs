@@ -162,7 +162,7 @@ impl TranscriptContent {
                     }
                 }
                 Some(PartContent::Reasoning(reasoning)) => {
-                    let joined = reasoning.summary.join("\n");
+                    let joined = reasoning.preferred_text();
                     if !joined.is_empty() {
                         content
                             .blocks

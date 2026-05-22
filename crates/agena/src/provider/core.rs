@@ -6,12 +6,16 @@ use std::collections::BTreeMap;
 use crate::error::AppError;
 use crate::model::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode,
+    ProviderId,
 };
 
 use super::{
     CapabilityFamily, CompletionRequest, CompletionResponse, CompletionStreamEvent,
-    PromptCacheShape,
+    PromptCacheShape, chat_wire,
 };
+
+pub(crate) type CompletionEventStream =
+    std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>;
 
 #[async_trait]
 pub trait ModelRuntime: Send + Sync {
@@ -148,6 +152,19 @@ pub trait ModelRuntime: Send + Sync {
             .map(|shape| shape.fingerprint())
     }
 
+    fn backfill_assistant_reasoning_field(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &mut CompletionRequest,
+    ) {
+        let metadata = self.model_metadata_for_adapter(adapter_id, &request.model);
+        chat_wire::backfill_assistant_reasoning_field_on_request(
+            request,
+            metadata.assistant_reasoning_field.as_deref(),
+            metadata.assistant_reasoning_interleaved.unwrap_or(false),
+        );
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, AppError>;
 
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError>;
@@ -227,8 +244,168 @@ pub trait ModelRuntime: Send + Sync {
     }
 }
 
+#[async_trait]
+pub(crate) trait ForwardingModelRuntime: Send + Sync {
+    fn target(&self) -> &dyn ModelRuntime;
+
+    fn prepare_request(&self, adapter_id: Option<&AdapterId>, request: &mut CompletionRequest) {
+        let _ = adapter_id;
+        let _ = request;
+    }
+
+    fn rewrite_response(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        response: CompletionResponse,
+    ) -> CompletionResponse {
+        let _ = adapter_id;
+        response
+    }
+
+    fn rewrite_stream(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        stream: CompletionEventStream,
+    ) -> CompletionEventStream {
+        let _ = adapter_id;
+        stream
+    }
+
+    async fn forward_complete(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<CompletionResponse, AppError> {
+        self.prepare_request(adapter_id, &mut request);
+        let response = self
+            .target()
+            .complete_for_adapter(adapter_id, request)
+            .await?;
+        Ok(self.rewrite_response(adapter_id, response))
+    }
+
+    async fn forward_compact_conversation(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<Option<String>, AppError> {
+        self.prepare_request(adapter_id, &mut request);
+        self.target()
+            .compact_conversation_for_adapter(adapter_id, request)
+            .await
+    }
+
+    async fn forward_complete_stream(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        mut request: CompletionRequest,
+    ) -> Result<CompletionEventStream, AppError> {
+        self.prepare_request(adapter_id, &mut request);
+        let stream = self
+            .target()
+            .complete_stream_for_adapter(adapter_id, request)
+            .await?;
+        Ok(self.rewrite_stream(adapter_id, stream))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamResumePolicy {
     Disabled,
     ReplaySafePrefix,
+}
+
+pub(crate) fn remap_stream_event_provider_id(
+    provider_id: &ProviderId,
+    event: CompletionStreamEvent,
+) -> CompletionStreamEvent {
+    match event {
+        CompletionStreamEvent::TextDelta { model, delta, .. } => CompletionStreamEvent::TextDelta {
+            provider_id: provider_id.clone(),
+            model,
+            delta,
+        },
+        CompletionStreamEvent::ThinkingDelta { model, delta, .. } => {
+            CompletionStreamEvent::ThinkingDelta {
+                provider_id: provider_id.clone(),
+                model,
+                delta,
+            }
+        }
+        CompletionStreamEvent::ToolCallDelta {
+            model,
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+            ..
+        } => CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model,
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+        },
+        CompletionStreamEvent::Completed {
+            model,
+            finish_reason,
+            usage,
+            provider_metadata,
+            ..
+        } => CompletionStreamEvent::Completed {
+            provider_id: provider_id.clone(),
+            model,
+            finish_reason,
+            usage,
+            provider_metadata,
+        },
+    }
+}
+
+pub(crate) fn remap_stream_event_provider_and_model(
+    provider_id: &ProviderId,
+    model: &ModelId,
+    event: CompletionStreamEvent,
+) -> CompletionStreamEvent {
+    match event {
+        CompletionStreamEvent::TextDelta { delta, .. } => CompletionStreamEvent::TextDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            delta,
+        },
+        CompletionStreamEvent::ThinkingDelta { delta, .. } => {
+            CompletionStreamEvent::ThinkingDelta {
+                provider_id: provider_id.clone(),
+                model: model.clone(),
+                delta,
+            }
+        }
+        CompletionStreamEvent::ToolCallDelta {
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+            ..
+        } => CompletionStreamEvent::ToolCallDelta {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            stream_key,
+            id,
+            name,
+            arguments_delta,
+        },
+        CompletionStreamEvent::Completed {
+            finish_reason,
+            usage,
+            provider_metadata,
+            ..
+        } => CompletionStreamEvent::Completed {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            finish_reason,
+            usage,
+            provider_metadata,
+        },
+    }
 }

@@ -8,8 +8,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use super::super::{
-    DirectoryQuery, abs_path, git_strict_patch_validation, is_safe_repo_rel_path, lock_repo,
-    map_git_failure, require_directory, run_git, run_git_with_input,
+    DirectoryQuery, abs_path, git_strict_patch_validation, is_safe_repo_rel_path, map_git_failure,
+    require_directory, require_locked_directory, run_git, run_git_with_input,
 };
 use super::unified::{
     PatchSummary, parse_unified_diff_meta, patch_paths_are_safe, validate_unified_patch_hunks,
@@ -286,13 +286,8 @@ pub async fn git_apply_patch(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitApplyPatchBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 

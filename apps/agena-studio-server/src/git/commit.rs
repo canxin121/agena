@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     DirectoryQuery, GitBranchProtectionPrompt, GitCommitSummary, git_allow_no_verify_commit,
-    git_branch_protection_for_branch, git_config_get, git_enforce_branch_protection, lock_repo,
-    map_git_failure, redact_git_output, require_directory, run_git, truncate_for_payload,
+    git_branch_protection_for_branch, git_config_get, git_enforce_branch_protection,
+    map_git_failure, redact_git_output, require_directory, require_locked_directory, run_git,
+    run_git_checked_with_status, truncate_for_payload,
 };
 
 #[derive(Debug, Deserialize)]
@@ -75,27 +76,32 @@ async fn git_path_exists(dir: &Path, name: &str) -> bool {
     tokio::fs::metadata(full).await.is_ok()
 }
 
+async fn git_sequencer_in_progress(dir: &Path) -> bool {
+    for name in [
+        "MERGE_HEAD",
+        "rebase-apply",
+        "rebase-merge",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+    ] {
+        if git_path_exists(dir, name).await {
+            return true;
+        }
+    }
+    false
+}
+
 pub async fn git_undo_commit(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitUndoCommitBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
     // Disallow undo while sequencer operations are in progress.
-    let busy = git_path_exists(&dir, "MERGE_HEAD").await
-        || git_path_exists(&dir, "rebase-apply").await
-        || git_path_exists(&dir, "rebase-merge").await
-        || git_path_exists(&dir, "CHERRY_PICK_HEAD").await
-        || git_path_exists(&dir, "REVERT_HEAD").await;
-    if busy {
+    if git_sequencer_in_progress(&dir).await {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
@@ -107,11 +113,15 @@ pub async fn git_undo_commit(
     }
 
     // Ensure there's a parent commit.
-    let (c0, o0, e0) = run_git(&dir, &["rev-parse", "--verify", "HEAD~1"])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if c0 != 0 {
-        if let Some(resp) = map_git_failure(c0, &o0, &e0) {
+    if let Err(resp) = run_git_checked_with_status(
+        &dir,
+        &["rev-parse", "--verify", "HEAD~1"],
+        StatusCode::BAD_REQUEST,
+        Some("git_undo_not_possible"),
+    )
+    .await
+    {
+        if resp.status() == StatusCode::CONFLICT {
             return resp;
         }
         return (
@@ -142,20 +152,15 @@ pub async fn git_undo_commit(
             .into_response();
     };
 
-    let (c, o, e) = run_git(&dir, &["reset", flag, "HEAD~1"]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if c != 0 {
-        if let Some(resp) = map_git_failure(c, &o, &e) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.trim(), "code": "git_reset_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked_with_status(
+        &dir,
+        &["reset", flag, "HEAD~1"],
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("git_reset_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
     Json(serde_json::json!({"success": true, "mode": mode})).into_response()
@@ -165,13 +170,8 @@ pub async fn git_reset_commit(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitResetCommitBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
@@ -191,12 +191,7 @@ pub async fn git_reset_commit(
             .into_response();
     };
 
-    let busy = git_path_exists(&dir, "MERGE_HEAD").await
-        || git_path_exists(&dir, "rebase-apply").await
-        || git_path_exists(&dir, "rebase-merge").await
-        || git_path_exists(&dir, "CHERRY_PICK_HEAD").await
-        || git_path_exists(&dir, "REVERT_HEAD").await;
-    if busy {
+    if git_sequencer_in_progress(&dir).await {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({
@@ -227,20 +222,15 @@ pub async fn git_reset_commit(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["reset", flag, commit]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_reset_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked_with_status(
+        &dir,
+        &["reset", flag, commit],
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Some("git_reset_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
     Json(serde_json::json!({"success": true, "mode": mode, "commit": commit})).into_response()
@@ -337,13 +327,8 @@ pub async fn git_commit(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitCommitBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
     let Some(message) = body

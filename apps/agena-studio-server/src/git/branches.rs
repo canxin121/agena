@@ -10,8 +10,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, lock_repo, map_git_failure,
-    normalize_http_auth, require_directory, require_directory_raw, run_git, run_git_env,
+    DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, git_success_response,
+    map_git_failure, normalize_http_auth, require_directory, require_directory_raw,
+    require_locked_directory, run_git, run_git_checked, run_git_checked_with_status,
+    run_locked_git_checked, run_locked_git_checked_with_status,
+    run_locked_git_env_checked_with_status,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -316,15 +319,6 @@ pub async fn git_create_branch(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<CreateBranchBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
     let Some(name) = body
         .name
         .as_deref()
@@ -343,18 +337,14 @@ pub async fn git_create_branch(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .unwrap_or("HEAD");
-    let (code, out, err) = run_git(&dir, &["checkout", "-b", name, start])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "create_branch_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["checkout", "-b", name, start],
+        Some("create_branch_failed"),
+    )
+    .await
+    {
+        return resp;
     }
     Json(serde_json::json!({"success": true, "branch": name})).into_response()
 }
@@ -369,15 +359,6 @@ pub async fn git_delete_branch(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<DeleteBranchBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
     let Some(branch) = body
         .branch
         .as_deref()
@@ -396,22 +377,12 @@ pub async fn git_delete_branch(
     } else {
         "-d"
     };
-    let (code, out, err) = run_git(&dir, &["branch", flag, branch]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "delete_branch_failed"})),
-        )
-            .into_response();
+    if let Err(resp) =
+        run_locked_git_checked(&q, &["branch", flag, branch], Some("delete_branch_failed")).await
+    {
+        return resp;
     }
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -425,16 +396,6 @@ pub async fn git_rename_branch(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<RenameBranchBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(from) = body
         .from
         .as_deref()
@@ -482,20 +443,14 @@ pub async fn git_rename_branch(
     } else {
         "-m"
     };
-    let (code, out, err) = run_git(&dir, &["branch", flag, from, to]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "rename_branch_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["branch", flag, from, to],
+        Some("rename_branch_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
     Json(serde_json::json!({"success": true, "from": from, "to": to})).into_response()
@@ -513,16 +468,6 @@ pub async fn git_delete_remote_branch(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<DeleteRemoteBranchBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let mut remote: Option<String> = None;
     let mut branch: Option<String> = None;
     if let Some(raw) = body.name.as_deref()
@@ -558,21 +503,17 @@ pub async fn git_delete_remote_branch(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["push", &remote, "--delete", &branch])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "delete_remote_branch_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["push", &remote, "--delete", &branch],
+        Some("delete_remote_branch_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,15 +525,6 @@ pub async fn git_checkout(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<CheckoutBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
     let Some(branch) = body
         .branch
         .as_deref()
@@ -605,58 +537,30 @@ pub async fn git_checkout(
         )
             .into_response();
     };
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     if let Some((remote, name)) = parse_remote_branch(branch) {
         if local_branch_exists(&dir, &name).await {
-            let (code, out, err) = run_git(&dir, &["checkout", &name]).await.unwrap_or((
-                1,
-                "".to_string(),
-                "".to_string(),
-            ));
-            if code != 0 {
-                if let Some(resp) = map_git_failure(code, &out, &err) {
-                    return resp;
-                }
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": err.trim()})),
-                )
-                    .into_response();
+            if let Err(resp) = run_git_checked(&dir, &["checkout", &name], None).await {
+                return resp;
             }
             return Json(serde_json::json!({"success": true, "branch": name})).into_response();
         }
 
         let remote_ref = format!("{remote}/{name}");
-        let (code, out, err) = run_git(&dir, &["checkout", "--track", &remote_ref])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-        if code != 0 {
-            if let Some(resp) = map_git_failure(code, &out, &err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": err.trim()})),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked(&dir, &["checkout", "--track", &remote_ref], None).await
+        {
+            return resp;
         }
 
         return Json(serde_json::json!({"success": true, "branch": name})).into_response();
     }
 
-    let (code, out, err) =
-        run_git(&dir, &["checkout", branch])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked(&dir, &["checkout", branch], None).await {
+        return resp;
     }
     Json(serde_json::json!({"success": true, "branch": branch})).into_response()
 }
@@ -696,7 +600,7 @@ pub async fn git_tags_list(Query(q): Query<DirectoryQuery>) -> Response {
         Err(resp) => return *resp,
     };
 
-    let (code, out, err) = run_git(
+    let (out, _err) = match run_git_checked(
         &dir,
         &[
             "for-each-ref",
@@ -704,19 +608,13 @@ pub async fn git_tags_list(Query(q): Query<DirectoryQuery>) -> Response {
             "--sort=-creatordate",
             "--format=%(refname:strip=2)\t%(objectname)\t%(creatordate:iso8601)\t%(subject)",
         ],
+        None,
     )
     .await
-    .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
+    {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     let mut tags: Vec<GitTagInfo> = Vec::new();
     for line in out.lines() {
@@ -761,15 +659,6 @@ pub async fn git_tags_create(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitTagCreateBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
     let Some(name) = body
         .name
         .as_deref()
@@ -781,6 +670,10 @@ pub async fn git_tags_create(
             Json(serde_json::json!({"error": "name is required", "code": "missing_name"})),
         )
             .into_response();
+    };
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
     };
     let full_ref = format!("refs/tags/{name}");
     if !git_check_ref_format(&dir, &full_ref, true).await {
@@ -815,19 +708,15 @@ pub async fn git_tags_create(
         args.push(t.to_string());
     }
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, out, err) =
-        run_git(&dir, &args_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": err.trim(), "code": "tag_create_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked_with_status(
+        &dir,
+        &args_ref,
+        StatusCode::BAD_REQUEST,
+        Some("tag_create_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
     Json(serde_json::json!({"success": true, "name": name})).into_response()
@@ -843,15 +732,6 @@ pub async fn git_tags_delete(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitTagDeleteBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
     let Some(name) = body
         .name
         .as_deref()
@@ -864,21 +744,17 @@ pub async fn git_tags_delete(
         )
             .into_response();
     };
-    let (code, out, err) =
-        run_git(&dir, &["tag", "-d", name])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": err.trim(), "code": "tag_delete_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked_with_status(
+        &q,
+        &["tag", "-d", name],
+        StatusCode::BAD_REQUEST,
+        Some("tag_delete_failed"),
+    )
+    .await
+    {
+        return resp;
     }
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -894,15 +770,6 @@ pub async fn git_tags_delete_remote(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitTagDeleteRemoteBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
     let remote = body
         .remote
         .as_deref()
@@ -950,21 +817,18 @@ pub async fn git_tags_delete_remote(
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let (code, out, err) =
-        run_git_env(&dir, &args_ref, &env_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": err.trim(), "code": "tag_delete_remote_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_env_checked_with_status(
+        &q,
+        &args_ref,
+        &env_ref,
+        StatusCode::BAD_REQUEST,
+        Some("tag_delete_remote_failed"),
+    )
+    .await
+    {
+        return resp;
     }
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -977,15 +841,6 @@ pub async fn git_checkout_detached(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitCheckoutDetachedBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
     let Some(rf) = body
         .r#ref
         .as_deref()
@@ -998,20 +853,17 @@ pub async fn git_checkout_detached(
         )
             .into_response();
     };
-    let (code, out, err) = run_git(&dir, &["checkout", "--detach", rf])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": err.trim(), "code": "checkout_detached_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked_with_status(
+        &q,
+        &["checkout", "--detach", rf],
+        StatusCode::BAD_REQUEST,
+        Some("checkout_detached_failed"),
+    )
+    .await
+    {
+        return resp;
     }
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -1026,15 +878,6 @@ pub async fn git_create_branch_from(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitCreateBranchFromBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
     let Some(name) = body
         .name
         .as_deref()
@@ -1053,6 +896,10 @@ pub async fn git_create_branch_from(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .unwrap_or("HEAD");
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     let full_ref = format!("refs/heads/{name}");
     if !git_check_ref_format(&dir, &full_ref, true).await {
@@ -1069,19 +916,15 @@ pub async fn git_create_branch_from(
     } else {
         vec!["branch", name, start]
     };
-    let (code, out, err) =
-        run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": err.trim(), "code": "create_branch_from_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_git_checked_with_status(
+        &dir,
+        &args,
+        StatusCode::BAD_REQUEST,
+        Some("create_branch_from_failed"),
+    )
+    .await
+    {
+        return resp;
     }
     Json(serde_json::json!({"success": true, "branch": name})).into_response()
 }

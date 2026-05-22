@@ -1,12 +1,9 @@
-use axum::{
-    Json,
-    extract::Query,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
+use axum::{Json, extract::Query, response::Response};
 use serde::Deserialize;
 
-use super::super::{DirectoryQuery, lock_repo, map_git_failure, require_directory, run_git};
+use super::super::{
+    DirectoryQuery, git_success_response, require_locked_directory, run_git_checked,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct GitAbortBody {
@@ -14,123 +11,41 @@ pub struct GitAbortBody {
     pub _dummy: Option<bool>,
 }
 
+async fn run_abort_command(q: &DirectoryQuery, args: &[&str]) -> Response {
+    let (dir, _guard) = match require_locked_directory(q).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
+    if let Err(resp) = run_git_checked(&dir, args, None).await {
+        return resp;
+    }
+    git_success_response()
+}
+
 pub async fn git_merge_abort(
     Query(q): Query<DirectoryQuery>,
     Json(_): Json<GitAbortBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-    let (code, out, err) =
-        run_git(&dir, &["merge", "--abort"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
-    Json(serde_json::json!({"success": true})).into_response()
+    run_abort_command(&q, &["merge", "--abort"]).await
 }
 
 pub async fn git_rebase_abort(
     Query(q): Query<DirectoryQuery>,
     Json(_): Json<GitAbortBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-    let (code, out, err) =
-        run_git(&dir, &["rebase", "--abort"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
-    Json(serde_json::json!({"success": true})).into_response()
+    run_abort_command(&q, &["rebase", "--abort"]).await
 }
 
 pub async fn git_cherry_pick_abort(
     Query(q): Query<DirectoryQuery>,
     Json(_): Json<GitAbortBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-    let (code, out, err) = run_git(&dir, &["cherry-pick", "--abort"]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
-    Json(serde_json::json!({"success": true})).into_response()
+    run_abort_command(&q, &["cherry-pick", "--abort"]).await
 }
 
 pub async fn git_revert_abort(
     Query(q): Query<DirectoryQuery>,
     Json(_): Json<GitAbortBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-    let (code, out, err) =
-        run_git(&dir, &["revert", "--abort"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
-    Json(serde_json::json!({"success": true})).into_response()
+    run_abort_command(&q, &["revert", "--abort"]).await
 }

@@ -14,9 +14,10 @@ use crate::{
     },
 };
 
+use super::core::remap_stream_event_provider_and_model;
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
-    ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy, chat_wire,
+    ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy,
 };
 
 #[derive(Debug, Clone)]
@@ -132,19 +133,6 @@ impl MultiAdapterProvider {
             &adapter.model_capabilities(target_model),
             &adapter.model_metadata(target_model),
         )
-    }
-
-    fn backfill_assistant_reasoning_field(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: &mut CompletionRequest,
-    ) {
-        let metadata = self.model_metadata_for_adapter(adapter_id, &request.model);
-        chat_wire::backfill_assistant_reasoning_field_on_request(
-            request,
-            metadata.assistant_reasoning_field.as_deref(),
-            metadata.assistant_reasoning_interleaved.unwrap_or(false),
-        );
     }
 }
 
@@ -441,47 +429,10 @@ impl ModelRuntime for MultiAdapterProvider {
         let stream = adapter.complete_stream(request).await?;
         let stream: BoxStream<'static, Result<CompletionStreamEvent, AppError>> =
             Box::pin(stream.map(move |item| {
-                item.map(|event| match event {
-                    CompletionStreamEvent::TextDelta { delta, .. } => {
-                        CompletionStreamEvent::TextDelta {
-                            provider_id: ProviderId::new(provider_id.clone()),
-                            model: visible_model.clone(),
-                            delta,
-                        }
-                    }
-                    CompletionStreamEvent::ThinkingDelta { delta, .. } => {
-                        CompletionStreamEvent::ThinkingDelta {
-                            provider_id: ProviderId::new(provider_id.clone()),
-                            model: visible_model.clone(),
-                            delta,
-                        }
-                    }
-                    CompletionStreamEvent::ToolCallDelta {
-                        stream_key,
-                        id,
-                        name,
-                        arguments_delta,
-                        ..
-                    } => CompletionStreamEvent::ToolCallDelta {
-                        provider_id: ProviderId::new(provider_id.clone()),
-                        model: visible_model.clone(),
-                        stream_key,
-                        id,
-                        name,
-                        arguments_delta,
-                    },
-                    CompletionStreamEvent::Completed {
-                        finish_reason,
-                        usage,
-                        provider_metadata,
-                        ..
-                    } => CompletionStreamEvent::Completed {
-                        provider_id: ProviderId::new(provider_id.clone()),
-                        model: visible_model.clone(),
-                        finish_reason,
-                        usage,
-                        provider_metadata,
-                    },
+                let provider_id = ProviderId::new(provider_id.clone());
+                let visible_model = visible_model.clone();
+                item.map(|event| {
+                    remap_stream_event_provider_and_model(&provider_id, &visible_model, event)
                 })
             }));
         Ok(Box::pin(stream))

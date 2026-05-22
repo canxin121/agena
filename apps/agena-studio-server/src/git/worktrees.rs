@@ -10,7 +10,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DirectoryQuery, is_safe_repo_rel_path, lock_repo, map_git_failure, require_directory, run_git,
+    DirectoryQuery, git_success_response, is_safe_repo_rel_path, map_git_failure,
+    require_directory, require_locked_directory, run_git, run_git_checked, run_locked_git_checked,
 };
 
 fn count_status_paths(status_output: &str) -> usize {
@@ -233,11 +234,6 @@ pub async fn git_worktree_add(
         Err(resp) => return *resp,
     };
 
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(path_raw) = body.path.as_deref() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -286,19 +282,9 @@ pub async fn git_worktree_add(
     }
 
     let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (code, out, err) =
-        run_git(&dir, &args_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_worktree_add_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(&q, &args_ref, Some("git_worktree_add_failed")).await
+    {
+        return resp;
     }
 
     Json(serde_json::json!({"success": true, "path": target.to_string_lossy()})).into_response()
@@ -318,11 +304,6 @@ pub async fn git_worktree_remove(
         Err(resp) => return *resp,
     };
 
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(path_raw) = body.path.as_deref() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -336,48 +317,30 @@ pub async fn git_worktree_remove(
     };
 
     let target_str = target.to_string_lossy().to_string();
-    let (code, out, err) = run_git(&dir, &["worktree", "remove", &target_str])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_worktree_remove_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["worktree", "remove", &target_str],
+        Some("git_worktree_remove_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 pub async fn git_worktree_prune(Query(q): Query<DirectoryQuery>) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (out, _err) = match run_locked_git_checked(
+        &q,
+        &["worktree", "prune"],
+        Some("git_worktree_prune_failed"),
+    )
+    .await
+    {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
-
-    let (code, out, err) =
-        run_git(&dir, &["worktree", "prune"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_worktree_prune_failed"})),
-        )
-            .into_response();
-    }
 
     Json(serde_json::json!({"success": true, "output": out.trim()})).into_response()
 }
@@ -396,13 +359,8 @@ pub async fn git_worktree_migrate(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitWorktreeMigrateBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 
@@ -470,19 +428,16 @@ pub async fn git_worktree_migrate(
             .into_response();
     }
 
-    let (status_code, status_out, status_err) = run_git(&source, &["status", "--porcelain"])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if status_code != 0 {
-        if let Some(resp) = map_git_failure(status_code, &status_out, &status_err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": status_err.trim(), "code": "git_status_failed"})),
-        )
-            .into_response();
-    }
+    let (status_out, _status_err) = match run_git_checked(
+        &source,
+        &["status", "--porcelain"],
+        Some("git_status_failed"),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let changed_files = count_status_paths(&status_out);
     if changed_files == 0 {
         return (
@@ -518,35 +473,22 @@ pub async fn git_worktree_migrate(
         stash_args.push("--include-untracked".to_string());
     }
     let stash_args_ref: Vec<&str> = stash_args.iter().map(|s| s.as_str()).collect();
-    let (stash_code, stash_out, stash_err) =
-        run_git(&source, &stash_args_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if stash_code != 0 {
-        if let Some(resp) = map_git_failure(stash_code, &stash_out, &stash_err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": stash_err.trim(), "code": "git_stash_push_failed"})),
-        )
-            .into_response();
+    if let Err(resp) =
+        run_git_checked(&source, &stash_args_ref, Some("git_stash_push_failed")).await
+    {
+        return resp;
     }
 
-    let (ref_code, ref_out, ref_err) =
-        run_git(&source, &["stash", "list", "-n", "1", "--format=%gd"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if ref_code != 0 {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({
-                "error": ref_err.trim(),
-                "code": "git_stash_ref_failed"
-            })),
-        )
-            .into_response();
-    }
+    let (ref_out, _ref_err) = match run_git_checked(
+        &source,
+        &["stash", "list", "-n", "1", "--format=%gd"],
+        Some("git_stash_ref_failed"),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
     let stash_ref = ref_out
         .lines()
         .next()
@@ -581,22 +523,14 @@ pub async fn git_worktree_migrate(
     }
 
     if !delete_from_source {
-        let (restore_code, restore_out, restore_err) =
-            run_git(&source, &["stash", "pop", "--index", &stash_ref])
-                .await
-                .unwrap_or((1, "".to_string(), "".to_string()));
-        if restore_code != 0 {
-            if let Some(resp) = map_git_failure(restore_code, &restore_out, &restore_err) {
-                return resp;
-            }
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": restore_err.trim(),
-                    "code": "git_worktree_restore_failed"
-                })),
-            )
-                .into_response();
+        if let Err(resp) = run_git_checked(
+            &source,
+            &["stash", "pop", "--index", &stash_ref],
+            Some("git_worktree_restore_failed"),
+        )
+        .await
+        {
+            return resp;
         }
     }
 

@@ -7,8 +7,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::super::{
-    DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, lock_repo, map_git_failure,
-    normalize_http_auth, require_directory, run_git_env,
+    DirectoryQuery, GitAuthInput, TempGitAskpass, git_http_auth_env, normalize_http_auth,
+    run_locked_git_env_checked,
 };
 
 #[derive(Debug, Deserialize)]
@@ -79,16 +79,6 @@ fn parse_pull_stat(stdout: &str) -> (Vec<String>, i32, i32) {
 }
 
 pub async fn git_pull(Query(q): Query<DirectoryQuery>, Json(body): Json<GitPullBody>) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let remote = body
         .remote
         .as_deref()
@@ -149,20 +139,10 @@ pub async fn git_pull(Query(q): Query<DirectoryQuery>, Json(body): Json<GitPullB
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let (code, out, err) =
-        run_git_env(&dir, &args_ref, &env_ref)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
+    let (out, _err) = match run_locked_git_env_checked(&q, &args_ref, &env_ref, None).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     let (files, insertions, deletions) = parse_pull_stat(&out);
     let summary = GitCommitSummary {

@@ -327,22 +327,7 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
     match part.content.as_ref() {
         Some(PartContent::Text(text)) => push_markdown(out, "  ", text.text.as_str(), width),
         Some(PartContent::Reasoning(reasoning)) => {
-            let summary = reasoning.preferred_text();
-            push_section_heading(
-                out,
-                "  thinking",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
-            push_multiline(
-                out,
-                "    ",
-                summary.as_str(),
-                Style::default().fg(Color::DarkGray),
-                width,
-            );
+            render_reasoning_summary(reasoning.preferred_text().as_str(), out, width, i18n, true);
         }
         Some(PartContent::Operation(tool)) => {
             render_tool_execution(part, tool, out, width, i18n, false)
@@ -392,13 +377,21 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
                 .summary
                 .clone()
                 .unwrap_or_else(|| ui_text::t(i18n, "message-part-detail-unavailable"));
-            push_multiline(
-                out,
-                "  ",
-                fallback.as_str(),
-                Style::default().fg(Color::DarkGray),
-                width,
-            );
+            match part.kind {
+                agena::message::PartKind::Reasoning => {
+                    render_reasoning_summary(fallback.as_str(), out, width, i18n, false);
+                }
+                agena::message::PartKind::Operation => {
+                    render_summary_tool_execution(part, fallback.as_str(), out, width, i18n, false);
+                }
+                _ => push_multiline(
+                    out,
+                    "  ",
+                    fallback.as_str(),
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                ),
+            }
         }
     }
 }
@@ -617,14 +610,20 @@ fn render_part_node(
                 ),
             };
             match kind {
-                TranscriptNodeKind::Tool => push_single_line(
-                    out,
-                    "  ",
-                    fallback.as_str(),
-                    Style::default().fg(tool_status_key_and_color(part.status).1),
-                    width,
-                ),
-                _ => push_multiline(
+                TranscriptNodeKind::Reasoning => {
+                    render_reasoning_summary(fallback.as_str(), out, width, i18n, expanded);
+                }
+                TranscriptNodeKind::Tool => {
+                    render_summary_tool_execution(
+                        part,
+                        fallback.as_str(),
+                        out,
+                        width,
+                        i18n,
+                        expanded,
+                    );
+                }
+                TranscriptNodeKind::Message => push_multiline(
                     out,
                     "  ",
                     fallback.as_str(),
@@ -641,6 +640,79 @@ fn render_part_node(
                 requires_full_message: true,
             }
         }
+    }
+}
+
+fn render_reasoning_summary(
+    summary: &str,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+) {
+    push_section_heading(
+        out,
+        "  thinking",
+        Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
+    if expanded {
+        push_multiline(
+            out,
+            "    ",
+            summary,
+            Style::default().fg(Color::DarkGray),
+            width,
+        );
+    } else {
+        push_collapsible_text(
+            out,
+            "    ",
+            summary,
+            Style::default().fg(Color::DarkGray),
+            width,
+            i18n,
+        );
+    }
+}
+
+fn render_summary_tool_execution(
+    part: &MessagePart,
+    summary: &str,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    expanded: bool,
+) {
+    let (message_key, color) = tool_status_key_and_color(part.status);
+    if !expanded {
+        push_single_line(
+            out,
+            "  ",
+            summary_only_tool_collapsed_summary(part, i18n).as_str(),
+            Style::default().fg(color),
+            width,
+        );
+        return;
+    }
+
+    let label = summary_only_tool_label(part);
+    push_multiline(
+        out,
+        "  ",
+        &i18n.text_args(message_key, &crate::fl_args!("label" => label)),
+        Style::default().fg(color),
+        width,
+    );
+    if !summary.trim().is_empty() {
+        let detail_style = if matches!(part.status, ExecutionStatus::Failed) {
+            Style::default().fg(Color::Red)
+        } else {
+            Style::default()
+        };
+        push_multiline(out, "    ", summary, detail_style, width);
     }
 }
 
@@ -1245,11 +1317,33 @@ fn tool_execution_collapsed_summary(
     tool: &OperationPart,
     i18n: &I18n,
 ) -> String {
+    format_collapsed_tool_summary(
+        part.status,
+        tool_invocation_label(&tool.invocation).as_str(),
+        i18n,
+    )
+}
+
+fn summary_only_tool_collapsed_summary(part: &MessagePart, i18n: &I18n) -> String {
+    let label = summary_only_tool_label(part);
+    format_collapsed_tool_summary(part.status, label.as_str(), i18n)
+}
+
+fn format_collapsed_tool_summary(status: ExecutionStatus, label: &str, i18n: &I18n) -> String {
     format!(
         "[tool] {} | {}",
-        ui_text::execution_status_label(i18n, part.status),
-        tool_invocation_label(&tool.invocation)
+        ui_text::execution_status_label(i18n, status),
+        label
     )
+}
+
+fn summary_only_tool_label(part: &MessagePart) -> String {
+    part.name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "tool".to_string())
 }
 
 fn operation_block_copy_text(block: &OperationBlock) -> String {
@@ -2293,6 +2387,117 @@ mod tests {
         assert!(rendered[0].contains("[tool]"));
         assert!(rendered[0].contains("completed"));
         assert!(rendered[0].contains("bash"));
+    }
+
+    #[test]
+    fn summary_only_tool_parts_keep_their_single_line_tool_format_after_reload() {
+        let invocation = ToolInvocation::new(
+            "settings",
+            serde_json::from_value(json!({ "action": "list" }))
+                .expect("valid structured input"),
+        );
+        let tool = OperationPart::completed(
+            9,
+            invocation,
+            "Listed 9 settings entries.",
+            Vec::new(),
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            2,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool),
+        )
+        .without_detail();
+        let message = transcript_message(vec![part]);
+
+        let rendered = render_message_detailed(
+            &message,
+            120,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                tool_output_expanded: false,
+                thinking_expanded: false,
+            },
+            &std::collections::BTreeMap::new(),
+        );
+
+        assert_eq!(rendered.nodes.len(), 1);
+        assert_eq!(rendered.nodes[0].kind, TranscriptNodeKind::Tool);
+        assert!(rendered.nodes[0].toggleable);
+        assert!(!rendered.nodes[0].expanded);
+        assert!(rendered.nodes[0].requires_full_message);
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("[tool] completed | settings"))
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("Listed 9 settings entries.")),
+            "collapsed summary-only tool output should not render raw tool output"
+        );
+    }
+
+    #[test]
+    fn summary_only_reasoning_parts_stay_collapsed_after_reload() {
+        let part = MessagePart::with_content(
+            3,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Reasoning(ReasoningPart {
+                summary: vec![
+                    "line-1\n".to_string(),
+                    "line-2\n".to_string(),
+                    "line-3\n".to_string(),
+                    "line-4\n".to_string(),
+                    "line-5\n".to_string(),
+                    "line-6\n".to_string(),
+                    "line-7\n".to_string(),
+                    "line-8\n".to_string(),
+                    "line-9\n".to_string(),
+                    "line-10".to_string(),
+                ],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        )
+        .without_detail();
+        let message = transcript_message(vec![part]);
+
+        let rendered = render_message_detailed(
+            &message,
+            120,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                tool_output_expanded: false,
+                thinking_expanded: false,
+            },
+            &std::collections::BTreeMap::new(),
+        );
+
+        assert_eq!(rendered.nodes.len(), 1);
+        assert_eq!(rendered.nodes[0].kind, TranscriptNodeKind::Reasoning);
+        assert!(rendered.nodes[0].toggleable);
+        assert!(!rendered.nodes[0].expanded);
+        assert!(rendered.nodes[0].requires_full_message);
+        assert!(rendered.lines.iter().any(|line| line.text.contains("thinking")));
+        assert!(
+            rendered.lines.iter().any(|line| line.text.contains("line-8")),
+            "collapsed preview should still show early reasoning lines"
+        );
+        assert!(
+            rendered.lines.iter().all(|line| !line.text.contains("line-10")),
+            "collapsed summary-only reasoning should not fully expand after reload"
+        );
     }
 
     #[test]

@@ -42,7 +42,7 @@ struct CompleteGoalToolInput {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "workflow",
-    description = "Workflow prompt command. Use action `init`, `review`, or `security_review`; pass any workflow arguments directly on the action payload.",
+    description = "Workflow scaffold command. Use action `init`, `review`, or `security_review` to generate reusable workflow instructions; this entry does not execute shell or filesystem actions by itself.",
     tags(ToolTag::ReadOnly),
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = true,
@@ -70,9 +70,9 @@ enum WorkflowToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "tools",
-    description = "Tool catalog command. Use action `search` to find or load deferred tools, or `help` to fetch detailed usage for a tool.",
+    description = "Tool catalog command. Use action `search` to find or load deferred tools, or `help` to fetch detailed usage for a tool. This entry does not execute the target tool for you.",
     summary = "Search tools or fetch detailed tool help.",
-    help = "Use action `search` with `query`, optional `load`, and optional `limit` to discover tools and load deferred tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool.",
+    help = "Use action `search` with `query`, optional `load`, and optional `limit` to discover tools and load deferred tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. To actually run a tool, call that tool directly after reading its help.",
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
     host_capabilities(HostCapability::ListTools),
     concurrency_safe = true,
@@ -106,7 +106,7 @@ fn default_include_schema() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "agent",
-    description = "Runtime agent command. Use action `switch` or `restore`; pass any action payload directly on the request.",
+    description = "Runtime agent profile command. Use action `switch` to change the current session's active agent profile or `restore` to bring back a saved profile. This entry does not spawn delegated subagent work; use `task` for that.",
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = false,
     load = "always"
@@ -145,7 +145,7 @@ enum TodoToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "task",
-    description = "Task command. Use action `run` to create or resume a typed subagent task session for explore, implement, or verify delegated work.",
+    description = "Delegated subagent task command. Use action `run` to create or resume a typed child task session for explore, implement, or verify work. This entry launches/resumes a separate task session; it does not switch the current runtime agent profile.",
     tags(ToolTag::Task, ToolTag::Subtask),
     host_capabilities(HostCapability::SpawnSubtask),
     concurrency_safe = false,
@@ -168,7 +168,7 @@ struct SessionRenameToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "session",
-    description = "Session command. Use action `get` to inspect the current session metadata or `rename` to update the session title.",
+    description = "Session metadata command. Use action `get` to inspect the current session metadata or `rename` to update the session title. This entry does not read chat history or execute workflow actions.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating),
     host_capabilities(HostCapability::SessionRegistry),
     concurrency_safe = false,
@@ -221,7 +221,7 @@ enum GoalToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "user",
-    description = "User interaction command. Use action `request_input` to request structured short answers.",
+    description = "User interaction command. Use action `request_input` to request structured short answers. Legacy action alias `ask` still works but is not the preferred name.",
     tags(ToolTag::ReadOnly, ToolTag::Interactive),
     host_capabilities(HostCapability::AskUser),
     concurrency_safe = false,

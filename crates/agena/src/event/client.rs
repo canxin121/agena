@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{ExecutionStatus, MessagePart, MessageStatus},
-    permission::{DecisionTraceStep, PermissionReplyKind, PermissionRiskLevel},
+    permission::{DecisionTraceStep, PermissionAction, PermissionReplyKind, PermissionRiskLevel},
     role::Role,
 };
 
@@ -141,6 +141,10 @@ pub struct MessagePartDeltaEvent {
 pub struct PermissionRequestedEvent {
     pub session_id: i64,
     pub request_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_actions: Vec<PermissionAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_actions: Vec<PermissionAction>,
     pub reason: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub explanation: String,

@@ -977,9 +977,7 @@ impl PluginHost {
             }
             let params = serde_json::to_value(&input)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = call_with_timeout(plugin, method::HOOK_PERMISSION_ASK, params, timeout)
-                .await
-                .map_err(transport_to_plugin_error)?;
+            let v = call_permission_ask_hook(plugin, params, timeout).await?;
             if matches!(&v, serde_json::Value::Null) {
                 continue;
             }
@@ -991,7 +989,7 @@ impl PluginHost {
                         tracing::warn!(
                             target: "agena_plugin_host::permission",
                             plugin = %plugin.id,
-                            "permission.ask returned Decide without PermissionDecision capability; treating as advice"
+                            "permission.ask_permission returned Decide without PermissionDecision capability; treating as advice"
                         );
                         return Ok(Some(PermissionAskOutcome::Advice {
                             plugin_id: plugin.id.clone(),
@@ -1767,6 +1765,60 @@ fn transport_to_plugin_error(e: TransportError) -> PluginError {
     }
 }
 
+fn is_not_implemented_plugin_error(err: &PluginError) -> bool {
+    err.code == PluginErrorCode::NotImplemented
+        || err.message.contains("method not found")
+        || err.message.contains("not implemented")
+}
+
+async fn call_permission_ask_hook(
+    plugin: &LoadedPlugin,
+    params: serde_json::Value,
+    timeout: Duration,
+) -> Result<serde_json::Value, PluginError> {
+    match call_with_timeout(plugin, method::HOOK_PERMISSION_ASK, params.clone(), timeout).await {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let err = transport_to_plugin_error(err);
+            if is_not_implemented_plugin_error(&err) {
+                call_with_timeout(plugin, method::HOOK_PERMISSION_ASK_LEGACY, params, timeout)
+                    .await
+                    .map_err(transport_to_plugin_error)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+async fn dispatch_permission_ask_transport(
+    transport: Arc<dyn PluginTransport>,
+    context: HostCallbackContext,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, PluginError> {
+    match host_api::with_host_callback_context(
+        context.clone(),
+        transport.dispatch(method::HOOK_PERMISSION_ASK, params.clone()),
+    )
+    .await
+    {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            let err = transport_to_plugin_error(err);
+            if is_not_implemented_plugin_error(&err) {
+                host_api::with_host_callback_context(
+                    context,
+                    transport.dispatch(method::HOOK_PERMISSION_ASK_LEGACY, params),
+                )
+                .await
+                .map_err(transport_to_plugin_error)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
 fn merge_json(into: &mut serde_json::Value, from: serde_json::Value) {
     match (into, from) {
         (serde_json::Value::Object(map_into), serde_json::Value::Object(map_from)) => {
@@ -2467,11 +2519,12 @@ impl HostHandle {
                         .await?;
                         Ok(serde_json::Value::Object(Default::default()))
                     }
-                    method::HOST_PERMISSION_ASK => {
+                    method::HOST_PERMISSION_ASK | method::HOST_PERMISSION_ASK_LEGACY => {
                         let req: PermissionAskInput = parse(params)?;
-                        // If a permission handler plugin is registered, route the
-                        // ask through that plugin's `plugin/permission.render`
-                        // method. Otherwise fall back to the regular HostClient.
+                        // If a permission handler plugin is registered, route
+                        // the permission request through that plugin's
+                        // `permission.ask_permission` hook. Otherwise fall
+                        // back to the regular HostClient method.
                         let handler_id = self.permission_handler.read().await.clone();
                         let d = if let Some(handler_id) = handler_id {
                             let transport = self
@@ -2484,12 +2537,12 @@ impl HostHandle {
                                 Some(transport) => {
                                     let params = serde_json::to_value(&req)
                                         .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-                                    let value = host_api::with_host_callback_context(
+                                    let value = dispatch_permission_ask_transport(
+                                        transport,
                                         scoped_context(plugin_id.clone(), None),
-                                        transport.dispatch(method::HOOK_PERMISSION_ASK, params),
+                                        params,
                                     )
-                                    .await
-                                    .map_err(transport_to_plugin_error)?;
+                                    .await?;
                                     // Plugin hook returns Option<PermissionAskDecision>.
                                     // Map it back to PermissionDecision for the
                                     // HOST_PERMISSION_ASK contract: Defer / None

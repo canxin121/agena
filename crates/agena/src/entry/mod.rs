@@ -36,8 +36,8 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, FilesystemEffect, Message, PartContent, PluginInvocation, StructuredObject,
-    ToolInvocation, ToolOutput,
+    AskUserToolInput, FilesystemEffect, Message, NetworkEffect, PartContent, PluginInvocation,
+    StructuredObject, ToolInvocation, ToolOutput,
 };
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
@@ -783,6 +783,9 @@ impl ToolExecutor {
             {
                 return Ok(());
             }
+            Err(err) if err.code == crate::plugin::sdk::PluginErrorCode::InvalidParams => {
+                return Err(ToolError::InvalidInput(err.message));
+            }
             Err(err) => return Err(ToolError::Plugin(err.message)),
         };
 
@@ -831,6 +834,9 @@ impl ToolExecutor {
                     || err.message.contains("not implemented") =>
             {
                 return Ok(());
+            }
+            Err(err) if err.code == crate::plugin::sdk::PluginErrorCode::InvalidParams => {
+                return Err(ToolError::InvalidInput(err.message));
             }
             Err(err) => return Err(ToolError::Plugin(err.message)),
         };
@@ -1557,6 +1563,22 @@ impl ToolExecutor {
         Ok(())
     }
 
+    pub(crate) fn ensure_network_effects_permission(
+        &self,
+        effects: &[NetworkEffect],
+    ) -> Result<(), ToolError> {
+        for effect in effects {
+            let target = NetworkTarget::parse(effect.target.as_str()).map_err(|err| {
+                ToolError::InvalidInput(format!(
+                    "invalid network effect target `{}`: {err}",
+                    effect.target
+                ))
+            })?;
+            self.ensure_network_permission(&target)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn ensure_network_permission(
         &self,
         target: &NetworkTarget,
@@ -1660,10 +1682,10 @@ fn validate_shell_filesystem_effects(
     effects: &[FilesystemEffect],
 ) -> Result<(), ToolError> {
     if effects.is_empty()
-        && let Some(reason) = bash::mutating_command_reason(command)
+        && let Some(reason) = bash::filesystem_command_reason(command)
     {
         return Err(ToolError::InvalidInput(format!(
-            "{tool_name} filesystem_effects must declare at least one path because the command appears to modify files: {reason}"
+            "{tool_name} filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
         )));
     }
     Ok(())
@@ -2129,10 +2151,11 @@ mod tests {
 
     use crate::message::{
         ApplyPatchToolInput, BashToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-        FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, Message,
-        OperationPart, PartContent, ReadToolInput, StructuredObject, TaskSubagentType,
-        TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
-        ToolInvocation, ToolSearchToolInput, WebFetchToolInput,
+        FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput,
+        LspDefinitionToolInput, Message, MonitorToolInput, NetworkEffect, OperationPart,
+        PartContent, ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TimeRange,
+        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation,
+        ToolSearchToolInput, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -3133,6 +3156,7 @@ mod tests {
                 timeout_ms: Some(30_000),
                 workdir: None,
                 filesystem_effects: Vec::new(),
+                network_effects: Vec::new(),
             }))
             .expect("bash default tool should succeed");
 
@@ -3166,6 +3190,7 @@ mod tests {
             timeout_ms: Some(30_000),
             workdir: None,
             filesystem_effects: Vec::new(),
+            network_effects: Vec::new(),
         })
         .into_invocation();
         assert_eq!(invocation.name, "shell");
@@ -3215,6 +3240,7 @@ mod tests {
                     path: "notes.txt".to_string(),
                     access: crate::message::FilesystemAccess::Read,
                 }],
+                network_effects: Vec::new(),
             }))
             .expect("bash default tool should succeed");
 
@@ -3274,6 +3300,7 @@ mod tests {
                         access: crate::message::FilesystemAccess::Read,
                     },
                 ],
+                network_effects: Vec::new(),
             }))
             .expect("bash default tool should succeed");
 
@@ -3314,13 +3341,14 @@ mod tests {
                 timeout_ms: Some(30_000),
                 workdir: None,
                 filesystem_effects: Vec::new(),
+                network_effects: Vec::new(),
             }))
             .expect_err("write command should be rejected before execution");
 
         match err {
             ToolError::InvalidInput(message) => {
                 assert!(message.contains("filesystem_effects"));
-                assert!(message.contains("modify files"));
+                assert!(message.contains("touch the filesystem"));
             }
             other => panic!("expected invalid input, got {other:?}"),
         }
@@ -3651,6 +3679,149 @@ mod tests {
     }
 
     #[test]
+    fn collect_permission_checks_for_glob_and_grep_use_explicit_base_paths() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+
+        let glob_invocation = ToolPayloadInput::Glob(GlobToolInput {
+            pattern: "**/*.rs".to_string(),
+            path: Some("packages/app".to_string()),
+        })
+        .into_invocation();
+        let grep_invocation = ToolPayloadInput::Grep(GrepToolInput {
+            pattern: "main".to_string(),
+            path: Some("src".to_string()),
+            include: None,
+        })
+        .into_invocation();
+
+        let glob_checks = executor
+            .collect_permission_checks_for_invocation(&glob_invocation)
+            .expect("glob permission collection should succeed");
+        let grep_checks = executor
+            .collect_permission_checks_for_invocation(&grep_invocation)
+            .expect("grep permission collection should succeed");
+
+        let glob_paths = glob_checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => Some((access_kind.clone(), target_path.clone())),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let grep_paths = grep_checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => Some((access_kind.clone(), target_path.clone())),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(glob_paths.contains(&(
+            "read".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("packages/app")),
+        )));
+        assert!(grep_paths.contains(&(
+            "read".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("src")),
+        )));
+    }
+
+    #[test]
+    fn collect_permission_checks_for_lsp_invocation_uses_file_path() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::LspDefinition(LspDefinitionToolInput {
+            file_path: "src/lib.rs".to_string(),
+            line: 3,
+            character: 8,
+        })
+        .into_invocation();
+
+        let checks = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect("lsp permission collection should succeed");
+        let path_actions = checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => Some((access_kind.clone(), target_path.clone())),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(path_actions.contains(&(
+            "read".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("src/lib.rs")),
+        )));
+    }
+
+    #[test]
+    fn collect_permission_checks_for_monitor_start_uses_declared_targets() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::Monitor(MonitorToolInput::Start {
+            command: "curl https://status.example.com/health".to_string(),
+            description: "watch status".to_string(),
+            workdir: Some("services/api".to_string()),
+            filesystem_effects: Vec::new(),
+            network_effects: vec![NetworkEffect {
+                target: "https://status.example.com/health".to_string(),
+            }],
+            timeout_ms: Some(5_000),
+            persistent: false,
+            include_pattern: None,
+            max_buffered_lines: None,
+            capture_stderr: true,
+        })
+        .into_invocation();
+
+        let checks = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect("monitor permission collection should succeed");
+        let path_actions = checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } => Some((access_kind.clone(), target_path.clone())),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        let network_actions = checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::NetworkAccess { host, port, .. } => {
+                    Some((host.clone(), *port))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(path_actions.contains(&(
+            "read".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("services/api")),
+        )));
+        assert!(network_actions.contains(&("status.example.com".to_string(), Some(443))));
+    }
+
+    #[test]
     fn web_fetch_uses_network_permission_policy() {
         let workspace = TempWorkspace::new();
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all())
@@ -3714,6 +3885,14 @@ mod tests {
                     access: FilesystemAccess::Write,
                 },
             ],
+            network_effects: vec![
+                crate::message::NetworkEffect {
+                    target: "https://api.example.com/upload".to_string(),
+                },
+                crate::message::NetworkEffect {
+                    target: "cache.internal:8443".to_string(),
+                },
+            ],
         })
         .into_invocation();
 
@@ -3735,6 +3914,10 @@ mod tests {
 
         assert!(path_actions.contains(&(
             "read".to_string(),
+            super::normalize_path_for_display(&workspace.root.join("packages/app")),
+        )));
+        assert!(path_actions.contains(&(
+            "read".to_string(),
             super::normalize_path_for_display(&workspace.root.join("packages/app/src/lib.rs")),
         )));
         assert!(path_actions.contains(&(
@@ -3753,6 +3936,18 @@ mod tests {
             "write".to_string(),
             super::normalize_path_for_display(&outside),
         )));
+
+        let network_actions = checks
+            .iter()
+            .filter_map(|check| match &check.action {
+                crate::permission::PermissionAction::NetworkAccess { host, port, .. } => {
+                    Some((host.clone(), *port))
+                }
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert!(network_actions.contains(&("api.example.com".to_string(), Some(443))));
+        assert!(network_actions.contains(&("cache.internal".to_string(), Some(8443))));
     }
 
     #[test]
@@ -3776,6 +3971,7 @@ mod tests {
                 path: "created.txt".to_string(),
                 access: FilesystemAccess::Write,
             }],
+            network_effects: Vec::new(),
         })
         .into_invocation();
 
@@ -3815,7 +4011,8 @@ mod tests {
             "command": "pwd",
             "description": "",
             "timeout_ms": null,
-            "workdir": null
+            "workdir": null,
+            "network_effects": []
         }))
         .expect_err("bash input should require filesystem_effects");
 
@@ -3823,7 +4020,21 @@ mod tests {
     }
 
     #[test]
-    fn bash_tool_schema_requires_filesystem_effects_field() {
+    fn bash_input_requires_network_effects_field() {
+        let err = serde_json::from_value::<BashToolInput>(json!({
+            "command": "pwd",
+            "description": "",
+            "timeout_ms": null,
+            "workdir": null,
+            "filesystem_effects": []
+        }))
+        .expect_err("bash input should require network_effects");
+
+        assert!(err.to_string().contains("network_effects"));
+    }
+
+    #[test]
+    fn bash_tool_schema_requires_declared_effect_fields() {
         let schema = crate::entry::definition::json_schema_for::<BashToolInput>();
         let required = schema
             .get("required")
@@ -3841,6 +4052,17 @@ mod tests {
                 .and_then(serde_json::Value::as_object)
                 .is_some()
         );
+        assert!(
+            required
+                .iter()
+                .any(|field| field.as_str() == Some("network_effects"))
+        );
+        assert!(
+            schema
+                .pointer("/properties/network_effects")
+                .and_then(serde_json::Value::as_object)
+                .is_some()
+        );
     }
 
     #[test]
@@ -3854,6 +4076,7 @@ mod tests {
             timeout_ms: Some(30_000),
             workdir: None,
             filesystem_effects: Vec::new(),
+            network_effects: Vec::new(),
         })
         .into_invocation();
 
@@ -3863,7 +4086,112 @@ mod tests {
         match err {
             ToolError::InvalidInput(message) => {
                 assert!(message.contains("filesystem_effects"));
-                assert!(message.contains("modify files"));
+                assert!(message.contains("touch the filesystem"));
+            }
+            other => panic!("expected invalid input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bash_invocation_rejects_filesystem_read_without_declared_paths() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::Bash(BashToolInput {
+            command: "cat notes.txt".to_string(),
+            description: "missing read effects".to_string(),
+            timeout_ms: Some(30_000),
+            workdir: None,
+            filesystem_effects: Vec::new(),
+            network_effects: Vec::new(),
+        })
+        .into_invocation();
+
+        let err = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect_err("filesystem-reading bash without filesystem effects should be rejected");
+        match err {
+            ToolError::InvalidInput(message) => {
+                assert!(message.contains("filesystem_effects"));
+                assert!(message.contains("touch the filesystem"));
+            }
+            other => panic!("expected invalid input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bash_invocation_rejects_obvious_network_without_declared_targets() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::Bash(BashToolInput {
+            command: "curl https://example.com/health".to_string(),
+            description: "missing network targets".to_string(),
+            timeout_ms: Some(30_000),
+            workdir: None,
+            filesystem_effects: Vec::new(),
+            network_effects: Vec::new(),
+        })
+        .into_invocation();
+
+        let err = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect_err("network bash without network_effects should be rejected");
+        match err {
+            ToolError::Plugin(message) | ToolError::InvalidInput(message) => {
+                assert!(message.contains("network_effects"));
+                assert!(message.contains("use the network"));
+            }
+            other => panic!("expected invalid input or plugin error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bash_invocation_allows_network_only_curl_without_filesystem_effects() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::Bash(BashToolInput {
+            command: "curl https://example.com/health".to_string(),
+            description: "network only curl".to_string(),
+            timeout_ms: Some(30_000),
+            workdir: None,
+            filesystem_effects: Vec::new(),
+            network_effects: vec![NetworkEffect {
+                target: "https://example.com/health".to_string(),
+            }],
+        })
+        .into_invocation();
+
+        executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect("network-only curl should not require filesystem effects");
+    }
+
+    #[test]
+    fn bash_invocation_rejects_curl_file_write_without_declared_paths() {
+        let workspace = TempWorkspace::new();
+        let executor = build_executor(&workspace.root)
+            .with_plugin_manager(build_default_plugin_manager(&workspace.root));
+        let invocation = ToolPayloadInput::Bash(BashToolInput {
+            command: "curl -o download.json https://example.com/data.json".to_string(),
+            description: "curl writes file".to_string(),
+            timeout_ms: Some(30_000),
+            workdir: None,
+            filesystem_effects: Vec::new(),
+            network_effects: vec![NetworkEffect {
+                target: "https://example.com/data.json".to_string(),
+            }],
+        })
+        .into_invocation();
+
+        let err = executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect_err("curl file output without filesystem effects should be rejected");
+        match err {
+            ToolError::InvalidInput(message) => {
+                assert!(message.contains("filesystem_effects"));
+                assert!(message.contains("touch the filesystem"));
             }
             other => panic!("expected invalid input, got {other:?}"),
         }
@@ -3896,6 +4224,7 @@ mod tests {
                     path: "created.txt".to_string(),
                     access: FilesystemAccess::Write,
                 }],
+                network_effects: Vec::new(),
             }))
             .expect_err("declared write should be denied by path policy");
 
@@ -3925,6 +4254,7 @@ mod tests {
                     timeout_ms: Some(30_000),
                     workdir: None,
                     filesystem_effects: Vec::new(),
+                    network_effects: Vec::new(),
                 })
                 .into_invocation(),
                 10,
@@ -3968,6 +4298,7 @@ mod tests {
                 timeout_ms: None,
                 workdir: None,
                 filesystem_effects: Vec::new(),
+                network_effects: Vec::new(),
             })
             .into_invocation()
         };
@@ -4059,6 +4390,7 @@ mod tests {
             timeout_ms: None,
             workdir: None,
             filesystem_effects: Vec::new(),
+            network_effects: Vec::new(),
         })
         .into_invocation();
 

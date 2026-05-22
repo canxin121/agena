@@ -242,7 +242,7 @@ pub struct TimeoutsConfig {
     pub tool_hook: Option<DurationSpec>,
     /// `tool.invoke` timeout (default 5min).
     pub tool_invoke: Option<DurationSpec>,
-    /// `permission.ask` timeout (default 60s).
+    /// `permission.ask_permission` timeout (default 60s).
     pub permission_ask: Option<DurationSpec>,
     /// `chat.*` timeout (default 5s).
     pub chat: Option<DurationSpec>,

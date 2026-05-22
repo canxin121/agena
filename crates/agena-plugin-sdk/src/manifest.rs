@@ -755,7 +755,7 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ),
     ("auth", HookSubscription::AUTH),
     ("provider.list", HookSubscription::PROVIDER_LIST),
-    ("permission.ask", HookSubscription::PERMISSION_ASK),
+    ("permission.ask_permission", HookSubscription::PERMISSION_ASK),
     ("notification", HookSubscription::NOTIFICATION),
     ("command.execute.before", HookSubscription::COMMAND_BEFORE),
     ("command.execute.after", HookSubscription::COMMAND_AFTER),
@@ -774,7 +774,7 @@ fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
         .iter()
         .find_map(|(hook_name, flag)| (*hook_name == name).then_some(*flag))
         .or(match name {
-            "permission_request" => Some(HookSubscription::PERMISSION_ASK),
+            "permission.ask" | "permission_request" => Some(HookSubscription::PERMISSION_ASK),
             _ => None,
         })
 }

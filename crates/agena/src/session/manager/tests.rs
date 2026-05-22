@@ -20,7 +20,10 @@ use crate::message::{
     UserInputQuestion,
 };
 use crate::model::{ModelId, ModelRef, ProviderId};
-use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
+use crate::permission::{
+    NetworkPermissionPolicy, PermissionAction, PermissionMode, PermissionPolicy,
+    ToolPermissionPolicy,
+};
 use crate::provider::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
     CompletionUsage, ModelRuntime, ProviderModel, ProviderRegistry,
@@ -2545,6 +2548,140 @@ fn blocked_permission_survives_restart_and_reply_continues() {
     });
 }
 
+#[test]
+fn pending_permission_request_aggregates_invocation_actions() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        fs::write(
+            workspace.root.join("notes.txt"),
+            "aggregated permissions fixture\n",
+        )
+        .expect("fixture file should be written");
+        let db = open_temp_database(&workspace.root, "permission-aggregate.db").await;
+        let agents = crate::agents::SubagentRegistry::discover(&workspace.root, None);
+        let mut agent = Agent::new(
+            "build",
+            PermissionPolicy::allow_all().with_workspace_read_default(PermissionMode::Ask),
+        )
+        .with_tool_policy(ToolPermissionPolicy::allow_all());
+        agent.network_policy =
+            NetworkPermissionPolicy::allow_all().with_internet_default(PermissionMode::Ask);
+        let executor =
+            ToolExecutor::new(&workspace.root, agent).with_subagent_registry(agents.clone());
+        let plugins = crate::tool::default_tool_host(&workspace.root).expect("default plugin host");
+        plugins
+            .host_handle()
+            .install_client(Arc::new(SessionTestHostClient {
+                executor: executor.clone().with_plugin_manager(Arc::clone(&plugins)),
+            }))
+            .await;
+        let executor = executor.with_plugin_manager(plugins.clone());
+        let mut registry = ProviderRegistry::new();
+        registry.register(ScriptedProvider);
+        let processor = SessionProcessor::new(
+            Arc::new(registry),
+            ContextGovernor::new(ContextPolicy::default()),
+        )
+        .with_plugin_host(Arc::clone(&plugins));
+        let test_executor = executor.clone();
+        let manager = SessionManager::new(db, processor, executor)
+            .with_config(SessionManagerConfig::default());
+        let invocation = crate::tool::ToolPayloadInput::Bash(crate::message::BashToolInput {
+            command: "curl https://api.example.com/health && cat notes.txt".to_string(),
+            description: "aggregate permission request".to_string(),
+            timeout_ms: Some(5_000),
+            workdir: Some(".".to_string()),
+            filesystem_effects: vec![crate::message::FilesystemEffect {
+                path: "notes.txt".to_string(),
+                access: crate::message::FilesystemAccess::Read,
+            }],
+            network_effects: vec![crate::message::NetworkEffect {
+                target: "https://api.example.com/health".to_string(),
+            }],
+        })
+        .into_invocation();
+        let checks = test_executor
+            .collect_permission_checks_for_invocation(&invocation)
+            .expect("permission checks should collect");
+        let outcome = manager
+            .aggregate_permission_outcome(None, checks.as_slice())
+            .await
+            .expect("permission aggregation should succeed");
+        let request = match outcome {
+            super::replies::AggregatedPermissionOutcome::Request(request) => request,
+            super::replies::AggregatedPermissionOutcome::Allow => {
+                panic!("aggregated outcome should request confirmation")
+            }
+            super::replies::AggregatedPermissionOutcome::Deny { reason } => {
+                panic!("aggregated outcome should not deny: {reason}")
+            }
+        };
+
+        assert_eq!(
+            request.requested_actions.len(),
+            3,
+            "workdir, file, and network actions should all require confirmation"
+        );
+        assert!(
+            request
+                .reason
+                .contains("plus 2 more permission checks for this tool call"),
+            "aggregated permission reason should mention additional requested actions: {}",
+            request.reason
+        );
+        assert!(
+            request.related_actions.iter().any(|action| matches!(
+                action,
+                PermissionAction::Tool { tool_name, .. } if tool_name == "shell" || tool_name == "bash"
+            )),
+            "aggregated request should include the shell tool action: {:?}",
+            request.related_actions
+        );
+        assert!(
+            request.related_actions.iter().any(|action| matches!(
+                action,
+                PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } if access_kind == "read" && target_path.ends_with("notes.txt")
+            )),
+            "aggregated request should include the file read action: {:?}",
+            request.related_actions
+        );
+        assert!(
+            request.related_actions.iter().any(|action| matches!(
+                action,
+                PermissionAction::NetworkAccess { host, port, .. }
+                    if host == "api.example.com" && port == &Some(443)
+            )),
+            "aggregated request should include the network action: {:?}",
+            request.related_actions
+        );
+        assert!(
+            request.requested_actions.iter().any(|action| matches!(
+                action,
+                PermissionAction::PathAccess {
+                    access_kind,
+                    target_path,
+                    ..
+                } if access_kind == "read" && target_path.ends_with("notes.txt")
+            )),
+            "requested actions should include the file read permission: {:?}",
+            request.requested_actions
+        );
+        assert!(
+            request.requested_actions.iter().any(|action| matches!(
+                action,
+                PermissionAction::NetworkAccess { host, port, .. }
+                    if host == "api.example.com" && port == &Some(443)
+            )),
+            "requested actions should include the network permission: {:?}",
+            request.requested_actions
+        );
+    });
+}
+
 #[tokio::test]
 async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
     let workspace = TempWorkspace::new();
@@ -4562,7 +4699,8 @@ while True:
                         "description": "read notes via shell",
                         "workdir": ".",
                         "timeout_ms": 5_000,
-                        "filesystem_effects": [{"path": "notes.txt", "access": "read"}]
+                        "filesystem_effects": [{"path": "notes.txt", "access": "read"}],
+                        "network_effects": []
                     })
                     .to_string(),
                 )])
@@ -4577,7 +4715,8 @@ while True:
                         "shell": "powershell",
                         "command": "Get-Location",
                         "description": "probe powershell availability",
-                        "filesystem_effects": []
+                        "filesystem_effects": [],
+                        "network_effects": []
                     })
                     .to_string(),
                 )])
@@ -4593,7 +4732,8 @@ while True:
                         "timeout_ms": 10_000,
                         "persistent": false,
                         "capture_stderr": true,
-                        "filesystem_effects": [{"path": ".", "access": "read"}]
+                        "filesystem_effects": [{"path": ".", "access": "read"}],
+                        "network_effects": []
                     })
                     .to_string(),
                 )])

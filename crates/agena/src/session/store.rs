@@ -36,7 +36,7 @@ pub(crate) struct SessionCommit {
     pub(crate) session: Session,
     pub(crate) touched_messages: Vec<Message>,
     pub(crate) client_events: Vec<EventKind>,
-    pub(crate) persisted_rule: Option<PersistedPermissionRule>,
+    pub(crate) persisted_rules: Vec<PersistedPermissionRule>,
 }
 
 #[derive(Debug, Clone)]
@@ -1161,7 +1161,7 @@ impl SessionStore {
             mut session,
             touched_messages,
             mut client_events,
-            persisted_rule,
+            persisted_rules,
         } = commit;
         session.sync_runtime_turn_state();
         let session_id = session.id;
@@ -1185,21 +1185,20 @@ impl SessionStore {
         let session_for_cache = session.clone();
         let session_goal = session.goal.clone();
         let session_runtime = session.runtime.clone();
-        let (updated_session, persisted_rule_for_event) =
+        let (updated_session, persisted_rules_for_event) =
             with_transaction_and_effects(&self.db, move |txn, effects| {
                 let cache = Arc::clone(&cache);
                 let session_goal = session_goal.clone();
                 Box::pin(async move {
-                    let persisted_rule_for_event = if let Some(rule) = persisted_rule.as_ref() {
+                    let mut persisted_rules_for_event = Vec::new();
+                    for rule in &persisted_rules {
                         let (model, created) = permission_rule::upsert_rule(txn, rule).await?;
-                        Some(PersistedRuleEventMeta {
+                        persisted_rules_for_event.push(PersistedRuleEventMeta {
                             rule: rule.clone(),
                             rule_id: model.id,
                             created,
-                        })
-                    } else {
-                        None
-                    };
+                        });
+                    }
 
                     let updated_session =
                         session::touch_session_updated_at(txn, session_id, session_runtime)
@@ -1222,7 +1221,7 @@ impl SessionStore {
                         });
                     });
 
-                    Ok((updated_session, persisted_rule_for_event))
+                    Ok((updated_session, persisted_rules_for_event))
                 })
             })
             .await?;
@@ -1231,7 +1230,7 @@ impl SessionStore {
         for kind in client_events {
             self.publish_event(session_id, kind).await?;
         }
-        if let Some(meta) = persisted_rule_for_event {
+        for meta in persisted_rules_for_event {
             let event_kind = if meta.rule.revoked_at_ms.is_some() {
                 EventKind::PermissionRuleRevoked(permission_rule_event_from_rule(
                     meta.rule_id,

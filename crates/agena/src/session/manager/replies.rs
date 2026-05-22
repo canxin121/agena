@@ -1,5 +1,31 @@
 use super::*;
 
+#[derive(Debug, Clone)]
+pub(super) struct AggregatedPermissionRequest {
+    pub(super) action: PermissionAction,
+    pub(super) related_actions: Vec<PermissionAction>,
+    pub(super) requested_actions: Vec<PermissionAction>,
+    pub(super) reason: String,
+    pub(super) explanation: String,
+    pub(super) source: Option<String>,
+    pub(super) scope: Option<PermissionScope>,
+    pub(super) operator: Option<String>,
+    pub(super) risk: PermissionRiskLevel,
+    pub(super) trace: Vec<DecisionTraceStep>,
+}
+
+pub(super) enum AggregatedPermissionOutcome {
+    Allow,
+    Request(AggregatedPermissionRequest),
+    Deny { reason: String },
+}
+
+fn push_unique_permission_action(actions: &mut Vec<PermissionAction>, action: PermissionAction) {
+    if !actions.iter().any(|existing| existing == &action) {
+        actions.push(action);
+    }
+}
+
 fn mode_request_override_for_adapter(
     request_override: &ModelSpeedModeRequestOverride,
     adapter_overrides: &std::collections::BTreeMap<String, ModelSpeedModeRequestOverride>,
@@ -65,10 +91,15 @@ impl SessionManager {
             permission_part.status = ExecutionStatus::Completed;
         }
 
-        let persisted_rule = persisted_rule_for_reply(
+        let persisted_actions = if permission_request.requested_actions.is_empty() {
+            vec![permission_request.action.clone()]
+        } else {
+            permission_request.requested_actions.clone()
+        };
+        let persisted_rules = persisted_rules_for_reply(
             &self.store,
             request.session_id,
-            &permission_request.action,
+            persisted_actions.as_slice(),
             &request.reply,
             request.operator.as_deref(),
         )
@@ -98,11 +129,11 @@ impl SessionManager {
                 ) {
                     Ok(execution) => {
                         session = self
-                            .apply_tool_success(
+                            .apply_tool_success_with_rules(
                                 session,
                                 &pending.tool,
                                 execution,
-                                persisted_rule.clone(),
+                                persisted_rules.clone(),
                                 state.clone(),
                             )
                             .await?;
@@ -114,11 +145,11 @@ impl SessionManager {
                     }
                     Err(err) => {
                         session = self
-                            .apply_tool_failure(
+                            .apply_tool_failure_with_rules(
                                 session,
                                 &pending.tool,
                                 err.to_string(),
-                                persisted_rule.clone(),
+                                persisted_rules.clone(),
                                 state.clone(),
                             )
                             .await?;
@@ -127,11 +158,11 @@ impl SessionManager {
             }
             PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
                 session = self
-                    .apply_tool_failure(
+                    .apply_tool_failure_with_rules(
                         session,
                         &pending.tool,
                         reply_reason,
-                        persisted_rule.clone(),
+                        persisted_rules.clone(),
                         state.clone(),
                     )
                     .await?;
@@ -1334,50 +1365,39 @@ impl SessionManager {
                 }
             };
 
-        for check in permission_checks {
-            let resolution = self
-                .resolve_permission_decision(Some(session.id), &check)
-                .await?;
-            match resolution.decision {
-                PermissionDecision::Allow => {}
-                PermissionDecision::Ask { reason } => {
-                    let (source, scope, operator) = match resolution.source {
-                        crate::permission::PermissionResolutionSource::PersistedRule {
-                            scope,
-                            source,
-                            operator,
-                            ..
-                        } => (Some(source), Some(scope), operator),
-                        crate::permission::PermissionResolutionSource::StaticPolicy => {
-                            (Some("static_policy".to_string()), None, None)
-                        }
-                    };
-                    return self
-                        .apply_permission_request(
-                            session,
-                            &resolved.pending,
-                            check.action,
-                            reason,
-                            resolution.explanation,
-                            source,
-                            scope,
-                            operator,
-                            resolution.risk,
-                            resolution.trace,
-                            state,
-                        )
-                        .await;
-                }
-                PermissionDecision::Deny { reason } => {
-                    return Box::pin(self.apply_tool_failure(
+        match self
+            .aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
+            .await?
+        {
+            AggregatedPermissionOutcome::Allow => {}
+            AggregatedPermissionOutcome::Request(request) => {
+                return self
+                    .apply_permission_request(
                         session,
                         &resolved.pending,
-                        reason,
-                        None,
+                        request.action,
+                        request.related_actions,
+                        request.requested_actions,
+                        request.reason,
+                        request.explanation,
+                        request.source,
+                        request.scope,
+                        request.operator,
+                        request.risk,
+                        request.trace,
                         state,
-                    ))
+                    )
                     .await;
-                }
+            }
+            AggregatedPermissionOutcome::Deny { reason } => {
+                return Box::pin(self.apply_tool_failure(
+                    session,
+                    &resolved.pending,
+                    reason,
+                    None,
+                    state,
+                ))
+                .await;
             }
         }
 
@@ -1609,6 +1629,75 @@ impl SessionManager {
         Ok(resolution)
     }
 
+    pub(super) async fn aggregate_permission_outcome(
+        &self,
+        session_id: Option<i64>,
+        checks: &[ToolPermissionCheck],
+    ) -> Result<AggregatedPermissionOutcome, AppError> {
+        let mut related_actions = Vec::with_capacity(checks.len());
+        let mut requested_actions = Vec::new();
+        let mut primary_request: Option<AggregatedPermissionRequest> = None;
+
+        for check in checks {
+            let action = check.action.clone();
+            push_unique_permission_action(&mut related_actions, action.clone());
+            let resolution = self.resolve_permission_decision(session_id, check).await?;
+            match resolution.decision {
+                PermissionDecision::Allow => {}
+                PermissionDecision::Deny { reason } => {
+                    return Ok(AggregatedPermissionOutcome::Deny { reason });
+                }
+                PermissionDecision::Ask { reason } => {
+                    push_unique_permission_action(&mut requested_actions, action.clone());
+                    let (source, scope, operator) = match resolution.source {
+                        crate::permission::PermissionResolutionSource::PersistedRule {
+                            scope,
+                            source,
+                            operator,
+                            ..
+                        } => (Some(source), Some(scope), operator),
+                        crate::permission::PermissionResolutionSource::StaticPolicy => {
+                            (Some("static_policy".to_string()), None, None)
+                        }
+                    };
+
+                    if let Some(existing) = primary_request.as_mut() {
+                        existing.risk = max_permission_risk(existing.risk, resolution.risk);
+                        existing.trace.extend(resolution.trace);
+                    } else {
+                        primary_request = Some(AggregatedPermissionRequest {
+                            action,
+                            related_actions: Vec::new(),
+                            requested_actions: Vec::new(),
+                            reason,
+                            explanation: resolution.explanation,
+                            source,
+                            scope,
+                            operator,
+                            risk: resolution.risk,
+                            trace: resolution.trace,
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(mut request) = primary_request {
+            request.related_actions = related_actions;
+            request.requested_actions = requested_actions;
+            if request.requested_actions.len() > 1 {
+                let additional = request.requested_actions.len() - 1;
+                request.reason = format!(
+                    "{} (plus {additional} more permission checks for this tool call)",
+                    request.reason
+                );
+            }
+            return Ok(AggregatedPermissionOutcome::Request(request));
+        }
+
+        Ok(AggregatedPermissionOutcome::Allow)
+    }
+
     pub(super) async fn require_immediate_tool_permissions(
         &self,
         session_id: i64,
@@ -1644,6 +1733,8 @@ impl SessionManager {
         mut session: Session,
         pending_tool: &SessionPendingTool,
         action: PermissionAction,
+        related_actions: Vec<PermissionAction>,
+        requested_actions: Vec<PermissionAction>,
         reason: String,
         explanation: String,
         source: Option<String>,
@@ -1658,6 +1749,8 @@ impl SessionManager {
             request_id: resolved.operation_id.clone(),
             session_id: Some(session.id),
             action,
+            related_actions: related_actions.clone(),
+            requested_actions: requested_actions.clone(),
             reason: reason.clone(),
             explanation: explanation.clone(),
             source,
@@ -1703,6 +1796,8 @@ impl SessionManager {
                 EventKind::PermissionRequested(PermissionRequestedEvent {
                     session_id: session.id,
                     request_id: resolved.operation_id.clone(),
+                    related_actions,
+                    requested_actions,
                     reason: reason.clone(),
                     explanation,
                     source: request.source.clone(),
@@ -1889,10 +1984,28 @@ impl SessionManager {
 
     async fn apply_tool_success(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         execution: ToolInvocationExecution,
         persisted_rule: Option<PersistedPermissionRule>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        self.apply_tool_success_with_rules(
+            session,
+            pending_tool,
+            execution,
+            persisted_rule.into_iter().collect(),
+            state,
+        )
+        .await
+    }
+
+    async fn apply_tool_success_with_rules(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        execution: ToolInvocationExecution,
+        persisted_rules: Vec<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
@@ -1943,11 +2056,11 @@ impl SessionManager {
             text: execution.view.output_text.clone(),
         };
         let session = self
-            .persist_session_changes(
+            .persist_session_changes_with_rules(
                 session,
                 vec![assistant_message.clone()],
                 Vec::new(),
-                persisted_rule.clone(),
+                persisted_rules,
                 state.clone(),
             )
             .await?;
@@ -1969,10 +2082,28 @@ impl SessionManager {
 
     async fn apply_tool_failure(
         &self,
-        mut session: Session,
+        session: Session,
         pending_tool: &SessionPendingTool,
         reason: String,
         persisted_rule: Option<PersistedPermissionRule>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        self.apply_tool_failure_with_rules(
+            session,
+            pending_tool,
+            reason,
+            persisted_rule.into_iter().collect(),
+            state,
+        )
+        .await
+    }
+
+    async fn apply_tool_failure_with_rules(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        reason: String,
+        persisted_rules: Vec<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
@@ -2018,11 +2149,11 @@ impl SessionManager {
             })
             .cloned();
         let session = self
-            .persist_session_changes(
+            .persist_session_changes_with_rules(
                 session,
                 vec![assistant_message.clone()],
                 Vec::new(),
-                persisted_rule.clone(),
+                persisted_rules,
                 state.clone(),
             )
             .await?;
@@ -2050,13 +2181,31 @@ impl SessionManager {
         persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
+        self.persist_session_changes_with_rules(
+            session,
+            touched_messages,
+            client_events,
+            persisted_rule.into_iter().collect(),
+            state,
+        )
+        .await
+    }
+
+    pub(super) async fn persist_session_changes_with_rules(
+        &self,
+        session: Session,
+        touched_messages: Vec<Message>,
+        client_events: Vec<EventKind>,
+        persisted_rules: Vec<PersistedPermissionRule>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
         self.store
             .persist(
                 SessionCommit {
                     session,
                     touched_messages,
                     client_events,
-                    persisted_rule,
+                    persisted_rules,
                 },
                 state.cache_policy(),
             )

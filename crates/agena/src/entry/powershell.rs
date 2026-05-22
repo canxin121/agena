@@ -27,6 +27,13 @@ pub(super) fn execute(
             "powershell command must not be empty".to_string(),
         ));
     }
+    if input.filesystem_effects.is_empty()
+        && let Some(reason) = super::bash::filesystem_command_reason(input.command.as_str())
+    {
+        return Err(ToolError::InvalidInput(format!(
+            "powershell filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
+        )));
+    }
     let cwd = input
         .workdir
         .as_deref()
@@ -34,6 +41,7 @@ pub(super) fn execute(
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());
     executor.ensure_read_permission(&cwd)?;
     executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
+    executor.ensure_network_effects_permission(&input.network_effects)?;
 
     let mut env = inherited_environment();
     env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);

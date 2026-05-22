@@ -33,22 +33,25 @@ const defaultDeps: SettingsAgentsStateDeps = {
   patchSettings,
 }
 
-function readPermissionSummary(permission: RuntimeStatus['operator']['agents']['agents'][number]['permission']): string {
+function readPermissionSummary(
+  permission: RuntimeStatus['operator']['agents']['agents'][number]['permission'],
+): string {
+  const config = permission || {}
   const parts: string[] = []
-  if (typeof permission.inherit === 'boolean') {
-    parts.push(`inherit=${permission.inherit ? 'on' : 'off'}`)
-  } else if (permission.inherit && typeof permission.inherit === 'object') {
-    const inheritModes = Object.entries(permission.inherit)
+  if (typeof config.inherit === 'boolean') {
+    parts.push(`inherit=${config.inherit ? 'on' : 'off'}`)
+  } else if (config.inherit && typeof config.inherit === 'object') {
+    const inheritModes = Object.entries(config.inherit)
       .filter(([, value]) => Boolean(value))
       .map(([key]) => key)
     if (inheritModes.length) parts.push(`inherit=${inheritModes.join(',')}`)
   }
 
-  const toolRuleCount = Object.keys(permission.tools?.rules || {}).length
-  const toolNameCount = Object.keys(permission.tools?.names || {}).length
-  const toolTagCount = Object.keys(permission.tools?.tags || {}).length
-  const pathRuleCount = Object.keys(permission.path?.rules || {}).length
-  const networkRuleCount = Object.keys(permission.network?.rules || {}).length
+  const toolRuleCount = Object.keys(config.tools?.rules || {}).length
+  const toolNameCount = Object.keys(config.tools?.names || {}).length
+  const toolTagCount = Object.keys(config.tools?.tags || {}).length
+  const pathRuleCount = Object.keys(config.path?.rules || {}).length
+  const networkRuleCount = Object.keys(config.network?.rules || {}).length
 
   if (toolRuleCount || toolNameCount || toolTagCount || pathRuleCount || networkRuleCount) {
     parts.push(
@@ -68,10 +71,11 @@ function readPermissionSummary(permission: RuntimeStatus['operator']['agents']['
 }
 
 function readDefaultSummary(agent: RuntimeStatus['operator']['agents']['agents'][number]): string {
+  const defaults = agent.default || {}
   const parts = [
-    agent.default.provider ? `provider=${agent.default.provider}` : null,
-    agent.default.adapter ? `adapter=${agent.default.adapter}` : null,
-    agent.default.model ? `model=${agent.default.model}` : null,
+    defaults.provider ? `provider=${defaults.provider}` : null,
+    defaults.adapter ? `adapter=${defaults.adapter}` : null,
+    defaults.model ? `model=${defaults.model}` : null,
   ].filter(Boolean)
   return parts.length ? parts.join(' · ') : 'inherits runtime model defaults'
 }

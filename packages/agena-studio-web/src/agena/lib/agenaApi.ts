@@ -125,6 +125,11 @@ export type RuntimeStatus = {
         steps?: number | null
         allowed_tools: string[]
         permission?: AgentPermissionConfig
+        default?: {
+          provider?: string | null
+          adapter?: string | null
+          model?: string | null
+        }
         model?: string | null
         aliases: string[]
         scope: 'project' | 'user' | 'bundled'
@@ -995,11 +1000,13 @@ export async function fetchRuntimeStatus(): Promise<RuntimeStatus> {
   return await apiJson<RuntimeStatus>('/api/v1/runtime')
 }
 
-export async function fetchUsageStats(input: {
-  period?: UsagePeriod
-  from?: string | null
-  to?: string | null
-} = {}): Promise<UsageStats> {
+export async function fetchUsageStats(
+  input: {
+    period?: UsagePeriod
+    from?: string | null
+    to?: string | null
+  } = {},
+): Promise<UsageStats> {
   const params = new URLSearchParams()
   if (input.period) params.set('period', input.period)
   if (input.from) params.set('from', input.from)

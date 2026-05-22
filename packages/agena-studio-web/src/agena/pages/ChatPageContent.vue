@@ -51,6 +51,7 @@ const props = defineProps<{
         :session-lineage-label="props.state.sessionLineageLabel.value"
         :ancestor-sessions="props.state.ancestorSessions.value"
         :execution-facts="props.state.executionFacts.value"
+        :context-usage-label="props.state.contextUsageLabel.value"
         :session-usage-summary-facts="props.state.sessionUsageSummaryFacts.value"
         :sibling-sessions="props.state.siblingSessions.value"
         :child-sessions="props.state.childSessions.value"

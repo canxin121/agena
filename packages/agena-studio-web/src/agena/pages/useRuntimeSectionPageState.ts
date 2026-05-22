@@ -9,10 +9,7 @@ import { createRuntimeSkillsPanelState } from './useRuntimeSkillsPageState'
 import { createRuntimeWorkflowPanelState } from './useRuntimeWorkflowPageState'
 import { useSectionPanelRegistry } from './useSectionPanelRegistry'
 
-export function useRuntimeSectionPageState(input: {
-  route: RouteLocationNormalizedLoaded
-  router: Router
-}) {
+export function useRuntimeSectionPageState(input: { route: RouteLocationNormalizedLoaded; router: Router }) {
   const { shared, state } = useRuntimeSectionState({ ...input, section: 'runtime' })
 
   const shell = createRuntimeSectionShellState({
@@ -33,6 +30,7 @@ export function useRuntimeSectionPageState(input: {
 
   const workflow = createRuntimeWorkflowPanelState({
     approvePermission: state.approvePermission,
+    editPermissionRequest: state.editPermissionRequest,
     executionFacts: state.executionFacts,
     openSelectedSessionInChat: state.openSelectedSessionInChat,
     selectSession: state.selectSession,

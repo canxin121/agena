@@ -131,10 +131,7 @@ impl SessionManager {
             .as_ref()
             .and_then(|options| state.processor.model_metadata(&options.model).ok())
             .unwrap_or_default();
-        let context_window_tokens = metadata
-            .limits
-            .context_window_tokens
-            .or(session.runtime.prompt_tokens.model_context_window_tokens);
+        let context_window_tokens = metadata.limits.context_window_tokens;
         let max_input_tokens = metadata.limits.max_input_tokens;
         let max_output_tokens = options
             .as_ref()
@@ -145,18 +142,10 @@ impl SessionManager {
             max_output_tokens,
             state.config.auto_compaction.reserved_tokens,
         );
-        let usable_tokens = crate::session::estimate_session_context_usable_tokens(
+        let auto_compact_limit_tokens = crate::session::estimate_auto_compaction_limit_tokens(
             context_window_tokens,
-            max_input_tokens,
-            max_output_tokens,
-            reserved_tokens,
-        )
-        .filter(|value| *value > 0);
-        let threshold_tokens = Some(crate::session::estimate_prompt_budget_threshold_tokens(
-            context_window_tokens,
-            max_output_tokens,
-        ))
-        .filter(|value| *value > 0);
+            state.config.auto_compaction.reserved_tokens,
+        );
 
         let projected_tokens = prompt_window::estimate_prompt_tokens_from_runtime(
             session,
@@ -182,26 +171,12 @@ impl SessionManager {
                 )
             })
         });
-        let (limit_tokens, limit_basis) = if let Some(limit_tokens) = usable_tokens {
-            (
-                Some(limit_tokens),
-                Some(SessionUsageLimitBasis::ContextWindow),
-            )
-        } else if let Some(limit_tokens) = threshold_tokens {
-            (
-                Some(limit_tokens),
-                Some(SessionUsageLimitBasis::PromptThreshold),
-            )
-        } else {
-            (None, None)
-        };
-
         Ok(SessionUsage {
             measured_prompt_tokens,
             current_tokens,
             projected_tokens,
-            limit_tokens,
-            limit_basis,
+            limit_tokens: auto_compact_limit_tokens,
+            limit_basis: auto_compact_limit_tokens.map(|_| SessionUsageLimitBasis::ContextWindow),
             reserved_tokens,
             model_context_window_tokens: context_window_tokens,
             model_max_input_tokens: max_input_tokens,

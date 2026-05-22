@@ -1,7 +1,22 @@
 import { computed, type Ref } from 'vue'
 
-import type { RewindCheckpointResource, SessionExecutionResource, SessionResource, SessionTreeResource, WorkspaceResource } from '../lib/agenaApi'
-import { chatUsageBreakdownFacts, chatUsageFacts, formatUsageCount, formatUsageUsd, summarizeChatUsage } from './chatUsageModel'
+import type {
+  RewindCheckpointResource,
+  SessionExecutionResource,
+  SessionResource,
+  SessionTreeResource,
+  WorkspaceResource,
+} from '../lib/agenaApi'
+import {
+  chatUsageBreakdownFacts,
+  chatUsageFacts,
+  formatUsageCount,
+  formatUsageUsd,
+  summarizeChatUsage,
+} from './chatUsageModel'
+
+const CONTEXT_USAGE_BASELINE_TOKENS = 12_000
+const EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
 
 export type ChatDerivedStateInput = {
   formatEventTime: (timestampMs: number) => string
@@ -16,10 +31,32 @@ export type ChatDerivedStateInput = {
 }
 
 export function useChatDerivedState(input: ChatDerivedStateInput) {
-  function flattenSessionTreeRows(items: SessionTreeResource[], depth = 0): Array<{ session: SessionTreeResource; depth: number }> {
+  function formatTokenK(value: number): string {
+    const normalized = Number.isFinite(value) && value > 0 ? value : 0
+    if (!normalized) return '0k'
+    const kValue = normalized / 1000
+    if (kValue < 10) return `${kValue.toFixed(1)}k`
+    return `${Math.round(kValue).toLocaleString('en-US')}k`
+  }
+
+  function contextUsagePercentUsed(currentTokens: number, contextWindowTokens: number): number {
+    const effectiveWindow = Math.floor((contextWindowTokens * EFFECTIVE_CONTEXT_WINDOW_PERCENT) / 100)
+    if (effectiveWindow <= CONTEXT_USAGE_BASELINE_TOKENS) return 100
+    const usableWindow = effectiveWindow - CONTEXT_USAGE_BASELINE_TOKENS
+    const used = Math.max(0, currentTokens - CONTEXT_USAGE_BASELINE_TOKENS)
+    return Math.round(Math.max(0, Math.min(100, (used / usableWindow) * 100)))
+  }
+
+  function flattenSessionTreeRows(
+    items: SessionTreeResource[],
+    depth = 0,
+  ): Array<{ session: SessionTreeResource; depth: number }> {
     return items.flatMap((session) => [
       { session, depth },
-      ...flattenSessionTreeRows(input.sessionTree.value.filter((item) => item.parent_id === session.id), depth + 1),
+      ...flattenSessionTreeRows(
+        input.sessionTree.value.filter((item) => item.parent_id === session.id),
+        depth + 1,
+      ),
     ])
   }
 
@@ -48,6 +85,16 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
   const sessionUsageHeadline = computed(() => {
     if (!sessionUsageSummary.value.turns) return 'No assistant usage yet.'
     return `${formatUsageCount(sessionUsageSummary.value.turns)} turns · ${formatUsageCount(sessionUsageSummary.value.inputTokens + sessionUsageSummary.value.outputTokens)} visible tokens · ${formatUsageUsd(sessionUsageSummary.value.totalCostUsd)}`
+  })
+  const contextUsageLabel = computed(() => {
+    const usage = input.sessionState.value?.usage
+    if (!usage) return ''
+    const currentTokens = usage.projected_tokens ?? usage.current_tokens
+    const contextWindowTokens = usage.model_context_window_tokens
+    if (contextWindowTokens && contextWindowTokens > 0) {
+      return `context ${contextUsagePercentUsed(currentTokens, contextWindowTokens)}% used`
+    }
+    return `context ${formatTokenK(currentTokens)} used`
   })
   const sessionUsageModelLines = computed(() =>
     sessionUsageSummary.value.byModel.map((item) => ({
@@ -89,7 +136,9 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
   const siblingSessions = computed(() => {
     const current = selectedSession.value
     if (!current?.parent_id) return [] as SessionResource[]
-    return input.sessions.value.filter((session) => session.parent_id === current.parent_id && session.id !== current.id)
+    return input.sessions.value.filter(
+      (session) => session.parent_id === current.parent_id && session.id !== current.id,
+    )
   })
 
   const sessionLineageLabel = computed(() => {
@@ -127,6 +176,7 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
   return {
     ancestorSessions,
     childSessions,
+    contextUsageLabel,
     executionFacts,
     parentSession,
     rewindCheckpointFacts,

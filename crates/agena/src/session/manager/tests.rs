@@ -11,15 +11,13 @@ use sea_orm::{
 use uuid::Uuid;
 
 use crate::agent::Agent;
-use crate::db::entities::{activity_message, activity_part};
+use crate::db::entities::activity_message;
 use crate::db::init_schema;
-use crate::entry::{ToolPayloadExecution, ToolPayloadOutput};
 use crate::event::EventKind;
 use crate::message::{
-    ApplyPatchToolInput, AskUserToolInput, AttachmentSource, ExecutionStatus, MessageMetadata,
-    MessagePart, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolAttachment,
-    ToolOutput, ToolSearchToolInput, UserInputOption, UserInputQuestion, UserInputReply,
-    UserInputReplyKind,
+    ApplyPatchToolInput, AskUserToolInput, ExecutionStatus, MessageMetadata, MessagePart, TodoItem,
+    TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput, UserInputOption,
+    UserInputQuestion,
 };
 use crate::model::{ModelId, ModelRef, ProviderId};
 use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
@@ -28,14 +26,11 @@ use crate::provider::{
     CompletionUsage, ModelRuntime, ProviderModel, ProviderRegistry,
 };
 use crate::role::Role;
-use crate::session::history::{
-    AssistantMessageCompleted, ToolCallCompleted, ToolCallIssued, TranscriptContent,
-};
-use crate::session::ids::ToolCallId;
+use crate::session::history::TranscriptContent;
 use crate::session::{ContextGovernor, ContextPolicy};
 
 use super::*;
-use crate::session::cache::{SessionCache, SessionCachePolicy};
+use crate::session::cache::SessionCachePolicy;
 
 struct TempWorkspace {
     root: std::path::PathBuf,
@@ -126,10 +121,12 @@ impl crate::plugin::sdk::Plugin for SessionEndFixturePlugin {
     }
 }
 
+#[allow(dead_code)]
 struct HostInvokeSourceFixturePlugin {
     host: tokio::sync::RwLock<Option<Arc<dyn crate::plugin::sdk::host_api::HostClient>>>,
 }
 
+#[allow(dead_code)]
 impl HostInvokeSourceFixturePlugin {
     fn new() -> Self {
         Self {
@@ -184,6 +181,7 @@ impl crate::plugin::sdk::Plugin for HostInvokeSourceFixturePlugin {
     }
 }
 
+#[allow(dead_code)]
 struct HostInvokeTargetFixturePlugin;
 
 #[async_trait]
@@ -217,7 +215,7 @@ impl crate::plugin::sdk::Plugin for HostInvokeTargetFixturePlugin {
 
 struct StreamingFixturePlugin {
     chunk_sent: Arc<tokio::sync::Notify>,
-    finish: Arc<tokio::sync::Notify>,
+    finish: Arc<tokio::sync::Semaphore>,
 }
 
 #[async_trait]
@@ -253,7 +251,12 @@ impl crate::plugin::sdk::Plugin for StreamingFixturePlugin {
         })
         .await;
         self.chunk_sent.notify_waiters();
-        self.finish.notified().await;
+        let permit = self
+            .finish
+            .acquire()
+            .await
+            .expect("streaming fixture finish semaphore should remain open");
+        drop(permit);
         Ok(crate::plugin::sdk::ToolStreamEnd {
             stream_id,
             title: "Stream fixture".to_string(),
@@ -338,11 +341,13 @@ impl RecordingProvider {
         self
     }
 
+    #[allow(dead_code)]
     fn with_dynamic_prompt_cache_shape(mut self, shape: crate::provider::PromptCacheShape) -> Self {
         self.dynamic_prompt_cache_shape = Some(shape);
         self
     }
 
+    #[allow(dead_code)]
     fn with_remote_compact_error(mut self, message: impl Into<String>) -> Self {
         self.remote_compact_error = Some(message.into());
         self
@@ -732,16 +737,19 @@ impl ModelRuntime for ScriptedProvider {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Copy)]
 enum ToolErrorRecoveryScenario {
     BadTodo,
     ParallelBadTools,
 }
 
+#[allow(dead_code)]
 struct ToolErrorRecoveryProvider {
     scenario: ToolErrorRecoveryScenario,
 }
 
+#[allow(dead_code)]
 impl ToolErrorRecoveryProvider {
     fn bad_todo() -> Self {
         Self {
@@ -1027,6 +1035,7 @@ async fn build_session_end_plugin_host(
     (host, rx)
 }
 
+#[allow(dead_code)]
 async fn build_host_invoke_plugin_host(
     workspace_root: &std::path::Path,
 ) -> Arc<crate::plugin::PluginHost> {
@@ -1070,10 +1079,10 @@ async fn build_streaming_plugin_host(
 ) -> (
     Arc<crate::plugin::PluginHost>,
     Arc<tokio::sync::Notify>,
-    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Semaphore>,
 ) {
     let chunk_sent = Arc::new(tokio::sync::Notify::new());
-    let finish = Arc::new(tokio::sync::Notify::new());
+    let finish = Arc::new(tokio::sync::Semaphore::new(0));
     let mut list = BTreeMap::new();
     list.insert(
         "fixture".to_string(),
@@ -1107,11 +1116,13 @@ async fn build_streaming_plugin_host(
     (host, chunk_sent, finish)
 }
 
+#[allow(dead_code)]
 #[derive(Clone)]
 struct HostInvokeRuntimeTestHostClient {
     manager: Arc<tokio::sync::RwLock<Option<Arc<SessionManager>>>>,
 }
 
+#[allow(dead_code)]
 impl HostInvokeRuntimeTestHostClient {
     fn new() -> Self {
         Self {
@@ -1421,6 +1432,7 @@ fn pending_permission_request_id(session: &Session) -> String {
         .expect("session should contain a pending permission request")
 }
 
+#[allow(dead_code)]
 struct InterruptibleProvider {
     call_count: Arc<std::sync::atomic::AtomicUsize>,
 }
@@ -1487,6 +1499,7 @@ impl ModelRuntime for InterruptibleProvider {
     }
 }
 
+#[allow(dead_code)]
 fn interruptible_options() -> SessionRunOptions {
     SessionRunOptions {
         model: ModelRef::new("interruptible", "interruptible-model"),
@@ -1503,6 +1516,7 @@ fn interruptible_options() -> SessionRunOptions {
     }
 }
 
+#[allow(dead_code)]
 async fn wait_for_active_turn(manager: &SessionManager, session_id: i64) {
     let registered = async {
         for _ in 0..500 {
@@ -1517,6 +1531,7 @@ async fn wait_for_active_turn(manager: &SessionManager, session_id: i64) {
     assert!(registered, "turn should register within 10s");
 }
 
+#[allow(dead_code)]
 async fn wait_for_provider_calls(
     call_count: &std::sync::atomic::AtomicUsize,
     expected_at_least: usize,
@@ -1537,6 +1552,7 @@ async fn wait_for_provider_calls(
     );
 }
 
+#[allow(dead_code)]
 async fn cancel_running_turn(
     manager: Arc<SessionManager>,
     session_id: i64,
@@ -1634,6 +1650,17 @@ fn high_recording_usage() -> CompletionUsage {
     CompletionUsage {
         input_tokens: 3_800,
         output_tokens: 200,
+        reasoning_tokens: 0,
+        cache_write_tokens: 0,
+        cache_read_tokens: 0,
+        total_cost: 0.0,
+    }
+}
+
+fn context_limit_recording_usage() -> CompletionUsage {
+    CompletionUsage {
+        input_tokens: 245_000,
+        output_tokens: 100,
         reasoning_tokens: 0,
         cache_write_tokens: 0,
         cache_read_tokens: 0,
@@ -1803,7 +1830,9 @@ fn streaming_tool_execution_persists_in_progress_output() {
         .name("streaming-tool-execution-test".to_string())
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_stack_size(16 * 1024 * 1024)
                 .enable_all()
                 .build()
                 .expect("test runtime should build")
@@ -1885,9 +1914,10 @@ async fn streaming_tool_execution_persists_in_progress_output_impl() {
     .expect("streaming output should persist as in-progress");
     assert_eq!(partial_output, "partial ");
 
-    finish.notify_waiters();
-    let completed = submit
+    finish.add_permits(1);
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(15), submit)
         .await
+        .expect("streaming submit should finish after fixture release")
         .expect("submit task should join")
         .expect("streaming submit should complete");
     let final_output = completed
@@ -2092,6 +2122,141 @@ async fn append_only_full_turn_writes_one_row_per_event_no_overwrites() {
         }
         prev = Some(record.meta.seq_global);
     }
+}
+
+#[tokio::test]
+async fn session_usage_does_not_guess_unknown_context_window() {
+    let workspace = TempWorkspace::new();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let service = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+        ContextPolicy::default(),
+        RecordingProvider::new(requests),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "usage-unknown-context".into(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let usage = service.session_usage(&created).expect("session usage");
+
+    assert_eq!(usage.model_context_window_tokens, None);
+    assert_eq!(usage.limit_tokens, None);
+    assert_eq!(usage.reserved_tokens, None);
+    assert_eq!(usage.limit_basis, None);
+}
+
+#[tokio::test]
+async fn auto_compact_does_not_trigger_when_context_window_unknown() {
+    let workspace = TempWorkspace::new();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let service = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+        ContextPolicy::default(),
+        RecordingProvider::new(requests.clone()).with_usage(context_limit_recording_usage()),
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "auto-compact-unknown-context".into(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let first = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text("seed")],
+        })
+        .await
+        .expect("first turn");
+    assert!(first.runtime.prompt_window.compaction.is_none());
+
+    let second = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text("trigger compaction")],
+        })
+        .await
+        .expect("second turn");
+
+    assert!(
+        second.runtime.prompt_window.compaction.is_none(),
+        "unknown context windows should not trigger automatic compaction"
+    );
+    assert_eq!(
+        requests.lock().expect("request lock should succeed").len(),
+        2,
+        "expected only the two ordinary model turns"
+    );
+}
+
+#[tokio::test]
+async fn auto_compact_triggers_at_known_context_limit() {
+    let workspace = TempWorkspace::new();
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = RecordingProvider::new(requests.clone())
+        .with_metadata(
+            crate::provider::ModelMetadata::default().with_context_window_tokens(272_000),
+        )
+        .with_usage(context_limit_recording_usage());
+    let service = build_manager_with_provider(
+        &workspace.root,
+        PermissionPolicy::allow_all(),
+        SessionManagerConfig::default(),
+        ContextPolicy::default(),
+        provider,
+    )
+    .await;
+
+    let created = service
+        .create_session(SessionCreateRequest {
+            title: "auto-compact-known-context".into(),
+            parent_session_id: None,
+        })
+        .await
+        .expect("create session");
+
+    let first = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text("seed")],
+        })
+        .await
+        .expect("first turn");
+    assert!(first.runtime.prompt_window.compaction.is_none());
+
+    let second = service
+        .submit_user_turn(SessionUserTurnRequest {
+            session_id: created.id,
+            options: recording_run_options(),
+            parts: vec![PartContent::text("trigger compaction")],
+        })
+        .await
+        .expect("second turn");
+
+    assert!(
+        second.runtime.prompt_window.compaction.is_some(),
+        "second turn should install an automatic compaction snapshot"
+    );
+    assert!(
+        requests.lock().expect("request lock should succeed").len() >= 3,
+        "expected first turn, local compaction turn, and post-compaction turn"
+    );
 }
 
 #[tokio::test]

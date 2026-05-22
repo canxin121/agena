@@ -537,11 +537,6 @@ impl SessionManager {
                 == last_message_id;
             let session_usage = self.session_usage(&session)?;
             if state.config.auto_compaction.enabled
-                && session
-                    .runtime
-                    .prompt_tokens
-                    .last_successful_usage
-                    .is_some()
                 && !already_auto_compacted_at_boundary
                 && session_usage.limit_basis == Some(SessionUsageLimitBasis::ContextWindow)
                 && let Some(limit_tokens) = session_usage.limit_tokens
@@ -974,7 +969,7 @@ impl SessionManager {
 
     fn prompt_budget_for_turn(
         &self,
-        session: &Session,
+        _session: &Session,
         options: &SessionRunOptions,
         tools: &[crate::plugin::registry::PluginEntry],
         state: &SessionManagerState,
@@ -984,10 +979,7 @@ impl SessionManager {
             .processor
             .model_metadata(&options.model)
             .unwrap_or_default();
-        let context_window_tokens = metadata
-            .limits
-            .context_window_tokens
-            .or(session.runtime.prompt_tokens.model_context_window_tokens);
+        let context_window_tokens = metadata.limits.context_window_tokens;
         let max_prompt_chars = prompt_window::prompt_char_budget(
             context_window_tokens,
             options

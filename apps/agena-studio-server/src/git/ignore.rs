@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use super::{DirectoryQuery, is_safe_repo_rel_path, lock_repo, require_directory};
+use super::{DirectoryQuery, is_safe_repo_rel_path, require_locked_directory};
 
 #[derive(Debug, Deserialize)]
 pub struct GitIgnoreBody {
@@ -32,13 +32,8 @@ pub async fn git_ignore(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitIgnoreBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
+    let (dir, _guard) = match require_locked_directory(&q).await {
+        Ok(value) => value,
         Err(resp) => return resp,
     };
 

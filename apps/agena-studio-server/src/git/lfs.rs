@@ -6,13 +6,64 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{DirectoryQuery, lock_repo, map_git_failure, require_directory, run_git};
+use super::{DirectoryQuery, git_success_response, map_git_failure, require_directory, run_git};
 
 fn is_lfs_missing(out: &str, err: &str) -> bool {
     let combined = format!("{}\n{}", out, err).to_ascii_lowercase();
     combined.contains("git: 'lfs' is not a git command")
         || combined.contains("not a git command") && combined.contains("lfs")
         || combined.contains("git-lfs") && combined.contains("not found")
+}
+
+fn lfs_missing_response() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": "git-lfs not installed", "code": "lfs_missing"})),
+    )
+        .into_response()
+}
+
+fn lfs_command_error_response(status: StatusCode, error: &str, code: &'static str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({"error": error.trim(), "code": code})),
+    )
+        .into_response()
+}
+
+async fn run_lfs_checked(
+    dir: &std::path::Path,
+    args: &[&str],
+    failure_status: StatusCode,
+    failure_code: &'static str,
+) -> Result<(String, String), Response> {
+    let (code, out, err) = run_git(dir, args)
+        .await
+        .unwrap_or((1, String::new(), String::new()));
+    if code == 0 {
+        return Ok((out, err));
+    }
+    if is_lfs_missing(&out, &err) {
+        return Err(lfs_missing_response());
+    }
+    if let Some(resp) = map_git_failure(code, &out, &err) {
+        return Err(resp);
+    }
+    Err(lfs_command_error_response(
+        failure_status,
+        &err,
+        failure_code,
+    ))
+}
+
+async fn run_locked_lfs_checked(
+    q: &DirectoryQuery,
+    args: &[&str],
+    failure_status: StatusCode,
+    failure_code: &'static str,
+) -> Result<(String, String), Response> {
+    let (dir, _guard) = super::require_locked_directory(q).await?;
+    run_lfs_checked(&dir, args, failure_status, failure_code).await
 }
 
 #[derive(Debug, Serialize)]
@@ -113,43 +164,23 @@ pub async fn git_lfs_install(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitLfsInstallBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let mut args: Vec<&str> = vec!["lfs", "install", "--local"];
     if body.force.unwrap_or(false) {
         args.push("--force");
     }
 
-    let (code, out, err) =
-        run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if is_lfs_missing(&out, &err) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "git-lfs not installed", "code": "lfs_missing"})),
-            )
-                .into_response();
-        }
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_lfs_install_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_lfs_checked(
+        &q,
+        &args,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "git_lfs_install_failed",
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,15 +192,6 @@ pub async fn git_lfs_track(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitLfsTrackBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(pattern) = body
         .pattern
         .as_deref()
@@ -183,30 +205,18 @@ pub async fn git_lfs_track(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["lfs", "track", pattern]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if code != 0 {
-        if is_lfs_missing(&out, &err) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "git-lfs not installed", "code": "lfs_missing"})),
-            )
-                .into_response();
-        }
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_lfs_track_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_lfs_checked(
+        &q,
+        &["lfs", "track", pattern],
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "git_lfs_track_failed",
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Serialize)]
@@ -247,28 +257,17 @@ pub async fn git_lfs_locks(Query(q): Query<DirectoryQuery>) -> Response {
         Err(resp) => return *resp,
     };
 
-    let (code, out, err) = run_git(&dir, &["lfs", "locks", "--json"]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if code != 0 {
-        if is_lfs_missing(&out, &err) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "git-lfs not installed", "code": "lfs_missing"})),
-            )
-                .into_response();
-        }
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_lfs_locks_failed"})),
-        )
-            .into_response();
-    }
+    let (out, _err) = match run_lfs_checked(
+        &dir,
+        &["lfs", "locks", "--json"],
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "git_lfs_locks_failed",
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     let parsed: GitLfsLocksJson =
         serde_json::from_str(&out).unwrap_or(GitLfsLocksJson { locks: vec![] });
@@ -301,15 +300,6 @@ pub async fn git_lfs_lock(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitLfsLockBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(path) = body
         .path
         .as_deref()
@@ -323,29 +313,18 @@ pub async fn git_lfs_lock(
             .into_response();
     };
 
-    let (code, out, err) =
-        run_git(&dir, &["lfs", "lock", path])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if is_lfs_missing(&out, &err) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "git-lfs not installed", "code": "lfs_missing"})),
-            )
-                .into_response();
-        }
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_lfs_lock_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_lfs_checked(
+        &q,
+        &["lfs", "lock", path],
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "git_lfs_lock_failed",
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -358,15 +337,6 @@ pub async fn git_lfs_unlock(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitLfsUnlockBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(path) = body
         .path
         .as_deref()
@@ -386,27 +356,16 @@ pub async fn git_lfs_unlock(
     }
     args.push(path);
 
-    let (code, out, err) =
-        run_git(&dir, &args)
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if is_lfs_missing(&out, &err) {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "git-lfs not installed", "code": "lfs_missing"})),
-            )
-                .into_response();
-        }
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_lfs_unlock_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_lfs_checked(
+        &q,
+        &args,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "git_lfs_unlock_failed",
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }

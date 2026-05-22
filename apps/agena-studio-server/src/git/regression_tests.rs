@@ -9,11 +9,12 @@ use tempfile::TempDir;
 
 use super::{
     CheckoutBody, CreateBranchBody, DirectoryQuery, GitAbortBody, GitConflictResolveBody,
-    GitDiffQuery, GitFetchBody, GitFileDiffQuery, GitPullBody, GitRemoteBranchesQuery,
-    GitStatusQuery, GitTagCreateBody, GitTagDeleteBody, git_check, git_checkout, git_conflict_file,
-    git_conflict_resolve, git_conflicts_list, git_create_branch, git_diff, git_fetch, git_pull,
-    git_rebase_abort, git_remote_branches_list, git_stash_list, git_state, git_status,
-    git_tags_create, git_tags_delete,
+    GitContinueBody, GitDiffQuery, GitFetchBody, GitFileDiffQuery, GitPullBody,
+    GitRemoteBranchesQuery, GitStashRefBody, GitStashShowQuery, GitStatusQuery, GitTagCreateBody,
+    GitTagDeleteBody, git_check, git_checkout, git_conflict_file, git_conflict_resolve,
+    git_conflicts_list, git_create_branch, git_diff, git_fetch, git_pull, git_rebase_abort,
+    git_rebase_continue, git_remote_branches_list, git_stash_apply, git_stash_drop, git_stash_list,
+    git_stash_show, git_state, git_status, git_tags_create, git_tags_delete,
 };
 
 fn run_git(cwd: &Path, args: &[&str]) -> Output {
@@ -500,6 +501,104 @@ async fn git_rebase_abort_is_covered_by_automated_test() {
         state_after.get("rebaseInProgress").and_then(Value::as_bool),
         Some(false)
     );
+}
+
+#[tokio::test]
+async fn git_rebase_continue_is_covered_by_automated_test() {
+    let tmp = TempDir::new().expect("tempdir");
+    let repo = mk_rebase_repo(tmp.path());
+    let repo_s = repo.to_string_lossy().to_string();
+
+    write_file(&repo.join("rebase.txt"), "main\ntopic\n");
+    run_git_ok(&repo, &["add", "rebase.txt"]);
+
+    let cont = expect_ok_json(
+        git_rebase_continue(
+            Query(DirectoryQuery {
+                directory: Some(repo_s.clone()),
+            }),
+            Json(GitContinueBody { _dummy: None }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(cont.get("success").and_then(Value::as_bool), Some(true));
+
+    let state_after = expect_ok_json(
+        git_state(Query(DirectoryQuery {
+            directory: Some(repo_s.clone()),
+        }))
+        .await,
+    )
+    .await;
+    assert_eq!(
+        state_after.get("rebaseInProgress").and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let rebased = fs::read_to_string(repo.join("rebase.txt")).expect("read rebased file");
+    assert_eq!(rebased, "main\ntopic\n");
+}
+
+#[tokio::test]
+async fn git_stash_ref_operations_are_covered_by_automated_test() {
+    let tmp = TempDir::new().expect("tempdir");
+    let repo = mk_basic_repo(tmp.path());
+    let repo_s = repo.to_string_lossy().to_string();
+
+    let shown = expect_ok_json(
+        git_stash_show(Query(GitStashShowQuery {
+            directory: Some(repo_s.clone()),
+            r#ref: None,
+        }))
+        .await,
+    )
+    .await;
+    let diff = shown
+        .get("diff")
+        .and_then(Value::as_str)
+        .expect("stash diff should be present");
+    assert!(diff.contains("stash-change"));
+
+    let apply = expect_ok_json(
+        git_stash_apply(
+            Query(DirectoryQuery {
+                directory: Some(repo_s.clone()),
+            }),
+            Json(GitStashRefBody { r#ref: None }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(apply.get("success").and_then(Value::as_bool), Some(true));
+
+    let applied = fs::read_to_string(repo.join("stashme.txt")).expect("read applied stash file");
+    assert!(applied.contains("stash-change"));
+
+    let drop = expect_ok_json(
+        git_stash_drop(
+            Query(DirectoryQuery {
+                directory: Some(repo_s.clone()),
+            }),
+            Json(GitStashRefBody { r#ref: None }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(drop.get("success").and_then(Value::as_bool), Some(true));
+
+    let stash_after = expect_ok_json(
+        git_stash_list(Query(DirectoryQuery {
+            directory: Some(repo_s),
+        }))
+        .await,
+    )
+    .await;
+    let stashes_after = stash_after
+        .get("stashes")
+        .and_then(Value::as_array)
+        .expect("stashes should be an array");
+    assert!(stashes_after.is_empty());
 }
 
 #[tokio::test]

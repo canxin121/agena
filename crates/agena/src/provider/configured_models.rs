@@ -11,9 +11,10 @@ use crate::model::{
     ModelThinkingMode,
 };
 
+use super::core::ForwardingModelRuntime;
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelRuntime, PromptCacheShape,
-    StreamResumePolicy, ThinkingRequest, chat_wire,
+    StreamResumePolicy, ThinkingRequest,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -909,18 +910,16 @@ impl ConfiguredModelsProvider {
                 .flatten(),
         )
     }
+}
 
-    fn backfill_assistant_reasoning_field(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        request: &mut CompletionRequest,
-    ) {
-        let metadata = self.model_metadata_for_adapter(adapter_id, &request.model);
-        chat_wire::backfill_assistant_reasoning_field_on_request(
-            request,
-            metadata.assistant_reasoning_field.as_deref(),
-            metadata.assistant_reasoning_interleaved.unwrap_or(false),
-        );
+#[async_trait]
+impl ForwardingModelRuntime for ConfiguredModelsProvider {
+    fn target(&self) -> &dyn ModelRuntime {
+        self.target.as_ref()
+    }
+
+    fn prepare_request(&self, adapter_id: Option<&AdapterId>, request: &mut CompletionRequest) {
+        ModelRuntime::backfill_assistant_reasoning_field(self, adapter_id, request);
     }
 }
 
@@ -1059,71 +1058,64 @@ impl ModelRuntime for ConfiguredModelsProvider {
         Ok(models)
     }
 
-    async fn complete(
-        &self,
-        mut request: CompletionRequest,
-    ) -> Result<CompletionResponse, AppError> {
-        self.backfill_assistant_reasoning_field(None, &mut request);
-        self.target.complete(request).await
+    async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        self.forward_complete(None, request).await
     }
 
     async fn complete_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        self.target.complete_for_adapter(adapter_id, request).await
+        self.forward_complete(adapter_id, request).await
     }
 
     async fn compact_conversation(
         &self,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
-        self.backfill_assistant_reasoning_field(None, &mut request);
-        self.target.compact_conversation(request).await
+        self.forward_compact_conversation(None, request).await
     }
 
     async fn compact_conversation_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        self.target
-            .compact_conversation_for_adapter(adapter_id, request)
-            .await
+        self.forward_compact_conversation(adapter_id, request).await
     }
 
     async fn complete_stream(
         &self,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        self.backfill_assistant_reasoning_field(None, &mut request);
-        self.target.complete_stream(request).await
+        self.forward_complete_stream(None, request).await
     }
 
     async fn complete_stream_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
-        mut request: CompletionRequest,
+        request: CompletionRequest,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        self.target
-            .complete_stream_for_adapter(adapter_id, request)
-            .await
+        self.forward_complete_stream(adapter_id, request).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        message::{Message, PartContent, ReasoningPart},
+        provider::{CompletionFinishReason, CompletionResponse},
+        role::Role,
+    };
+    use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
     struct StaticProvider {
@@ -1131,6 +1123,7 @@ mod tests {
         listed_models: Vec<Model>,
         fallback_capabilities: ModelCapabilities,
         fallback_metadata: ModelMetadata,
+        captured_requests: Option<Arc<Mutex<Vec<CompletionRequest>>>>,
         capability_family: Option<crate::provider::CapabilityFamily>,
     }
 
@@ -1162,11 +1155,24 @@ mod tests {
 
         async fn complete(
             &self,
-            _request: CompletionRequest,
+            request: CompletionRequest,
         ) -> Result<CompletionResponse, AppError> {
-            Err(AppError::Internal(
-                "unused in configured-model tests".to_owned(),
-            ))
+            if let Some(captured_requests) = &self.captured_requests {
+                captured_requests
+                    .lock()
+                    .expect("captured requests lock should not be poisoned")
+                    .push(request.clone());
+            }
+            Ok(CompletionResponse {
+                provider_id: crate::model::ProviderId::new("test-provider"),
+                model: request.model,
+                text: "ok".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
         }
     }
 
@@ -1218,6 +1224,7 @@ mod tests {
             fallback_capabilities: ModelCapabilities::default()
                 .with_streaming(CapabilitySupport::Supported),
             fallback_metadata: ModelMetadata::default().with_description("fallback metadata"),
+            captured_requests: None,
             capability_family: None,
         });
 
@@ -1275,6 +1282,7 @@ mod tests {
             ],
             fallback_capabilities: ModelCapabilities::default(),
             fallback_metadata: ModelMetadata::default(),
+            captured_requests: None,
             capability_family: None,
         });
 
@@ -1351,6 +1359,7 @@ mod tests {
             listed_models: vec![Model::new("test-provider", "gpt-5")],
             fallback_capabilities: ModelCapabilities::default(),
             fallback_metadata: ModelMetadata::default(),
+            captured_requests: None,
             capability_family: Some(crate::provider::CapabilityFamily::OpenAi),
         });
 
@@ -1369,6 +1378,84 @@ mod tests {
         assert!(modes.contains_key("no-thinking"));
         assert!(modes.contains_key("thinking-xhigh"));
         assert!(modes.contains_key("thinking-minimal"));
+    }
+
+    #[tokio::test]
+    async fn configured_provider_backfills_assistant_reasoning_field_from_config_metadata() {
+        let captured_requests = Arc::new(Mutex::new(Vec::new()));
+        let target = Arc::new(StaticProvider {
+            default_model: ModelId::new("deepseek-v4-pro"),
+            listed_models: vec![Model::new("test-provider", "deepseek-v4-pro")],
+            fallback_capabilities: ModelCapabilities::default(),
+            fallback_metadata: ModelMetadata::default(),
+            captured_requests: Some(Arc::clone(&captured_requests)),
+            capability_family: None,
+        });
+
+        let provider = ConfiguredModelsProvider::new(
+            target,
+            BTreeMap::from([(
+                "deepseek-v4-pro".to_owned(),
+                ConfiguredModelDefinition {
+                    assistant_reasoning_field: Some("reasoning_content".to_owned()),
+                    ..ConfiguredModelDefinition::default()
+                },
+            )]),
+        );
+
+        provider
+            .complete(CompletionRequest {
+                model: ModelId::new("deepseek-v4-pro"),
+                system: None,
+                messages: vec![
+                    Message::prompt_parts(
+                        Role::Assistant,
+                        vec![
+                            PartContent::Reasoning(ReasoningPart {
+                                summary: vec!["Prior chain".to_owned()],
+                                raw_content: Vec::new(),
+                                encrypted_content: None,
+                            }),
+                            PartContent::text("Prior answer"),
+                        ],
+                    ),
+                    Message::prompt_text(Role::User, "continue"),
+                ],
+                tools: Vec::new(),
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                request_override: Default::default(),
+                response_format: None,
+            })
+            .await
+            .expect("configured provider completion should succeed");
+
+        let captured = captured_requests
+            .lock()
+            .expect("captured requests lock should not be poisoned");
+        let assistant = captured[0]
+            .messages
+            .iter()
+            .find(|message| matches!(message.role, Role::Assistant))
+            .expect("assistant message should be present");
+        assert_eq!(
+            assistant
+                .metadata
+                .provider_metadata
+                .as_ref()
+                .and_then(|value| value.get("assistant_reasoning_field"))
+                .and_then(|value| value.as_str()),
+            Some("reasoning_content")
+        );
     }
 
     #[test]

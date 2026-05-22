@@ -14,8 +14,8 @@ use tokio::process::Command;
 
 use super::utils::git_config_get;
 use super::{
-    DirectoryQuery, lock_repo, map_git_failure, require_directory, require_directory_raw, run_git,
-    run_git_env,
+    DirectoryQuery, git_success_response, require_directory, require_directory_raw, run_git,
+    run_git_checked, run_git_env, run_locked_git_checked,
 };
 
 #[derive(Debug, Serialize)]
@@ -88,20 +88,11 @@ pub async fn git_remote_info(Query(q): Query<DirectoryQuery>) -> Response {
         Err(resp) => return *resp,
     };
 
-    let (code, out, err) =
-        run_git(&dir, &["remote", "-v"])
-            .await
-            .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_remote_failed"})),
-        )
-            .into_response();
-    }
+    let (out, _err) =
+        match run_git_checked(&dir, &["remote", "-v"], Some("git_remote_failed")).await {
+            Ok(value) => value,
+            Err(resp) => return resp,
+        };
 
     let mut seen: HashSet<(String, String)> = HashSet::new();
     let mut remotes: Vec<GitRemoteInfo> = Vec::new();
@@ -145,16 +136,6 @@ pub async fn git_remote_add(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitRemoteAddBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(name) = body
         .name
         .as_deref()
@@ -180,21 +161,17 @@ pub async fn git_remote_add(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["remote", "add", name, url])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_remote_add_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["remote", "add", name, url],
+        Some("git_remote_add_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,16 +185,6 @@ pub async fn git_remote_rename(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitRemoteRenameBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(name) = body
         .name
         .as_deref()
@@ -243,21 +210,17 @@ pub async fn git_remote_rename(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["remote", "rename", name, new_name])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_remote_rename_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["remote", "rename", name, new_name],
+        Some("git_remote_rename_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -270,16 +233,6 @@ pub async fn git_remote_set_url(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitRemoteSetUrlBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(name) = body
         .name
         .as_deref()
@@ -305,21 +258,17 @@ pub async fn git_remote_set_url(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["remote", "set-url", name, url])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_remote_set_url_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["remote", "set-url", name, url],
+        Some("git_remote_set_url_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -331,16 +280,6 @@ pub async fn git_remote_remove(
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitRemoteRemoveBody>,
 ) -> Response {
-    let dir = match require_directory(&q) {
-        Ok(d) => d,
-        Err(resp) => return *resp,
-    };
-
-    let _guard = match lock_repo(&dir).await {
-        Ok(g) => g,
-        Err(resp) => return resp,
-    };
-
     let Some(name) = body
         .name
         .as_deref()
@@ -354,23 +293,17 @@ pub async fn git_remote_remove(
             .into_response();
     };
 
-    let (code, out, err) = run_git(&dir, &["remote", "remove", name]).await.unwrap_or((
-        1,
-        "".to_string(),
-        "".to_string(),
-    ));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim(), "code": "git_remote_remove_failed"})),
-        )
-            .into_response();
+    if let Err(resp) = run_locked_git_checked(
+        &q,
+        &["remote", "remove", name],
+        Some("git_remote_remove_failed"),
+    )
+    .await
+    {
+        return resp;
     }
 
-    Json(serde_json::json!({"success": true})).into_response()
+    git_success_response()
 }
 
 #[derive(Debug, Serialize)]
@@ -699,19 +632,10 @@ pub async fn git_remote_branches_list(Query(q): Query<GitRemoteBranchesQuery>) -
         .unwrap_or("origin");
 
     // Use ls-remote for remote heads without fetching.
-    let (code, out, err) = run_git(&dir, &["ls-remote", "--heads", remote])
-        .await
-        .unwrap_or((1, "".to_string(), "".to_string()));
-    if code != 0 {
-        if let Some(resp) = map_git_failure(code, &out, &err) {
-            return resp;
-        }
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": err.trim()})),
-        )
-            .into_response();
-    }
+    let (out, _err) = match run_git_checked(&dir, &["ls-remote", "--heads", remote], None).await {
+        Ok(value) => value,
+        Err(resp) => return resp,
+    };
 
     let mut branches: Vec<String> = Vec::new();
     for line in out.lines() {

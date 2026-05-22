@@ -56,6 +56,27 @@ struct TerminalSessionStore {
     write_lock: AsyncMutex<()>,
 }
 
+struct RegistryMutation<T> {
+    value: T,
+    persist: bool,
+}
+
+impl<T> RegistryMutation<T> {
+    fn persist(value: T) -> Self {
+        Self {
+            value,
+            persist: true,
+        }
+    }
+
+    fn skip(value: T) -> Self {
+        Self {
+            value,
+            persist: false,
+        }
+    }
+}
+
 impl TerminalSessionStore {
     fn new(path: PathBuf) -> Self {
         Self {
@@ -120,6 +141,22 @@ impl TerminalSessionStore {
         *guard = Some(registry);
     }
 
+    async fn mutate_registry<T, F>(&self, mutate: F) -> Result<T, String>
+    where
+        F: FnOnce(&mut PersistedTerminalRegistry) -> Result<RegistryMutation<T>, String>,
+    {
+        let _guard = self.write_lock.lock().await;
+        let mut registry = self.load_from_disk().await;
+        let mutation = mutate(&mut registry)?;
+        if !mutation.persist {
+            return Ok(mutation.value);
+        }
+        registry.version = registry.version.saturating_add(1);
+        self.persist_to_disk(&registry).await?;
+        self.write_cache(registry).await;
+        Ok(mutation.value)
+    }
+
     async fn upsert(
         &self,
         session_id: &str,
@@ -128,59 +165,54 @@ impl TerminalSessionStore {
         rows: u16,
         running: bool,
     ) -> Result<(), String> {
-        let _guard = self.write_lock.lock().await;
-        let mut registry = self.load_from_disk().await;
-        let now = now_millis();
-        let created_at = registry
-            .sessions
-            .get(session_id)
-            .map(|entry| entry.created_at)
-            .unwrap_or(now);
-        registry.version = registry.version.saturating_add(1);
-        registry.sessions.insert(
-            session_id.to_string(),
-            PersistedTerminalSession {
-                cwd: cwd.to_string(),
-                cols,
-                rows,
-                running,
-                created_at,
-                updated_at: now,
-            },
-        );
-        self.persist_to_disk(&registry).await?;
-        self.write_cache(registry).await;
-        Ok(())
+        self.mutate_registry(|registry| {
+            let now = now_millis();
+            let created_at = registry
+                .sessions
+                .get(session_id)
+                .map(|entry| entry.created_at)
+                .unwrap_or(now);
+            registry.sessions.insert(
+                session_id.to_string(),
+                PersistedTerminalSession {
+                    cwd: cwd.to_string(),
+                    cols,
+                    rows,
+                    running,
+                    created_at,
+                    updated_at: now,
+                },
+            );
+            Ok(RegistryMutation::persist(()))
+        })
+        .await
     }
 
     async fn remove(&self, session_id: &str) -> Result<bool, String> {
-        let _guard = self.write_lock.lock().await;
-        let mut registry = self.load_from_disk().await;
-        let removed = registry.sessions.remove(session_id).is_some();
-        if !removed {
-            return Ok(false);
-        }
-        registry.version = registry.version.saturating_add(1);
-        self.persist_to_disk(&registry).await?;
-        self.write_cache(registry).await;
-        Ok(true)
+        self.mutate_registry(|registry| {
+            let removed = registry.sessions.remove(session_id).is_some();
+            Ok(if removed {
+                RegistryMutation::persist(true)
+            } else {
+                RegistryMutation::skip(false)
+            })
+        })
+        .await
     }
 
     async fn set_running(&self, session_id: &str, running: bool) -> Result<bool, String> {
-        let _guard = self.write_lock.lock().await;
-        let mut registry = self.load_from_disk().await;
-        let Some(entry) = registry.sessions.get_mut(session_id) else {
-            return Ok(false);
-        };
-        if entry.running == running {
-            return Ok(true);
-        }
-        entry.running = running;
-        entry.updated_at = now_millis();
-        registry.version = registry.version.saturating_add(1);
-        self.persist_to_disk(&registry).await?;
-        self.write_cache(registry).await;
-        Ok(true)
+        self.mutate_registry(|registry| {
+            let Some(entry) = registry.sessions.get_mut(session_id) else {
+                return Ok(RegistryMutation::skip(false));
+            };
+            if entry.running == running {
+                return Ok(RegistryMutation::skip(true));
+            }
+            entry.running = running;
+            entry.updated_at = now_millis();
+            Ok(RegistryMutation::persist(true))
+        })
+        .await
     }
 
     async fn update_dimensions(
@@ -189,21 +221,19 @@ impl TerminalSessionStore {
         cols: u16,
         rows: u16,
     ) -> Result<bool, String> {
-        let _guard = self.write_lock.lock().await;
-        let mut registry = self.load_from_disk().await;
-        let Some(entry) = registry.sessions.get_mut(session_id) else {
-            return Ok(false);
-        };
-        if entry.cols == cols && entry.rows == rows {
-            return Ok(true);
-        }
-        entry.cols = cols;
-        entry.rows = rows;
-        entry.updated_at = now_millis();
-        registry.version = registry.version.saturating_add(1);
-        self.persist_to_disk(&registry).await?;
-        self.write_cache(registry).await;
-        Ok(true)
+        self.mutate_registry(|registry| {
+            let Some(entry) = registry.sessions.get_mut(session_id) else {
+                return Ok(RegistryMutation::skip(false));
+            };
+            if entry.cols == cols && entry.rows == rows {
+                return Ok(RegistryMutation::skip(true));
+            }
+            entry.cols = cols;
+            entry.rows = rows;
+            entry.updated_at = now_millis();
+            Ok(RegistryMutation::persist(true))
+        })
+        .await
     }
 }
 

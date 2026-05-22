@@ -400,10 +400,7 @@ impl ToolExecutor {
         self
     }
 
-    pub fn with_web_search_duckduckgo_url_override(
-        mut self,
-        url: impl Into<String>,
-    ) -> Self {
+    pub fn with_web_search_duckduckgo_url_override(mut self, url: impl Into<String>) -> Self {
         self.web_search_duckduckgo_url_override = Some(url.into());
         self
     }

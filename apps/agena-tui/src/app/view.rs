@@ -938,9 +938,9 @@ impl App {
     }
 
     fn render_line_overlay(&self, frame: &mut Frame, area: Rect, dialog: &LineInputOverlay) {
+        let target_width = adaptive_modal_width(area.width, 88);
         let prompt_height =
-            wrapped_text_height(dialog.prompt.as_str(), adaptive_modal_width(area.width, 88))
-                .clamp(1, 2);
+            wrapped_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2)).clamp(1, 2);
         let area = preferred_overlay_rect(area, 88, prompt_height.saturating_add(6));
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -989,8 +989,12 @@ impl App {
         let target_width = adaptive_modal_width(area.width, 82);
         let prompt_height =
             overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
-        let help_height =
-            overlay_text_height(permission_rule_edit_help().as_str(), target_width, 3, 6);
+        let help_height = overlay_text_height(
+            permission_rule_edit_help().as_str(),
+            target_width.saturating_sub(2),
+            3,
+            6,
+        );
         let preview_height = overlay_text_height(
             render_permission_rule_preview(dialog.input.text()).as_str(),
             target_width.saturating_sub(2),
@@ -1328,7 +1332,6 @@ impl App {
                 "Review your answers before submitting.",
                 Style::default().add_modifier(Modifier::BOLD),
             ))];
-            review_lines.push(Line::from(""));
             for (index, question) in dialog.request.questions.iter().enumerate() {
                 let values = dialog
                     .answers
@@ -1440,7 +1443,6 @@ impl App {
                     )),
                     Style::default().fg(Color::DarkGray),
                 )),
-                Line::from(""),
                 Line::from(vec![
                     Span::styled(
                         "Current answer: ",
@@ -1521,7 +1523,6 @@ impl App {
             } else {
                 "( )"
             };
-            option_lines.push(Line::from(""));
             option_lines.push(Line::from(vec![
                 Span::styled(format!("{prefix} "), custom_style),
                 Span::styled("Other", custom_style.add_modifier(Modifier::BOLD)),
@@ -2500,16 +2501,24 @@ impl App {
         let content_width = target_width.saturating_sub(2);
         let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
         let content_height = settings_studio_content_height(dialog, content_width);
+        let current_section = dialog.sections.get(dialog.selected_section);
+        let section_summary = current_section
+            .map(|section| format!("{}  ·  {} item(s)", section.summary, section.items.len()))
+            .unwrap_or_else(|| "no settings available".to_string());
         let area = preferred_overlay_rect(
             area,
             122,
             content_height
                 .saturating_add(footer_height)
-                .saturating_add(3),
+                .saturating_add(2),
         );
         frame.render_widget(Clear, area);
         let block = Block::default()
-            .title(sanitize_display_text(format!(" {} ", dialog.title)))
+            .title(sanitize_display_text(overlay_title_with_summary(
+                dialog.title.as_str(),
+                section_summary.as_str(),
+                target_width,
+            )))
             .borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -2517,28 +2526,15 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
                 Constraint::Min(content_height),
                 Constraint::Length(footer_height),
             ])
             .split(inner);
-        let current_section = dialog.sections.get(dialog.selected_section);
-        let section_summary = current_section
-            .map(|section| format!("{}  ·  {} item(s)", section.summary, section.items.len()))
-            .unwrap_or_else(|| "no settings available".to_string());
-        self.render_header_row(
-            frame,
-            rows[0],
-            "Settings".to_string(),
-            section_summary,
-            Style::default().add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::DarkGray),
-        );
 
         let content = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(28), Constraint::Min(60)])
-            .split(rows[1]);
+            .split(rows[0]);
         let nav_area = content[0];
         let right_area = content[1];
         let nav_panel_height = list_panel_height(dialog.sections.len().max(1), 2, 4, 12);
@@ -2711,7 +2707,7 @@ impl App {
 
         frame.render_widget(
             Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
-            rows[2],
+            rows[1],
         );
     }
 
@@ -2722,15 +2718,15 @@ impl App {
         dialog: &ProviderStudioOverlay,
     ) {
         let target_width = adaptive_modal_width(area.width, 122);
-        let footer_height =
-            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
-        let content_height = provider_studio_content_height(dialog, target_width);
+        let content_width = target_width.saturating_sub(2);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
+        let content_height = provider_studio_content_height(dialog, content_width);
         let area = preferred_overlay_rect(
             area,
             122,
             content_height
                 .saturating_add(footer_height)
-                .saturating_add(3),
+                .saturating_add(2),
         );
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -2742,26 +2738,16 @@ impl App {
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),
                 Constraint::Min(content_height),
                 Constraint::Length(footer_height),
             ])
             .split(inner);
 
-        self.render_header_row(
-            frame,
-            rows[0],
-            ui_text::t(&self.i18n, "overlay-provider-studio-header"),
-            String::new(),
-            Style::default().add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::DarkGray),
-        );
-
         let right_area = if dialog.show_provider_list {
             let content = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([Constraint::Length(28), Constraint::Min(54)])
-                .split(rows[1]);
+                .split(rows[0]);
             let providers_area = content[0];
             let providers_panel_area = top_aligned_panel_rect(
                 providers_area,
@@ -2797,7 +2783,7 @@ impl App {
             frame.render_stateful_widget(provider_list, providers_panel_area, &mut provider_state);
             content[1]
         } else {
-            rows[1]
+            rows[0]
         };
         let draft_fields = provider_studio_visible_fields(dialog);
         let draft_panel_height = provider_studio_draft_panel_height(dialog, right_area.width);
@@ -3031,7 +3017,7 @@ impl App {
 
         frame.render_widget(
             Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
-            rows[2],
+            rows[1],
         );
 
         if let Some(detail_page) = dialog.detail_page.as_ref() {
@@ -3198,31 +3184,9 @@ impl App {
         dialog: &ModelCatalogStudioOverlay,
     ) {
         let target_width = adaptive_modal_width(area.width, 116);
-        let footer_height =
-            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
-        let content_height = model_catalog_content_height(dialog, target_width);
-        let area = preferred_overlay_rect(
-            area,
-            116,
-            content_height
-                .saturating_add(footer_height)
-                .saturating_add(3),
-        );
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(sanitize_display_text(format!(" {} ", dialog.title)))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),
-                Constraint::Min(content_height),
-                Constraint::Length(footer_height),
-            ])
-            .split(inner);
+        let content_width = target_width.saturating_sub(2);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
+        let content_height = model_catalog_content_height(dialog, content_width);
         let summary = format!(
             "query {}  ·  page {}-{} / {}  ·  {} official / {} custom",
             if dialog.query.trim().is_empty() {
@@ -3236,34 +3200,51 @@ impl App {
             dialog.summary.official_entry_count,
             dialog.summary.custom_entry_count,
         );
-        self.render_header_row(
-            frame,
-            rows[0],
-            "Model Catalog".to_string(),
-            summary,
-            Style::default().add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::DarkGray),
+        let area = preferred_overlay_rect(
+            area,
+            116,
+            content_height
+                .saturating_add(footer_height)
+                .saturating_add(2),
         );
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(overlay_title_with_summary(
+                dialog.title.as_str(),
+                summary.as_str(),
+                target_width,
+            )))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
 
-        let stacked = should_stack_detail_layout(rows[1].width, 48, 34);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(content_height),
+                Constraint::Length(footer_height),
+            ])
+            .split(inner);
+
+        let stacked = should_stack_detail_layout(rows[0].width, 48, 34);
         let (list_height, detail_height) =
-            model_catalog_panel_heights(dialog, rows[1].width.saturating_sub(2));
+            model_catalog_panel_heights(dialog, rows[0].width.saturating_sub(2));
         let (list_area, detail_area) = if stacked {
             let (list_height, detail_height) =
-                model_catalog_panel_heights(dialog, rows[1].width.saturating_sub(2));
+                model_catalog_panel_heights(dialog, rows[0].width.saturating_sub(2));
             let content = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(list_height),
                     Constraint::Length(detail_height),
                 ])
-                .split(rows[1]);
+                .split(rows[0]);
             (content[0], content[1])
         } else {
             let content = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints(adaptive_detail_split(rows[1].width, 48, 34))
-                .split(rows[1]);
+                .constraints(adaptive_detail_split(rows[0].width, 48, 34))
+                .split(rows[0]);
             (
                 top_aligned_panel_rect(content[0], list_height),
                 top_aligned_panel_rect(content[1], detail_height),
@@ -3373,7 +3354,7 @@ impl App {
 
         frame.render_widget(
             Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
-            rows[2],
+            rows[1],
         );
 
         if let Some(editor) = dialog.editor.as_ref() {
@@ -3641,6 +3622,27 @@ fn top_aligned_panel_rect(area: Rect, panel_height: u16) -> Rect {
         .unwrap_or(area)
 }
 
+fn overlay_title_with_summary(title: &str, summary: &str, width: u16) -> String {
+    let title = sanitize_display_text(title).trim().to_string();
+    let summary = sanitize_display_text(summary).trim().to_string();
+    if summary.is_empty() {
+        return format!(" {title} ");
+    }
+
+    let max_summary_width = width
+        .saturating_sub(UnicodeWidthStr::width(title.as_str()) as u16)
+        .saturating_sub(7) as usize;
+    if max_summary_width < 8 {
+        format!(" {title} ")
+    } else {
+        format!(
+            " {} · {} ",
+            title,
+            truncate_display_text(summary.as_str(), max_summary_width)
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TranscriptSurfaceLayout {
     header: Rect,
@@ -3771,6 +3773,21 @@ pub(super) fn should_stack_detail_layout(total_width: u16, left_min: u16, right_
     available < left_min.saturating_add(right_min).saturating_add(8)
 }
 
+fn estimated_horizontal_panel_widths(
+    total_width: u16,
+    left_min: u16,
+    right_min: u16,
+) -> (u16, u16) {
+    if should_stack_detail_layout(total_width, left_min, right_min) {
+        return (total_width.max(1), total_width.max(1));
+    }
+
+    let [left_pct, _right_pct] = proportional_percentages(left_min, right_min);
+    let left_width = ((u32::from(total_width) * u32::from(left_pct)) / 100) as u16;
+    let right_width = total_width.saturating_sub(left_width);
+    (left_width.max(1), right_width.max(1))
+}
+
 fn proportional_percentages(first: u16, second: u16) -> [u16; 2] {
     let total = u32::from(first.max(1)).saturating_add(u32::from(second.max(1)));
     let first_pct = ((u32::from(first.max(1)) * 100) / total).clamp(1, 99) as u16;
@@ -3889,18 +3906,13 @@ fn settings_studio_content_height(dialog: &SettingsStudioOverlay, width: u16) ->
 }
 
 fn provider_studio_content_height(dialog: &ProviderStudioOverlay, width: u16) -> u16 {
-    let draft_panel_height = provider_studio_draft_panel_height(dialog, width);
     let right_width = if dialog.show_provider_list {
-        width.saturating_sub(32).max(44)
+        width.saturating_sub(28).max(44)
     } else {
-        width.saturating_sub(4).max(44)
+        width.max(44)
     };
-    let (adapter_height, model_height) = provider_studio_adapter_model_heights(dialog, right_width);
-    let lower_height = if should_stack_detail_layout(right_width, 24, 28) {
-        adapter_height.saturating_add(model_height)
-    } else {
-        max(adapter_height, model_height)
-    };
+    let draft_panel_height = provider_studio_draft_panel_height(dialog, right_width);
+    let lower_height = provider_studio_lower_content_height(dialog, right_width);
     let right_total = draft_panel_height.saturating_add(lower_height);
     if dialog.show_provider_list {
         max(
@@ -3913,9 +3925,8 @@ fn provider_studio_content_height(dialog: &ProviderStudioOverlay, width: u16) ->
 }
 
 fn provider_studio_lower_content_height(dialog: &ProviderStudioOverlay, width: u16) -> u16 {
-    let right_width = width.saturating_sub(2).max(40);
-    let (adapter_height, model_height) = provider_studio_adapter_model_heights(dialog, right_width);
-    if should_stack_detail_layout(right_width, 24, 28) {
+    let (adapter_height, model_height) = provider_studio_adapter_model_heights(dialog, width);
+    if should_stack_detail_layout(width, 24, 28) {
         adapter_height.saturating_add(model_height)
     } else {
         max(adapter_height, model_height)
@@ -3924,7 +3935,7 @@ fn provider_studio_lower_content_height(dialog: &ProviderStudioOverlay, width: u
 
 fn model_catalog_content_height(dialog: &ModelCatalogStudioOverlay, width: u16) -> u16 {
     let (list_height, detail_height) = model_catalog_panel_heights(dialog, width);
-    let stacked = should_stack_detail_layout(width.saturating_sub(2), 48, 34);
+    let stacked = should_stack_detail_layout(width, 48, 34);
     if stacked {
         list_height.saturating_add(detail_height)
     } else {
@@ -3938,8 +3949,7 @@ fn user_input_nav_panel_height() -> u16 {
 
 fn user_input_review_summary_height(dialog: &UserInputOverlay, width: u16) -> u16 {
     let content_width = width.saturating_sub(4).max(1);
-    let mut lines = wrapped_text_height("Review your answers before submitting.", content_width)
-        .saturating_add(1);
+    let mut lines = wrapped_text_height("Review your answers before submitting.", content_width);
     for question in &dialog.request.questions {
         let values = dialog
             .answers
@@ -3966,7 +3976,6 @@ fn user_input_prompt_panel_height(question: &UserInputQuestion, width: u16) -> u
     let answer_hint = "Current answer:";
     let content_width = width.saturating_sub(4);
     let body_height = wrapped_text_height(question.question.as_str(), content_width)
-        .saturating_add(1)
         .saturating_add(wrapped_text_height(
             format!(
                 "{} · id={}",
@@ -4006,7 +4015,6 @@ fn user_input_choices_panel_height(question: &UserInputQuestion, width: u16) -> 
     }
     if question.allow_custom {
         lines = lines
-            .saturating_add(1)
             .saturating_add(wrapped_text_height("Other", line_width))
             .saturating_add(wrapped_text_height(
                 format!(
@@ -4097,9 +4105,12 @@ fn timeline_overlay_panel_heights(dialog: &TimelineOverlay, width: u16) -> (u16,
             .unwrap_or(dialog.empty_message.as_str())
     };
     let detail_width = if should_stack_detail_layout(width, 40, 46) {
-        width
+        width.saturating_sub(2).max(1)
     } else {
-        width.saturating_sub(42).max(24)
+        estimated_horizontal_panel_widths(width, 40, 46)
+            .1
+            .saturating_sub(2)
+            .max(1)
     };
     let detail_height = bordered_paragraph_height(detail_text, detail_width, 4, 12);
     (list_height, detail_height)
@@ -4127,11 +4138,15 @@ fn plugin_inspector_panel_heights(dialog: &PluginInspectorOverlay, width: u16) -
         .map(|item| item.logs.as_str())
         .unwrap_or(dialog.empty_message.as_str());
     if should_stack_detail_layout(width, 34, 48) {
-        let detail_height = bordered_paragraph_height(detail_text, width, 3, 8);
-        let logs_height = bordered_paragraph_height(logs_text, width, 3, 8);
+        let detail_width = width.saturating_sub(2).max(1);
+        let detail_height = bordered_paragraph_height(detail_text, detail_width, 3, 8);
+        let logs_height = bordered_paragraph_height(logs_text, detail_width, 3, 8);
         (list_height, detail_height, logs_height)
     } else {
-        let right_width = width.saturating_sub(36).max(24);
+        let right_width = estimated_horizontal_panel_widths(width, 34, 48)
+            .1
+            .saturating_sub(2)
+            .max(1);
         let detail_height = bordered_paragraph_height(detail_text, right_width, 3, 7);
         let logs_height = bordered_paragraph_height(logs_text, right_width, 3, 7);
         (list_height, detail_height, logs_height)
@@ -4288,10 +4303,13 @@ fn model_catalog_panel_heights(dialog: &ModelCatalogStudioOverlay, width: u16) -
                 .clone()
                 .unwrap_or_else(|| "No catalog entries.".to_string())
         });
-    let detail_width = if should_stack_detail_layout(width.saturating_sub(2), 48, 34) {
-        width.saturating_sub(2)
+    let detail_width = if should_stack_detail_layout(width, 48, 34) {
+        width.saturating_sub(2).max(1)
     } else {
-        width.saturating_sub(52).max(24)
+        estimated_horizontal_panel_widths(width, 48, 34)
+            .1
+            .saturating_sub(2)
+            .max(1)
     };
     let detail_height = bordered_paragraph_height(detail.as_str(), detail_width, 4, 12);
     (list_height, detail_height)
@@ -4362,4 +4380,22 @@ fn permission_overlay_body_height(dialog: &PermissionOverlay, width: u16) -> u16
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimated_horizontal_panel_widths_follow_stacked_layout() {
+        let (left, right) = estimated_horizontal_panel_widths(40, 34, 48);
+        assert_eq!((left, right), (40, 40));
+    }
+
+    #[test]
+    fn estimated_horizontal_panel_widths_preserve_total_width() {
+        let (left, right) = estimated_horizontal_panel_widths(114, 48, 34);
+        assert_eq!(left + right, 114);
+        assert!(left > right);
+    }
 }

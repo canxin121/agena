@@ -187,12 +187,14 @@ impl SessionManager {
             .contains_key(request.reply.request_id.as_str());
         if is_host_request {
             let response = host_user_input_response(&user_input_request, &request.reply)?;
-            let tool_part_ref = session.resolve_part_ref(&pending.tool.part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool part not found: message={}, part={}",
-                    pending.tool.part.message_id, pending.tool.part.part_id
-                ))
-            })?;
+            let tool_part_ref = session
+                .resolve_part_ref(&pending.tool.part)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "pending tool part not found: message={}, part={}",
+                        pending.tool.part.message_id, pending.tool.part.part_id
+                    ))
+                })?;
             let assistant_message = session.messages[tool_part_ref.message_index].clone();
             session = self
                 .persist_session_changes(
@@ -1804,12 +1806,14 @@ impl SessionManager {
                 .store
                 .load_session(session.id, state.cache_policy())
                 .await?;
-            let tool_part_ref = session.resolve_part_ref(&pending_tool.part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "streaming tool part not found: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
-                ))
-            })?;
+            let tool_part_ref = session
+                .resolve_part_ref(&pending_tool.part)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "streaming tool part not found: message={}, part={}",
+                        pending_tool.part.message_id, pending_tool.part.part_id
+                    ))
+                })?;
             let tool_part = session.part_mut(&tool_part_ref).ok_or_else(|| {
                 AppError::Internal(format!(
                     "streaming tool part not found: message={}, part={}",

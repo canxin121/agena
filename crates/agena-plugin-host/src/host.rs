@@ -520,7 +520,7 @@ impl PluginHost {
 
         if let Some(handle) = current {
             return if current_is_multithread {
-                    tokio::task::block_in_place(|| handle.block_on(fut))
+                tokio::task::block_in_place(|| handle.block_on(fut))
             } else {
                 block_on_scoped_thread(fut)
             };

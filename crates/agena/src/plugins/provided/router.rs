@@ -92,10 +92,11 @@ fn current_executor(
         .lock()
         .ok()
         .and_then(|contexts| {
-            contexts
-                .get(&key)
-                .cloned()
-                .or_else(|| entry_key.as_ref().and_then(|key| contexts.get(key).cloned()))
+            contexts.get(&key).cloned().or_else(|| {
+                entry_key
+                    .as_ref()
+                    .and_then(|key| contexts.get(key).cloned())
+            })
         })
         .ok_or_else(|| PluginError::new("static plugin invoked without executor context"))
 }

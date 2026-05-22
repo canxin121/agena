@@ -136,7 +136,6 @@ impl TurnRegistry {
             .map_err(|_| TurnControlError::SteerClosed)
     }
 
-    #[allow(dead_code)]
     pub async fn is_active(&self, session_id: i64) -> bool {
         self.inner.lock().await.contains_key(&session_id)
     }

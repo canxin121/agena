@@ -166,4 +166,4 @@ fn chmod_user_only(path: &Path) {
 }
 
 #[cfg(not(unix))]
-fn chmod_user_only(_path: &Path) {}
+fn chmod_user_only(_: &Path) {}

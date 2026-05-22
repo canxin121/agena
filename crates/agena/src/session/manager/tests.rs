@@ -121,98 +121,6 @@ impl crate::plugin::sdk::Plugin for SessionEndFixturePlugin {
     }
 }
 
-#[allow(dead_code)]
-struct HostInvokeSourceFixturePlugin {
-    host: tokio::sync::RwLock<Option<Arc<dyn crate::plugin::sdk::host_api::HostClient>>>,
-}
-
-#[allow(dead_code)]
-impl HostInvokeSourceFixturePlugin {
-    fn new() -> Self {
-        Self {
-            host: tokio::sync::RwLock::new(None),
-        }
-    }
-}
-
-#[async_trait]
-impl crate::plugin::sdk::Plugin for HostInvokeSourceFixturePlugin {
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
-        crate::plugin::sdk::PluginManifest::builder("host-invoke-source-fixture", "0.1.0")
-            .tool(
-                crate::plugin::sdk::PluginToolDecl::new(
-                    "host_invoke_source",
-                    serde_json::json!({"type": "object"}),
-                )
-                .description("Call another tool through host/tool.invoke.")
-                .host_capability(crate::plugin::sdk::HostCapability::InvokeTool),
-            )
-            .build()
-    }
-
-    async fn init(
-        &self,
-        _ctx: crate::plugin::sdk::InitContext,
-        host: Arc<dyn crate::plugin::sdk::host_api::HostClient>,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::InitOutcome> {
-        *self.host.write().await = Some(host);
-        Ok(crate::plugin::sdk::InitOutcome::ack(self.manifest()))
-    }
-
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-        match input.tool_name.as_str() {
-            "host_invoke_source" => {
-                let host = self
-                    .host
-                    .read()
-                    .await
-                    .clone()
-                    .expect("host client should be installed");
-                host.invoke_tool("host_invoke_target".to_string(), serde_json::json!({}))
-                    .await
-            }
-            other => Err(crate::plugin::PluginError::new(format!(
-                "unexpected tool {other}"
-            ))),
-        }
-    }
-}
-
-#[allow(dead_code)]
-struct HostInvokeTargetFixturePlugin;
-
-#[async_trait]
-impl crate::plugin::sdk::Plugin for HostInvokeTargetFixturePlugin {
-    fn manifest(&self) -> crate::plugin::sdk::PluginManifest {
-        crate::plugin::sdk::PluginManifest::builder("host-invoke-target-fixture", "0.1.0")
-            .tool(
-                crate::plugin::sdk::PluginToolDecl::new(
-                    "host_invoke_target",
-                    serde_json::json!({"type": "object"}),
-                )
-                .description("Target tool for host/tool.invoke."),
-            )
-            .build()
-    }
-
-    async fn tool_invoke(
-        &self,
-        input: crate::plugin::sdk::ToolInvokeInput,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-        match input.tool_name.as_str() {
-            "host_invoke_target" => {
-                Ok(crate::plugin::sdk::ToolInvokeOutput::text("target ok").with_title("Target"))
-            }
-            other => Err(crate::plugin::PluginError::new(format!(
-                "unexpected tool {other}"
-            ))),
-        }
-    }
-}
-
 struct StreamingFixturePlugin {
     chunk_sent: Arc<tokio::sync::Notify>,
     finish: Arc<tokio::sync::Semaphore>,
@@ -329,27 +237,13 @@ impl RecordingProvider {
         format!("resp_{}", *guard)
     }
 
-    #[allow(dead_code)]
     fn with_metadata(mut self, metadata: crate::provider::ModelMetadata) -> Self {
         self.metadata = metadata;
         self
     }
 
-    #[allow(dead_code)]
     fn with_usage(mut self, usage: CompletionUsage) -> Self {
         self.usage = Some(usage);
-        self
-    }
-
-    #[allow(dead_code)]
-    fn with_dynamic_prompt_cache_shape(mut self, shape: crate::provider::PromptCacheShape) -> Self {
-        self.dynamic_prompt_cache_shape = Some(shape);
-        self
-    }
-
-    #[allow(dead_code)]
-    fn with_remote_compact_error(mut self, message: impl Into<String>) -> Self {
-        self.remote_compact_error = Some(message.into());
         self
     }
 }
@@ -737,124 +631,6 @@ impl ModelRuntime for ScriptedProvider {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Clone, Copy)]
-enum ToolErrorRecoveryScenario {
-    BadTodo,
-    ParallelBadTools,
-}
-
-#[allow(dead_code)]
-struct ToolErrorRecoveryProvider {
-    scenario: ToolErrorRecoveryScenario,
-}
-
-#[allow(dead_code)]
-impl ToolErrorRecoveryProvider {
-    fn bad_todo() -> Self {
-        Self {
-            scenario: ToolErrorRecoveryScenario::BadTodo,
-        }
-    }
-
-    fn parallel_bad_tools() -> Self {
-        Self {
-            scenario: ToolErrorRecoveryScenario::ParallelBadTools,
-        }
-    }
-}
-
-#[async_trait]
-impl ModelRuntime for ToolErrorRecoveryProvider {
-    fn id(&self) -> &str {
-        "scripted"
-    }
-
-    fn default_model(&self) -> &ModelId {
-        static DEFAULT_MODEL: std::sync::LazyLock<ModelId> =
-            std::sync::LazyLock::new(|| ModelId::new("scripted-model"));
-        &DEFAULT_MODEL
-    }
-
-    async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        Ok(vec![
-            ProviderModel::new("scripted", "scripted-model").with_display_name("Scripted"),
-        ])
-    }
-
-    async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        Ok(CompletionResponse {
-            provider_id: scripted_provider_id(),
-            model: scripted_model_id(),
-            text: String::new(),
-            reasoning_text: None,
-            finish_reason: Some(CompletionFinishReason::Stop),
-            tool_calls: Vec::new(),
-            usage: None,
-            provider_metadata: None,
-        })
-    }
-
-    async fn complete_stream(
-        &self,
-        request: CompletionRequest,
-    ) -> Result<
-        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
-        AppError,
-    > {
-        let events = match self.scenario {
-            ToolErrorRecoveryScenario::BadTodo => {
-                if completed_or_failed_operation_count(&request, &["call_todo_1"]) == 0 {
-                    scripted_tool_call_events(vec![(
-                        "call_todo_1",
-                        "todo",
-                        serde_json::json!({
-                            "action": "write",
-                            "items": "bad",
-                        })
-                        .to_string(),
-                    )])
-                } else {
-                    scripted_text_events("permission todo failed")
-                }
-            }
-            ToolErrorRecoveryScenario::ParallelBadTools => {
-                if completed_or_failed_operation_count(
-                    &request,
-                    &["call_bad_tools_1", "call_bad_tools_2"],
-                ) == 0
-                {
-                    scripted_tool_call_events(vec![
-                        (
-                            "call_bad_tools_1",
-                            "tools",
-                            serde_json::json!({
-                                "action": "search",
-                                "query": 123,
-                            })
-                            .to_string(),
-                        ),
-                        (
-                            "call_bad_tools_2",
-                            "tools",
-                            serde_json::json!({
-                                "action": "search",
-                                "query": "todo",
-                                "limit": 1,
-                            })
-                            .to_string(),
-                        ),
-                    ])
-                } else {
-                    scripted_text_events("parallel tool failures returned")
-                }
-            }
-        };
-
-        Ok(Box::pin(stream::iter(events)))
-    }
-}
-
 fn completed_or_failed_operation_count(
     request: &CompletionRequest,
     operation_ids: &[&str],
@@ -1035,45 +811,6 @@ async fn build_session_end_plugin_host(
     (host, rx)
 }
 
-#[allow(dead_code)]
-async fn build_host_invoke_plugin_host(
-    workspace_root: &std::path::Path,
-) -> Arc<crate::plugin::PluginHost> {
-    let mut list = BTreeMap::new();
-    list.insert(
-        "source".to_string(),
-        crate::plugin::PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-            disabled: false,
-        },
-    );
-    list.insert(
-        "target".to_string(),
-        crate::plugin::PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-            disabled: false,
-        },
-    );
-    let config = crate::plugin::PluginsConfig {
-        enabled: true,
-        timeouts: Default::default(),
-        list,
-        trusted_keys: Default::default(),
-        default_quota: Default::default(),
-        quotas: Default::default(),
-        tool_presentation: Default::default(),
-    };
-    crate::plugin::PluginHostBuilder::new(workspace_root, "test")
-        .with_config(config)
-        .register_static("source", HostInvokeSourceFixturePlugin::new())
-        .register_static("target", HostInvokeTargetFixturePlugin)
-        .build()
-        .await
-        .expect("plugin host should build")
-}
-
 async fn build_streaming_plugin_host(
     workspace_root: &std::path::Path,
 ) -> (
@@ -1116,25 +853,6 @@ async fn build_streaming_plugin_host(
     (host, chunk_sent, finish)
 }
 
-#[allow(dead_code)]
-#[derive(Clone)]
-struct HostInvokeRuntimeTestHostClient {
-    manager: Arc<tokio::sync::RwLock<Option<Arc<SessionManager>>>>,
-}
-
-#[allow(dead_code)]
-impl HostInvokeRuntimeTestHostClient {
-    fn new() -> Self {
-        Self {
-            manager: Arc::new(tokio::sync::RwLock::new(None)),
-        }
-    }
-
-    async fn install_manager(&self, manager: Arc<SessionManager>) {
-        *self.manager.write().await = Some(manager);
-    }
-}
-
 fn host_invoke_execution_output(
     execution: ToolInvocationExecution,
 ) -> crate::plugin::sdk::ToolInvokeOutput {
@@ -1144,72 +862,6 @@ fn host_invoke_execution_output(
         payload: execution.output.to_json_payload(),
         metadata: execution.view.metadata.into_iter().collect(),
         attachments: execution.view.attachments,
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::plugin::sdk::host_api::HostClient for HostInvokeRuntimeTestHostClient {
-    async fn log(
-        &self,
-        _level: crate::plugin::sdk::host_api::LogLevel,
-        _message: String,
-        _fields: serde_json::Value,
-    ) {
-    }
-
-    async fn publish_event(
-        &self,
-        _env: crate::plugin::sdk::EventEnvelope,
-    ) -> crate::plugin::sdk::Result<()> {
-        Ok(())
-    }
-
-    async fn subscribe_events(
-        &self,
-        _filter: crate::plugin::sdk::EventFilter,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::host_api::EventSubscription> {
-        Ok(crate::plugin::sdk::host_api::EventSubscription { id: "sub".into() })
-    }
-
-    async fn ask_permission(
-        &self,
-        _req: crate::plugin::sdk::PermissionAskInput,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::PermissionDecision> {
-        Ok(crate::plugin::sdk::PermissionDecision::Prompt)
-    }
-
-    async fn read_config(
-        &self,
-        _path: Option<String>,
-    ) -> crate::plugin::sdk::Result<serde_json::Value> {
-        Ok(serde_json::Value::Null)
-    }
-
-    async fn invoke_tool(
-        &self,
-        tool: String,
-        input: serde_json::Value,
-    ) -> crate::plugin::sdk::Result<crate::plugin::sdk::ToolInvokeOutput> {
-        let manager = self
-            .manager
-            .read()
-            .await
-            .clone()
-            .ok_or_else(|| crate::plugin::PluginError::new("session manager not installed"))?;
-        let context = crate::plugin::sdk::host_api::current_host_callback_context()
-            .ok_or_else(|| crate::plugin::PluginError::new("missing host callback context"))?;
-        let session_id = context
-            .session_id
-            .ok_or_else(|| crate::plugin::PluginError::new("missing session_id"))?;
-        let call_id = context.call_id.unwrap_or(-1);
-        let structured = crate::message::StructuredObject::try_from(input)
-            .map_err(|err| crate::plugin::PluginError::invalid_params(err.to_string()))?;
-        let invocation = ToolInvocation::new(tool, structured);
-        let execution = manager
-            .execute_host_invoked_tool(session_id, call_id, invocation)
-            .await
-            .map_err(|err| crate::plugin::PluginError::new(err.to_string()))?;
-        Ok(host_invoke_execution_output(execution))
     }
 }
 
@@ -1432,165 +1084,6 @@ fn pending_permission_request_id(session: &Session) -> String {
         .expect("session should contain a pending permission request")
 }
 
-#[allow(dead_code)]
-struct InterruptibleProvider {
-    call_count: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-#[async_trait]
-impl ModelRuntime for InterruptibleProvider {
-    fn id(&self) -> &str {
-        "interruptible"
-    }
-
-    fn default_model(&self) -> &ModelId {
-        static MODEL: std::sync::LazyLock<ModelId> =
-            std::sync::LazyLock::new(|| ModelId::new("interruptible-model"));
-        &MODEL
-    }
-
-    async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-        Ok(vec![ProviderModel::new(
-            "interruptible",
-            "interruptible-model",
-        )])
-    }
-
-    async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, AppError> {
-        Err(AppError::Provider("streaming only".to_string()))
-    }
-
-    async fn complete_stream(
-        &self,
-        _: CompletionRequest,
-    ) -> Result<
-        std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
-        AppError,
-    > {
-        let call_index = self
-            .call_count
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if call_index == 0 {
-            let stream = async_stream::stream! {
-                yield Ok(CompletionStreamEvent::TextDelta {
-                    provider_id: ProviderId::new("interruptible"),
-                    model: ModelId::new("interruptible-model"),
-                    delta: "thinking".to_string(),
-                });
-                std::future::pending::<()>().await;
-            };
-            return Ok(Box::pin(stream));
-        }
-
-        Ok(Box::pin(stream::iter(vec![
-            Ok(CompletionStreamEvent::TextDelta {
-                provider_id: ProviderId::new("interruptible"),
-                model: ModelId::new("interruptible-model"),
-                delta: "resumed work".to_string(),
-            }),
-            Ok(CompletionStreamEvent::Completed {
-                provider_id: ProviderId::new("interruptible"),
-                model: ModelId::new("interruptible-model"),
-                finish_reason: Some(CompletionFinishReason::Stop),
-                usage: None,
-                provider_metadata: None,
-            }),
-        ])))
-    }
-}
-
-#[allow(dead_code)]
-fn interruptible_options() -> SessionRunOptions {
-    SessionRunOptions {
-        model: ModelRef::new("interruptible", "interruptible-model"),
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature: None,
-        max_output_tokens: Some(64),
-        agent_profile: None,
-        max_turn_loops: None,
-    }
-}
-
-#[allow(dead_code)]
-async fn wait_for_active_turn(manager: &SessionManager, session_id: i64) {
-    let registered = async {
-        for _ in 0..500 {
-            if manager.is_turn_active(session_id).await {
-                return true;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        false
-    }
-    .await;
-    assert!(registered, "turn should register within 10s");
-}
-
-#[allow(dead_code)]
-async fn wait_for_provider_calls(
-    call_count: &std::sync::atomic::AtomicUsize,
-    expected_at_least: usize,
-) {
-    let started = async {
-        for _ in 0..500 {
-            if call_count.load(std::sync::atomic::Ordering::SeqCst) >= expected_at_least {
-                return true;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        false
-    }
-    .await;
-    assert!(
-        started,
-        "provider should be invoked at least {expected_at_least} time(s) within 10s"
-    );
-}
-
-#[allow(dead_code)]
-async fn cancel_running_turn(
-    manager: Arc<SessionManager>,
-    session_id: i64,
-    call_count: &std::sync::atomic::AtomicUsize,
-) {
-    let submit_manager = Arc::clone(&manager);
-    let submit = tokio::spawn(async move {
-        submit_manager
-            .submit_user_turn(SessionUserTurnRequest {
-                session_id,
-                options: interruptible_options(),
-                parts: vec![PartContent::text("start work")],
-            })
-            .await
-    });
-
-    wait_for_active_turn(manager.as_ref(), session_id).await;
-    wait_for_provider_calls(call_count, 1).await;
-    for attempt in 0..3 {
-        match manager.cancel_active_turn(session_id).await {
-            Ok(()) => break,
-            Err(_) if attempt < 2 => {
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            Err(err) => panic!("cancel should find active turn: {err}"),
-        }
-    }
-
-    let result = tokio::time::timeout(std::time::Duration::from_secs(15), submit)
-        .await
-        .expect("submit should complete after cancel")
-        .expect("join");
-    assert!(
-        result.is_err(),
-        "expected turn to be reported as failed/cancelled"
-    );
-}
-
 fn run_options() -> SessionRunOptions {
     SessionRunOptions {
         model: scripted_model_ref(),
@@ -1620,40 +1113,6 @@ fn recording_run_options() -> SessionRunOptions {
         max_output_tokens: Some(256),
         agent_profile: None,
         max_turn_loops: None,
-    }
-}
-
-#[allow(dead_code)]
-fn interrupted_model_ref() -> ModelRef {
-    ModelRef::new("interrupted", "interrupted-model")
-}
-
-#[allow(dead_code)]
-fn interrupted_run_options() -> SessionRunOptions {
-    SessionRunOptions {
-        model: interrupted_model_ref(),
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature: None,
-        max_output_tokens: Some(128),
-        agent_profile: None,
-        max_turn_loops: None,
-    }
-}
-
-#[allow(dead_code)]
-fn high_recording_usage() -> CompletionUsage {
-    CompletionUsage {
-        input_tokens: 3_800,
-        output_tokens: 200,
-        reasoning_tokens: 0,
-        cache_write_tokens: 0,
-        cache_read_tokens: 0,
-        total_cost: 0.0,
     }
 }
 
@@ -1810,7 +1269,7 @@ async fn broadcast_active_session_end_notifies_plugins() {
         .await
         .expect("session creation should succeed");
     let session_id = created.id;
-    let (_control, _steer_rx) = manager.turn_registry.register(session_id).await;
+    let _ = manager.turn_registry.register(session_id).await;
 
     manager
         .broadcast_active_session_end(crate::plugin::SessionEndReason::Other)

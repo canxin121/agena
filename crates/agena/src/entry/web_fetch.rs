@@ -8,12 +8,12 @@
 //! the real fetch path under the existing network-permission policy. Bytes are
 //! capped at 5 MB.
 
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use lru::LruCache;
 
-use crate::message::{ToolAttachment, WebFetchToolInput};
+use crate::message::WebFetchToolInput;
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
@@ -78,7 +78,6 @@ pub(super) fn execute(
             hit.markdown,
             hit.truncated,
             true,
-            input.prompt.as_deref(),
         ));
     }
 
@@ -102,7 +101,6 @@ pub(super) fn execute(
         markdown,
         truncated,
         false,
-        input.prompt.as_deref(),
     ))
 }
 
@@ -199,7 +197,6 @@ fn make_execution(
     markdown: String,
     truncated: bool,
     cached: bool,
-    _prompt: Option<&str>,
 ) -> ToolPayloadExecution {
     // NOTE: prompt-based summarization is left as a follow-up — it
     // requires re-entering the LLM provider from inside a tool dispatch,
@@ -231,7 +228,3 @@ fn preview_text(s: &str, max: usize) -> String {
     }
     format!("{}…", &s[..end])
 }
-
-/// Silence unused warnings until we wire prompt-based summarization.
-#[allow(dead_code)]
-fn _silence(_: Arc<()>, _: Vec<ToolAttachment>) {}

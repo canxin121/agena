@@ -642,7 +642,7 @@ enum Overlay {
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
-    ProviderStudio(ProviderStudioOverlay),
+    ProviderStudio(Box<ProviderStudioOverlay>),
     ModelCatalogStudio(ModelCatalogStudioOverlay),
 }
 
@@ -656,7 +656,7 @@ enum Route {
     SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
     PluginInspector(PluginInspectorOverlay),
-    ProviderStudio(ProviderStudioOverlay),
+    ProviderStudio(Box<ProviderStudioOverlay>),
     ModelCatalogStudio(ModelCatalogStudioOverlay),
 }
 
@@ -807,7 +807,7 @@ enum SettingsPickerAction {
         entry: JsonValue,
         disabled: bool,
     },
-    OpenAgent(AgentDescriptor),
+    OpenAgent(Box<AgentDescriptor>),
     OpenProviderWorkbench,
     OpenProviderWorkbenchFor(String),
     OpenModelCatalogWorkbench,
@@ -1186,7 +1186,7 @@ enum PickerValue {
     Session(i64),
     Message(i64),
     PermissionRuleCreate,
-    PermissionRule(PermissionRuleResource),
+    PermissionRule(Box<PermissionRuleResource>),
     Inspector,
 }
 
@@ -3624,12 +3624,11 @@ impl App {
                 KeyCode::Enter => {
                     editor.input.flush_all_pending_input();
                     let value = editor.input.text().trim().to_string();
-                    if let ProviderStudioEditorAction::Field(field) = editor.action {
-                        if let Err(error) = self.commit_provider_studio_field(dialog, field, value)
-                        {
-                            self.flash_error(error);
-                            return false;
-                        }
+                    if let ProviderStudioEditorAction::Field(field) = editor.action
+                        && let Err(error) = self.commit_provider_studio_field(dialog, field, value)
+                    {
+                        self.flash_error(error);
+                        return false;
                     }
                     dialog.editor = None;
                     false
@@ -7408,7 +7407,7 @@ impl App {
                 false
             }
             SettingsPickerAction::OpenAgent(agent) => {
-                self.open_agent_source(agent);
+                self.open_agent_source(*agent);
                 false
             }
             SettingsPickerAction::OpenProviderWorkbench => {
@@ -7576,11 +7575,11 @@ impl App {
 
     fn take_provider_studio_dialog(&mut self) -> Option<(DialogHost, ProviderStudioOverlay)> {
         match std::mem::replace(&mut self.current_route, Route::Main) {
-            Route::ProviderStudio(dialog) => Some((DialogHost::Route, dialog)),
+            Route::ProviderStudio(dialog) => Some((DialogHost::Route, *dialog)),
             route => {
                 self.current_route = route;
                 match self.overlay.take() {
-                    Some(Overlay::ProviderStudio(dialog)) => Some((DialogHost::Overlay, dialog)),
+                    Some(Overlay::ProviderStudio(dialog)) => Some((DialogHost::Overlay, *dialog)),
                     overlay => {
                         self.overlay = overlay;
                         None
@@ -7592,8 +7591,8 @@ impl App {
 
     fn restore_provider_studio_dialog(&mut self, host: DialogHost, dialog: ProviderStudioOverlay) {
         match host {
-            DialogHost::Route => self.current_route = Route::ProviderStudio(dialog),
-            DialogHost::Overlay => self.overlay = Some(Overlay::ProviderStudio(dialog)),
+            DialogHost::Route => self.current_route = Route::ProviderStudio(Box::new(dialog)),
+            DialogHost::Overlay => self.overlay = Some(Overlay::ProviderStudio(Box::new(dialog))),
         }
     }
 
@@ -8067,9 +8066,7 @@ impl App {
             ProviderStudioField::Profile => {
                 Some(provider_studio_profile_choice_items(&self.backend))
             }
-            ProviderStudioField::ApiKeyEnv => {
-                Some(provider_studio_api_key_env_choice_items(dialog))
-            }
+            ProviderStudioField::ApiKeyEnv => Some(provider_studio_api_key_env_choice_items()),
             ProviderStudioField::ServiceKeyEnv => Some(vec![choice_item(
                 "AICORE_SERVICE_KEY",
                 "default SAP AI Core service key env var",
@@ -8276,7 +8273,7 @@ impl App {
                 all_items.extend(rules.into_iter().map(|rule| PickerItem {
                     label: permission_rule_label(&rule),
                     detail: permission_rule_detail(&rule),
-                    value: PickerValue::PermissionRule(rule),
+                    value: PickerValue::PermissionRule(Box::new(rule)),
                 }));
                 let mut overlay = PickerOverlay {
                     title: ui_text::t(&self.i18n, "overlay-permission-rules-title"),
@@ -8628,7 +8625,7 @@ impl App {
             .get(overlay.selected_provider)
             .and_then(|row| row.provider_id.clone());
         self.load_provider_studio_draft(&mut overlay, selected_id.as_deref(), draft_prefill);
-        self.current_route = Route::ProviderStudio(overlay);
+        self.current_route = Route::ProviderStudio(Box::new(overlay));
     }
 
     fn load_provider_studio_draft(
@@ -12096,7 +12093,7 @@ fn settings_studio_agent_items(
                 label: agent.name.clone(),
                 value,
                 detail,
-                action: SettingsPickerAction::OpenAgent(agent.clone()),
+                action: SettingsPickerAction::OpenAgent(Box::new(agent.clone())),
             }
         })
         .collect::<Vec<_>>();
@@ -12148,9 +12145,9 @@ fn settings_studio_agent_detail_text(
         lines.push(agent.description.clone());
     }
     lines.push(String::new());
-    lines.push(format!(
-        "Enter opens the source file or config file. d makes this the default agent. t toggles hidden when the profile is owned by the current config file."
-    ));
+    lines.push(
+        "Enter opens the source file or config file. d makes this the default agent. t toggles hidden when the profile is owned by the current config file.".to_string(),
+    );
     lines.join("\n")
 }
 
@@ -12408,7 +12405,7 @@ fn provider_studio_profile_choice_items(backend: &Backend) -> Vec<ChoiceItem> {
     dedupe_choice_items(items)
 }
 
-fn provider_studio_api_key_env_choice_items(_dialog: &ProviderStudioOverlay) -> Vec<ChoiceItem> {
+fn provider_studio_api_key_env_choice_items() -> Vec<ChoiceItem> {
     let items = vec![
         choice_item("OPENAI_API_KEY", "OpenAI-compatible API key env var"),
         choice_item("ANTHROPIC_API_KEY", "Anthropic API key env var"),
@@ -14436,9 +14433,9 @@ fn merge_message_resources(
 
     let current_parts_score = message_parts_score(current.parts.as_ref());
     let incoming_parts_score = message_parts_score(incoming.parts.as_ref());
-    merged.parts = if incoming.parts.is_none() && current.parts.is_some() {
-        current.parts.clone()
-    } else if current_parts_score > incoming_parts_score {
+    merged.parts = if (incoming.parts.is_none() && current.parts.is_some())
+        || current_parts_score > incoming_parts_score
+    {
         current.parts.clone()
     } else {
         incoming.parts.clone()
@@ -14879,10 +14876,10 @@ fn format_plugin_inspector_detail(
 
 fn format_plugin_entry_summary_lines(entry: &agena::plugin::PluginToolDecl) -> Vec<String> {
     let mut lines = vec![format!("{}", entry.name)];
-    if let Some(description) = entry.description_text().trim().split('\n').next() {
-        if !description.trim().is_empty() {
-            lines.push(format!("description: {}", description.trim()));
-        }
+    if let Some(description) = entry.description_text().trim().split('\n').next()
+        && !description.trim().is_empty()
+    {
+        lines.push(format!("description: {}", description.trim()));
     }
     if let Some(summary) = entry.summary_text() {
         lines.push(format!("summary: {summary}"));
@@ -17213,9 +17210,11 @@ mod tests {
         let expected_line_count =
             render_message(&first, 80, &i18n).len() + render_message(&second, 80, &i18n).len();
 
-        let mut transcript = TranscriptState::default();
-        transcript.session_id = Some(1);
-        transcript.messages = vec![first.clone(), second.clone()];
+        let mut transcript = TranscriptState {
+            session_id: Some(1),
+            messages: vec![first.clone(), second.clone()],
+            ..TranscriptState::default()
+        };
 
         let rendered = transcript.rendered(80);
 

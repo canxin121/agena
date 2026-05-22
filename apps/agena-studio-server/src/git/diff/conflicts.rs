@@ -382,17 +382,16 @@ pub async fn git_conflict_resolve(
         }
     }
 
-    if stage {
-        if let Err(resp) = run_git_checked_with_status(
+    if stage
+        && let Err(resp) = run_git_checked_with_status(
             &dir,
             &["add", "--", path],
             StatusCode::CONFLICT,
             Some("stage_failed"),
         )
         .await
-        {
-            return resp;
-        }
+    {
+        return resp;
     }
 
     Json(serde_json::json!({"success": true})).into_response()

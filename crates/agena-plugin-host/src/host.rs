@@ -2095,7 +2095,6 @@ pub struct HostHandle {
     /// callbacks coming back through entry B.
     entry_capabilities: tokio::sync::RwLock<HashMap<String, HashMap<String, Vec<HostCapability>>>>,
     /// Per-plugin bearer tokens for HTTP callbacks.
-    #[allow(dead_code)]
     tokens: tokio::sync::Mutex<HashMap<String, String>>,
     callback_base_url: Option<String>,
     entries: Arc<RwLock<PluginEntryRegistry>>,
@@ -3738,25 +3737,22 @@ struct HostMonitorStopParams {
 #[derive(serde::Deserialize)]
 struct HostEntryRegisterParams {
     request: HostEntryRegisterRequest,
-    #[allow(dead_code)]
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostEntryUpdateParams {
     request: HostEntryUpdateRequest,
-    #[allow(dead_code)]
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostEntryRemoveParams {
     request: HostEntryRemoveRequest,
-    #[allow(dead_code)]
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
@@ -3818,9 +3814,8 @@ struct HostSecretListParams {
 #[derive(serde::Deserialize)]
 struct HostPluginStatusGetParams {
     request: HostPluginStatusGetRequest,
-    #[allow(dead_code)]
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -3879,7 +3874,6 @@ struct HostSchedulerDeleteParams {
 #[derive(serde::Deserialize)]
 struct HostAgentRegisterParams {
     request: HostAgentRegisterRequest,
-    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -3887,14 +3881,12 @@ struct HostAgentRegisterParams {
 #[derive(serde::Deserialize)]
 struct HostAgentRemoveParams {
     request: HostAgentRemoveRequest,
-    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize, Default)]
 struct HostAgentListParams {
-    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -3902,7 +3894,6 @@ struct HostAgentListParams {
 #[derive(serde::Deserialize)]
 struct HostAgentGetParams {
     request: HostAgentGetRequest,
-    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -3911,7 +3902,6 @@ struct HostAgentGetParams {
 struct HostAgentSwitchParams {
     #[serde(default)]
     request: HostAgentSwitchRequest,
-    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -3920,7 +3910,6 @@ struct HostAgentSwitchParams {
 struct HostAgentRestoreParams {
     #[serde(default)]
     request: HostAgentRestoreRequest,
-    #[allow(dead_code)]
     #[serde(default)]
     context: Option<HostCallbackContext>,
 }
@@ -3948,33 +3937,29 @@ struct HostMcpRemoveServerParams {
 #[derive(serde::Deserialize)]
 struct HostStatuslineContributeParams {
     request: HostStatuslineContributeRequest,
-    #[allow(dead_code)]
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostStatuslineRemoveParams {
     request: HostStatuslineRemoveRequest,
-    #[allow(dead_code)]
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostThemeRegisterParams {
     request: HostThemeRegisterRequest,
-    #[allow(dead_code)]
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
 struct HostThemeRemoveParams {
     request: HostThemeRemoveRequest,
-    #[allow(dead_code)]
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
 }
 
 fn host_unavailable(message: impl Into<String>) -> PluginError {
@@ -4623,8 +4608,3 @@ impl HostClient for ScopedHostClient {
         Ok(HostThemeRemoveResponse { removed })
     }
 }
-
-/// Convenience: a `HostClient` impl that always errors. Used as the default
-/// inside `HostHandle` until agena wires its own.
-#[allow(dead_code)]
-pub struct HostHandleClient;

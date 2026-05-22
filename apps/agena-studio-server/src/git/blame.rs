@@ -60,7 +60,7 @@ fn parse_blame_header(line: &str) -> Option<(String, usize, usize)> {
         return None;
     }
 
-    let _orig_line = parts.next()?;
+    parts.next()?;
     let final_line = parts
         .next()
         .and_then(|v| v.parse::<usize>().ok())

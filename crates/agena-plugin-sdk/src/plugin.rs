@@ -8,7 +8,6 @@ use crate::error::Result;
 use crate::hooks::*;
 use crate::host_api::HostClient;
 use crate::manifest::PluginManifest;
-use crate::rpc::method;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitContext {
@@ -294,9 +293,4 @@ impl ToolStreamSink {
             })
             .await;
     }
-}
-
-#[allow(dead_code)]
-fn _ensure_method_used() {
-    let _ = method::HOOK_TOOL_INVOKE_STREAM;
 }

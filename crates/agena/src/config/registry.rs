@@ -933,7 +933,7 @@ fn build_adapter_provider(
                 runtime_config,
             )?)
         }
-        ProviderAdapterDefinition::AmazonBedrock(_adapter) => Arc::new(match auth {
+        ProviderAdapterDefinition::AmazonBedrock(_) => Arc::new(match auth {
             ProviderAuthConfig::BedrockSigv4(sigv4) => AmazonBedrockAdapter::new_sigv4(
                 client,
                 sigv4.base_url.clone(),
@@ -1386,17 +1386,22 @@ fn gitlab_runtime_config(
     config: &super::ProviderGitlabAuthConfig,
     default_model: &str,
 ) -> GitlabProviderConfig {
-    let mut runtime = GitlabProviderConfig::default();
-    runtime.instance_url = gitlab_instance_url(config);
-    runtime.ai_gateway_url = gitlab_ai_gateway_url(config);
-    runtime.default_model = default_model.to_owned();
-    if !config.ai_gateway_headers.is_empty() {
-        runtime.ai_gateway_headers = to_hash_map(&config.ai_gateway_headers);
+    let defaults = GitlabProviderConfig::default();
+    GitlabProviderConfig {
+        instance_url: gitlab_instance_url(config),
+        ai_gateway_url: gitlab_ai_gateway_url(config),
+        default_model: default_model.to_owned(),
+        ai_gateway_headers: if config.ai_gateway_headers.is_empty() {
+            defaults.ai_gateway_headers
+        } else {
+            to_hash_map(&config.ai_gateway_headers)
+        },
+        feature_flags: if config.feature_flags.is_empty() {
+            defaults.feature_flags
+        } else {
+            to_hash_map(&config.feature_flags)
+        },
     }
-    if !config.feature_flags.is_empty() {
-        runtime.feature_flags = to_hash_map(&config.feature_flags);
-    }
-    runtime
 }
 
 fn gitlab_auth_managed_credential(
@@ -1500,17 +1505,22 @@ fn gitlab_credential_runtime_config(
     config: &ProviderCredentialAuthConfig,
     default_model: &str,
 ) -> GitlabProviderConfig {
-    let mut runtime = GitlabProviderConfig::default();
-    runtime.instance_url = gitlab_credential_instance_url(config);
-    runtime.ai_gateway_url = gitlab_credential_ai_gateway_url(config);
-    runtime.default_model = default_model.to_owned();
-    if !config.ai_gateway_headers.is_empty() {
-        runtime.ai_gateway_headers = to_hash_map(&config.ai_gateway_headers);
+    let defaults = GitlabProviderConfig::default();
+    GitlabProviderConfig {
+        instance_url: gitlab_credential_instance_url(config),
+        ai_gateway_url: gitlab_credential_ai_gateway_url(config),
+        default_model: default_model.to_owned(),
+        ai_gateway_headers: if config.ai_gateway_headers.is_empty() {
+            defaults.ai_gateway_headers
+        } else {
+            to_hash_map(&config.ai_gateway_headers)
+        },
+        feature_flags: if config.feature_flags.is_empty() {
+            defaults.feature_flags
+        } else {
+            to_hash_map(&config.feature_flags)
+        },
     }
-    if !config.feature_flags.is_empty() {
-        runtime.feature_flags = to_hash_map(&config.feature_flags);
-    }
-    runtime
 }
 
 fn api_auth_has_direct_source(api: &ProviderApiAuthConfig, env: &dyn ConfigEnvironment) -> bool {
@@ -1799,11 +1809,7 @@ fn http_adapter_extra_headers<T>(
     default_user_agent: Option<String>,
 ) -> HashMap<String, String> {
     let mut headers = to_hash_map(&adapter.extra_headers);
-    if let Some(user_agent) = adapter
-        .user_agent
-        .as_deref()
-        .and_then(|value| normalize_text(value))
-    {
+    if let Some(user_agent) = adapter.user_agent.as_deref().and_then(normalize_text) {
         set_user_agent_header(&mut headers, user_agent);
     } else if !has_user_agent_header(&headers)
         && let Some(user_agent) = default_user_agent.as_deref().and_then(normalize_text)

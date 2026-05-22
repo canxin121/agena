@@ -122,20 +122,6 @@ pub(crate) struct InProcessToolPlugin {
 }
 
 impl InProcessToolPlugin {
-    #[allow(dead_code)]
-    pub fn new(
-        plugin_name: &'static str,
-        description: &'static str,
-        entries: Vec<PluginToolDecl>,
-    ) -> Self {
-        Self {
-            plugin_name,
-            description,
-            entries,
-            resolver: None,
-        }
-    }
-
     pub fn new_with_resolver(
         plugin_name: &'static str,
         description: &'static str,

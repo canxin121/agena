@@ -296,7 +296,6 @@ impl TranscriptToolOutput {
 }
 
 #[inline]
-#[allow(dead_code)]
 fn hash_len(hasher: &mut blake3::Hasher, len: u64) {
     hasher.update(&len.to_le_bytes());
 }
@@ -327,7 +326,6 @@ fn short_digest(value: &str) -> String {
 }
 
 #[inline]
-#[allow(dead_code)]
 fn hash_str(hasher: &mut blake3::Hasher, value: &str) {
     let bytes = value.as_bytes();
     hash_len(hasher, bytes.len() as u64);
@@ -335,7 +333,6 @@ fn hash_str(hasher: &mut blake3::Hasher, value: &str) {
 }
 
 #[inline]
-#[allow(dead_code)]
 fn hash_opt_str(hasher: &mut blake3::Hasher, value: Option<&str>) {
     match value {
         Some(v) => {

@@ -229,11 +229,7 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
     match part.content.as_ref() {
         Some(PartContent::Text(text)) => push_markdown(out, "  ", text.text.as_str(), width),
         Some(PartContent::Reasoning(reasoning)) => {
-            let summary = if !reasoning.summary.is_empty() {
-                reasoning.summary.join(" ")
-            } else {
-                reasoning.raw_content.join(" ")
-            };
+            let summary = reasoning.preferred_text();
             push_section_heading(
                 out,
                 "  thinking",
@@ -692,11 +688,7 @@ fn preview_for_part(part: &MessagePart, i18n: &I18n) -> Option<String> {
     match part.content.as_ref() {
         Some(PartContent::Text(text)) => first_non_empty_preview_line(text.text.as_str()),
         Some(PartContent::Reasoning(reasoning)) => {
-            let summary = if !reasoning.summary.is_empty() {
-                reasoning.summary.join(" ")
-            } else {
-                reasoning.raw_content.join(" ")
-            };
+            let summary = reasoning.preferred_text();
             first_non_empty_preview_line(summary.as_str())
         }
         Some(PartContent::Operation(tool)) => Some(tool_execution_preview(part, tool)),
@@ -812,10 +804,46 @@ fn push_markdown(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, width: u
         return;
     }
 
-    let rendered = markdown_to_text(markdown.as_str());
-    for line in rendered.lines {
-        push_wrapped_rich_line(out, prefix, prefix, owned_line(&line), width);
+    let lines = markdown.lines().collect::<Vec<_>>();
+    let mut chunk = Vec::<&str>::new();
+    let mut active_fence = None::<MarkdownFence>;
+    let mut index = 0_usize;
+
+    while index < lines.len() {
+        let line = lines[index];
+        if let Some(delimiter) = markdown_fence_delimiter(line) {
+            if let Some(active) = active_fence {
+                if delimiter.marker == active.marker && delimiter.len >= active.len {
+                    active_fence = None;
+                }
+            } else {
+                active_fence = Some(delimiter);
+            }
+            chunk.push(line);
+            index += 1;
+            continue;
+        }
+
+        if active_fence.is_none()
+            && index + 1 < lines.len()
+            && is_markdown_table_header(lines[index], lines[index + 1])
+        {
+            flush_markdown_chunk(out, prefix, &mut chunk, width);
+            let mut table_lines = vec![lines[index], lines[index + 1]];
+            index += 2;
+            while index < lines.len() && looks_like_markdown_table_row(lines[index]) {
+                table_lines.push(lines[index]);
+                index += 1;
+            }
+            push_markdown_table(out, prefix, table_lines.as_slice(), width);
+            continue;
+        }
+
+        chunk.push(line);
+        index += 1;
     }
+
+    flush_markdown_chunk(out, prefix, &mut chunk, width);
 }
 
 fn push_wrapped_line(
@@ -870,10 +898,14 @@ fn push_wrapped_rich_line(
     line: Line<'static>,
     width: u16,
 ) {
+    let line_style = line.style;
+    let line_alignment = line.alignment;
     if line.spans.is_empty() {
-        out.push(RenderedLine::rich(Line::from(Span::raw(
-            initial_prefix.to_string(),
-        ))));
+        out.push(RenderedLine::rich(Line {
+            style: line_style,
+            alignment: line_alignment,
+            spans: vec![Span::raw(initial_prefix.to_string())],
+        }));
         return;
     }
 
@@ -911,7 +943,14 @@ fn push_wrapped_rich_line(
         } else {
             continuation_prefix
         };
-        out.push(RenderedLine::rich(prefix_rich_line(prefix, wrapped_line)));
+        out.push(RenderedLine::rich(prefix_rich_line(
+            prefix,
+            Line {
+                style: line_style,
+                alignment: line_alignment,
+                spans: wrapped_line.spans,
+            },
+        )));
     }
 }
 
@@ -919,19 +958,28 @@ fn prefix_rich_line(prefix: &str, line: Line<'static>) -> Line<'static> {
     if prefix.is_empty() {
         return line;
     }
+    let style = line.style;
+    let alignment = line.alignment;
     let mut spans = Vec::with_capacity(line.spans.len().saturating_add(1));
     spans.push(Span::raw(prefix.to_string()));
     spans.extend(line.spans);
-    Line::from(spans)
+    Line {
+        style,
+        alignment,
+        spans,
+    }
 }
 
 fn owned_line(line: &Line<'_>) -> Line<'static> {
-    Line::from(
-        line.spans
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line
+            .spans
             .iter()
             .map(|span| Span::styled(span.content.to_string(), span.style))
             .collect::<Vec<_>>(),
-    )
+    }
 }
 
 fn line_plain_text(line: &Line<'static>) -> String {
@@ -939,6 +987,398 @@ fn line_plain_text(line: &Line<'static>) -> String {
         .iter()
         .map(|span| span.content.as_ref())
         .collect::<String>()
+}
+
+fn flush_markdown_chunk(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    chunk: &mut Vec<&str>,
+    width: u16,
+) {
+    if chunk.is_empty() {
+        return;
+    }
+    let chunk_text = chunk.join("\n");
+    let rendered = markdown_to_text(chunk_text.as_str());
+    for line in rendered.lines {
+        push_wrapped_rich_line(out, prefix, prefix, owned_line(&line), width);
+    }
+    chunk.clear();
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MarkdownFence {
+    marker: char,
+    len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableColumnAlignment {
+    Left,
+    Center,
+    Right,
+}
+
+fn markdown_fence_delimiter(line: &str) -> Option<MarkdownFence> {
+    let trimmed = line.trim_start();
+    let marker = trimmed.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+    let len = trimmed.chars().take_while(|ch| *ch == marker).count();
+    (len >= 3).then_some(MarkdownFence { marker, len })
+}
+
+fn is_markdown_table_header(header: &str, delimiter: &str) -> bool {
+    if !header.contains('|') {
+        return false;
+    }
+    parse_markdown_table_alignment(delimiter).is_some()
+}
+
+fn looks_like_markdown_table_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && trimmed.contains('|')
+}
+
+fn push_markdown_table(out: &mut Vec<RenderedLine>, prefix: &str, lines: &[&str], width: u16) {
+    if lines.len() < 2 {
+        for line in lines {
+            push_multiline(out, prefix, line, Style::default(), width);
+        }
+        return;
+    }
+
+    let Some(alignments) = parse_markdown_table_alignment(lines[1]) else {
+        for line in lines {
+            push_multiline(out, prefix, line, Style::default(), width);
+        }
+        return;
+    };
+
+    let mut rows = lines
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 1)
+        .map(|(_, line)| parse_markdown_table_row(line))
+        .collect::<Vec<_>>();
+    if rows.is_empty() {
+        return;
+    }
+
+    let column_count = rows
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or_else(|| alignments.len().max(1));
+    if column_count == 0 {
+        return;
+    }
+
+    let alignments = normalize_table_alignments(alignments, column_count);
+    for row in &mut rows {
+        row.resize(column_count, String::new());
+        for cell in row.iter_mut() {
+            *cell = markdown_table_cell_text(cell.as_str());
+        }
+    }
+
+    let separator_width = column_count.saturating_sub(1).saturating_mul(3);
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    let available_width = width.max(1) as usize;
+    let table_width_budget = available_width.saturating_sub(prefix_width);
+    let min_content_width = column_count.saturating_mul(3);
+    if table_width_budget <= separator_width.saturating_add(min_content_width) {
+        push_markdown_table_fallback(out, prefix, &rows, width);
+        return;
+    }
+
+    let column_widths = compute_table_column_widths(
+        rows.as_slice(),
+        table_width_budget.saturating_sub(separator_width),
+    );
+    if column_widths.is_empty() {
+        push_markdown_table_fallback(out, prefix, &rows, width);
+        return;
+    }
+
+    let header_style = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let separator_style = Style::default().fg(Color::DarkGray);
+    let body_style = Style::default();
+
+    render_table_row(
+        out,
+        prefix,
+        rows[0].as_slice(),
+        column_widths.as_slice(),
+        alignments.as_slice(),
+        header_style,
+    );
+    push_table_separator(out, prefix, column_widths.as_slice(), separator_style);
+    for row in rows.iter().skip(1) {
+        render_table_row(
+            out,
+            prefix,
+            row.as_slice(),
+            column_widths.as_slice(),
+            alignments.as_slice(),
+            body_style,
+        );
+    }
+}
+
+fn push_markdown_table_fallback(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    rows: &[Vec<String>],
+    width: u16,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let header = rows[0]
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    push_multiline(
+        out,
+        prefix,
+        header.as_str(),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+        width,
+    );
+    for row in rows.iter().skip(1) {
+        push_multiline(
+            out,
+            prefix,
+            row.iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(" | ")
+                .as_str(),
+            Style::default(),
+            width,
+        );
+    }
+}
+
+fn parse_markdown_table_alignment(line: &str) -> Option<Vec<TableColumnAlignment>> {
+    let cells = parse_markdown_table_row(line);
+    if cells.is_empty() {
+        return None;
+    }
+
+    cells
+        .into_iter()
+        .map(|cell| {
+            let trimmed = cell.trim();
+            if trimmed.is_empty()
+                || !trimmed.contains('-')
+                || !trimmed.chars().all(|ch| matches!(ch, '-' | ':' | ' '))
+            {
+                return None;
+            }
+            Some(match (trimmed.starts_with(':'), trimmed.ends_with(':')) {
+                (true, true) => TableColumnAlignment::Center,
+                (false, true) => TableColumnAlignment::Right,
+                _ => TableColumnAlignment::Left,
+            })
+        })
+        .collect()
+}
+
+fn parse_markdown_table_row(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let content = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let content = content.strip_suffix('|').unwrap_or(content);
+    let mut cells = Vec::new();
+    let mut cell = String::new();
+    let mut escape = false;
+
+    for ch in content.chars() {
+        if escape {
+            cell.push(ch);
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' => escape = true,
+            '|' => {
+                cells.push(cell.trim().to_string());
+                cell.clear();
+            }
+            _ => cell.push(ch),
+        }
+    }
+    if escape {
+        cell.push('\\');
+    }
+    cells.push(cell.trim().to_string());
+    cells
+}
+
+fn normalize_table_alignments(
+    mut alignments: Vec<TableColumnAlignment>,
+    column_count: usize,
+) -> Vec<TableColumnAlignment> {
+    alignments.resize(column_count, TableColumnAlignment::Left);
+    alignments
+}
+
+fn markdown_table_cell_text(cell: &str) -> String {
+    let rendered = markdown_to_text(cell);
+    let flattened = rendered
+        .lines
+        .iter()
+        .map(|line| line_plain_text(&owned_line(line)))
+        .collect::<Vec<_>>()
+        .join(" ");
+    sanitize_terminal_text(flattened.as_str())
+        .trim()
+        .to_string()
+}
+
+fn compute_table_column_widths(rows: &[Vec<String>], budget: usize) -> Vec<usize> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+
+    let column_count = rows.iter().map(Vec::len).max().unwrap_or(0);
+    if column_count == 0 {
+        return Vec::new();
+    }
+
+    let min_width = 3_usize;
+    let min_total = min_width.saturating_mul(column_count);
+    if budget < min_total {
+        return Vec::new();
+    }
+
+    let natural_widths = (0..column_count)
+        .map(|index| {
+            rows.iter()
+                .filter_map(|row| row.get(index))
+                .map(|cell| UnicodeWidthStr::width(cell.as_str()).max(min_width))
+                .max()
+                .unwrap_or(min_width)
+        })
+        .collect::<Vec<_>>();
+    let mut widths = vec![min_width; column_count];
+    let mut remaining = budget.saturating_sub(min_total);
+    let mut deficits = natural_widths
+        .iter()
+        .map(|width| width.saturating_sub(min_width))
+        .collect::<Vec<_>>();
+
+    while remaining > 0 && deficits.iter().any(|deficit| *deficit > 0) {
+        for index in 0..column_count {
+            if deficits[index] == 0 || remaining == 0 {
+                continue;
+            }
+            widths[index] += 1;
+            deficits[index] -= 1;
+            remaining -= 1;
+        }
+    }
+
+    widths
+}
+
+fn render_table_row(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    cells: &[String],
+    widths: &[usize],
+    alignments: &[TableColumnAlignment],
+    style: Style,
+) {
+    let wrapped_cells = cells
+        .iter()
+        .zip(widths.iter())
+        .map(|(cell, width)| wrap_table_cell(cell.as_str(), *width))
+        .collect::<Vec<_>>();
+    let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
+
+    for line_index in 0..row_height {
+        let mut spans = vec![Span::raw(prefix.to_string())];
+        for (column_index, width) in widths.iter().enumerate() {
+            if column_index > 0 {
+                spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+            }
+            let text = wrapped_cells
+                .get(column_index)
+                .and_then(|lines| lines.get(line_index))
+                .cloned()
+                .unwrap_or_default();
+            spans.push(Span::styled(
+                pad_table_cell(
+                    text.as_str(),
+                    *width,
+                    alignments
+                        .get(column_index)
+                        .copied()
+                        .unwrap_or(TableColumnAlignment::Left),
+                ),
+                style,
+            ));
+        }
+        out.push(RenderedLine::rich(Line::from(spans)));
+    }
+}
+
+fn push_table_separator(out: &mut Vec<RenderedLine>, prefix: &str, widths: &[usize], style: Style) {
+    let mut spans = vec![Span::raw(prefix.to_string())];
+    for (index, width) in widths.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled("-+-", style));
+        }
+        spans.push(Span::styled("-".repeat(*width), style));
+    }
+    out.push(RenderedLine::rich(Line::from(spans)));
+}
+
+fn wrap_table_cell(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![String::new()];
+    }
+
+    let normalized = sanitize_terminal_text(text).trim().to_string();
+    if normalized.is_empty() {
+        return vec![String::new()];
+    }
+
+    let options = WrapOptions::new(width)
+        .break_words(true)
+        .word_splitter(WordSplitter::NoHyphenation);
+    let wrapped = wrap(normalized.as_str(), options);
+    if wrapped.is_empty() {
+        return vec![String::new()];
+    }
+
+    wrapped
+        .into_iter()
+        .map(|segment| truncate_display_width(segment.as_ref(), width))
+        .collect()
+}
+
+fn pad_table_cell(text: &str, width: usize, alignment: TableColumnAlignment) -> String {
+    let visible = truncate_display_width(text, width);
+    let visible_width = UnicodeWidthStr::width(visible.as_str());
+    let padding = width.saturating_sub(visible_width);
+    match alignment {
+        TableColumnAlignment::Left => format!("{visible}{}", " ".repeat(padding)),
+        TableColumnAlignment::Right => format!("{}{visible}", " ".repeat(padding)),
+        TableColumnAlignment::Center => {
+            let left = padding / 2;
+            let right = padding.saturating_sub(left);
+            format!("{}{}{}", " ".repeat(left), visible, " ".repeat(right))
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1137,6 +1577,8 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agena::message::ReasoningPart;
+    use chrono::Utc;
 
     #[test]
     fn trim_empty_line_edges_removes_outer_blank_lines_only() {
@@ -1167,5 +1609,69 @@ mod tests {
         assert!(out.iter().all(|line| line.rich_line.is_some()));
         assert!(out.iter().any(|line| line.text.contains("hello")));
         assert!(out.iter().any(|line| line.text.contains("world")));
+    }
+
+    #[test]
+    fn push_markdown_preserves_heading_line_style() {
+        let mut out = Vec::new();
+        push_markdown(&mut out, "  ", "# heading", 40);
+        let heading = out
+            .iter()
+            .find_map(|line| line.rich_line.as_ref())
+            .expect("expected heading line");
+        assert_ne!(heading.style, Style::default());
+        assert_eq!(out[0].style, heading.style);
+    }
+
+    #[test]
+    fn push_markdown_renders_pipe_tables() {
+        let mut out = Vec::new();
+        push_markdown(
+            &mut out,
+            "  ",
+            "| Name | Status |\n| --- | ---: |\n| Alice | ok |\n| Bob | waiting |",
+            48,
+        );
+        let rendered = out.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert!(rendered.iter().any(|line| line.contains("Name")));
+        assert!(rendered.iter().any(|line| line.contains("Alice")));
+        assert!(rendered.iter().any(|line| line.contains("-+-")));
+    }
+
+    #[test]
+    fn render_reasoning_part_does_not_inject_spaces_between_deltas() {
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Reasoning(ReasoningPart {
+                summary: vec![
+                    "The".to_string(),
+                    " user".to_string(),
+                    " wants".to_string(),
+                    " a".to_string(),
+                    " bigger".to_string(),
+                    " /m".to_string(),
+                    "ore".to_string(),
+                    " extensive".to_string(),
+                    " table.".to_string(),
+                ],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+
+        let mut out = Vec::new();
+        render_part(&part, 120, &mut out, &I18n::english());
+
+        let rendered = out.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("The user wants a bigger /more extensive table."))
+        );
+        assert!(!rendered.iter().any(|line| line.contains("/m ore")));
+        assert!(!rendered.iter().any(|line| line.contains("The  user")));
     }
 }

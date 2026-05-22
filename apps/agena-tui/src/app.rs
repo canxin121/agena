@@ -34,9 +34,7 @@ use agena_api::{
 };
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
-use crossterm::event::{
-    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind,
-};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
 use ratatui::{
     Frame, Terminal,
@@ -1746,43 +1744,8 @@ impl App {
             Event::Key(key) => self.handle_key_event(key),
             Event::Paste(text) => self.handle_paste(text),
             Event::Resize(_, _) => self.transcript.invalidate_render(),
-            Event::Mouse(mouse) => self.handle_mouse_event(mouse),
+            Event::Mouse(_) => {}
             Event::FocusGained | Event::FocusLost => {}
-        }
-    }
-
-    fn handle_mouse_event(&mut self, mouse: MouseEvent) {
-        if !matches!(
-            mouse.kind,
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
-        ) {
-            return;
-        }
-        if !matches!(self.current_route, Route::Main) || self.overlay.is_some() {
-            return;
-        }
-
-        let area = self.layout.transcript_body;
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-        let inside_transcript = mouse.column >= area.x
-            && mouse.column < area.x.saturating_add(area.width)
-            && mouse.row >= area.y
-            && mouse.row < area.y.saturating_add(area.height);
-        if !inside_transcript {
-            return;
-        }
-
-        let delta = match mouse.kind {
-            MouseEventKind::ScrollUp => -3,
-            MouseEventKind::ScrollDown => 3,
-            _ => return,
-        };
-        self.transcript
-            .scroll_by_lines(area.width, area.height, delta);
-        if delta.is_negative() {
-            self.maybe_request_older_messages();
         }
     }
 
@@ -13530,9 +13493,10 @@ impl RenderedLine {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>();
+        let style = line.style;
         Self {
             text,
-            style: Style::default(),
+            style,
             rich_line: Some(line),
         }
     }

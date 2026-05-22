@@ -2897,28 +2897,27 @@ mod runtime_builtin_tool_tests {
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput};
+    use crate::plugin::sdk::host_api::{
+        AskUserRequest, AskUserResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
+        HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext, HostClearGoalRequest,
+        HostClearGoalResponse, HostClient, HostConfigReloadResponse, HostCreateGoalRequest,
+        HostCreateGoalResponse, HostEnterPlanModeRequest, HostEnterWorktreeRequest,
+        HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
+        HostGetSessionRequest, HostGetSessionResponse, HostGoal, HostGoalStatus, HostLspDiagnostic,
+        HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
+        HostLspServer, HostRenameSessionRequest, HostRenameSessionResponse, HostSession,
+        HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
+        HostUpdateGoalResponse, LogLevel, SpawnSubtaskRequest, SpawnSubtaskResponse,
+        ToolDescriptor, current_host_callback_context,
+    };
+    use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
     use axum::{
         Router,
         extract::State,
         response::Html,
         routing::{get, post},
     };
-    use crate::message::{EnterWorktreeToolInput, ExitWorktreeToolInput};
-    use crate::plugin::sdk::host_api::{
-        AskUserRequest, AskUserResponse, HostAgentRestoreRequest, HostAgentRestoreResponse,
-        HostAgentSwitchRequest, HostAgentSwitchResponse, HostCallbackContext,
-        HostClearGoalRequest, HostClearGoalResponse, HostClient, HostConfigReloadResponse,
-        HostCreateGoalRequest, HostCreateGoalResponse, HostEnterPlanModeRequest,
-        HostEnterWorktreeRequest, HostExitPlanModeRequest, HostExitWorktreeRequest,
-        HostGetGoalRequest, HostGetGoalResponse, HostGetSessionRequest, HostGetSessionResponse,
-        HostGoal, HostGoalStatus, HostLspDiagnostic, HostLspListDiagnosticsRequest,
-        HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
-        HostRenameSessionRequest, HostRenameSessionResponse, HostSession, HostTodoPriority,
-        HostTodoStatus, HostTodoWriteRequest,
-        HostUpdateGoalRequest, HostUpdateGoalResponse, LogLevel, SpawnSubtaskRequest,
-        SpawnSubtaskResponse, ToolDescriptor, current_host_callback_context,
-    };
-    use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
 
     struct NoopJobSink;
 
@@ -3013,13 +3012,7 @@ mod runtime_builtin_tool_tests {
 
     #[async_trait]
     impl HostClient for RuntimeToolTestHostClient {
-        async fn log(
-            &self,
-            _level: LogLevel,
-            _message: String,
-            _fields: serde_json::Value,
-        ) {
-        }
+        async fn log(&self, _level: LogLevel, _message: String, _fields: serde_json::Value) {}
 
         async fn publish_event(&self, _env: EventEnvelope) -> crate::plugin::sdk::Result<()> {
             Ok(())
@@ -3077,7 +3070,10 @@ mod runtime_builtin_tool_tests {
             Ok(host_invoke_execution_output(execution))
         }
 
-        async fn ask_user(&self, req: AskUserRequest) -> crate::plugin::sdk::Result<AskUserResponse> {
+        async fn ask_user(
+            &self,
+            req: AskUserRequest,
+        ) -> crate::plugin::sdk::Result<AskUserResponse> {
             let mut answers = BTreeMap::new();
             for question in req.questions {
                 let answer = question
@@ -3524,8 +3520,10 @@ mod runtime_builtin_tool_tests {
     where
         P: ModelRuntime + 'static,
     {
-        build_runtime_tool_manager_with_provider_and_executor(root, db, provider, |executor| executor)
-            .await
+        build_runtime_tool_manager_with_provider_and_executor(root, db, provider, |executor| {
+            executor
+        })
+        .await
     }
 
     async fn build_runtime_tool_manager_with_provider_and_executor<P, F>(
@@ -3566,24 +3564,27 @@ mod runtime_builtin_tool_tests {
             executor.clone(),
             root.join("config.json"),
         ));
-        plugins
-            .host_handle()
-            .install_client(host.clone())
-            .await;
+        plugins.host_handle().install_client(host.clone()).await;
 
         let mut registry = ProviderRegistry::new();
         registry.register(provider);
-        let processor = SessionProcessor::new(Arc::new(registry), ContextGovernor::new(ContextPolicy::default()))
-            .with_plugin_host(Arc::clone(&plugins));
-        let manager =
-            Arc::new(SessionManager::new(db, processor, executor).with_config(SessionManagerConfig::default()));
+        let processor = SessionProcessor::new(
+            Arc::new(registry),
+            ContextGovernor::new(ContextPolicy::default()),
+        )
+        .with_plugin_host(Arc::clone(&plugins));
+        let manager = Arc::new(
+            SessionManager::new(db, processor, executor)
+                .with_config(SessionManagerConfig::default()),
+        );
         host.install_manager(Arc::clone(&manager)).await;
         (manager, host)
     }
 
     async fn open_runtime_tool_database(root: &Path, name: &str) -> DatabaseConnection {
         let path = root.join(name);
-        let mut options = sea_orm::ConnectOptions::new(format!("sqlite://{}?mode=rwc", path.display()));
+        let mut options =
+            sea_orm::ConnectOptions::new(format!("sqlite://{}?mode=rwc", path.display()));
         options.max_connections(8);
         options.min_connections(1);
         let db = Database::connect(options)
@@ -3640,19 +3641,26 @@ mod runtime_builtin_tool_tests {
     }
 
     fn request_operation_text(request: &CompletionRequest, operation_id: &str) -> Option<String> {
-        request.messages.iter().flat_map(|message| message.parts.iter()).find_map(|part| {
-            if part.operation_id.as_deref() != Some(operation_id) {
-                return None;
-            }
-            match part.content.as_ref() {
-                Some(PartContent::Operation(operation))
-                    if matches!(part.status, ExecutionStatus::Completed | ExecutionStatus::Failed) =>
-                {
-                    Some(operation.model_output.text.clone())
+        request
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find_map(|part| {
+                if part.operation_id.as_deref() != Some(operation_id) {
+                    return None;
                 }
-                _ => None,
-            }
-        })
+                match part.content.as_ref() {
+                    Some(PartContent::Operation(operation))
+                        if matches!(
+                            part.status,
+                            ExecutionStatus::Completed | ExecutionStatus::Failed
+                        ) =>
+                    {
+                        Some(operation.model_output.text.clone())
+                    }
+                    _ => None,
+                }
+            })
     }
 
     fn request_operation_debug(request: &CompletionRequest, operation_id: &str) -> String {
@@ -3678,7 +3686,10 @@ mod runtime_builtin_tool_tests {
             .unwrap_or_else(|| format!("operation {operation_id} not found"))
     }
 
-    fn request_operation_payload(request: &CompletionRequest, operation_id: &str) -> serde_json::Value {
+    fn request_operation_payload(
+        request: &CompletionRequest,
+        operation_id: &str,
+    ) -> serde_json::Value {
         request
             .messages
             .iter()
@@ -3689,7 +3700,10 @@ mod runtime_builtin_tool_tests {
                 }
                 match part.content.as_ref() {
                     Some(PartContent::Operation(operation))
-                        if matches!(part.status, ExecutionStatus::Completed | ExecutionStatus::Failed) =>
+                        if matches!(
+                            part.status,
+                            ExecutionStatus::Completed | ExecutionStatus::Failed
+                        ) =>
                     {
                         operation.details.to_json_payload()
                     }
@@ -3769,7 +3783,10 @@ mod runtime_builtin_tool_tests {
             )
         }
 
-        async fn search_results(State(state): State<LocalWebServerState>, _body: String) -> Html<String> {
+        async fn search_results(
+            State(state): State<LocalWebServerState>,
+            _body: String,
+        ) -> Html<String> {
             state.search_hits.fetch_add(1, Ordering::SeqCst);
             Html(format!(
                 r#"
@@ -3790,8 +3807,8 @@ mod runtime_builtin_tool_tests {
 
         let fetch_hits = Arc::new(AtomicUsize::new(0));
         let search_hits = Arc::new(AtomicUsize::new(0));
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("local web fixture should bind");
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("local web fixture should bind");
         listener
             .set_nonblocking(true)
             .expect("local web fixture listener should become nonblocking");
@@ -4001,10 +4018,16 @@ while True:
         }
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel::new("runtime-tools", "runtime-tools-model")])
+            Ok(vec![ProviderModel::new(
+                "runtime-tools",
+                "runtime-tools-model",
+            )])
         }
 
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
             Err(AppError::Provider("streaming only".to_string()))
         }
 
@@ -4224,7 +4247,9 @@ while True:
                     .messages
                     .iter()
                     .any(|message| message.role == Role::Assistant
-                        && message.as_text_lossy().contains("runtime tool flow finished")),
+                        && message
+                            .as_text_lossy()
+                            .contains("runtime tool flow finished")),
                 "assistant should acknowledge the flow completion"
             );
 
@@ -4243,7 +4268,11 @@ while True:
                 "call_worktree_exit_1",
             ] {
                 let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(status, ExecutionStatus::Completed, "{operation_id} was not completed");
+                assert_eq!(
+                    status,
+                    ExecutionStatus::Completed,
+                    "{operation_id} was not completed"
+                );
                 assert!(error.is_none(), "{operation_id} failed: {error:?}");
             }
 
@@ -4286,8 +4315,7 @@ while True:
             let root_notes = std::fs::read_to_string(workspace.root.join("notes.txt"))
                 .expect("original workspace notes should remain readable");
             assert_eq!(
-                root_notes,
-                "base line\n",
+                root_notes, "base line\n",
                 "worktree mutation should not leak back into the original workspace"
             );
             assert!(
@@ -4313,10 +4341,16 @@ while True:
         }
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel::new("runtime-tools", "runtime-tools-model")])
+            Ok(vec![ProviderModel::new(
+                "runtime-tools",
+                "runtime-tools-model",
+            )])
         }
 
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
             Err(AppError::Provider("streaming only".to_string()))
         }
 
@@ -4463,12 +4497,9 @@ while True:
             let workspace = TempWorkspace::new();
             init_git_workspace(&workspace.root);
             let db = open_runtime_tool_database(&workspace.root, "runtime-tools-shell.db").await;
-            let (manager, _host) = build_runtime_tool_manager_with_provider(
-                &workspace.root,
-                db,
-                ShellRuntimeProvider,
-            )
-            .await;
+            let (manager, _host) =
+                build_runtime_tool_manager_with_provider(&workspace.root, db, ShellRuntimeProvider)
+                    .await;
 
             let created = manager
                 .create_session(SessionCreateRequest {
@@ -4516,7 +4547,9 @@ while True:
                     .messages
                     .iter()
                     .any(|message| message.role == Role::Assistant
-                        && message.as_text_lossy().contains("runtime shell flow finished")),
+                        && message
+                            .as_text_lossy()
+                            .contains("runtime shell flow finished")),
                 "assistant should acknowledge the shell flow completion"
             );
 
@@ -4529,7 +4562,11 @@ while True:
                 "call_monitor_stop_1",
             ] {
                 let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(status, ExecutionStatus::Completed, "{operation_id} was not completed");
+                assert_eq!(
+                    status,
+                    ExecutionStatus::Completed,
+                    "{operation_id} was not completed"
+                );
                 assert!(error.is_none(), "{operation_id} failed: {error:?}");
             }
 
@@ -4541,7 +4578,10 @@ while True:
                     ExecutionStatus::Completed,
                     "powershell should succeed on Windows"
                 );
-                assert!(powershell_error.is_none(), "powershell should not error on Windows");
+                assert!(
+                    powershell_error.is_none(),
+                    "powershell should not error on Windows"
+                );
             } else {
                 assert_eq!(
                     powershell_status,
@@ -4575,7 +4615,9 @@ while True:
                 .as_array()
                 .expect("tools payload should include loaded_tools");
             assert!(
-                loaded_tools.iter().any(|tool| tool.as_str() == Some("shell")),
+                loaded_tools
+                    .iter()
+                    .any(|tool| tool.as_str() == Some("shell")),
                 "tools search should have loaded the deferred shell tool"
             );
 
@@ -4618,7 +4660,10 @@ while True:
 
             let monitor_stop_payload = session_operation_payload(&session, "call_monitor_stop_1");
             assert_eq!(monitor_stop_payload["action"].as_str(), Some("stop"));
-            assert_eq!(monitor_stop_payload["monitor_id"].as_str(), Some(monitor_id));
+            assert_eq!(
+                monitor_stop_payload["monitor_id"].as_str(),
+                Some(monitor_id)
+            );
         });
     }
 
@@ -4640,10 +4685,16 @@ while True:
         }
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel::new("runtime-tools", "runtime-tools-model")])
+            Ok(vec![ProviderModel::new(
+                "runtime-tools",
+                "runtime-tools-model",
+            )])
         }
 
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
             Err(AppError::Provider("streaming only".to_string()))
         }
 
@@ -4654,7 +4705,9 @@ while True:
             std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
             AppError,
         > {
-            let events = if completed_or_failed_operation_count(&request, &["call_tools_web_1"]) == 0 {
+            let events = if completed_or_failed_operation_count(&request, &["call_tools_web_1"])
+                == 0
+            {
                 scripted_tool_call_events(vec![(
                     "call_tools_web_1",
                     "tools",
@@ -4774,7 +4827,9 @@ while True:
                     .messages
                     .iter()
                     .any(|message| message.role == Role::Assistant
-                        && message.as_text_lossy().contains("runtime web flow finished")),
+                        && message
+                            .as_text_lossy()
+                            .contains("runtime web flow finished")),
                 "assistant should acknowledge the web flow completion"
             );
 
@@ -4878,10 +4933,16 @@ while True:
         }
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel::new("runtime-tools", "runtime-tools-model")])
+            Ok(vec![ProviderModel::new(
+                "runtime-tools",
+                "runtime-tools-model",
+            )])
         }
 
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
             Err(AppError::Provider("streaming only".to_string()))
         }
 
@@ -4898,52 +4959,54 @@ while True:
                         .as_text_lossy()
                         .contains("Inspect SUBTASK.md and report its headline.")
             }) {
-                let events = if completed_or_failed_operation_count(&request, &["call_subtask_fs_read_1"])
-                    == 0
-                {
+                let events =
+                    if completed_or_failed_operation_count(&request, &["call_subtask_fs_read_1"])
+                        == 0
+                    {
+                        scripted_tool_call_events(vec![(
+                            "call_subtask_fs_read_1",
+                            "fs",
+                            serde_json::json!({
+                                "action": "read",
+                                "path": "SUBTASK.md"
+                            })
+                            .to_string(),
+                        )])
+                    } else {
+                        scripted_text_events("subtask finished: Delegated Notes")
+                    };
+                return Ok(Box::pin(stream::iter(events)));
+            }
+
+            let events =
+                if completed_or_failed_operation_count(&request, &["call_tools_task_1"]) == 0 {
                     scripted_tool_call_events(vec![(
-                        "call_subtask_fs_read_1",
-                        "fs",
+                        "call_tools_task_1",
+                        "tools",
                         serde_json::json!({
-                            "action": "read",
-                            "path": "SUBTASK.md"
+                            "action": "search",
+                            "query": "subtask delegated work",
+                            "load": ["task"],
+                            "limit": 5
+                        })
+                        .to_string(),
+                    )])
+                } else if completed_or_failed_operation_count(&request, &["call_task_run_1"]) == 0 {
+                    scripted_tool_call_events(vec![(
+                        "call_task_run_1",
+                        "task",
+                        serde_json::json!({
+                            "action": "run",
+                            "description": "inspect delegated note",
+                            "prompt": "Inspect SUBTASK.md and report its headline.",
+                            "subagent_type": "explore",
+                            "task_id": "runtime-task-note"
                         })
                         .to_string(),
                     )])
                 } else {
-                    scripted_text_events("subtask finished: Delegated Notes")
+                    scripted_text_events("runtime task flow finished")
                 };
-                return Ok(Box::pin(stream::iter(events)));
-            }
-
-            let events = if completed_or_failed_operation_count(&request, &["call_tools_task_1"]) == 0 {
-                scripted_tool_call_events(vec![(
-                    "call_tools_task_1",
-                    "tools",
-                    serde_json::json!({
-                        "action": "search",
-                        "query": "subtask delegated work",
-                        "load": ["task"],
-                        "limit": 5
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_task_run_1"]) == 0 {
-                scripted_tool_call_events(vec![(
-                    "call_task_run_1",
-                    "task",
-                    serde_json::json!({
-                        "action": "run",
-                        "description": "inspect delegated note",
-                        "prompt": "Inspect SUBTASK.md and report its headline.",
-                        "subagent_type": "explore",
-                        "task_id": "runtime-task-note"
-                    })
-                    .to_string(),
-                )])
-            } else {
-                scripted_text_events("runtime task flow finished")
-            };
 
             Ok(Box::pin(stream::iter(events)))
         }
@@ -4960,12 +5023,9 @@ while True:
             )
             .expect("runtime task fixture should be written");
             let db = open_runtime_tool_database(&workspace.root, "runtime-tools-task.db").await;
-            let (manager, _host) = build_runtime_tool_manager_with_provider(
-                &workspace.root,
-                db,
-                TaskRuntimeProvider,
-            )
-            .await;
+            let (manager, _host) =
+                build_runtime_tool_manager_with_provider(&workspace.root, db, TaskRuntimeProvider)
+                    .await;
 
             let created = manager
                 .create_session(SessionCreateRequest {
@@ -5001,7 +5061,9 @@ while True:
                     .messages
                     .iter()
                     .any(|message| message.role == Role::Assistant
-                        && message.as_text_lossy().contains("runtime task flow finished")),
+                        && message
+                            .as_text_lossy()
+                            .contains("runtime task flow finished")),
                 "assistant should acknowledge the task flow completion"
             );
 
@@ -5021,7 +5083,9 @@ while True:
                 .as_array()
                 .expect("tools payload should include loaded_tools");
             assert!(
-                loaded_tools.iter().any(|tool| tool.as_str() == Some("task")),
+                loaded_tools
+                    .iter()
+                    .any(|tool| tool.as_str() == Some("task")),
                 "tools search should have loaded the deferred task tool"
             );
 
@@ -5047,7 +5111,10 @@ while True:
                 .await
                 .expect("child session should load");
             assert_eq!(child.parent_id, Some(created.id));
-            assert!(child.is_subagent, "task flow should create a subagent session");
+            assert!(
+                child.is_subagent,
+                "task flow should create a subagent session"
+            );
             assert!(
                 child.messages.iter().any(|message| {
                     message.role == Role::Assistant
@@ -5063,7 +5130,9 @@ while True:
                 .as_array()
                 .expect("subtask read payload should include loaded paths");
             assert!(
-                loaded_paths.iter().any(|value| value.as_str() == Some("SUBTASK.md")),
+                loaded_paths
+                    .iter()
+                    .any(|value| value.as_str() == Some("SUBTASK.md")),
                 "subtask should read the delegated fixture file"
             );
             assert!(
@@ -5079,7 +5148,8 @@ while True:
                     .flat_map(|message| message.parts.iter())
                     .filter(|part| part.operation_id.as_deref() == Some("call_subtask_fs_read_1"))
                     .filter_map(|part| match part.content.as_ref() {
-                        Some(PartContent::Operation(operation)) => Some(operation.model_output.text.clone()),
+                        Some(PartContent::Operation(operation)) =>
+                            Some(operation.model_output.text.clone()),
                         _ => None,
                     })
                     .any(|text| text.contains("# Delegated Notes")),
@@ -5104,10 +5174,16 @@ while True:
         }
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel::new("runtime-tools", "runtime-tools-model")])
+            Ok(vec![ProviderModel::new(
+                "runtime-tools",
+                "runtime-tools-model",
+            )])
         }
 
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
             Err(AppError::Provider("streaming only".to_string()))
         }
 
@@ -5118,7 +5194,8 @@ while True:
             std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
             AppError,
         > {
-            let events = if completed_or_failed_operation_count(&request, &["call_lsp_servers_1"]) == 0
+            let events = if completed_or_failed_operation_count(&request, &["call_lsp_servers_1"])
+                == 0
             {
                 scripted_tool_call_events(vec![(
                     "call_lsp_servers_1",
@@ -5128,7 +5205,8 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_lsp_definition_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_lsp_definition_1"]) == 0
+            {
                 scripted_tool_call_events(vec![(
                     "call_lsp_definition_1",
                     "lsp",
@@ -5140,7 +5218,8 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_lsp_references_1"]) == 0 {
+            } else if completed_or_failed_operation_count(&request, &["call_lsp_references_1"]) == 0
+            {
                 scripted_tool_call_events(vec![(
                     "call_lsp_references_1",
                     "lsp",
@@ -5165,7 +5244,8 @@ while True:
                     })
                     .to_string(),
                 )])
-            } else if completed_or_failed_operation_count(&request, &["call_lsp_diagnostics_1"]) == 0
+            } else if completed_or_failed_operation_count(&request, &["call_lsp_diagnostics_1"])
+                == 0
             {
                 scripted_tool_call_events(vec![(
                     "call_lsp_diagnostics_1",
@@ -5191,12 +5271,9 @@ while True:
             init_git_workspace(&workspace.root);
             let lsp_fixture = write_local_lsp_fixture(&workspace.root);
             let db = open_runtime_tool_database(&workspace.root, "runtime-tools-lsp.db").await;
-            let (manager, _host) = build_runtime_tool_manager_with_provider(
-                &workspace.root,
-                db,
-                LspRuntimeProvider,
-            )
-            .await;
+            let (manager, _host) =
+                build_runtime_tool_manager_with_provider(&workspace.root, db, LspRuntimeProvider)
+                    .await;
 
             let registry = manager
                 .tool_executor()
@@ -5249,7 +5326,9 @@ while True:
                     .messages
                     .iter()
                     .any(|message| message.role == Role::Assistant
-                        && message.as_text_lossy().contains("runtime lsp flow finished")),
+                        && message
+                            .as_text_lossy()
+                            .contains("runtime lsp flow finished")),
                 "assistant should acknowledge the lsp flow completion"
             );
 
@@ -5289,9 +5368,9 @@ while True:
                 .expect("definition payload should include locations");
             assert_eq!(definition_locations.len(), 1);
             assert!(
-                definition_locations[0]
-                    .as_str()
-                    .is_some_and(|location| location == format!("{}:1:1", lsp_fixture.source_path.display())),
+                definition_locations[0].as_str().is_some_and(
+                    |location| location == format!("{}:1:1", lsp_fixture.source_path.display())
+                ),
                 "definition should point at the function declaration: {definition_locations:?}"
             );
 
@@ -5355,10 +5434,16 @@ while True:
         }
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel::new("runtime-tools", "runtime-tools-model")])
+            Ok(vec![ProviderModel::new(
+                "runtime-tools",
+                "runtime-tools-model",
+            )])
         }
 
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
             Err(AppError::Provider("streaming only".to_string()))
         }
 
@@ -5369,126 +5454,118 @@ while True:
             std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
             AppError,
         > {
-            let events =
-                if completed_or_failed_operation_count(&request, &["call_workflow_review_1"]) == 0 {
-                    scripted_tool_call_events(vec![(
-                        "call_workflow_review_1",
-                        "workflow",
-                        serde_json::json!({
-                            "action": "review",
-                            "args": "auth handlers"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_agent_restore_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_agent_restore_1",
-                        "agent",
-                        serde_json::json!({
-                            "action": "restore"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_session_rename_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_session_rename_1",
-                        "session",
-                        serde_json::json!({
-                            "action": "rename",
-                            "title": "runtime-mutation-renamed"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_goal_create_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_goal_create_1",
-                        "goal",
-                        serde_json::json!({
-                            "action": "create",
-                            "objective": "Close runtime mutation coverage"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_goal_complete_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_goal_complete_1",
-                        "goal",
-                        serde_json::json!({
-                            "action": "complete"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_goal_clear_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_goal_clear_1",
-                        "goal",
-                        serde_json::json!({
-                            "action": "clear"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(
-                    &request,
-                    &["call_workflow_security_review_1"],
-                ) == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_workflow_security_review_1",
-                        "workflow",
-                        serde_json::json!({
-                            "action": "security_review",
-                            "args": "auth layer"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_agent_restore_2"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_agent_restore_2",
-                        "agent",
-                        serde_json::json!({
-                            "action": "restore"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_agent_switch_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_agent_switch_1",
-                        "agent",
-                        serde_json::json!({
-                            "action": "switch",
-                            "agent": "planner",
-                            "push_previous": true
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_agent_restore_3"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_agent_restore_3",
-                        "agent",
-                        serde_json::json!({
-                            "action": "restore"
-                        })
-                        .to_string(),
-                    )])
-                } else {
-                    scripted_text_events("runtime workflow mutation flow finished")
-                };
+            let events = if completed_or_failed_operation_count(
+                &request,
+                &["call_workflow_review_1"],
+            ) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_workflow_review_1",
+                    "workflow",
+                    serde_json::json!({
+                        "action": "review",
+                        "args": "auth handlers"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_agent_restore_1"]) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_agent_restore_1",
+                    "agent",
+                    serde_json::json!({
+                        "action": "restore"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_session_rename_1"]) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_session_rename_1",
+                    "session",
+                    serde_json::json!({
+                        "action": "rename",
+                        "title": "runtime-mutation-renamed"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_goal_create_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_goal_create_1",
+                    "goal",
+                    serde_json::json!({
+                        "action": "create",
+                        "objective": "Close runtime mutation coverage"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_goal_complete_1"]) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_goal_complete_1",
+                    "goal",
+                    serde_json::json!({
+                        "action": "complete"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_goal_clear_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_goal_clear_1",
+                    "goal",
+                    serde_json::json!({
+                        "action": "clear"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(
+                &request,
+                &["call_workflow_security_review_1"],
+            ) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_workflow_security_review_1",
+                    "workflow",
+                    serde_json::json!({
+                        "action": "security_review",
+                        "args": "auth layer"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_agent_restore_2"]) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_agent_restore_2",
+                    "agent",
+                    serde_json::json!({
+                        "action": "restore"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_agent_switch_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_agent_switch_1",
+                    "agent",
+                    serde_json::json!({
+                        "action": "switch",
+                        "agent": "planner",
+                        "push_previous": true
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_agent_restore_3"]) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_agent_restore_3",
+                    "agent",
+                    serde_json::json!({
+                        "action": "restore"
+                    })
+                    .to_string(),
+                )])
+            } else {
+                scripted_text_events("runtime workflow mutation flow finished")
+            };
 
             Ok(Box::pin(stream::iter(events)))
         }
@@ -5499,8 +5576,9 @@ while True:
         run_async_with_large_stack(async move {
             let workspace = TempWorkspace::new();
             init_git_workspace(&workspace.root);
-            let db = open_runtime_tool_database(&workspace.root, "runtime-tools-workflow-mutation.db")
-                .await;
+            let db =
+                open_runtime_tool_database(&workspace.root, "runtime-tools-workflow-mutation.db")
+                    .await;
             let (manager, _host) = build_runtime_tool_manager_with_provider(
                 &workspace.root,
                 db,
@@ -5532,7 +5610,9 @@ while True:
                         agent_profile: None,
                         max_turn_loops: Some(32),
                     },
-                    parts: vec![PartContent::text("exercise workflow mutation runtime tools")],
+                    parts: vec![PartContent::text(
+                        "exercise workflow mutation runtime tools",
+                    )],
                 })
                 .await;
 
@@ -5613,14 +5693,16 @@ while True:
                 Some("runtime-mutation-renamed")
             );
 
-            let restore_after_review =
-                session_operation_payload(&session, "call_agent_restore_1");
+            let restore_after_review = session_operation_payload(&session, "call_agent_restore_1");
             assert_eq!(restore_after_review["restored"].as_bool(), Some(true));
             assert_eq!(
                 restore_after_review["previous_agent"].as_str(),
                 Some("reviewer")
             );
-            assert_eq!(restore_after_review["current_agent"], serde_json::Value::Null);
+            assert_eq!(
+                restore_after_review["current_agent"],
+                serde_json::Value::Null
+            );
             assert_eq!(restore_after_review["stack_depth"].as_u64(), Some(0));
 
             let goal_create_payload = session_operation_payload(&session, "call_goal_create_1");
@@ -5633,8 +5715,7 @@ while True:
                 Some("active")
             );
 
-            let goal_complete_payload =
-                session_operation_payload(&session, "call_goal_complete_1");
+            let goal_complete_payload = session_operation_payload(&session, "call_goal_complete_1");
             assert_eq!(
                 goal_complete_payload["goal"]["status"].as_str(),
                 Some("completed")
@@ -5648,13 +5729,14 @@ while True:
                 .iter()
                 .flat_map(|message| message.parts.iter())
                 .find_map(|part| {
-                    (part.operation_id.as_deref() == Some("call_workflow_security_review_1"))
-                        .then(|| match part.content.as_ref() {
+                    (part.operation_id.as_deref() == Some("call_workflow_security_review_1")).then(
+                        || match part.content.as_ref() {
                             Some(PartContent::Operation(operation)) => {
                                 Some(operation.model_output.text.clone())
                             }
                             _ => None,
-                        })?
+                        },
+                    )?
                 })
                 .expect("workflow security review output should exist");
             assert!(
@@ -5686,13 +5768,22 @@ while True:
             );
 
             let agent_switch_payload = session_operation_payload(&session, "call_agent_switch_1");
-            assert_eq!(agent_switch_payload["current_agent"].as_str(), Some("planner"));
-            assert_eq!(agent_switch_payload["previous_agent"], serde_json::Value::Null);
+            assert_eq!(
+                agent_switch_payload["current_agent"].as_str(),
+                Some("planner")
+            );
+            assert_eq!(
+                agent_switch_payload["previous_agent"],
+                serde_json::Value::Null
+            );
             assert_eq!(agent_switch_payload["stack_depth"].as_u64(), Some(1));
 
             let restore_to_default = session_operation_payload(&session, "call_agent_restore_3");
             assert_eq!(restore_to_default["restored"].as_bool(), Some(true));
-            assert_eq!(restore_to_default["previous_agent"].as_str(), Some("planner"));
+            assert_eq!(
+                restore_to_default["previous_agent"].as_str(),
+                Some("planner")
+            );
             assert_eq!(restore_to_default["current_agent"], serde_json::Value::Null);
             assert_eq!(restore_to_default["stack_depth"].as_u64(), Some(0));
 
@@ -5702,8 +5793,7 @@ while True:
                 "goal clear should remove the active goal from the session"
             );
             assert_eq!(
-                session.runtime.execution.agent_profile,
-                None,
+                session.runtime.execution.agent_profile, None,
                 "final agent restore should return the session to the default runtime context"
             );
         });
@@ -5725,10 +5815,16 @@ while True:
         }
 
         async fn list_models(&self) -> Result<Vec<ProviderModel>, AppError> {
-            Ok(vec![ProviderModel::new("runtime-tools", "runtime-tools-model")])
+            Ok(vec![ProviderModel::new(
+                "runtime-tools",
+                "runtime-tools-model",
+            )])
         }
 
-        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse, AppError> {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, AppError> {
             Err(AppError::Provider("streaming only".to_string()))
         }
 
@@ -5750,208 +5846,201 @@ while True:
                 ))));
             }
 
-            let events =
-                if completed_or_failed_operation_count(&request, &["call_workflow_init_1"]) == 0 {
-                    scripted_tool_call_events(vec![(
-                        "call_workflow_init_1",
-                        "workflow",
-                        serde_json::json!({
-                            "action": "init",
-                            "args": "backend service"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_tools_help_1"]) == 0 {
-                    scripted_tool_call_events(vec![(
-                        "call_tools_help_1",
-                        "tools",
-                        serde_json::json!({
-                            "action": "help",
-                            "tool": "settings",
-                            "include_schema": true
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_session_get_1"]) == 0 {
-                    scripted_tool_call_events(vec![(
-                        "call_session_get_1",
-                        "session",
-                        serde_json::json!({
-                            "action": "get"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_goal_get_1"]) == 0 {
-                    scripted_tool_call_events(vec![(
-                        "call_goal_get_1",
-                        "goal",
-                        serde_json::json!({
-                            "action": "get"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_user_1"]) == 0 {
-                    scripted_tool_call_events(vec![(
-                        "call_user_1",
-                        "user",
-                        serde_json::json!({
-                            "action": "request_input",
-                            "questions": [{
-                                "id": "confirm",
-                                "header": "Confirm",
-                                "question": "Should the runtime test continue?",
-                                "options": [
-                                    {
-                                        "label": "yes",
-                                        "description": "Continue the scripted runtime flow."
-                                    },
-                                    {
-                                        "label": "no",
-                                        "description": "Stop the scripted runtime flow."
-                                    }
-                                ],
-                                "multiple": false,
-                                "allow_custom": false
-                            }]
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_todo_1"]) == 0 {
-                    scripted_tool_call_events(vec![(
-                        "call_todo_1",
-                        "todo",
-                        serde_json::json!({
-                            "action": "write",
-                            "items": [
+            let events = if completed_or_failed_operation_count(&request, &["call_workflow_init_1"])
+                == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_workflow_init_1",
+                    "workflow",
+                    serde_json::json!({
+                        "action": "init",
+                        "args": "backend service"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_tools_help_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_tools_help_1",
+                    "tools",
+                    serde_json::json!({
+                        "action": "help",
+                        "tool": "settings",
+                        "include_schema": true
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_session_get_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_session_get_1",
+                    "session",
+                    serde_json::json!({
+                        "action": "get"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_goal_get_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_goal_get_1",
+                    "goal",
+                    serde_json::json!({
+                        "action": "get"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_user_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_user_1",
+                    "user",
+                    serde_json::json!({
+                        "action": "request_input",
+                        "questions": [{
+                            "id": "confirm",
+                            "header": "Confirm",
+                            "question": "Should the runtime test continue?",
+                            "options": [
                                 {
-                                    "content": "cover workflow host tools",
-                                    "status": "completed",
-                                    "priority": "high"
+                                    "label": "yes",
+                                    "description": "Continue the scripted runtime flow."
                                 },
                                 {
-                                    "content": "cover settings and schedule",
-                                    "status": "in_progress",
-                                    "priority": "medium"
+                                    "label": "no",
+                                    "description": "Stop the scripted runtime flow."
                                 }
-                            ]
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_settings_get_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_settings_get_1",
-                        "settings",
-                        serde_json::json!({
-                            "action": "get",
-                            "path": "default.agent",
-                            "source": "file"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_settings_set_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_settings_set_1",
-                        "settings",
-                        serde_json::json!({
-                            "action": "set",
-                            "path": "default.agent",
-                            "value": "planner",
-                            "reload": true
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(
-                    &request,
-                    &["call_settings_validate_1"],
-                ) == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_settings_validate_1",
-                        "settings",
-                        serde_json::json!({
-                            "action": "validate"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_schedule_list_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_schedule_list_1",
-                        "schedule",
-                        serde_json::json!({
-                            "action": "list"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_schedule_wakeup_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_schedule_wakeup_1",
-                        "schedule",
-                        serde_json::json!({
-                            "action": "wakeup",
-                            "delay_seconds": 60,
-                            "prompt": "wake me up later",
-                            "reason": "runtime coverage"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_schedule_create_1"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_schedule_create_1",
-                        "schedule",
-                        serde_json::json!({
-                            "action": "create",
-                            "expression": "0 0 * * * *",
-                            "prompt": "hourly coverage check",
-                            "max_age_days": 1
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_schedule_list_2"])
-                    == 0
-                {
-                    scripted_tool_call_events(vec![(
-                        "call_schedule_list_2",
-                        "schedule",
-                        serde_json::json!({
-                            "action": "list"
-                        })
-                        .to_string(),
-                    )])
-                } else if completed_or_failed_operation_count(&request, &["call_schedule_delete_1"])
-                    == 0
-                {
-                    let schedule_id = request_operation_payload(&request, "call_schedule_create_1")
-                        .get("id")
-                        .and_then(serde_json::Value::as_str)
-                        .map(str::to_string)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "schedule create should return an id: {}",
-                                request_operation_debug(&request, "call_schedule_create_1")
-                            )
-                        });
-                    scripted_tool_call_events(vec![(
-                        "call_schedule_delete_1",
-                        "schedule",
-                        serde_json::json!({
-                            "action": "delete",
-                            "id": schedule_id
-                        })
-                        .to_string(),
-                    )])
-                } else {
-                    scripted_text_events("runtime workflow flow finished")
-                };
+                            ],
+                            "multiple": false,
+                            "allow_custom": false
+                        }]
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_todo_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_todo_1",
+                    "todo",
+                    serde_json::json!({
+                        "action": "write",
+                        "items": [
+                            {
+                                "content": "cover workflow host tools",
+                                "status": "completed",
+                                "priority": "high"
+                            },
+                            {
+                                "content": "cover settings and schedule",
+                                "status": "in_progress",
+                                "priority": "medium"
+                            }
+                        ]
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_settings_get_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_settings_get_1",
+                    "settings",
+                    serde_json::json!({
+                        "action": "get",
+                        "path": "default.agent",
+                        "source": "file"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_settings_set_1"]) == 0 {
+                scripted_tool_call_events(vec![(
+                    "call_settings_set_1",
+                    "settings",
+                    serde_json::json!({
+                        "action": "set",
+                        "path": "default.agent",
+                        "value": "planner",
+                        "reload": true
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_settings_validate_1"])
+                == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_settings_validate_1",
+                    "settings",
+                    serde_json::json!({
+                        "action": "validate"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_schedule_list_1"]) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_schedule_list_1",
+                    "schedule",
+                    serde_json::json!({
+                        "action": "list"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_schedule_wakeup_1"])
+                == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_schedule_wakeup_1",
+                    "schedule",
+                    serde_json::json!({
+                        "action": "wakeup",
+                        "delay_seconds": 60,
+                        "prompt": "wake me up later",
+                        "reason": "runtime coverage"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_schedule_create_1"])
+                == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_schedule_create_1",
+                    "schedule",
+                    serde_json::json!({
+                        "action": "create",
+                        "expression": "0 0 * * * *",
+                        "prompt": "hourly coverage check",
+                        "max_age_days": 1
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_schedule_list_2"]) == 0
+            {
+                scripted_tool_call_events(vec![(
+                    "call_schedule_list_2",
+                    "schedule",
+                    serde_json::json!({
+                        "action": "list"
+                    })
+                    .to_string(),
+                )])
+            } else if completed_or_failed_operation_count(&request, &["call_schedule_delete_1"])
+                == 0
+            {
+                let schedule_id = request_operation_payload(&request, "call_schedule_create_1")
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "schedule create should return an id: {}",
+                            request_operation_debug(&request, "call_schedule_create_1")
+                        )
+                    });
+                scripted_tool_call_events(vec![(
+                    "call_schedule_delete_1",
+                    "schedule",
+                    serde_json::json!({
+                        "action": "delete",
+                        "id": schedule_id
+                    })
+                    .to_string(),
+                )])
+            } else {
+                scripted_text_events("runtime workflow flow finished")
+            };
 
             Ok(Box::pin(stream::iter(events)))
         }
@@ -6028,7 +6117,9 @@ while True:
                     .messages
                     .iter()
                     .any(|message| message.role == Role::Assistant
-                        && message.as_text_lossy().contains("runtime workflow flow finished")),
+                        && message
+                            .as_text_lossy()
+                            .contains("runtime workflow flow finished")),
                 "assistant should acknowledge the workflow flow completion"
             );
 
@@ -6049,7 +6140,11 @@ while True:
                 "call_schedule_delete_1",
             ] {
                 let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(status, ExecutionStatus::Completed, "{operation_id} was not completed");
+                assert_eq!(
+                    status,
+                    ExecutionStatus::Completed,
+                    "{operation_id} was not completed"
+                );
                 assert!(error.is_none(), "{operation_id} failed: {error:?}");
             }
 
@@ -6078,14 +6173,14 @@ while True:
                 .iter()
                 .flat_map(|message| message.parts.iter())
                 .find_map(|part| {
-                    (part.operation_id.as_deref() == Some("call_tools_help_1")).then(|| {
-                        match part.content.as_ref() {
+                    (part.operation_id.as_deref() == Some("call_tools_help_1")).then(
+                        || match part.content.as_ref() {
                             Some(PartContent::Operation(operation)) => {
                                 Some(operation.model_output.text.clone())
                             }
                             _ => None,
-                        }
-                    })?
+                        },
+                    )?
                 })
                 .expect("tools help output should exist");
             assert!(
@@ -6118,16 +6213,14 @@ while True:
                 .expect("todo write should return items");
             assert_eq!(todo_items.len(), 2);
 
-            let settings_get_payload =
-                session_operation_payload(&session, "call_settings_get_1");
+            let settings_get_payload = session_operation_payload(&session, "call_settings_get_1");
             assert_eq!(
                 settings_get_payload["value"].as_str(),
                 Some("build"),
                 "settings get should read the file-backed default agent before mutation"
             );
 
-            let settings_set_payload =
-                session_operation_payload(&session, "call_settings_set_1");
+            let settings_set_payload = session_operation_payload(&session, "call_settings_set_1");
             assert_eq!(
                 settings_set_payload["current"].as_str(),
                 Some("planner"),
@@ -6145,7 +6238,9 @@ while True:
             )
             .expect("config.json should stay valid");
             assert_eq!(
-                config_json.pointer("/default/agent").and_then(serde_json::Value::as_str),
+                config_json
+                    .pointer("/default/agent")
+                    .and_then(serde_json::Value::as_str),
                 Some("planner"),
                 "settings set should persist the updated config file"
             );

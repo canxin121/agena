@@ -657,12 +657,14 @@ fn resolve_pending_tool(
     session: &Session,
     pending_tool: &SessionPendingTool,
 ) -> Result<ResolvedPendingTool, AppError> {
-    let normalized_part = session.resolve_part_ref(&pending_tool.part).ok_or_else(|| {
-        AppError::Internal(format!(
-            "pending tool part not found: message={}, part={}",
-            pending_tool.part.message_id, pending_tool.part.part_id
-        ))
-    })?;
+    let normalized_part = session
+        .resolve_part_ref(&pending_tool.part)
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "pending tool part not found: message={}, part={}",
+                pending_tool.part.message_id, pending_tool.part.part_id
+            ))
+        })?;
     let normalized_pending = SessionPendingTool {
         part: normalized_part,
     };

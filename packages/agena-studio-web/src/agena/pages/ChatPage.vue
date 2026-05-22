@@ -161,6 +161,7 @@ const {
 const {
   ancestorSessions,
   childSessions,
+  contextUsageLabel,
   executionFacts,
   parentSession,
   rewindCheckpointFacts,
@@ -304,6 +305,7 @@ const pageContent = createChatPageContentState({
   cancelCurrentSessionTurn,
   cancelUserAnswers,
   childSessions,
+  contextUsageLabel,
   composer,
   continueCurrentSession,
   continuing,

@@ -2294,7 +2294,6 @@ impl ModelRuntime for OpenAiAdapter {
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
-            prompt_window_generation: request.prompt_window_generation,
             stream: false,
             stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
             top_p: request.top_p,
@@ -2449,7 +2448,6 @@ impl ModelRuntime for OpenAiAdapter {
             temperature: request.temperature,
             prompt_cache_key: request.prompt_cache_key.clone(),
             previous_response_id: request.previous_response_id.clone(),
-            prompt_window_generation: request.prompt_window_generation,
             stream: true,
             stop: (!request.stop_sequences.is_empty()).then(|| request.stop_sequences.clone()),
             top_p: request.top_p,
@@ -2737,9 +2735,6 @@ struct OpenAiResponsesRequest {
     prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_response_id: Option<String>,
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[serde(skip)]
-    prompt_window_generation: Option<u64>,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<Vec<String>>,

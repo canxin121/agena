@@ -15189,7 +15189,7 @@ fn model_status_label(model: &ModelRef) -> String {
 fn session_summary_status_parts(
     model_part: Option<String>,
     agent: Option<String>,
-    token_usage: Option<(u64, Option<u64>)>,
+    token_usage: Option<TokenUsageStatus>,
 ) -> Vec<String> {
     let mut parts = Vec::new();
     if let Some(model_part) = model_part
@@ -15204,36 +15204,52 @@ fn session_summary_status_parts(
     {
         parts.push(agent);
     }
-    if let Some(token_progress) = token_usage.and_then(|(current_tokens, limit_tokens)| {
-        token_progress_status_part(current_tokens, limit_tokens)
-    }) {
-        parts.push(token_progress);
+    if let Some(token_usage) = token_usage {
+        parts.push(token_usage.label());
     }
     parts
 }
 
-fn status_line_token_usage(usage: &SessionUsageResource) -> Option<(u64, Option<u64>)> {
-    usage
-        .limit_tokens
-        .map(|limit_tokens| (usage.current_tokens, Some(limit_tokens)))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenUsageStatus {
+    PercentUsed(u64),
+    UsedTokens(u64),
 }
 
-fn token_progress_status_part(current_tokens: u64, limit_tokens: Option<u64>) -> Option<String> {
-    limit_tokens
-        .filter(|value| *value > 0)
-        .map(|limit_tokens| format_token_progress_label(current_tokens, limit_tokens))
+impl TokenUsageStatus {
+    fn label(self) -> String {
+        match self {
+            Self::PercentUsed(percent_used) => format_token_progress_label(percent_used),
+            Self::UsedTokens(tokens) => format!("{} used", format_tokens_k(tokens)),
+        }
+    }
 }
 
-fn format_token_progress_label(current_tokens: u64, limit_tokens: u64) -> String {
-    if limit_tokens == 0 {
-        return "0%".to_string();
+fn status_line_token_usage(usage: &SessionUsageResource) -> Option<TokenUsageStatus> {
+    let current_tokens = usage.projected_tokens.unwrap_or(usage.current_tokens);
+    if let Some(context_window_tokens) = usage.model_context_window_tokens {
+        return Some(TokenUsageStatus::PercentUsed(
+            agena::session::context_usage_percent_used(current_tokens, context_window_tokens),
+        ));
     }
 
-    let percent = ((current_tokens as f64 / limit_tokens as f64) * 100.0)
-        .clamp(0.0, 100.0)
-        .round() as u64;
+    Some(TokenUsageStatus::UsedTokens(current_tokens))
+}
 
-    format!("{percent}%")
+fn format_token_progress_label(percent_used: u64) -> String {
+    format!("{}%", percent_used.min(100))
+}
+
+fn format_tokens_k(tokens: u64) -> String {
+    if tokens == 0 {
+        return "0k".to_string();
+    }
+
+    let value = tokens as f64 / 1_000.0;
+    if value < 10.0 {
+        return format!("{value:.1}k");
+    }
+    format!("{value:.0}k")
 }
 
 fn session_lineage_chain(
@@ -16810,5 +16826,64 @@ mod tests {
             !rendered.lines.iter().any(|line| line.text.is_empty()),
             "expected transcript rendering to avoid inserting blank separator lines"
         );
+    }
+
+    fn usage_resource(
+        current_tokens: u64,
+        projected_tokens: Option<u64>,
+        context_window_tokens: Option<u32>,
+        limit_tokens: Option<u64>,
+    ) -> SessionUsageResource {
+        SessionUsageResource {
+            measured_prompt_tokens: None,
+            current_tokens,
+            projected_tokens,
+            limit_tokens,
+            limit_basis: None,
+            reserved_tokens: None,
+            model_context_window_tokens: context_window_tokens,
+            model_max_input_tokens: None,
+            model_max_output_tokens: None,
+        }
+    }
+
+    #[test]
+    fn status_line_token_usage_uses_codex_style_context_percent_used() {
+        let usage = usage_resource(135_200, None, Some(272_000), Some(244_800));
+
+        assert_eq!(
+            status_line_token_usage(&usage),
+            Some(TokenUsageStatus::PercentUsed(50))
+        );
+        assert_eq!(
+            session_summary_status_parts(None, None, status_line_token_usage(&usage)),
+            vec!["50%".to_string()]
+        );
+    }
+
+    #[test]
+    fn status_line_token_usage_prefers_projected_tokens() {
+        let usage = usage_resource(12_000, Some(135_200), Some(272_000), Some(244_800));
+
+        assert_eq!(
+            status_line_token_usage(&usage),
+            Some(TokenUsageStatus::PercentUsed(50))
+        );
+    }
+
+    #[test]
+    fn status_line_token_usage_shows_used_tokens_when_context_window_unknown() {
+        let usage = usage_resource(50, None, None, Some(100));
+
+        assert_eq!(
+            status_line_token_usage(&usage),
+            Some(TokenUsageStatus::UsedTokens(50))
+        );
+        assert_eq!(
+            session_summary_status_parts(None, None, status_line_token_usage(&usage)),
+            vec!["0.1k used".to_string()]
+        );
+        assert_eq!(format_tokens_k(12_400), "12k");
+        assert_eq!(format_token_progress_label(101), "100%");
     }
 }

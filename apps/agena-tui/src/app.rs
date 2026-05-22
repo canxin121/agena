@@ -385,6 +385,8 @@ pub struct App {
     launch: LaunchOptions,
     should_quit: bool,
     focus: Focus,
+    current_route: Route,
+    route_stack: Vec<Route>,
     overlay: Option<Overlay>,
     overlay_stack: Vec<Overlay>,
     seen_permission_request_ids: BTreeSet<String>,
@@ -624,10 +626,8 @@ type UiResult<T> = std::result::Result<T, String>;
 
 #[derive(Debug, Clone)]
 enum Overlay {
-    Help(HelpOverlay),
     TranscriptSearch(LineInputOverlay),
     SessionRename(LineInputOverlay),
-    SettingsStudio(SettingsStudioOverlay),
     SettingsValueEdit(SettingsValueEditOverlay),
     RuntimeSettingEdit(RuntimeSettingEditOverlay),
     Choice(ChoiceOverlay),
@@ -640,9 +640,28 @@ enum Overlay {
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
     Timeline(TimelineOverlay),
+    ProviderStudio(ProviderStudioOverlay),
+    ModelCatalogStudio(ModelCatalogStudioOverlay),
+}
+
+#[derive(Debug, Clone)]
+enum Route {
+    Main,
+    Help(HelpOverlay),
+    SettingsStudio(SettingsStudioOverlay),
+    SessionSearch(SessionSearchOverlay),
+    Picker(PickerOverlay),
+    SessionModelChooser(SessionModelChooserOverlay),
+    Timeline(TimelineOverlay),
     PluginInspector(PluginInspectorOverlay),
     ProviderStudio(ProviderStudioOverlay),
     ModelCatalogStudio(ModelCatalogStudioOverlay),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DialogHost {
+    Route,
+    Overlay,
 }
 
 #[derive(Debug, Clone)]
@@ -1517,6 +1536,10 @@ fn persistent_draft_store_version() -> u32 {
 }
 
 impl App {
+    fn current_route_is_main(&self) -> bool {
+        matches!(self.current_route, Route::Main)
+    }
+
     pub fn new(backend: Backend, launch: LaunchOptions, i18n: I18n) -> Self {
         let (tx, rx) = unbounded_channel();
         let draft_store_path = default_draft_store_path();
@@ -1553,6 +1576,8 @@ impl App {
             launch: launch.clone(),
             should_quit: false,
             focus: Focus::Composer,
+            current_route: Route::Main,
+            route_stack: Vec::new(),
             overlay: None,
             overlay_stack: Vec::new(),
             seen_permission_request_ids: BTreeSet::new(),
@@ -1750,10 +1775,18 @@ impl App {
             return;
         }
 
+        if self.handle_route_key(key) {
+            return;
+        }
+
         if key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
         {
             self.open_resume_session_picker();
+            return;
+        }
+
+        if !self.current_route_is_main() {
             return;
         }
 
@@ -1777,7 +1810,8 @@ impl App {
                     return;
                 }
                 KeyCode::Char('?') => {
-                    self.overlay = Some(Overlay::Help(HelpOverlay::default()));
+                    self.route_stack.clear();
+                    self.current_route = Route::Help(HelpOverlay::default());
                     return;
                 }
                 _ => {}
@@ -1943,12 +1977,10 @@ impl App {
         };
 
         let close = match &mut overlay {
-            Overlay::Help(dialog) => self.handle_help_overlay_key(key, dialog),
             Overlay::TranscriptSearch(dialog) => {
                 self.handle_line_overlay_key(key, dialog, OverlayCommit::TranscriptSearch)
             }
             Overlay::SessionRename(dialog) => self.handle_session_rename_overlay_key(key, dialog),
-            Overlay::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
             Overlay::SettingsValueEdit(dialog) => {
                 self.handle_settings_value_edit_overlay_key(key, dialog)
             }
@@ -1969,9 +2001,6 @@ impl App {
                 self.handle_session_model_chooser_overlay_key(key, dialog)
             }
             Overlay::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),
-            Overlay::PluginInspector(dialog) => {
-                self.handle_plugin_inspector_overlay_key(key, dialog)
-            }
             Overlay::ProviderStudio(dialog) => self.handle_provider_studio_overlay_key(key, dialog),
             Overlay::ModelCatalogStudio(dialog) => {
                 self.handle_model_catalog_studio_overlay_key(key, dialog)
@@ -1988,6 +2017,46 @@ impl App {
             self.overlay = Some(self.refresh_restored_overlay(parent));
         } else if self.overlay.is_none() {
             self.maybe_auto_open_pending_interactive_overlay();
+        }
+
+        true
+    }
+
+    fn handle_route_key(&mut self, key: KeyEvent) -> bool {
+        let route = std::mem::replace(&mut self.current_route, Route::Main);
+        let mut route = match route {
+            Route::Main => return false,
+            route => route,
+        };
+
+        let close = match &mut route {
+            Route::Main => false,
+            Route::Help(dialog) => self.handle_help_overlay_key(key, dialog),
+            Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
+            Route::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
+            Route::Picker(dialog) => self.handle_picker_overlay_key(key, dialog),
+            Route::SessionModelChooser(dialog) => {
+                self.handle_session_model_chooser_overlay_key(key, dialog)
+            }
+            Route::Timeline(dialog) => self.handle_timeline_overlay_key(key, dialog),
+            Route::PluginInspector(dialog) => self.handle_plugin_inspector_overlay_key(key, dialog),
+            Route::ProviderStudio(dialog) => self.handle_provider_studio_overlay_key(key, dialog),
+            Route::ModelCatalogStudio(dialog) => {
+                self.handle_model_catalog_studio_overlay_key(key, dialog)
+            }
+        };
+
+        if !close {
+            if self.current_route_is_main() {
+                self.current_route = route;
+            }
+        } else if self.current_route_is_main() {
+            if let Some(parent) = self.route_stack.pop() {
+                self.current_route = self.refresh_restored_route(parent);
+            } else {
+                self.current_route = Route::Main;
+                self.maybe_auto_open_pending_interactive_overlay();
+            }
         }
 
         true
@@ -2720,6 +2789,7 @@ impl App {
                     {
                         Ok(_) => {
                             self.flash_success(format!("updated {}", dialog.field.path));
+                            self.refresh_current_route_after_local_edit();
                             true
                         }
                         Err(error) => {
@@ -2732,6 +2802,7 @@ impl App {
                     {
                         Ok(_) => {
                             self.flash_success(format!("cleared {}", dialog.field.path));
+                            self.refresh_current_route_after_local_edit();
                             true
                         }
                         Err(error) => {
@@ -2768,6 +2839,7 @@ impl App {
                 {
                     Ok(message) => {
                         self.flash_success(message);
+                        self.refresh_current_route_after_local_edit();
                         true
                     }
                     Err(error) => {
@@ -2871,7 +2943,7 @@ impl App {
                             self.overlay_stack.pop();
                             self.overlay = Some(*return_overlay);
                         } else {
-                            self.open_permission_rule_picker(dialog.return_query.as_str());
+                            self.refresh_permission_rules_route(dialog.return_query.as_str());
                         }
                         true
                     }
@@ -3224,7 +3296,7 @@ impl App {
             }
             KeyCode::Char('n') if matches!(dialog.kind, PickerKind::PermissionRules) => {
                 self.open_permission_rule_editor(None, dialog.input.text(), None);
-                true
+                false
             }
             KeyCode::Char('d') if matches!(dialog.kind, PickerKind::PermissionRules) => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
@@ -3232,7 +3304,7 @@ impl App {
                 };
                 if let PickerValue::PermissionRule(rule) = item.value {
                     self.open_revoke_permission_rule_confirm(&rule, dialog.input.text());
-                    true
+                    false
                 } else {
                     false
                 }
@@ -3245,7 +3317,7 @@ impl App {
                     match item.value {
                         PickerValue::PermissionRuleCreate => {
                             self.open_permission_rule_editor(None, dialog.input.text(), None);
-                            return true;
+                            return false;
                         }
                         PickerValue::PermissionRule(rule) => {
                             self.open_permission_rule_editor(
@@ -3253,7 +3325,7 @@ impl App {
                                 dialog.input.text(),
                                 None,
                             );
-                            return true;
+                            return false;
                         }
                         _ => {}
                     }
@@ -3751,13 +3823,91 @@ impl App {
         let backend = self.backend.clone();
         let mut pending_session_search_request: Option<(SessionViewMode, Option<i64>, String)> =
             None;
+        if self.overlay.is_none() {
+            let mut handled_route = false;
+            match &mut self.current_route {
+                Route::Main => {}
+                Route::Help(_) | Route::SettingsStudio(_) => {}
+                Route::SessionSearch(dialog) => {
+                    let before = dialog.input.text().trim().to_string();
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    let after = dialog.input.text().trim().to_string();
+                    if before != after {
+                        dialog.page_index = 0;
+                        dialog.selected = 0;
+                        dialog.offset = 0;
+                        dialog.cursors.clear();
+                        dialog.cursors.push(None);
+                        dialog.next_cursor = None;
+                        dialog.has_more = false;
+                        dialog.loading = true;
+                        pending_session_search_request =
+                            Some((dialog.mode, dialog.scope_session_id, after));
+                    }
+                    handled_route = true;
+                }
+                Route::Picker(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::refresh_picker_overlay(dialog);
+                    handled_route = true;
+                }
+                Route::SessionModelChooser(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::refresh_session_model_chooser_overlay(dialog, false, None);
+                    handled_route = true;
+                }
+                Route::Timeline(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::refresh_timeline_overlay(dialog);
+                    handled_route = true;
+                }
+                Route::PluginInspector(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::refresh_plugin_inspector_overlay(dialog);
+                    handled_route = true;
+                }
+                Route::ProviderStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_all_pending_input();
+                        editor.input.insert_str(text.as_str());
+                        handled_route = true;
+                    }
+                }
+                Route::ModelCatalogStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_all_pending_input();
+                        editor.input.insert_str(text.as_str());
+                        handled_route = true;
+                    }
+                }
+            }
+            if handled_route {
+                if let Some((mode, scope_session_id, query)) = pending_session_search_request {
+                    match mode {
+                        SessionViewMode::Subtree => {
+                            if let Some(session_id) = scope_session_id {
+                                self.request_session_search_subtree(session_id, query);
+                            }
+                        }
+                        SessionViewMode::All | SessionViewMode::Roots => {
+                            self.request_session_search_page(mode, query, 0, None);
+                        }
+                    }
+                }
+                return;
+            }
+        }
         if let Some(overlay) = &mut self.overlay {
             match overlay {
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                 }
-                Overlay::SettingsStudio(_) => {}
                 Overlay::SettingsValueEdit(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
@@ -3838,14 +3988,8 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_timeline_overlay(dialog);
                 }
-                Overlay::PluginInspector(dialog) => {
-                    dialog.input.flush_all_pending_input();
-                    dialog.input.insert_str(text.as_str());
-                    Self::refresh_plugin_inspector_overlay(dialog);
-                }
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
-                Overlay::Help(_) => {}
             }
             if let Some((mode, scope_session_id, query)) = pending_session_search_request {
                 match mode {
@@ -4598,7 +4742,8 @@ impl App {
     }
 
     fn file_mention_suggestion_context(&self) -> Option<FileMentionSuggestionContext> {
-        if self.focus != Focus::Composer || self.overlay.is_some() {
+        if self.focus != Focus::Composer || self.overlay.is_some() || !self.current_route_is_main()
+        {
             return None;
         }
         if self.prompt_history_search.is_some() {
@@ -4780,7 +4925,8 @@ impl App {
     }
 
     fn slash_command_suggestion_context(&self) -> Option<SlashCommandSuggestionContext> {
-        if self.focus != Focus::Composer || self.overlay.is_some() {
+        if self.focus != Focus::Composer || self.overlay.is_some() || !self.current_route_is_main()
+        {
             return None;
         }
 
@@ -5380,15 +5526,15 @@ impl App {
         purpose: ProviderPickerPurpose,
         result: UiResult<Vec<ProviderSummaryResource>>,
     ) {
-        let Some(Overlay::Picker(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_picker_dialog() else {
             return;
         };
         let PickerKind::Providers(current_purpose) = &dialog.kind else {
-            self.overlay = Some(Overlay::Picker(dialog));
+            self.restore_picker_dialog(host, dialog);
             return;
         };
         if *current_purpose != purpose {
-            self.overlay = Some(Overlay::Picker(dialog));
+            self.restore_picker_dialog(host, dialog);
             return;
         }
 
@@ -5412,7 +5558,7 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::Picker(dialog));
+        self.restore_picker_dialog(host, dialog);
     }
 
     fn handle_session_search_page_loaded(
@@ -5422,14 +5568,14 @@ impl App {
         page_index: usize,
         result: UiResult<PaginatedResponse<SessionResource>>,
     ) {
-        let Some(Overlay::SessionSearch(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_session_search_dialog() else {
             return;
         };
         if dialog.mode != mode
             || dialog.page_index != page_index
             || dialog.input.text().trim() != query
         {
-            self.overlay = Some(Overlay::SessionSearch(dialog));
+            self.restore_session_search_dialog(host, dialog);
             return;
         }
 
@@ -5446,7 +5592,7 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::SessionSearch(dialog));
+        self.restore_session_search_dialog(host, dialog);
     }
 
     fn handle_session_search_subtree_loaded(
@@ -5455,14 +5601,14 @@ impl App {
         query: String,
         result: UiResult<Vec<SessionResource>>,
     ) {
-        let Some(Overlay::SessionSearch(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_session_search_dialog() else {
             return;
         };
         if dialog.mode != SessionViewMode::Subtree
             || dialog.scope_session_id != Some(session_id)
             || dialog.input.text().trim() != query
         {
-            self.overlay = Some(Overlay::SessionSearch(dialog));
+            self.restore_session_search_dialog(host, dialog);
             return;
         }
 
@@ -5481,7 +5627,7 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::SessionSearch(dialog));
+        self.restore_session_search_dialog(host, dialog);
     }
 
     fn handle_lineage_loaded(&mut self, session_id: i64, result: UiResult<Vec<SessionResource>>) {
@@ -5498,18 +5644,18 @@ impl App {
                     });
                 }
 
-                let Some(Overlay::Picker(mut dialog)) = self.overlay.take() else {
+                let Some((host, mut dialog)) = self.take_picker_dialog() else {
                     return;
                 };
                 let PickerKind::Lineage {
                     session_id: current_session_id,
                 } = &dialog.kind
                 else {
-                    self.overlay = Some(Overlay::Picker(dialog));
+                    self.restore_picker_dialog(host, dialog);
                     return;
                 };
                 if *current_session_id != session_id {
-                    self.overlay = Some(Overlay::Picker(dialog));
+                    self.restore_picker_dialog(host, dialog);
                     return;
                 }
 
@@ -5520,16 +5666,16 @@ impl App {
                     .map(|item| self.lineage_session_picker_item(item))
                     .collect();
                 Self::refresh_picker_overlay(&mut dialog);
-                self.overlay = Some(Overlay::Picker(dialog));
+                self.restore_picker_dialog(host, dialog);
             }
             Err(error) => {
-                if let Some(Overlay::Picker(mut dialog)) = self.overlay.take() {
+                if let Some((host, mut dialog)) = self.take_picker_dialog() {
                     if matches!(dialog.kind, PickerKind::Lineage { session_id: current_session_id } if current_session_id == session_id)
                     {
                         dialog.loading = false;
                         dialog.empty_message = ui_text::t(&self.i18n, "overlay-lineage-empty");
                     }
-                    self.overlay = Some(Overlay::Picker(dialog));
+                    self.restore_picker_dialog(host, dialog);
                 }
                 self.flash_error(error);
             }
@@ -5541,18 +5687,18 @@ impl App {
         session_id: i64,
         result: UiResult<Vec<MessageResource>>,
     ) {
-        let Some(Overlay::Picker(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_picker_dialog() else {
             return;
         };
         let PickerKind::RewindMessages {
             session_id: current_session_id,
         } = &dialog.kind
         else {
-            self.overlay = Some(Overlay::Picker(dialog));
+            self.restore_picker_dialog(host, dialog);
             return;
         };
         if *current_session_id != session_id {
-            self.overlay = Some(Overlay::Picker(dialog));
+            self.restore_picker_dialog(host, dialog);
             return;
         }
 
@@ -5570,14 +5716,14 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::Picker(dialog));
+        self.restore_picker_dialog(host, dialog);
     }
 
     fn handle_session_model_chooser_loaded(
         &mut self,
         result: UiResult<Vec<SessionModelChoiceItem>>,
     ) {
-        let Some(Overlay::SessionModelChooser(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_session_model_chooser_dialog() else {
             return;
         };
 
@@ -5595,7 +5741,7 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::SessionModelChooser(dialog));
+        self.restore_session_model_chooser_dialog(host, dialog);
     }
 
     fn handle_model_catalog_loaded(
@@ -5604,11 +5750,11 @@ impl App {
         offset: usize,
         result: UiResult<ModelCatalogListResponse>,
     ) {
-        let Some(Overlay::ModelCatalogStudio(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_model_catalog_dialog() else {
             return;
         };
         if dialog.query != query || dialog.offset != offset {
-            self.overlay = Some(Overlay::ModelCatalogStudio(dialog));
+            self.restore_model_catalog_dialog(host, dialog);
             return;
         }
 
@@ -5624,7 +5770,7 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::ModelCatalogStudio(dialog));
+        self.restore_model_catalog_dialog(host, dialog);
     }
 
     fn handle_provider_studio_adapter_models_loaded(
@@ -5632,11 +5778,11 @@ impl App {
         request_key: String,
         result: UiResult<ProviderAdapterModelsResponse>,
     ) {
-        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
             return;
         };
         if dialog.pending_adapter_models_key.as_deref() != Some(request_key.as_str()) {
-            self.overlay = Some(Overlay::ProviderStudio(dialog));
+            self.restore_provider_studio_dialog(host, dialog);
             return;
         }
 
@@ -5658,7 +5804,7 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::ProviderStudio(dialog));
+        self.restore_provider_studio_dialog(host, dialog);
     }
 
     fn handle_provider_studio_auth_completed(
@@ -5666,7 +5812,7 @@ impl App {
         request_key: String,
         result: UiResult<crate::backend::ProviderDraftAuthActionResult>,
     ) {
-        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
             match result {
                 Ok(action) => self.flash_success(action.message),
                 Err(error) => self.flash_error(error),
@@ -5674,7 +5820,7 @@ impl App {
             return;
         };
         if dialog.pending_auth_key.as_deref() != Some(request_key.as_str()) {
-            self.overlay = Some(Overlay::ProviderStudio(dialog));
+            self.restore_provider_studio_dialog(host, dialog);
             return;
         }
 
@@ -5692,11 +5838,11 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::ProviderStudio(dialog));
+        self.restore_provider_studio_dialog(host, dialog);
     }
 
     fn handle_provider_studio_saved(&mut self, provider_id: String, result: UiResult<String>) {
-        let Some(Overlay::ProviderStudio(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
             match result {
                 Ok(message) => self.flash_success(message),
                 Err(error) => self.flash_error(error),
@@ -5728,11 +5874,11 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::ProviderStudio(dialog));
+        self.restore_provider_studio_dialog(host, dialog);
     }
 
     fn handle_model_catalog_refreshed(&mut self, result: UiResult<()>) {
-        let Some(Overlay::ModelCatalogStudio(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_model_catalog_dialog() else {
             match result {
                 Ok(()) => self.flash_success(ui_text::t(
                     &self.i18n,
@@ -5759,7 +5905,7 @@ impl App {
                 self.flash_error(error);
             }
         }
-        self.overlay = Some(Overlay::ModelCatalogStudio(dialog));
+        self.restore_model_catalog_dialog(host, dialog);
     }
 
     fn handle_child_sessions_loaded(
@@ -5767,18 +5913,18 @@ impl App {
         parent_session_id: i64,
         result: UiResult<Vec<SessionResource>>,
     ) {
-        let Some(Overlay::Picker(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_picker_dialog() else {
             return;
         };
         let PickerKind::ChildSessions {
             parent_session_id: current_parent_id,
         } = &dialog.kind
         else {
-            self.overlay = Some(Overlay::Picker(dialog));
+            self.restore_picker_dialog(host, dialog);
             return;
         };
         if *current_parent_id != parent_session_id {
-            self.overlay = Some(Overlay::Picker(dialog));
+            self.restore_picker_dialog(host, dialog);
             return;
         }
 
@@ -5801,15 +5947,15 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::Picker(dialog));
+        self.restore_picker_dialog(host, dialog);
     }
 
     fn handle_timeline_loaded(&mut self, session_id: i64, result: UiResult<Vec<DomainEvent>>) {
-        let Some(Overlay::Timeline(mut dialog)) = self.overlay.take() else {
+        let Some((host, mut dialog)) = self.take_timeline_dialog() else {
             return;
         };
         if dialog.session_id != session_id {
-            self.overlay = Some(Overlay::Timeline(dialog));
+            self.restore_timeline_dialog(host, dialog);
             return;
         }
 
@@ -5822,7 +5968,7 @@ impl App {
             }
             Err(error) => self.flash_error(error),
         }
-        self.overlay = Some(Overlay::Timeline(dialog));
+        self.restore_timeline_dialog(host, dialog);
     }
 
     fn handle_session_rewound(
@@ -6773,6 +6919,9 @@ impl App {
     }
 
     fn should_suppress_pending_interactive_overlay(&self) -> bool {
+        if !self.current_route_is_main() {
+            return true;
+        }
         composer_input_is_active(
             self.focus,
             !self.composer.text().trim().is_empty() || !self.composer_items.is_empty(),
@@ -6789,7 +6938,10 @@ impl App {
     }
 
     fn maybe_auto_open_pending_interactive_overlay(&mut self) {
-        if self.overlay.is_some() || self.should_suppress_pending_interactive_overlay() {
+        if self.overlay.is_some()
+            || !self.current_route_is_main()
+            || self.should_suppress_pending_interactive_overlay()
+        {
             return;
         }
         match self.next_pending_interactive_overlay_target() {
@@ -6856,7 +7008,7 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.overlay = Some(Overlay::Timeline(TimelineOverlay {
+        self.current_route = Route::Timeline(TimelineOverlay {
             session_id,
             title: self.i18n.text_args(
                 "overlay-timeline-title",
@@ -6870,7 +7022,7 @@ impl App {
             items: Vec::new(),
             selected: 0,
             loading: true,
-        }));
+        });
         self.request_timeline(session_id, limit);
     }
 
@@ -6886,15 +7038,15 @@ impl App {
             selected: 0,
         };
         self.reload_plugin_inspector_overlay(&mut dialog);
-        self.overlay = Some(Overlay::PluginInspector(dialog));
+        self.current_route = Route::PluginInspector(dialog);
     }
 
     fn open_settings_studio(&mut self, query: &str) {
         match self.build_settings_studio_overlay(None, None, SettingsStudioFocus::Navigation) {
             Ok(mut dialog) => {
                 self.select_settings_studio_query(&mut dialog, query);
-                self.overlay_stack.clear();
-                self.overlay = Some(Overlay::SettingsStudio(dialog));
+                self.route_stack.clear();
+                self.current_route = Route::SettingsStudio(dialog);
             }
             Err(error) => self.flash_error(error),
         }
@@ -7193,16 +7345,12 @@ impl App {
         };
         match item.action {
             SettingsPickerAction::EditField(field) => {
-                self.overlay_stack
-                    .push(Overlay::SettingsStudio(dialog.clone()));
                 self.open_settings_field_editor(field, "");
-                true
+                false
             }
             SettingsPickerAction::EditRuntimeSetting(field) => {
-                self.overlay_stack
-                    .push(Overlay::SettingsStudio(dialog.clone()));
                 self.open_runtime_setting_editor(field, "");
-                true
+                false
             }
             SettingsPickerAction::TogglePluginsEnabled => {
                 self.toggle_plugins_enabled(dialog);
@@ -7225,34 +7373,29 @@ impl App {
                 false
             }
             SettingsPickerAction::OpenProviderWorkbench => {
-                self.overlay_stack
-                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_provider_studio(None);
-                true
+                false
             }
             SettingsPickerAction::OpenProviderWorkbenchFor(provider_id) => {
-                self.overlay_stack
-                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_provider_studio(Some(provider_id.as_str()));
-                true
+                false
             }
             SettingsPickerAction::OpenModelCatalogWorkbench => {
-                self.overlay_stack
-                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_model_catalog_studio();
-                true
+                false
             }
             SettingsPickerAction::OpenRuntimeProviderOverride => {
-                self.overlay_stack
-                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_provider_picker(ProviderPickerPurpose::SetProvider);
-                true
+                false
             }
             SettingsPickerAction::OpenRuntimeModelOverride => {
-                self.overlay_stack
-                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_session_model_chooser();
-                true
+                false
             }
             SettingsPickerAction::ClearRuntimeModelStack => {
                 self.clear_provider_model_overrides();
@@ -7261,10 +7404,9 @@ impl App {
                 false
             }
             SettingsPickerAction::OpenPermissionRules => {
-                self.overlay_stack
-                    .push(Overlay::SettingsStudio(dialog.clone()));
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_permission_rule_picker("");
-                true
+                false
             }
             SettingsPickerAction::OpenConfigFile => {
                 self.open_runtime_config_in_editor();
@@ -7273,9 +7415,9 @@ impl App {
         }
     }
 
-    fn refresh_restored_overlay(&self, overlay: Overlay) -> Overlay {
-        match overlay {
-            Overlay::SettingsStudio(dialog) => self
+    fn refresh_restored_route(&self, route: Route) -> Route {
+        match route {
+            Route::SettingsStudio(dialog) => self
                 .build_settings_studio_overlay(
                     dialog
                         .sections
@@ -7288,9 +7430,183 @@ impl App {
                         .map(|item| item.label.as_str()),
                     dialog.focus,
                 )
-                .map(Overlay::SettingsStudio)
-                .unwrap_or(Overlay::SettingsStudio(dialog)),
+                .map(Route::SettingsStudio)
+                .unwrap_or(Route::SettingsStudio(dialog)),
             other => other,
+        }
+    }
+
+    fn refresh_restored_overlay(&self, overlay: Overlay) -> Overlay {
+        overlay
+    }
+
+    fn refresh_permission_rules_route(&mut self, query: &str) {
+        let route_query = query.to_string();
+        let should_refresh_current = matches!(
+            &self.current_route,
+            Route::Picker(dialog) if matches!(dialog.kind, PickerKind::PermissionRules)
+        );
+        if should_refresh_current {
+            self.open_permission_rule_picker(route_query.as_str());
+            return;
+        }
+        self.open_permission_rule_picker(route_query.as_str());
+    }
+
+    fn refresh_current_route_after_local_edit(&mut self) {
+        let route = std::mem::replace(&mut self.current_route, Route::Main);
+        self.current_route = self.refresh_restored_route(route);
+    }
+
+    fn take_picker_dialog(&mut self) -> Option<(DialogHost, PickerOverlay)> {
+        match std::mem::replace(&mut self.current_route, Route::Main) {
+            Route::Picker(dialog) => Some((DialogHost::Route, dialog)),
+            route => {
+                self.current_route = route;
+                match self.overlay.take() {
+                    Some(Overlay::Picker(dialog)) => Some((DialogHost::Overlay, dialog)),
+                    overlay => {
+                        self.overlay = overlay;
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    fn restore_picker_dialog(&mut self, host: DialogHost, dialog: PickerOverlay) {
+        match host {
+            DialogHost::Route => self.current_route = Route::Picker(dialog),
+            DialogHost::Overlay => self.overlay = Some(Overlay::Picker(dialog)),
+        }
+    }
+
+    fn take_session_search_dialog(&mut self) -> Option<(DialogHost, SessionSearchOverlay)> {
+        match std::mem::replace(&mut self.current_route, Route::Main) {
+            Route::SessionSearch(dialog) => Some((DialogHost::Route, dialog)),
+            route => {
+                self.current_route = route;
+                match self.overlay.take() {
+                    Some(Overlay::SessionSearch(dialog)) => Some((DialogHost::Overlay, dialog)),
+                    overlay => {
+                        self.overlay = overlay;
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    fn restore_session_search_dialog(&mut self, host: DialogHost, dialog: SessionSearchOverlay) {
+        match host {
+            DialogHost::Route => self.current_route = Route::SessionSearch(dialog),
+            DialogHost::Overlay => self.overlay = Some(Overlay::SessionSearch(dialog)),
+        }
+    }
+
+    fn take_session_model_chooser_dialog(
+        &mut self,
+    ) -> Option<(DialogHost, SessionModelChooserOverlay)> {
+        match std::mem::replace(&mut self.current_route, Route::Main) {
+            Route::SessionModelChooser(dialog) => Some((DialogHost::Route, dialog)),
+            route => {
+                self.current_route = route;
+                match self.overlay.take() {
+                    Some(Overlay::SessionModelChooser(dialog)) => {
+                        Some((DialogHost::Overlay, dialog))
+                    }
+                    overlay => {
+                        self.overlay = overlay;
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    fn restore_session_model_chooser_dialog(
+        &mut self,
+        host: DialogHost,
+        dialog: SessionModelChooserOverlay,
+    ) {
+        match host {
+            DialogHost::Route => self.current_route = Route::SessionModelChooser(dialog),
+            DialogHost::Overlay => self.overlay = Some(Overlay::SessionModelChooser(dialog)),
+        }
+    }
+
+    fn take_provider_studio_dialog(&mut self) -> Option<(DialogHost, ProviderStudioOverlay)> {
+        match std::mem::replace(&mut self.current_route, Route::Main) {
+            Route::ProviderStudio(dialog) => Some((DialogHost::Route, dialog)),
+            route => {
+                self.current_route = route;
+                match self.overlay.take() {
+                    Some(Overlay::ProviderStudio(dialog)) => Some((DialogHost::Overlay, dialog)),
+                    overlay => {
+                        self.overlay = overlay;
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    fn restore_provider_studio_dialog(&mut self, host: DialogHost, dialog: ProviderStudioOverlay) {
+        match host {
+            DialogHost::Route => self.current_route = Route::ProviderStudio(dialog),
+            DialogHost::Overlay => self.overlay = Some(Overlay::ProviderStudio(dialog)),
+        }
+    }
+
+    fn take_model_catalog_dialog(&mut self) -> Option<(DialogHost, ModelCatalogStudioOverlay)> {
+        match std::mem::replace(&mut self.current_route, Route::Main) {
+            Route::ModelCatalogStudio(dialog) => Some((DialogHost::Route, dialog)),
+            route => {
+                self.current_route = route;
+                match self.overlay.take() {
+                    Some(Overlay::ModelCatalogStudio(dialog)) => {
+                        Some((DialogHost::Overlay, dialog))
+                    }
+                    overlay => {
+                        self.overlay = overlay;
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    fn restore_model_catalog_dialog(
+        &mut self,
+        host: DialogHost,
+        dialog: ModelCatalogStudioOverlay,
+    ) {
+        match host {
+            DialogHost::Route => self.current_route = Route::ModelCatalogStudio(dialog),
+            DialogHost::Overlay => self.overlay = Some(Overlay::ModelCatalogStudio(dialog)),
+        }
+    }
+
+    fn take_timeline_dialog(&mut self) -> Option<(DialogHost, TimelineOverlay)> {
+        match std::mem::replace(&mut self.current_route, Route::Main) {
+            Route::Timeline(dialog) => Some((DialogHost::Route, dialog)),
+            route => {
+                self.current_route = route;
+                match self.overlay.take() {
+                    Some(Overlay::Timeline(dialog)) => Some((DialogHost::Overlay, dialog)),
+                    overlay => {
+                        self.overlay = overlay;
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    fn restore_timeline_dialog(&mut self, host: DialogHost, dialog: TimelineOverlay) {
+        match host {
+            DialogHost::Route => self.current_route = Route::Timeline(dialog),
+            DialogHost::Overlay => self.overlay = Some(Overlay::Timeline(dialog)),
         }
     }
 
@@ -7382,6 +7698,7 @@ impl App {
                     {
                         Ok(_) => {
                             self.flash_success(format!("updated {}", field.path));
+                            self.refresh_current_route_after_local_edit();
                             true
                         }
                         Err(error) => {
@@ -7393,6 +7710,7 @@ impl App {
                         match self.block_on_async(self.backend.delete_config_setting(field.path)) {
                             Ok(_) => {
                                 self.flash_success(format!("cleared {}", field.path));
+                                self.refresh_current_route_after_local_edit();
                                 true
                             }
                             Err(error) => {
@@ -7419,6 +7737,7 @@ impl App {
                 {
                     Ok(message) => {
                         self.flash_success(message);
+                        self.refresh_current_route_after_local_edit();
                         true
                     }
                     Err(error) => {
@@ -7433,18 +7752,18 @@ impl App {
                     ChoiceRow::Custom(value) => value,
                     ChoiceRow::Item(item) => item.value,
                 };
-                let Some(Overlay::ProviderStudio(mut parent)) = self.overlay_stack.pop() else {
+                let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
                     self.flash_error("provider studio context was lost");
                     return true;
                 };
                 match self.commit_provider_studio_field(&mut parent, field, value) {
                     Ok(()) => {
-                        self.overlay = Some(Overlay::ProviderStudio(parent));
+                        self.restore_provider_studio_dialog(host, parent);
                         true
                     }
                     Err(error) => {
+                        self.restore_provider_studio_dialog(host, parent);
                         self.flash_error(error);
-                        self.overlay_stack.push(Overlay::ProviderStudio(parent));
                         false
                     }
                 }
@@ -7904,7 +8223,7 @@ impl App {
             kind: PickerKind::Inspector,
         };
         Self::refresh_picker_overlay(&mut overlay);
-        self.overlay = Some(Overlay::Picker(overlay));
+        self.current_route = Route::Picker(overlay);
     }
 
     fn open_permission_rule_picker(&mut self, query: &str) {
@@ -7933,7 +8252,7 @@ impl App {
                     kind: PickerKind::PermissionRules,
                 };
                 Self::refresh_picker_overlay(&mut overlay);
-                self.overlay = Some(Overlay::Picker(overlay));
+                self.current_route = Route::Picker(overlay);
             }
             Err(error) => self.flash_error(error),
         }
@@ -8056,7 +8375,7 @@ impl App {
             kind: PickerKind::Commands,
         };
         Self::refresh_picker_overlay(&mut overlay);
-        self.overlay = Some(Overlay::Picker(overlay));
+        self.current_route = Route::Picker(overlay);
     }
 
     fn runtime_entry_command_rows(&self) -> Vec<crate::backend::InspectorRow> {
@@ -8117,7 +8436,7 @@ impl App {
                 );
             }
         }
-        self.overlay = Some(Overlay::SessionSearch(dialog));
+        self.current_route = Route::SessionSearch(dialog);
     }
 
     fn open_lineage_picker(&mut self) {
@@ -8125,7 +8444,7 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.overlay = Some(Overlay::Picker(PickerOverlay {
+        self.current_route = Route::Picker(PickerOverlay {
             title: self.i18n.text_args(
                 "overlay-lineage-title",
                 &crate::fl_args!("session" => session_id),
@@ -8139,7 +8458,7 @@ impl App {
             selected: 0,
             loading: true,
             kind: PickerKind::Lineage { session_id },
-        }));
+        });
         self.request_lineage(session_id);
     }
 
@@ -8155,7 +8474,7 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
             return;
         }
-        self.overlay = Some(Overlay::Picker(PickerOverlay {
+        self.current_route = Route::Picker(PickerOverlay {
             title: self.i18n.text_args(
                 "overlay-rewind-title",
                 &crate::fl_args!("session" => session_id),
@@ -8169,12 +8488,12 @@ impl App {
             selected: 0,
             loading: true,
             kind: PickerKind::RewindMessages { session_id },
-        }));
+        });
         self.request_rewind_messages(session_id);
     }
 
     fn open_provider_picker(&mut self, purpose: ProviderPickerPurpose) {
-        self.overlay = Some(Overlay::Picker(PickerOverlay {
+        self.current_route = Route::Picker(PickerOverlay {
             title: ui_text::t(&self.i18n, "overlay-providers-title"),
             prompt: ui_text::t(&self.i18n, "overlay-providers-prompt"),
             empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
@@ -8185,12 +8504,12 @@ impl App {
             selected: 0,
             loading: true,
             kind: PickerKind::Providers(purpose),
-        }));
+        });
         self.request_providers(purpose);
     }
 
     fn open_session_model_chooser(&mut self) {
-        self.overlay = Some(Overlay::SessionModelChooser(SessionModelChooserOverlay {
+        self.current_route = Route::SessionModelChooser(SessionModelChooserOverlay {
             title: "Session Model".to_string(),
             prompt: "Search provider, adapter, or model".to_string(),
             footer: "Type filter | Up/Down move | Left/Right page | Enter select | Esc close"
@@ -8202,7 +8521,7 @@ impl App {
             items: Vec::new(),
             selected: 0,
             page_size: 18,
-        }));
+        });
         self.request_session_model_chooser_items();
     }
 
@@ -8270,7 +8589,7 @@ impl App {
             .get(overlay.selected_provider)
             .and_then(|row| row.provider_id.clone());
         self.load_provider_studio_draft(&mut overlay, selected_id.as_deref(), draft_prefill);
-        self.overlay = Some(Overlay::ProviderStudio(overlay));
+        self.current_route = Route::ProviderStudio(overlay);
     }
 
     fn load_provider_studio_draft(
@@ -8365,7 +8684,7 @@ impl App {
             editor: None,
         };
         self.request_model_catalog_page(String::new(), 0);
-        self.overlay = Some(Overlay::ModelCatalogStudio(dialog.clone()));
+        self.current_route = Route::ModelCatalogStudio(dialog.clone());
     }
 
     fn request_model_catalog_page(&mut self, query: String, offset: usize) {
@@ -8715,8 +9034,6 @@ impl App {
             return;
         }
         if let Some(all_items) = self.provider_studio_field_choice_items(dialog, field) {
-            self.overlay_stack
-                .push(Overlay::ProviderStudio(dialog.clone()));
             self.open_choice_overlay(ChoiceOverlay {
                 title: ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
                 prompt: provider_studio_field_prompt(&self.i18n, field),
@@ -9179,7 +9496,7 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.overlay = Some(Overlay::Picker(PickerOverlay {
+        self.current_route = Route::Picker(PickerOverlay {
             title: self.i18n.text_args(
                 "overlay-children-title",
                 &crate::fl_args!("session" => parent_session_id),
@@ -9193,7 +9510,7 @@ impl App {
             selected: 0,
             loading: true,
             kind: PickerKind::ChildSessions { parent_session_id },
-        }));
+        });
         self.request_child_sessions(parent_session_id);
     }
 
@@ -9626,7 +9943,7 @@ impl App {
                         "flash-permission-rule-revoked",
                         &crate::fl_args!("name" => label),
                     ));
-                    self.open_permission_rule_picker(return_query.as_str());
+                    self.refresh_permission_rules_route(return_query.as_str());
                 }
                 Err(error) => self.flash_error(error),
             },
@@ -9649,7 +9966,10 @@ impl App {
 
     fn execute_command(&mut self, spec: &'static CommandSpec, args: &str) {
         match spec.id {
-            CommandId::Help => self.overlay = Some(Overlay::Help(HelpOverlay::default())),
+            CommandId::Help => {
+                self.route_stack.clear();
+                self.current_route = Route::Help(HelpOverlay::default());
+            }
             CommandId::Commands => self.open_command_palette(),
             CommandId::New => self.create_session(None),
             CommandId::Sessions => self.handle_sessions_command(spec, args),
@@ -10436,12 +10756,34 @@ impl App {
             Self::refresh_prompt_history_search(&self.prompt_history, search);
         }
         self.sync_composer_suggestions();
+        match &mut self.current_route {
+            Route::Main => {}
+            Route::Help(_) => {}
+            Route::SettingsStudio(_) => {}
+            Route::SessionSearch(dialog) => dialog.input.flush_pending_input_if_due(now),
+            Route::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
+            Route::SessionModelChooser(dialog) => {
+                dialog.input.flush_pending_input_if_due(now);
+                Self::refresh_session_model_chooser_overlay(dialog, false, None);
+            }
+            Route::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
+            Route::PluginInspector(dialog) => dialog.input.flush_pending_input_if_due(now),
+            Route::ProviderStudio(dialog) => {
+                if let Some(editor) = dialog.editor.as_mut() {
+                    editor.input.flush_pending_input_if_due(now);
+                }
+            }
+            Route::ModelCatalogStudio(dialog) => {
+                if let Some(editor) = dialog.editor.as_mut() {
+                    editor.input.flush_pending_input_if_due(now);
+                }
+            }
+        }
         if let Some(overlay) = &mut self.overlay {
             match overlay {
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
-                Overlay::SettingsStudio(_) => {}
                 Overlay::SettingsValueEdit(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
@@ -10468,7 +10810,6 @@ impl App {
                     Self::refresh_session_model_chooser_overlay(dialog, false, None);
                 }
                 Overlay::Timeline(dialog) => dialog.input.flush_pending_input_if_due(now),
-                Overlay::PluginInspector(dialog) => dialog.input.flush_pending_input_if_due(now),
                 Overlay::ProviderStudio(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
                         editor.input.flush_pending_input_if_due(now);
@@ -10481,7 +10822,6 @@ impl App {
                 }
                 Overlay::Confirm(_) => {}
                 Overlay::Permission(_) => {}
-                Overlay::Help(_) => {}
             }
         }
     }

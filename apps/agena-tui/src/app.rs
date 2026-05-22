@@ -9,7 +9,7 @@ use std::{
 };
 
 use agena::{
-    agents::AgentDescriptor,
+    agents::{AgentDescriptor, AgentProfile},
     config::get_json_path,
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
@@ -45,7 +45,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Map as JsonMap, Value as JsonValue};
+use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
     time::interval,
@@ -67,7 +67,7 @@ use crate::external_pager::page_text;
 use crate::i18n::{I18n, SUPPORTED_LOCALES};
 use crate::keybindings::{ComposerAction, ComposerKeyBindings};
 use crate::terminal;
-use crate::tui_config::{TuiComposerMode, TuiConfig, TuiStatusLineConfig};
+use crate::tui_config::{TuiConfig, TuiStatusLineConfig};
 use crate::ui_text;
 use agena_api_server::local_api::{
     ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse,
@@ -80,7 +80,8 @@ mod view;
 use self::provider_studio::*;
 
 use self::transcript_view::{
-    render_message, render_transcript_export_markdown, rewind_message_preview,
+    render_message, render_message_detailed, render_transcript_export_markdown,
+    rewind_message_preview,
     sanitize_terminal_text,
 };
 
@@ -327,34 +328,6 @@ enum PromptHistoryDirection {
     Newer,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ComposerMode {
-    Emacs,
-    VimInsert,
-    VimNormal,
-}
-
-impl ComposerMode {
-    fn from_config(mode: TuiComposerMode) -> Self {
-        match mode {
-            TuiComposerMode::Emacs => Self::Emacs,
-            TuiComposerMode::Vim => Self::VimInsert,
-        }
-    }
-
-    fn is_vim(self) -> bool {
-        matches!(self, Self::VimInsert | Self::VimNormal)
-    }
-
-    fn status_label(self) -> &'static str {
-        match self {
-            Self::Emacs => "EMACS",
-            Self::VimInsert => "INSERT",
-            Self::VimNormal => "NORMAL",
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 struct StatusLineState {
     command: String,
@@ -403,7 +376,6 @@ pub struct App {
     dismissed_file_mention_suggestions_for: Option<String>,
     prompt_history_search: Option<PromptHistorySearchState>,
     selected_composer_item: Option<usize>,
-    composer_mode: ComposerMode,
     draft_store: DraftStore,
     draft_store_path: PathBuf,
     draft_store_dirty: bool,
@@ -432,9 +404,6 @@ pub struct App {
     status_line: Option<StatusLineState>,
     plugin_theme: Option<agena::plugin::HostThemePalette>,
     keybindings: ComposerKeyBindings,
-    /// Last time the user pressed Esc inside the composer; used to detect
-    /// a double-tap that clears the input.
-    last_esc_at: Option<Instant>,
     /// Last time the user pressed Ctrl+C; a second press within the window
     /// exits the application.
     last_ctrl_c_at: Option<Instant>,
@@ -495,6 +464,11 @@ enum AppMessage {
         session_id: i64,
         mode: MessageLoadMode,
         result: UiResult<PaginatedResponse<MessageResource>>,
+    },
+    MessageDetailLoaded {
+        session_id: i64,
+        message_id: i64,
+        result: UiResult<Option<MessageResource>>,
     },
     SessionRefreshed {
         session_id: i64,
@@ -649,6 +623,8 @@ enum Route {
     Main,
     Help(HelpOverlay),
     SettingsStudio(SettingsStudioOverlay),
+    AgentStudio(AgentStudioOverlay),
+    AgentPermissionStudio(AgentPermissionStudioOverlay),
     SessionSearch(SessionSearchOverlay),
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
@@ -687,6 +663,118 @@ struct SettingsStudioOverlay {
     default_agent_name: Option<String>,
     plugins_enabled: bool,
     plugins_default_mode: String,
+}
+
+#[derive(Debug, Clone)]
+struct AgentStudioOverlay {
+    title: String,
+    footer: String,
+    agent_name: String,
+    profile: AgentProfile,
+    editable: bool,
+    default_agent_name: Option<String>,
+    items: Vec<AgentStudioItem>,
+    selected: usize,
+    editor: Option<AgentStudioEditor>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentStudioItem {
+    label: String,
+    value: String,
+    detail: String,
+    action: AgentStudioAction,
+}
+
+#[derive(Debug, Clone)]
+enum AgentStudioAction {
+    Edit(AgentStudioField),
+    ToggleHidden,
+    SetDefault,
+    OpenPermissionWorkbench,
+    OpenSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentStudioField {
+    Description,
+    Prompt,
+    Mode,
+    Aliases,
+    AllowedEntries,
+    Temperature,
+    MaxOutputTokens,
+    Steps,
+    DefaultProvider,
+    DefaultAdapter,
+    DefaultModel,
+}
+
+#[derive(Debug, Clone)]
+struct AgentStudioEditor {
+    title: String,
+    prompt: String,
+    footer: String,
+    multiline: bool,
+    input: Editor,
+    action: AgentStudioEditorAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentStudioEditorAction {
+    Field(AgentStudioField),
+}
+
+#[derive(Debug, Clone)]
+struct AgentPermissionStudioOverlay {
+    title: String,
+    footer: String,
+    agent_name: String,
+    profile: AgentProfile,
+    editable: bool,
+    items: Vec<AgentPermissionStudioItem>,
+    selected: usize,
+    editor: Option<AgentPermissionStudioEditor>,
+}
+
+#[derive(Debug, Clone)]
+struct AgentPermissionStudioItem {
+    label: String,
+    value: String,
+    detail: String,
+    action: AgentPermissionStudioAction,
+}
+
+#[derive(Debug, Clone)]
+enum AgentPermissionStudioAction {
+    Edit(AgentPermissionField),
+    OpenSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentPermissionField {
+    InheritPath,
+    InheritNetwork,
+    InheritEntries,
+    PathConfig,
+    NetworkConfig,
+    EntryConfig,
+    FullConfig,
+}
+
+#[derive(Debug, Clone)]
+struct AgentPermissionStudioEditor {
+    title: String,
+    prompt: String,
+    footer: String,
+    multiline: bool,
+    input: Editor,
+    action: AgentPermissionStudioEditorAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentPermissionStudioEditorAction {
+    Field(AgentPermissionField),
 }
 
 #[derive(Debug, Clone)]
@@ -1286,10 +1374,13 @@ struct TranscriptState {
     pending_restore_draft: Option<ComposerDraft>,
     follow_tail: bool,
     scroll: usize,
+    cursor_line: usize,
     search_query: String,
     search_match_index: Option<usize>,
     execution: Option<SessionExecutionResource>,
     last_event_seq: Option<i64>,
+    detail_expanded_by_default: TranscriptDetailDefaults,
+    node_expansions: BTreeMap<TranscriptNodeKey, bool>,
     rendered: Option<RenderedTranscript>,
 }
 
@@ -1465,6 +1556,8 @@ struct RenderedTranscript {
     lines: Vec<RenderedLine>,
     search_matches: Vec<usize>,
     message_line_starts: Vec<(i64, usize)>,
+    nodes: Vec<RenderedTranscriptNode>,
+    line_nodes: Vec<Option<usize>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1472,6 +1565,49 @@ struct RenderedLine {
     text: String,
     style: Style,
     rich_line: Option<Line<'static>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TranscriptDetailDefaults {
+    tool_output_expanded: bool,
+    thinking_expanded: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum TranscriptNodeKey {
+    MessagePart { message_id: i64, part_id: Option<i64> },
+    Reasoning { message_id: i64, part_id: i64 },
+    Tool { message_id: i64, part_id: i64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptNodeKind {
+    Message,
+    Reasoning,
+    Tool,
+}
+
+impl TranscriptNodeKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Message => "message",
+            Self::Reasoning => "thinking block",
+            Self::Tool => "tool output",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RenderedTranscriptNode {
+    key: TranscriptNodeKey,
+    kind: TranscriptNodeKind,
+    message_id: i64,
+    start_line: usize,
+    end_line: usize,
+    copy_text: String,
+    toggleable: bool,
+    expanded: bool,
+    requires_full_message: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1576,7 +1712,7 @@ impl App {
             rx,
             launch: launch.clone(),
             should_quit: false,
-            focus: Focus::Composer,
+            focus: Focus::Transcript,
             current_route: Route::Main,
             route_stack: Vec::new(),
             overlay: None,
@@ -1588,7 +1724,19 @@ impl App {
                 search_query: launch.initial_session_search.unwrap_or_default(),
                 ..SessionListState::default()
             },
-            transcript: TranscriptState::new(i18n),
+            transcript: TranscriptState::new(
+                i18n,
+                TranscriptDetailDefaults {
+                    tool_output_expanded: launch
+                        .tui_config
+                        .transcript
+                        .tool_output_default_expanded,
+                    thinking_expanded: launch
+                        .tui_config
+                        .transcript
+                        .thinking_default_expanded,
+                },
+            ),
             run_options: RunOptionsState::default(),
             composer: Editor::default(),
             composer_items: Vec::new(),
@@ -1598,7 +1746,6 @@ impl App {
             dismissed_file_mention_suggestions_for: None,
             prompt_history_search: None,
             selected_composer_item: None,
-            composer_mode: ComposerMode::from_config(launch.tui_config.composer_mode),
             draft_store,
             draft_store_path,
             draft_store_dirty: false,
@@ -1626,7 +1773,6 @@ impl App {
             status_line,
             plugin_theme,
             keybindings,
-            last_esc_at: None,
             last_ctrl_c_at: None,
             double_esc_window,
         };
@@ -2035,6 +2181,10 @@ impl App {
             Route::Main => false,
             Route::Help(dialog) => self.handle_help_overlay_key(key, dialog),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
+            Route::AgentStudio(dialog) => self.handle_agent_studio_overlay_key(key, dialog),
+            Route::AgentPermissionStudio(dialog) => {
+                self.handle_agent_permission_studio_overlay_key(key, dialog)
+            }
             Route::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
             Route::Picker(dialog) => self.handle_picker_overlay_key(key, dialog),
             Route::SessionModelChooser(dialog) => {
@@ -2773,6 +2923,374 @@ impl App {
             KeyCode::Enter => self.activate_settings_studio_selection(dialog),
             _ => false,
         }
+    }
+
+    fn handle_agent_studio_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut AgentStudioOverlay,
+    ) -> bool {
+        if dialog.editor.is_some() {
+            if matches!(key.code, KeyCode::Esc) {
+                dialog.editor = None;
+                return false;
+            }
+            let commit = if let Some(editor) = dialog.editor.as_mut() {
+                if editor.multiline {
+                    if matches!(key.code, KeyCode::Char('s'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        editor.input.flush_all_pending_input();
+                        Some((editor.action, editor.input.text().to_string()))
+                    } else {
+                        editor.input.handle_multiline_input_key(key);
+                        None
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Enter => {
+                            editor.input.flush_all_pending_input();
+                            Some((editor.action, editor.input.text().to_string()))
+                        }
+                        _ => {
+                            editor.input.handle_line_input_key(key);
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some((action, input)) = commit {
+                if let Err(error) = self.commit_agent_studio_editor(dialog, action, input) {
+                    self.flash_error(error);
+                } else {
+                    dialog.editor = None;
+                }
+            }
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Char('r') => {
+                self.refresh_agent_studio_overlay(dialog);
+                false
+            }
+            KeyCode::Char('o') => {
+                self.open_agent_profile_source(&dialog.profile);
+                false
+            }
+            KeyCode::Char('p') => {
+                self.route_stack.push(Route::AgentStudio(dialog.clone()));
+                self.open_agent_permission_studio(dialog.agent_name.as_str());
+                false
+            }
+            KeyCode::Char('d') => {
+                match self.set_default_agent_value(dialog.agent_name.as_str()) {
+                    Ok(()) => {
+                        self.flash_success(format!("set default.agent to {}", dialog.agent_name));
+                        self.refresh_agent_studio_overlay(dialog);
+                    }
+                    Err(error) => self.flash_error(error),
+                }
+                false
+            }
+            KeyCode::Char('t') => {
+                if !dialog.editable {
+                    self.flash_warning(
+                        "this agent is file-backed; open the source file to edit hidden/visible"
+                            .to_string(),
+                    );
+                    return false;
+                }
+                let hidden = dialog.profile.frontmatter.hidden;
+                match self.set_agent_hidden_value(dialog.agent_name.as_str(), !hidden) {
+                    Ok(_) => {
+                        self.flash_success(if hidden {
+                            format!("unhid agent {}", dialog.agent_name)
+                        } else {
+                            format!("hid agent {}", dialog.agent_name)
+                        });
+                        self.refresh_agent_studio_overlay(dialog);
+                    }
+                    Err(error) => self.flash_error(error),
+                }
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.selected = dialog.selected.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown => {
+                dialog.selected = min(dialog.selected.saturating_add(10), dialog.items.len().saturating_sub(1));
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected = 0;
+                false
+            }
+            KeyCode::End => {
+                dialog.selected = dialog.items.len().saturating_sub(1);
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dialog.selected =
+                    min(dialog.selected.saturating_add(1), dialog.items.len().saturating_sub(1));
+                false
+            }
+            KeyCode::Enter => self.activate_agent_studio_selection(dialog),
+            _ => false,
+        }
+    }
+
+    fn handle_agent_permission_studio_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut AgentPermissionStudioOverlay,
+    ) -> bool {
+        if dialog.editor.is_some() {
+            if matches!(key.code, KeyCode::Esc) {
+                dialog.editor = None;
+                return false;
+            }
+            let commit = if let Some(editor) = dialog.editor.as_mut() {
+                if editor.multiline {
+                    if matches!(key.code, KeyCode::Char('s'))
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        editor.input.flush_all_pending_input();
+                        Some((editor.action, editor.input.text().to_string()))
+                    } else {
+                        editor.input.handle_multiline_input_key(key);
+                        None
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Enter => {
+                            editor.input.flush_all_pending_input();
+                            Some((editor.action, editor.input.text().to_string()))
+                        }
+                        _ => {
+                            editor.input.handle_line_input_key(key);
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some((action, input)) = commit {
+                if let Err(error) = self.commit_agent_permission_editor(dialog, action, input) {
+                    self.flash_error(error);
+                } else {
+                    dialog.editor = None;
+                }
+            }
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Char('r') => {
+                self.refresh_agent_permission_studio_overlay(dialog);
+                false
+            }
+            KeyCode::Char('o') => {
+                self.open_agent_profile_source(&dialog.profile);
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.selected = dialog.selected.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown => {
+                dialog.selected = min(dialog.selected.saturating_add(10), dialog.items.len().saturating_sub(1));
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected = 0;
+                false
+            }
+            KeyCode::End => {
+                dialog.selected = dialog.items.len().saturating_sub(1);
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dialog.selected =
+                    min(dialog.selected.saturating_add(1), dialog.items.len().saturating_sub(1));
+                false
+            }
+            KeyCode::Enter => self.activate_agent_permission_studio_selection(dialog),
+            _ => false,
+        }
+    }
+
+    fn activate_agent_studio_selection(&mut self, dialog: &mut AgentStudioOverlay) -> bool {
+        let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+            return false;
+        };
+        match item.action {
+            AgentStudioAction::Edit(field) => {
+                if !dialog.editable {
+                    self.flash_warning(
+                        "this agent is file-backed; open the source file to edit it".to_string(),
+                    );
+                    return false;
+                }
+                self.open_agent_studio_editor(dialog, field);
+            }
+            AgentStudioAction::ToggleHidden => {
+                if !dialog.editable {
+                    self.flash_warning(
+                        "this agent is file-backed; open the source file to edit it".to_string(),
+                    );
+                    return false;
+                }
+                let hidden = dialog.profile.frontmatter.hidden;
+                match self.set_agent_hidden_value(dialog.agent_name.as_str(), !hidden) {
+                    Ok(()) => {
+                        self.flash_success(if hidden {
+                            format!("unhid agent {}", dialog.agent_name)
+                        } else {
+                            format!("hid agent {}", dialog.agent_name)
+                        });
+                        self.refresh_agent_studio_overlay(dialog);
+                    }
+                    Err(error) => self.flash_error(error),
+                }
+            }
+            AgentStudioAction::SetDefault => match self.set_default_agent_value(dialog.agent_name.as_str()) {
+                Ok(()) => {
+                    self.flash_success(format!("set default.agent to {}", dialog.agent_name));
+                    self.refresh_agent_studio_overlay(dialog);
+                }
+                Err(error) => self.flash_error(error),
+            },
+            AgentStudioAction::OpenPermissionWorkbench => {
+                self.route_stack.push(Route::AgentStudio(dialog.clone()));
+                self.open_agent_permission_studio(dialog.agent_name.as_str());
+            }
+            AgentStudioAction::OpenSource => self.open_agent_profile_source(&dialog.profile),
+        }
+        false
+    }
+
+    fn open_agent_studio_editor(&mut self, dialog: &mut AgentStudioOverlay, field: AgentStudioField) {
+        let (title, prompt, footer, multiline, input) =
+            agent_studio_editor_config(&dialog.profile, field);
+        dialog.editor = Some(AgentStudioEditor {
+            title,
+            prompt,
+            footer,
+            multiline,
+            input,
+            action: AgentStudioEditorAction::Field(field),
+        });
+    }
+
+    fn commit_agent_studio_editor(
+        &mut self,
+        dialog: &mut AgentStudioOverlay,
+        action: AgentStudioEditorAction,
+        input: String,
+    ) -> UiResult<()> {
+        match action {
+            AgentStudioEditorAction::Field(field) => {
+                let (path, value) = agent_studio_field_setting_value(
+                    dialog.agent_name.as_str(),
+                    field,
+                    input.as_str(),
+                )?;
+                if let Some(value) = value {
+                    self.block_on_async(self.backend.set_config_setting(path.as_str(), value))
+                        .map_err(|error| error.to_string())?;
+                    self.flash_success(format!("updated {path}"));
+                } else {
+                    self.block_on_async(self.backend.delete_config_setting(path.as_str()))
+                        .map_err(|error| error.to_string())?;
+                    self.flash_success(format!("cleared {path}"));
+                }
+                self.refresh_agent_studio_overlay(dialog);
+            }
+        }
+        Ok(())
+    }
+
+    fn activate_agent_permission_studio_selection(
+        &mut self,
+        dialog: &mut AgentPermissionStudioOverlay,
+    ) -> bool {
+        let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+            return false;
+        };
+        match item.action {
+            AgentPermissionStudioAction::Edit(field) => {
+                if !dialog.editable {
+                    self.flash_warning(
+                        "this agent is file-backed; open the source file to edit permissions"
+                            .to_string(),
+                    );
+                    return false;
+                }
+                self.open_agent_permission_studio_editor(dialog, field);
+            }
+            AgentPermissionStudioAction::OpenSource => self.open_agent_profile_source(&dialog.profile),
+        }
+        false
+    }
+
+    fn open_agent_permission_studio_editor(
+        &mut self,
+        dialog: &mut AgentPermissionStudioOverlay,
+        field: AgentPermissionField,
+    ) {
+        let (title, prompt, footer, multiline, input) =
+            agent_permission_editor_config(&dialog.profile, field);
+        dialog.editor = Some(AgentPermissionStudioEditor {
+            title,
+            prompt,
+            footer,
+            multiline,
+            input,
+            action: AgentPermissionStudioEditorAction::Field(field),
+        });
+    }
+
+    fn commit_agent_permission_editor(
+        &mut self,
+        dialog: &mut AgentPermissionStudioOverlay,
+        action: AgentPermissionStudioEditorAction,
+        input: String,
+    ) -> UiResult<()> {
+        match action {
+            AgentPermissionStudioEditorAction::Field(field) => {
+                let (path, value) = agent_permission_field_setting_value(
+                    dialog.agent_name.as_str(),
+                    field,
+                    input.as_str(),
+                )?;
+                if let Some(value) = value {
+                    self.block_on_async(self.backend.set_config_setting(path.as_str(), value))
+                        .map_err(|error| error.to_string())?;
+                    self.flash_success(format!("updated {path}"));
+                } else {
+                    self.block_on_async(self.backend.delete_config_setting(path.as_str()))
+                        .map_err(|error| error.to_string())?;
+                    self.flash_success(format!("cleared {path}"));
+                }
+                self.refresh_agent_permission_studio_overlay(dialog);
+            }
+        }
+        Ok(())
     }
 
     fn handle_settings_value_edit_overlay_key(
@@ -3829,6 +4347,20 @@ impl App {
             match &mut self.current_route {
                 Route::Main => {}
                 Route::Help(_) | Route::SettingsStudio(_) => {}
+                Route::AgentStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_all_pending_input();
+                        editor.input.insert_str(text.as_str());
+                        handled_route = true;
+                    }
+                }
+                Route::AgentPermissionStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_all_pending_input();
+                        editor.input.insert_str(text.as_str());
+                        handled_route = true;
+                    }
+                }
                 Route::SessionSearch(dialog) => {
                     let before = dialog.input.text().trim().to_string();
                     dialog.input.flush_all_pending_input();
@@ -4073,12 +4605,18 @@ impl App {
     fn handle_transcript_key(&mut self, key: KeyEvent) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
-        if matches!(key.code, KeyCode::Char('y')) {
-            self.copy_loaded_transcript();
+        if matches!(key.code, KeyCode::Char('i')) {
+            self.enter_insert_mode();
+        } else if matches!(key.code, KeyCode::Char('y')) {
+            self.copy_transcript_cursor_node();
         } else if matches!(key.code, KeyCode::Char('Y')) {
             self.copy_visible_transcript();
+        } else if matches!(key.code, KeyCode::Char('C')) {
+            self.copy_loaded_transcript();
         } else if matches!(key.code, KeyCode::Char('c')) {
             self.copy_last_assistant_message();
+        } else if matches!(key.code, KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char(' ')) {
+            self.toggle_transcript_cursor_node();
         } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) {
             self.transcript.scroll_by_lines(width, height, -1);
             self.maybe_request_older_messages();
@@ -4119,6 +4657,61 @@ impl App {
         }
     }
 
+    fn enter_insert_mode(&mut self) {
+        self.focus = Focus::Composer;
+    }
+
+    fn toggle_transcript_cursor_node(&mut self) {
+        let width = self.layout.transcript_body.width;
+        let height = self.layout.transcript_body.height;
+        let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
+            return;
+        };
+        let Some(session_id) = self.transcript.session_id else {
+            return;
+        };
+        if node.requires_full_message {
+            self.request_message_detail(session_id, node.message_id);
+        }
+        if !node.toggleable {
+            return;
+        }
+        self.transcript
+            .node_expansions
+            .insert(node.key, !node.expanded);
+        self.transcript.invalidate_render();
+        self.transcript.clamp_scroll(width, height);
+        if node.toggleable {
+            self.flash_info(format!(
+                "{} {}",
+                if node.expanded { "collapsed" } else { "expanded" },
+                node.kind.label()
+            ));
+        }
+    }
+
+    fn copy_transcript_cursor_node(&mut self) {
+        let width = self.layout.transcript_body.width;
+        let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
+            return;
+        };
+        let Some(session_id) = self.transcript.session_id else {
+            return;
+        };
+        if node.requires_full_message {
+            self.request_message_detail(session_id, node.message_id);
+            self.flash_info(format!(
+                "loading full {} detail; press y again to copy",
+                node.kind.label()
+            ));
+            return;
+        }
+        match set_clipboard_text(node.copy_text.as_str()) {
+            Ok(()) => self.flash_success(format!("copied current {}", node.kind.label())),
+            Err(error) => self.flash_error(format!("clipboard copy failed: {error}")),
+        }
+    }
+
     fn handle_composer_key(&mut self, key: KeyEvent) {
         if self.handle_prompt_history_search_key(key) {
             return;
@@ -4135,15 +4728,8 @@ impl App {
         // Esc handling is special — double-tap clears the input. We track
         // it before consulting the configurable bindings.
         if matches!(key.code, KeyCode::Esc) && key.modifiers.is_empty() {
-            if self.composer_mode == ComposerMode::VimInsert {
-                self.composer_mode = ComposerMode::VimNormal;
-                self.sync_composer_suggestions();
-                return;
-            }
-            self.handle_composer_esc();
-            return;
-        }
-        if self.composer_mode == ComposerMode::VimNormal && self.handle_vim_normal_key(key) {
+            self.focus = Focus::Transcript;
+            self.sync_composer_suggestions();
             return;
         }
         if matches!(key.code, KeyCode::Up) && key.modifiers.contains(KeyModifiers::ALT) {
@@ -4189,7 +4775,6 @@ impl App {
                 ComposerAction::ClearInput => {
                     self.reset_prompt_history_recall();
                     self.clear_composer_state();
-                    self.last_esc_at = None;
                     return;
                 }
                 ComposerAction::FocusItems => {
@@ -4332,154 +4917,6 @@ impl App {
                 ..
             } => {
                 self.open_selected_composer_item(index);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    fn handle_vim_normal_key(&mut self, key: KeyEvent) -> bool {
-        match key {
-            KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_left();
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('j'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_down();
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_up();
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('l'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_right();
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('w'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_word_right();
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_word_left();
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('0'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_home(false);
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('$'),
-                modifiers: KeyModifiers::SHIFT,
-                ..
-            } => {
-                self.composer.move_end(false);
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('x'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.delete();
-                self.after_composer_text_mutated();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('i'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer_mode = ComposerMode::VimInsert;
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('a'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_right();
-                self.composer_mode = ComposerMode::VimInsert;
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('I'),
-                modifiers: KeyModifiers::SHIFT,
-                ..
-            } => {
-                self.composer.move_home(false);
-                self.composer_mode = ComposerMode::VimInsert;
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('A'),
-                modifiers: KeyModifiers::SHIFT,
-                ..
-            } => {
-                self.composer.move_end(false);
-                self.composer_mode = ComposerMode::VimInsert;
-                self.sync_composer_suggestions();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.composer.move_end(false);
-                self.composer.insert_explicit_newline();
-                self.composer_mode = ComposerMode::VimInsert;
-                self.after_composer_text_mutated();
-                true
-            }
-            KeyEvent {
-                code: KeyCode::Char('O'),
-                modifiers: KeyModifiers::SHIFT,
-                ..
-            } => {
-                let line_start = self.composer.current_line_start();
-                self.composer.insert_str_at(line_start, "\n");
-                self.composer.cursor = line_start;
-                self.composer_mode = ComposerMode::VimInsert;
-                self.after_composer_text_mutated();
                 true
             }
             _ => false,
@@ -4970,27 +5407,6 @@ impl App {
         items
     }
 
-    /// Single-Esc dismisses transient composer UI. Double-Esc within the
-    /// configured window clears the input without leaving the composer.
-    fn handle_composer_esc(&mut self) {
-        let now = Instant::now();
-        let double = self
-            .last_esc_at
-            .map(|prev| now.duration_since(prev) <= self.double_esc_window)
-            .unwrap_or(false);
-        if double {
-            self.reset_prompt_history_recall();
-            self.clear_composer_state();
-            self.last_esc_at = None;
-            return;
-        }
-        self.last_esc_at = Some(now);
-        self.slash_command_suggestions = None;
-        self.file_mention_suggestions = None;
-        self.prompt_history_search = None;
-        self.selected_composer_item = None;
-    }
-
     /// UP / EditQueue binding: pull every editable queued message back into
     /// the editor for editing. Returns true if anything was pulled (so the
     /// caller skips the default cursor-up behavior).
@@ -5039,6 +5455,11 @@ impl App {
                 mode,
                 result,
             } => self.handle_messages_loaded(session_id, mode, result),
+            AppMessage::MessageDetailLoaded {
+                session_id,
+                message_id,
+                result,
+            } => self.handle_message_detail_loaded(session_id, message_id, result),
             AppMessage::SessionRefreshed { session_id, result } => {
                 self.handle_session_refreshed(session_id, result)
             }
@@ -5277,6 +5698,29 @@ impl App {
         }
     }
 
+    fn handle_message_detail_loaded(
+        &mut self,
+        session_id: i64,
+        message_id: i64,
+        result: UiResult<Option<MessageResource>>,
+    ) {
+        if self.transcript.session_id != Some(session_id) {
+            return;
+        }
+        match result {
+            Ok(Some(message)) => {
+                self.transcript.upsert_message(message);
+                self.transcript.invalidate_render();
+                self.transcript.clamp_scroll(
+                    self.layout.transcript_body.width,
+                    self.layout.transcript_body.height,
+                );
+            }
+            Ok(None) => self.flash_warning(format!("message not found: {message_id}")),
+            Err(error) => self.flash_error(error),
+        }
+    }
+
     fn handle_session_refreshed(&mut self, session_id: i64, result: UiResult<SessionRefresh>) {
         if self.transcript.session_id != Some(session_id) {
             return;
@@ -5396,6 +5840,9 @@ impl App {
             self.transcript.submitting = false;
         }
         self.submitting_session_ids.remove(&session_id);
+        if self.transcript.session_id == Some(session_id) {
+            self.request_refresh(session_id, true);
+        }
         match result {
             Ok(()) => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-turn-cancelled"));
@@ -6271,6 +6718,22 @@ impl App {
         });
     }
 
+    fn request_message_detail(&mut self, session_id: i64, message_id: i64) {
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend
+                .get_message(message_id, agena_api::resource::PartLoadMode::Full)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = tx.send(AppMessage::MessageDetailLoaded {
+                session_id,
+                message_id,
+                result,
+            });
+        });
+    }
+
     fn request_refresh(&mut self, session_id: i64, force: bool) {
         if self.transcript.refreshing {
             return;
@@ -6448,6 +6911,7 @@ impl App {
         self.sync_current_draft_slot();
         self.clear_composer_state();
         self.current_lineage = None;
+        self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
         self.seen_permission_request_ids.clear();
         self.seen_user_input_request_ids.clear();
@@ -7067,7 +7531,8 @@ impl App {
         let default_agent = self.backend.default_agent_name();
         let plugins_enabled = settings_studio_plugins_enabled(&sources);
         let plugins_default_mode = settings_studio_plugins_default_mode(&sources);
-        let plugin_entry_items = settings_studio_plugin_entry_items(&sources);
+        let plugin_entry_items =
+            settings_studio_plugin_entry_items(&sources, &self.backend.plugin_statuses());
         let configured_providers = self.backend.list_configured_providers();
         let permission_rule_count = self
             .block_on_async(self.backend.list_permission_rules())
@@ -7154,7 +7619,7 @@ impl App {
                     ),
                 },
                 description:
-                    "Browse discovered agent profiles. Enter opens the source file or runtime config, d makes the selected agent default, and t toggles hidden for config-owned profiles."
+                    "Browse discovered agent profiles. Enter opens the dedicated workbench, d makes the selected agent default, and t toggles hidden for config-owned profiles."
                         .to_string(),
                 items: agent_items,
             },
@@ -7265,6 +7730,99 @@ impl App {
         }
     }
 
+    fn open_agent_studio(&mut self, agent_name: &str) {
+        match self.build_agent_studio_overlay(agent_name, None) {
+            Ok(dialog) => self.current_route = Route::AgentStudio(dialog),
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn build_agent_studio_overlay(
+        &self,
+        agent_name: &str,
+        preferred_item_label: Option<&str>,
+    ) -> UiResult<AgentStudioOverlay> {
+        let profile = self
+            .backend
+            .get_agent_profile(agent_name)
+            .ok_or_else(|| format!("agent not found: {agent_name}"))?;
+        let editable = agent_profile_editable(&profile);
+        let default_agent_name = self.backend.default_agent_name();
+        let mut items = agent_studio_items(&profile, editable, default_agent_name.as_deref());
+        let item_len = items.len();
+        let selected = preferred_item_label
+            .and_then(|label| items.iter().position(|item| item.label == label))
+            .unwrap_or(0);
+        Ok(AgentStudioOverlay {
+            title: format!("Agent · {}", profile.name),
+            footer: "Up/Down move | Enter edit/open | p permissions | d default | t hidden | o source | r refresh | Esc back".to_string(),
+            agent_name: profile.name.clone(),
+            profile,
+            editable,
+            default_agent_name,
+            items: std::mem::take(&mut items),
+            selected: min(selected, item_len.saturating_sub(1)),
+            editor: None,
+        })
+    }
+
+    fn refresh_agent_studio_overlay(&mut self, dialog: &mut AgentStudioOverlay) {
+        let preferred_item = dialog
+            .items
+            .get(dialog.selected)
+            .map(|item| item.label.as_str());
+        match self.build_agent_studio_overlay(dialog.agent_name.as_str(), preferred_item) {
+            Ok(updated) => *dialog = updated,
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn open_agent_permission_studio(&mut self, agent_name: &str) {
+        match self.build_agent_permission_studio_overlay(agent_name, None) {
+            Ok(dialog) => self.current_route = Route::AgentPermissionStudio(dialog),
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn build_agent_permission_studio_overlay(
+        &self,
+        agent_name: &str,
+        preferred_item_label: Option<&str>,
+    ) -> UiResult<AgentPermissionStudioOverlay> {
+        let profile = self
+            .backend
+            .get_agent_profile(agent_name)
+            .ok_or_else(|| format!("agent not found: {agent_name}"))?;
+        let editable = agent_profile_editable(&profile);
+        let mut items = agent_permission_studio_items(&profile, editable);
+        let item_len = items.len();
+        let selected = preferred_item_label
+            .and_then(|label| items.iter().position(|item| item.label == label))
+            .unwrap_or(0);
+        Ok(AgentPermissionStudioOverlay {
+            title: format!("Permission · {}", profile.name),
+            footer: "Up/Down move | Enter edit/open | o source | r refresh | Esc back".to_string(),
+            agent_name: profile.name.clone(),
+            profile,
+            editable,
+            items: std::mem::take(&mut items),
+            selected: min(selected, item_len.saturating_sub(1)),
+            editor: None,
+        })
+    }
+
+    fn refresh_agent_permission_studio_overlay(&mut self, dialog: &mut AgentPermissionStudioOverlay) {
+        let preferred_item = dialog
+            .items
+            .get(dialog.selected)
+            .map(|item| item.label.as_str());
+        match self.build_agent_permission_studio_overlay(dialog.agent_name.as_str(), preferred_item)
+        {
+            Ok(updated) => *dialog = updated,
+            Err(error) => self.flash_error(error),
+        }
+    }
+
     fn select_settings_studio_query(&self, dialog: &mut SettingsStudioOverlay, query: &str) {
         let query = query.trim().to_ascii_lowercase();
         if query.is_empty() {
@@ -7370,7 +7928,8 @@ impl App {
                 false
             }
             SettingsPickerAction::OpenAgent(agent) => {
-                self.open_agent_source(*agent);
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_agent_studio(agent.name.as_str());
                 false
             }
             SettingsPickerAction::OpenProviderWorkbench => {
@@ -7433,6 +7992,20 @@ impl App {
                 )
                 .map(Route::SettingsStudio)
                 .unwrap_or(Route::SettingsStudio(dialog)),
+            Route::AgentStudio(dialog) => self
+                .build_agent_studio_overlay(
+                    dialog.agent_name.as_str(),
+                    dialog.items.get(dialog.selected).map(|item| item.label.as_str()),
+                )
+                .map(Route::AgentStudio)
+                .unwrap_or(Route::AgentStudio(dialog)),
+            Route::AgentPermissionStudio(dialog) => self
+                .build_agent_permission_studio_overlay(
+                    dialog.agent_name.as_str(),
+                    dialog.items.get(dialog.selected).map(|item| item.label.as_str()),
+                )
+                .map(Route::AgentPermissionStudio)
+                .unwrap_or(Route::AgentPermissionStudio(dialog)),
             other => other,
         }
     }
@@ -8089,8 +8662,8 @@ impl App {
         self.pending_ui_action = Some(UiAction::OpenPath { path });
     }
 
-    fn open_agent_source(&mut self, agent: AgentDescriptor) {
-        if let Some(path) = agent.source_path.clone() {
+    fn open_agent_profile_source(&mut self, profile: &AgentProfile) {
+        if let Some(path) = profile.source_path.clone() {
             self.pending_ui_action = Some(UiAction::OpenPath { path });
         } else {
             self.open_runtime_config_in_editor();
@@ -8163,17 +8736,27 @@ impl App {
         }
     }
 
-    fn set_default_agent(&mut self, agent_name: &str, dialog: &mut SettingsStudioOverlay) {
-        match self.block_on_async(
+    fn set_default_agent_value(&mut self, agent_name: &str) -> UiResult<()> {
+        self.block_on_async(
             self.backend
                 .set_config_setting("default.agent", JsonValue::String(agent_name.to_string())),
-        ) {
-            Ok(_) => {
+        )
+        .map(|_| ())
+    }
+
+    fn set_default_agent(&mut self, agent_name: &str, dialog: &mut SettingsStudioOverlay) {
+        match self.set_default_agent_value(agent_name) {
+            Ok(()) => {
                 self.flash_success(format!("set default.agent to {agent_name}"));
                 self.refresh_settings_studio_overlay(dialog);
             }
             Err(error) => self.flash_error(error),
         }
+    }
+
+    fn set_agent_hidden_value(&mut self, agent_name: &str, hidden: bool) -> UiResult<()> {
+        self.block_on_async(self.backend.set_agent_hidden(agent_name, hidden))
+            .map(|_| ())
     }
 
     fn toggle_agent_hidden(
@@ -8182,8 +8765,8 @@ impl App {
         hidden: bool,
         dialog: &mut SettingsStudioOverlay,
     ) {
-        match self.block_on_async(self.backend.set_agent_hidden(agent_name, !hidden)) {
-            Ok(_) => {
+        match self.set_agent_hidden_value(agent_name, !hidden) {
+            Ok(()) => {
                 self.flash_success(if hidden {
                     format!("unhid agent {agent_name}")
                 } else {
@@ -10692,6 +11275,8 @@ impl App {
             let mut parts = Vec::new();
             if let Some(wait_state) = self.current_session_wait_state_text() {
                 parts.push(wait_state);
+            } else if execution.run_state != SessionRunState::Idle {
+                parts.push(ui_text::t(&self.i18n, "session-running"));
             }
             parts.extend(session_summary_status_parts(model_part, agent, token_usage));
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
@@ -10759,6 +11344,16 @@ impl App {
             Route::Main => {}
             Route::Help(_) => {}
             Route::SettingsStudio(_) => {}
+            Route::AgentStudio(dialog) => {
+                if let Some(editor) = dialog.editor.as_mut() {
+                    editor.input.flush_pending_input_if_due(now);
+                }
+            }
+            Route::AgentPermissionStudio(dialog) => {
+                if let Some(editor) = dialog.editor.as_mut() {
+                    editor.input.flush_pending_input_if_due(now);
+                }
+            }
             Route::SessionSearch(dialog) => dialog.input.flush_pending_input_if_due(now),
             Route::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
             Route::SessionModelChooser(dialog) => {
@@ -10983,9 +11578,6 @@ impl App {
         self.dismissed_file_mention_suggestions_for = None;
         self.prompt_history_search = None;
         self.selected_composer_item = None;
-        if self.composer_mode.is_vim() {
-            self.composer_mode = ComposerMode::VimInsert;
-        }
     }
 
     fn current_composer_draft(&mut self) -> ComposerDraft {
@@ -11775,36 +12367,50 @@ fn settings_studio_plugins_count(sources: &ConfigJsonSources, path: &str) -> usi
         .unwrap_or(0)
 }
 
-fn settings_studio_plugin_entry_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
+fn settings_studio_plugin_entry_items(
+    sources: &ConfigJsonSources,
+    runtime_statuses: &[agena::plugin::status::PluginStatus],
+) -> Vec<SettingsStudioItem> {
     let plugin_entries_value =
         get_json_path(&sources.effective, Some("plugins.list")).unwrap_or(JsonValue::Null);
-    let Some(plugin_entries) = plugin_entries_value.as_object() else {
-        return Vec::new();
-    };
+    let plugin_entries = plugin_entries_value.as_object().cloned().unwrap_or_default();
     let file_entries_value =
         get_json_path(&sources.file, Some("plugins.list")).unwrap_or(JsonValue::Null);
     let file_entries = file_entries_value.as_object().cloned().unwrap_or_default();
 
-    let mut items = plugin_entries
+    let mut items = runtime_statuses
         .iter()
-        .filter_map(|(plugin_id, entry)| {
+        .filter_map(|status| {
+            let plugin_id = status.plugin_id.as_str();
+            let (entry, source) = if let Some(entry) = plugin_entries.get(plugin_id) {
+                (
+                    entry.clone(),
+                    if file_entries.contains_key(plugin_id) {
+                        "file".to_string()
+                    } else {
+                        "runtime".to_string()
+                    },
+                )
+            } else if status.kind == "static" {
+                (
+                    json!({
+                        "kind": "static",
+                        "disabled": false,
+                    }),
+                    "builtin".to_string(),
+                )
+            } else {
+                return None;
+            };
             let entry_object = entry.as_object()?;
-            let kind = entry_object
-                .get("kind")
-                .and_then(JsonValue::as_str)
-                .unwrap_or("unknown");
             let disabled = entry_object
                 .get("disabled")
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false);
-            let source = if file_entries.contains_key(plugin_id) {
-                "file"
-            } else {
-                "runtime"
-            };
             let value = [
-                kind.to_string(),
-                source.to_string(),
+                status.kind.to_string(),
+                source.clone(),
+                status.state.as_str().to_string(),
                 if disabled {
                     "disabled · skipped on reload".to_string()
                 } else {
@@ -11813,12 +12419,17 @@ fn settings_studio_plugin_entry_items(sources: &ConfigJsonSources) -> Vec<Settin
             ]
             .join(" · ");
             Some(SettingsStudioItem {
-                label: plugin_id.clone(),
+                label: status.plugin_id.clone(),
                 value,
-                detail: plugin_entry_detail_text(entry_object, source, disabled),
+                detail: plugin_entry_detail_text(
+                    status,
+                    entry_object,
+                    source.as_str(),
+                    disabled,
+                ),
                 action: SettingsPickerAction::TogglePluginEntryDisabled {
-                    plugin_id: plugin_id.clone(),
-                    entry: entry.clone(),
+                    plugin_id: status.plugin_id.clone(),
+                    entry,
                     disabled,
                 },
             })
@@ -11829,20 +12440,48 @@ fn settings_studio_plugin_entry_items(sources: &ConfigJsonSources) -> Vec<Settin
 }
 
 fn plugin_entry_detail_text(
+    status: &agena::plugin::status::PluginStatus,
     entry: &JsonMap<String, JsonValue>,
     source: &str,
     disabled: bool,
 ) -> String {
-    let kind = entry
-        .get("kind")
-        .and_then(JsonValue::as_str)
-        .unwrap_or("unknown");
-    let mut parts = vec![format!("kind={kind}"), format!("source={source}")];
+    let mut parts = vec![
+        format!("kind={}", status.kind),
+        format!("source={source}"),
+        format!("state={}", status.state.as_str()),
+    ];
+    if let Some(pid) = status.pid {
+        parts.push(format!("pid={pid}"));
+    }
+    if status.restart_count > 0 {
+        parts.push(format!("restarts={}", status.restart_count));
+    }
+    if let Some(error) = status
+        .last_error
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(format!("last_error={error}"));
+    }
     parts.push(if disabled {
         "disabled entries stay in config and are skipped on reload".to_string()
     } else {
         "enabled entries load on the next runtime reload".to_string()
     });
+    if source == "builtin" {
+        parts.push(
+            "This built-in plugin is registered by the runtime even when the config file omits it."
+                .to_string(),
+        );
+    }
+    if entry
+        .get("options")
+        .and_then(JsonValue::as_object)
+        .is_some_and(|options| !options.is_empty())
+    {
+        parts.push("custom options configured".to_string());
+    }
     parts.push("Enter or t toggles the entry".to_string());
     parts.join(" · ")
 }
@@ -12109,9 +12748,997 @@ fn settings_studio_agent_detail_text(
     }
     lines.push(String::new());
     lines.push(
-        "Enter opens the source file or config file. d makes this the default agent. t toggles hidden when the profile is owned by the current config file.".to_string(),
+        "Enter opens the dedicated agent workbench. d makes this the default agent. t toggles hidden when the profile is owned by the current config file.".to_string(),
     );
     lines.join("\n")
+}
+
+fn agent_profile_editable(profile: &AgentProfile) -> bool {
+    profile.source_path.is_none() && matches!(profile.scope, agena::agents::AgentScope::Project)
+}
+
+fn agent_profile_source_label(profile: &AgentProfile) -> String {
+    profile
+        .source_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "runtime config (agena.json)".to_string())
+}
+
+fn agent_prompt_summary(prompt: &str) -> String {
+    if prompt.trim().is_empty() {
+        "unset".to_string()
+    } else {
+        format!("{} chars", prompt.chars().count())
+    }
+}
+
+fn agent_list_summary(values: &[String], empty: &str) -> String {
+    if values.is_empty() {
+        empty.to_string()
+    } else if values.len() <= 3 {
+        values.join(", ")
+    } else {
+        format!("{} items", values.len())
+    }
+}
+
+fn agent_optional_string_summary(value: Option<&str>, empty: &str) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| empty.to_string())
+}
+
+fn agent_optional_number_summary<T: ToString>(value: Option<T>, empty: &str) -> String {
+    value.map(|value| value.to_string())
+        .unwrap_or_else(|| empty.to_string())
+}
+
+fn agent_studio_items(
+    profile: &AgentProfile,
+    editable: bool,
+    default_agent_name: Option<&str>,
+) -> Vec<AgentStudioItem> {
+    let is_default = default_agent_name.is_some_and(|name| name == profile.name.as_str());
+    vec![
+        AgentStudioItem {
+            label: "Description".to_string(),
+            value: agent_optional_string_summary(
+                (!profile.frontmatter.description.trim().is_empty())
+                    .then_some(profile.frontmatter.description.as_str()),
+                "unset",
+            ),
+            detail: "Short listing summary for the agent profile.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::Description),
+        },
+        AgentStudioItem {
+            label: "Prompt".to_string(),
+            value: agent_prompt_summary(profile.prompt.as_str()),
+            detail: "Main prompt body. Opens a multiline editor.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::Prompt),
+        },
+        AgentStudioItem {
+            label: "Mode".to_string(),
+            value: agent_mode_label(profile.frontmatter.mode).to_string(),
+            detail: "Whether this profile is available as a primary agent, a subagent, or both."
+                .to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::Mode),
+        },
+        AgentStudioItem {
+            label: "Hidden".to_string(),
+            value: if profile.frontmatter.hidden {
+                "yes".to_string()
+            } else {
+                "no".to_string()
+            },
+            detail: if editable {
+                "Toggles whether this agent stays out of default agent pickers.".to_string()
+            } else {
+                "Read-only here because this profile is backed by a markdown file.".to_string()
+            },
+            action: AgentStudioAction::ToggleHidden,
+        },
+        AgentStudioItem {
+            label: "Aliases".to_string(),
+            value: agent_list_summary(&profile.frontmatter.aliases, "none"),
+            detail: "Alternate names that resolve to this profile.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::Aliases),
+        },
+        AgentStudioItem {
+            label: "Allowed Entries".to_string(),
+            value: agent_list_summary(&profile.frontmatter.allowed_tools, "unrestricted"),
+            detail: "Optional allowlist for runtime entries/tools.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::AllowedEntries),
+        },
+        AgentStudioItem {
+            label: "Temperature".to_string(),
+            value: profile
+                .frontmatter
+                .temperature
+                .map(|value| value.0.to_string())
+                .unwrap_or_else(|| "inherit".to_string()),
+            detail: "Optional model temperature override for this agent.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::Temperature),
+        },
+        AgentStudioItem {
+            label: "Max Output Tokens".to_string(),
+            value: agent_optional_number_summary(
+                profile.frontmatter.max_output_tokens,
+                "inherit",
+            ),
+            detail: "Optional output token budget for this agent.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::MaxOutputTokens),
+        },
+        AgentStudioItem {
+            label: "Steps".to_string(),
+            value: agent_optional_number_summary(profile.frontmatter.steps, "inherit"),
+            detail: "Optional step cap for this agent.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::Steps),
+        },
+        AgentStudioItem {
+            label: "Default Provider".to_string(),
+            value: agent_optional_string_summary(
+                profile.frontmatter.default.provider.as_deref(),
+                "inherit",
+            ),
+            detail: "Agent-scoped default provider override.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::DefaultProvider),
+        },
+        AgentStudioItem {
+            label: "Default Adapter".to_string(),
+            value: agent_optional_string_summary(
+                profile.frontmatter.default.adapter.as_deref(),
+                "inherit",
+            ),
+            detail: "Agent-scoped default adapter override.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::DefaultAdapter),
+        },
+        AgentStudioItem {
+            label: "Default Model".to_string(),
+            value: agent_optional_string_summary(
+                profile.frontmatter.default.model.as_deref(),
+                "inherit",
+            ),
+            detail: "Agent-scoped default model override.".to_string(),
+            action: AgentStudioAction::Edit(AgentStudioField::DefaultModel),
+        },
+        AgentStudioItem {
+            label: "Permission Policy".to_string(),
+            value: agent_permission_summary(&profile.frontmatter.permission),
+            detail: "Open the dedicated permission workbench for this agent.".to_string(),
+            action: AgentStudioAction::OpenPermissionWorkbench,
+        },
+        AgentStudioItem {
+            label: "Default Agent".to_string(),
+            value: if is_default {
+                "selected".to_string()
+            } else {
+                "inactive".to_string()
+            },
+            detail: "Sets default.agent to this profile when activated.".to_string(),
+            action: AgentStudioAction::SetDefault,
+        },
+        AgentStudioItem {
+            label: if profile.source_path.is_some() {
+                "Open Source File".to_string()
+            } else {
+                "Open Config File".to_string()
+            },
+            value: agent_profile_source_label(profile),
+            detail: if editable {
+                "Open the raw config file for direct inspection.".to_string()
+            } else {
+                "Open the markdown profile backing this agent.".to_string()
+            },
+            action: AgentStudioAction::OpenSource,
+        },
+    ]
+}
+
+fn agent_studio_item_detail_text(
+    profile: &AgentProfile,
+    item: &AgentStudioItem,
+    editable: bool,
+    default_agent_name: Option<&str>,
+) -> String {
+    match &item.action {
+        AgentStudioAction::Edit(AgentStudioField::Description) => {
+            let mut lines = vec![
+                "The description is shown in agent listings and pickers.".to_string(),
+                String::new(),
+            ];
+            if profile.frontmatter.description.trim().is_empty() {
+                lines.push("Description is currently unset.".to_string());
+            } else {
+                lines.push(profile.frontmatter.description.clone());
+            }
+            lines.push(String::new());
+            lines.push(agent_editability_hint(editable));
+            lines.join("\n")
+        }
+        AgentStudioAction::Edit(AgentStudioField::Prompt) => {
+            let mut lines = vec![
+                format!("Prompt length: {} chars", profile.prompt.chars().count()),
+                String::new(),
+            ];
+            if profile.prompt.trim().is_empty() {
+                lines.push("Prompt is currently unset.".to_string());
+            } else {
+                lines.push(profile.prompt.clone());
+            }
+            lines.push(String::new());
+            lines.push(agent_editability_hint(editable));
+            lines.join("\n")
+        }
+        AgentStudioAction::Edit(AgentStudioField::Aliases) => {
+            let mut lines = vec!["Alternate names for invoking this agent.".to_string(), String::new()];
+            if profile.frontmatter.aliases.is_empty() {
+                lines.push("No aliases configured.".to_string());
+            } else {
+                lines.extend(profile.frontmatter.aliases.iter().cloned());
+            }
+            lines.push(String::new());
+            lines.push(agent_editability_hint(editable));
+            lines.join("\n")
+        }
+        AgentStudioAction::Edit(AgentStudioField::AllowedEntries) => {
+            let mut lines = vec![
+                "When empty, the agent can use the normal runtime tool surface.".to_string(),
+                String::new(),
+            ];
+            if profile.frontmatter.allowed_tools.is_empty() {
+                lines.push("No allowlist configured.".to_string());
+            } else {
+                lines.extend(profile.frontmatter.allowed_tools.iter().cloned());
+            }
+            lines.push(String::new());
+            lines.push(agent_editability_hint(editable));
+            lines.join("\n")
+        }
+        AgentStudioAction::OpenPermissionWorkbench => {
+            let lines = vec![
+                format!(
+                    "Summary: {}",
+                    agent_permission_summary(&profile.frontmatter.permission)
+                ),
+                String::new(),
+                permission_pretty_document(&profile.frontmatter.permission),
+                String::new(),
+                if editable {
+                    "Enter or p opens the permission workbench.".to_string()
+                } else {
+                    "Enter or p opens a read-only permission view for this file-backed profile."
+                        .to_string()
+                },
+            ];
+            lines.join("\n")
+        }
+        AgentStudioAction::SetDefault => format!(
+            "Current default agent: {}\n\nEnter or d sets default.agent to this profile.",
+            default_agent_name.unwrap_or("unset")
+        ),
+        AgentStudioAction::ToggleHidden => {
+            let current = if profile.frontmatter.hidden { "hidden" } else { "visible" };
+            format!(
+                "Current visibility: {current}\nScope: {}\nSource: {}\n\n{}",
+                profile.scope.as_str(),
+                agent_profile_source_label(profile),
+                if editable {
+                    "Enter or t toggles hidden/visible and persists the config override."
+                } else {
+                    "This profile is file-backed, so hidden/visible must be edited in the source file."
+                }
+            )
+        }
+        AgentStudioAction::OpenSource => format!(
+            "Source: {}\nScope: {}\n\nEnter or o opens the raw source/config file.",
+            agent_profile_source_label(profile),
+            profile.scope.as_str(),
+        ),
+        AgentStudioAction::Edit(_) => format!(
+            "{}\nCurrent value: {}\n\n{}",
+            item.detail,
+            item.value,
+            agent_editability_hint(editable),
+        ),
+    }
+}
+
+fn agent_studio_overview_text(
+    profile: &AgentProfile,
+    default_agent_name: Option<&str>,
+    editable: bool,
+) -> String {
+    let mut lines = vec![
+        format!("name: {}", profile.name),
+        format!("scope: {}", profile.scope.as_str()),
+        format!("mode: {}", agent_mode_label(profile.frontmatter.mode)),
+        format!(
+            "visibility: {}",
+            if profile.frontmatter.hidden {
+                "hidden"
+            } else {
+                "visible"
+            }
+        ),
+        format!(
+            "default agent: {}",
+            if default_agent_name.is_some_and(|name| name == profile.name.as_str()) {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
+        format!("source: {}", agent_profile_source_label(profile)),
+        format!(
+            "permission: {}",
+            agent_permission_summary(&profile.frontmatter.permission)
+        ),
+    ];
+    if !profile.frontmatter.default.is_empty() {
+        lines.push(format!(
+            "model defaults: {}",
+            agent_default_summary(&profile.frontmatter.default)
+        ));
+    }
+    if !profile.frontmatter.description.trim().is_empty() {
+        lines.push(String::new());
+        lines.push(profile.frontmatter.description.clone());
+    }
+    lines.push(String::new());
+    lines.push(if editable {
+        "This profile is backed by agena.json and can be edited directly in the TUI.".to_string()
+    } else {
+        "This profile is backed by a markdown source file and is read-only in the TUI.".to_string()
+    });
+    lines.join("\n")
+}
+
+fn agent_editability_hint(editable: bool) -> String {
+    if editable {
+        "Enter edits this field in agena.json.".to_string()
+    } else {
+        "This profile is read-only in the TUI because it is backed by a markdown file."
+            .to_string()
+    }
+}
+
+fn agent_studio_editor_config(
+    profile: &AgentProfile,
+    field: AgentStudioField,
+) -> (String, String, String, bool, Editor) {
+    let multiline = matches!(
+        field,
+        AgentStudioField::Description
+            | AgentStudioField::Prompt
+            | AgentStudioField::Aliases
+            | AgentStudioField::AllowedEntries
+    );
+    let title = format!("Edit {}", agent_studio_field_label(field));
+    let prompt = agent_studio_field_prompt(field).to_string();
+    let footer = if multiline {
+        "Ctrl+S save | Esc cancel".to_string()
+    } else {
+        "Enter save | Esc cancel".to_string()
+    };
+    let input = Editor::from_text(agent_studio_field_input_text(profile, field));
+    (title, prompt, footer, multiline, input)
+}
+
+fn agent_studio_field_label(field: AgentStudioField) -> &'static str {
+    match field {
+        AgentStudioField::Description => "Description",
+        AgentStudioField::Prompt => "Prompt",
+        AgentStudioField::Mode => "Mode",
+        AgentStudioField::Aliases => "Aliases",
+        AgentStudioField::AllowedEntries => "Allowed Entries",
+        AgentStudioField::Temperature => "Temperature",
+        AgentStudioField::MaxOutputTokens => "Max Output Tokens",
+        AgentStudioField::Steps => "Steps",
+        AgentStudioField::DefaultProvider => "Default Provider",
+        AgentStudioField::DefaultAdapter => "Default Adapter",
+        AgentStudioField::DefaultModel => "Default Model",
+    }
+}
+
+fn agent_studio_field_prompt(field: AgentStudioField) -> &'static str {
+    match field {
+        AgentStudioField::Description => "Multiline description. Leave blank to clear.",
+        AgentStudioField::Prompt => "Multiline prompt body. Leave blank to clear.",
+        AgentStudioField::Mode => "Enter primary, subagent, or all. Leave blank to clear.",
+        AgentStudioField::Aliases => {
+            "One alias per line. Commas are also accepted. Leave blank to clear."
+        }
+        AgentStudioField::AllowedEntries => {
+            "One runtime entry/tool name per line. Commas are also accepted. Leave blank to clear."
+        }
+        AgentStudioField::Temperature => "Enter a floating-point value. Leave blank to clear.",
+        AgentStudioField::MaxOutputTokens => {
+            "Enter a positive integer token limit. Leave blank to clear."
+        }
+        AgentStudioField::Steps => "Enter a positive integer step cap. Leave blank to clear.",
+        AgentStudioField::DefaultProvider => "Provider id override. Leave blank to clear.",
+        AgentStudioField::DefaultAdapter => "Adapter id override. Leave blank to clear.",
+        AgentStudioField::DefaultModel => "Model id override. Leave blank to clear.",
+    }
+}
+
+fn agent_studio_field_input_text(profile: &AgentProfile, field: AgentStudioField) -> String {
+    match field {
+        AgentStudioField::Description => profile.frontmatter.description.clone(),
+        AgentStudioField::Prompt => profile.prompt.clone(),
+        AgentStudioField::Mode => agent_mode_label(profile.frontmatter.mode).to_string(),
+        AgentStudioField::Aliases => profile.frontmatter.aliases.join("\n"),
+        AgentStudioField::AllowedEntries => profile.frontmatter.allowed_tools.join("\n"),
+        AgentStudioField::Temperature => profile
+            .frontmatter
+            .temperature
+            .map(|value| value.0.to_string())
+            .unwrap_or_default(),
+        AgentStudioField::MaxOutputTokens => profile
+            .frontmatter
+            .max_output_tokens
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        AgentStudioField::Steps => profile
+            .frontmatter
+            .steps
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        AgentStudioField::DefaultProvider => profile
+            .frontmatter
+            .default
+            .provider
+            .clone()
+            .unwrap_or_default(),
+        AgentStudioField::DefaultAdapter => profile
+            .frontmatter
+            .default
+            .adapter
+            .clone()
+            .unwrap_or_default(),
+        AgentStudioField::DefaultModel => profile.frontmatter.default.model.clone().unwrap_or_default(),
+    }
+}
+
+fn agent_studio_field_setting_value(
+    agent_name: &str,
+    field: AgentStudioField,
+    input: &str,
+) -> UiResult<(String, Option<JsonValue>)> {
+    let trimmed = input.trim();
+    let path = match field {
+        AgentStudioField::Description => agent_config_path(agent_name, "description"),
+        AgentStudioField::Prompt => agent_config_path(agent_name, "prompt"),
+        AgentStudioField::Mode => agent_config_path(agent_name, "mode"),
+        AgentStudioField::Aliases => agent_config_path(agent_name, "aliases"),
+        AgentStudioField::AllowedEntries => agent_config_path(agent_name, "allowed_entries"),
+        AgentStudioField::Temperature => agent_config_path(agent_name, "temperature"),
+        AgentStudioField::MaxOutputTokens => agent_config_path(agent_name, "max_output_tokens"),
+        AgentStudioField::Steps => agent_config_path(agent_name, "steps"),
+        AgentStudioField::DefaultProvider => agent_config_path(agent_name, "default.provider"),
+        AgentStudioField::DefaultAdapter => agent_config_path(agent_name, "default.adapter"),
+        AgentStudioField::DefaultModel => agent_config_path(agent_name, "default.model"),
+    };
+    let value = match field {
+        AgentStudioField::Description | AgentStudioField::Prompt => {
+            (!trimmed.is_empty()).then_some(JsonValue::String(input.to_string()))
+        }
+        AgentStudioField::Mode => {
+            if trimmed.is_empty() {
+                None
+            } else {
+                let normalized = trimmed.to_ascii_lowercase();
+                match normalized.as_str() {
+                    "primary" | "subagent" | "all" => Some(JsonValue::String(normalized)),
+                    other => {
+                        return Err(format!(
+                            "invalid mode `{other}`; expected primary, subagent, or all"
+                        ));
+                    }
+                }
+            }
+        }
+        AgentStudioField::Aliases | AgentStudioField::AllowedEntries => {
+            let values = parse_string_list_input(input);
+            (!values.is_empty()).then_some(JsonValue::Array(
+                values.into_iter().map(JsonValue::String).collect(),
+            ))
+        }
+        AgentStudioField::Temperature => {
+            if trimmed.is_empty() {
+                None
+            } else {
+                let parsed = trimmed
+                    .parse::<f32>()
+                    .map_err(|error| format!("invalid temperature: {error}"))?;
+                if !parsed.is_finite() {
+                    return Err("temperature must be finite".to_string());
+                }
+                Some(json!(parsed))
+            }
+        }
+        AgentStudioField::MaxOutputTokens => {
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(json!(
+                    trimmed
+                        .parse::<u32>()
+                        .map_err(|error| format!("invalid max_output_tokens: {error}"))?
+                ))
+            }
+        }
+        AgentStudioField::Steps => {
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(json!(
+                    trimmed
+                        .parse::<usize>()
+                        .map_err(|error| format!("invalid steps: {error}"))?
+                ))
+            }
+        }
+        AgentStudioField::DefaultProvider
+        | AgentStudioField::DefaultAdapter
+        | AgentStudioField::DefaultModel => {
+            (!trimmed.is_empty()).then_some(JsonValue::String(trimmed.to_string()))
+        }
+    };
+    Ok((path, value))
+}
+
+fn agent_permission_studio_items(
+    profile: &AgentProfile,
+    editable: bool,
+) -> Vec<AgentPermissionStudioItem> {
+    let permission = &profile.frontmatter.permission;
+    vec![
+        AgentPermissionStudioItem {
+            label: "Inherit Path".to_string(),
+            value: permission_inherit_value_label(permission, AgentPermissionField::InheritPath),
+            detail: "Controls whether path defaults flow in from runtime permissions.".to_string(),
+            action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritPath),
+        },
+        AgentPermissionStudioItem {
+            label: "Inherit Network".to_string(),
+            value: permission_inherit_value_label(
+                permission,
+                AgentPermissionField::InheritNetwork,
+            ),
+            detail: "Controls whether network defaults flow in from runtime permissions."
+                .to_string(),
+            action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritNetwork),
+        },
+        AgentPermissionStudioItem {
+            label: "Inherit Entries".to_string(),
+            value: permission_inherit_value_label(
+                permission,
+                AgentPermissionField::InheritEntries,
+            ),
+            detail: "Controls whether tool/entry defaults flow in from runtime permissions."
+                .to_string(),
+            action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritEntries),
+        },
+        AgentPermissionStudioItem {
+            label: "Path Section".to_string(),
+            value: agent_path_permission_summary(permission.path.as_ref()),
+            detail: "Structured path policy override as JSON.".to_string(),
+            action: AgentPermissionStudioAction::Edit(AgentPermissionField::PathConfig),
+        },
+        AgentPermissionStudioItem {
+            label: "Network Section".to_string(),
+            value: agent_network_permission_summary(permission.network.as_ref()),
+            detail: "Structured network policy override as JSON.".to_string(),
+            action: AgentPermissionStudioAction::Edit(AgentPermissionField::NetworkConfig),
+        },
+        AgentPermissionStudioItem {
+            label: "Entry Section".to_string(),
+            value: agent_tool_permission_summary(permission.tools.as_ref()),
+            detail: "Structured runtime entry/tool policy override as JSON.".to_string(),
+            action: AgentPermissionStudioAction::Edit(AgentPermissionField::EntryConfig),
+        },
+        AgentPermissionStudioItem {
+            label: "Full Permission Document".to_string(),
+            value: agent_permission_summary(permission),
+            detail: "Edit the whole agent permission document as JSON.".to_string(),
+            action: AgentPermissionStudioAction::Edit(AgentPermissionField::FullConfig),
+        },
+        AgentPermissionStudioItem {
+            label: if profile.source_path.is_some() {
+                "Open Source File".to_string()
+            } else {
+                "Open Config File".to_string()
+            },
+            value: agent_profile_source_label(profile),
+            detail: if editable {
+                "Open agena.json for direct inspection.".to_string()
+            } else {
+                "Open the markdown profile backing this agent.".to_string()
+            },
+            action: AgentPermissionStudioAction::OpenSource,
+        },
+    ]
+}
+
+fn agent_permission_studio_item_detail_text(
+    profile: &AgentProfile,
+    item: &AgentPermissionStudioItem,
+    editable: bool,
+) -> String {
+    match item.action {
+        AgentPermissionStudioAction::Edit(AgentPermissionField::InheritPath)
+        | AgentPermissionStudioAction::Edit(AgentPermissionField::InheritNetwork)
+        | AgentPermissionStudioAction::Edit(AgentPermissionField::InheritEntries) => {
+            format!(
+                "{}\nCurrent value: {}\n\n{}",
+                item.detail,
+                item.value,
+                if editable {
+                    "Enter edits this inheritance override. Leave the input blank to clear it."
+                } else {
+                    "This profile is read-only here because it is backed by a markdown file."
+                }
+            )
+        }
+        AgentPermissionStudioAction::Edit(AgentPermissionField::PathConfig) => {
+            format!(
+                "{}\n\n{}\n\n{}",
+                item.detail,
+                pretty_json_optional(profile.frontmatter.permission.path.as_ref())
+                    .unwrap_or_else(|| "Section is currently unset.".to_string()),
+                if editable {
+                    "Enter opens a multiline JSON editor for this section."
+                } else {
+                    "This section is read-only here because the profile is file-backed."
+                }
+            )
+        }
+        AgentPermissionStudioAction::Edit(AgentPermissionField::NetworkConfig) => {
+            format!(
+                "{}\n\n{}\n\n{}",
+                item.detail,
+                pretty_json_optional(profile.frontmatter.permission.network.as_ref())
+                    .unwrap_or_else(|| "Section is currently unset.".to_string()),
+                if editable {
+                    "Enter opens a multiline JSON editor for this section."
+                } else {
+                    "This section is read-only here because the profile is file-backed."
+                }
+            )
+        }
+        AgentPermissionStudioAction::Edit(AgentPermissionField::EntryConfig) => {
+            format!(
+                "{}\n\n{}\n\n{}",
+                item.detail,
+                pretty_json_optional(profile.frontmatter.permission.tools.as_ref())
+                    .unwrap_or_else(|| "Section is currently unset.".to_string()),
+                if editable {
+                    "Enter opens a multiline JSON editor for this section."
+                } else {
+                    "This section is read-only here because the profile is file-backed."
+                }
+            )
+        }
+        AgentPermissionStudioAction::Edit(AgentPermissionField::FullConfig) => {
+            format!(
+                "{}\n\n{}\n\n{}",
+                item.detail,
+                permission_pretty_document(&profile.frontmatter.permission),
+                if editable {
+                    "Enter opens a multiline JSON editor for the full permission document."
+                } else {
+                    "This permission document is read-only here because the profile is file-backed."
+                }
+            )
+        }
+        AgentPermissionStudioAction::OpenSource => format!(
+            "Source: {}\nScope: {}\n\nEnter or o opens the raw source/config file.",
+            agent_profile_source_label(profile),
+            profile.scope.as_str(),
+        ),
+    }
+}
+
+fn agent_permission_editor_config(
+    profile: &AgentProfile,
+    field: AgentPermissionField,
+) -> (String, String, String, bool, Editor) {
+    let multiline = matches!(
+        field,
+        AgentPermissionField::PathConfig
+            | AgentPermissionField::NetworkConfig
+            | AgentPermissionField::EntryConfig
+            | AgentPermissionField::FullConfig
+    );
+    let title = format!("Edit {}", agent_permission_field_label(field));
+    let prompt = agent_permission_field_prompt(field).to_string();
+    let footer = if multiline {
+        "Ctrl+S save | Esc cancel".to_string()
+    } else {
+        "Enter save | Esc cancel".to_string()
+    };
+    let input = Editor::from_text(agent_permission_field_input_text(profile, field));
+    (title, prompt, footer, multiline, input)
+}
+
+fn agent_permission_field_label(field: AgentPermissionField) -> &'static str {
+    match field {
+        AgentPermissionField::InheritPath => "Inherit Path",
+        AgentPermissionField::InheritNetwork => "Inherit Network",
+        AgentPermissionField::InheritEntries => "Inherit Entries",
+        AgentPermissionField::PathConfig => "Path Section",
+        AgentPermissionField::NetworkConfig => "Network Section",
+        AgentPermissionField::EntryConfig => "Entry Section",
+        AgentPermissionField::FullConfig => "Full Permission Document",
+    }
+}
+
+fn agent_permission_field_prompt(field: AgentPermissionField) -> &'static str {
+    match field {
+        AgentPermissionField::InheritPath
+        | AgentPermissionField::InheritNetwork
+        | AgentPermissionField::InheritEntries => {
+            "Enter true or false. Leave blank to clear the override."
+        }
+        AgentPermissionField::PathConfig => {
+            "Enter a JSON object matching PathPermissionConfig. Leave blank to clear the section."
+        }
+        AgentPermissionField::NetworkConfig => {
+            "Enter a JSON object matching NetworkPermissionConfig. Leave blank to clear the section."
+        }
+        AgentPermissionField::EntryConfig => {
+            "Enter a JSON object matching ToolPermissionConfig. Leave blank to clear the section."
+        }
+        AgentPermissionField::FullConfig => {
+            "Enter a JSON object matching AgentPermissionConfig. Leave blank to clear the whole permission override."
+        }
+    }
+}
+
+fn agent_permission_field_input_text(profile: &AgentProfile, field: AgentPermissionField) -> String {
+    match field {
+        AgentPermissionField::InheritPath => permission_inherit_setting_value(
+            &profile.frontmatter.permission,
+            AgentPermissionField::InheritPath,
+        )
+        .map(|value| value.to_string())
+        .unwrap_or_default(),
+        AgentPermissionField::InheritNetwork => permission_inherit_setting_value(
+            &profile.frontmatter.permission,
+            AgentPermissionField::InheritNetwork,
+        )
+        .map(|value| value.to_string())
+        .unwrap_or_default(),
+        AgentPermissionField::InheritEntries => permission_inherit_setting_value(
+            &profile.frontmatter.permission,
+            AgentPermissionField::InheritEntries,
+        )
+        .map(|value| value.to_string())
+        .unwrap_or_default(),
+        AgentPermissionField::PathConfig => pretty_json_optional(profile.frontmatter.permission.path.as_ref())
+            .unwrap_or_default(),
+        AgentPermissionField::NetworkConfig => {
+            pretty_json_optional(profile.frontmatter.permission.network.as_ref()).unwrap_or_default()
+        }
+        AgentPermissionField::EntryConfig => {
+            pretty_json_optional(profile.frontmatter.permission.tools.as_ref()).unwrap_or_default()
+        }
+        AgentPermissionField::FullConfig => {
+            if profile.frontmatter.permission.is_empty() {
+                String::new()
+            } else {
+                permission_pretty_document(&profile.frontmatter.permission)
+            }
+        }
+    }
+}
+
+fn agent_permission_field_setting_value(
+    agent_name: &str,
+    field: AgentPermissionField,
+    input: &str,
+) -> UiResult<(String, Option<JsonValue>)> {
+    let path = agent_permission_path(agent_name, field);
+    let trimmed = input.trim();
+    let value = match field {
+        AgentPermissionField::InheritPath
+        | AgentPermissionField::InheritNetwork
+        | AgentPermissionField::InheritEntries => {
+            parse_optional_bool_input(trimmed)?.map(JsonValue::Bool)
+        }
+        AgentPermissionField::PathConfig => {
+            parse_optional_json_config::<agena::agent::PathPermissionConfig>(trimmed)?
+        }
+        AgentPermissionField::NetworkConfig => {
+            parse_optional_json_config::<agena::agent::NetworkPermissionConfig>(trimmed)?
+        }
+        AgentPermissionField::EntryConfig => {
+            parse_optional_json_config::<agena::agent::ToolPermissionConfig>(trimmed)?
+        }
+        AgentPermissionField::FullConfig => {
+            parse_optional_json_config::<agena::agent::AgentPermissionConfig>(trimmed)?
+        }
+    };
+    Ok((path, value))
+}
+
+fn permission_pretty_document(permission: &agena::agent::AgentPermissionConfig) -> String {
+    if permission.is_empty() {
+        "Permission override is currently unset.".to_string()
+    } else {
+        pretty_json(permission)
+    }
+}
+
+fn permission_inherit_setting_value(
+    permission: &agena::agent::AgentPermissionConfig,
+    field: AgentPermissionField,
+) -> Option<bool> {
+    match &permission.inherit {
+        agena::agent::PermissionInheritanceConfig::All(value) => Some(*value),
+        agena::agent::PermissionInheritanceConfig::Sections(sections) => match field {
+            AgentPermissionField::InheritPath => sections.path,
+            AgentPermissionField::InheritNetwork => sections.network,
+            AgentPermissionField::InheritEntries => sections.tools,
+            _ => None,
+        },
+    }
+}
+
+fn permission_inherit_value_label(
+    permission: &agena::agent::AgentPermissionConfig,
+    field: AgentPermissionField,
+) -> String {
+    match permission_inherit_setting_value(permission, field) {
+        Some(value) => value.to_string(),
+        None => "default(true)".to_string(),
+    }
+}
+
+fn agent_path_permission_summary(path: Option<&agena::agent::PathPermissionConfig>) -> String {
+    let Some(path) = path else {
+        return "unset".to_string();
+    };
+    let mut parts = Vec::new();
+    if path.workspace.is_some() {
+        parts.push("workspace".to_string());
+    }
+    if path.external.is_some() {
+        parts.push("external".to_string());
+    }
+    if !path.rules.is_empty() {
+        parts.push(format!("{} rule(s)", path.rules.len()));
+    }
+    if parts.is_empty() {
+        "custom".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn agent_network_permission_summary(
+    network: Option<&agena::agent::NetworkPermissionConfig>,
+) -> String {
+    let Some(network) = network else {
+        return "unset".to_string();
+    };
+    let mut parts = Vec::new();
+    if network.internet.is_some() {
+        parts.push("internet".to_string());
+    }
+    if network.private.is_some() {
+        parts.push("private".to_string());
+    }
+    if network.loopback.is_some() {
+        parts.push("loopback".to_string());
+    }
+    if !network.rules.is_empty() {
+        parts.push(format!("{} rule(s)", network.rules.len()));
+    }
+    if parts.is_empty() {
+        "custom".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn agent_tool_permission_summary(tools: Option<&agena::agent::ToolPermissionConfig>) -> String {
+    let Some(tools) = tools else {
+        return "unset".to_string();
+    };
+    let mut parts = Vec::new();
+    if !tools.tags.is_empty() {
+        parts.push(format!("{} tag(s)", tools.tags.len()));
+    }
+    if !tools.names.is_empty() {
+        parts.push(format!("{} name(s)", tools.names.len()));
+    }
+    if !tools.rules.is_empty() {
+        parts.push(format!("{} rule set(s)", tools.rules.len()));
+    }
+    if parts.is_empty() {
+        "custom".to_string()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+fn pretty_json_optional<T: Serialize>(value: Option<&T>) -> Option<String> {
+    value.map(pretty_json)
+}
+
+fn pretty_json<T: Serialize>(value: &T) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn parse_optional_json_config<T>(input: &str) -> UiResult<Option<JsonValue>>
+where
+    T: serde::de::DeserializeOwned + Serialize,
+{
+    if input.trim().is_empty() {
+        return Ok(None);
+    }
+    let parsed = serde_json::from_str::<T>(input)
+        .map_err(|error| format!("invalid json: {error}"))?;
+    serde_json::to_value(parsed)
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
+fn parse_optional_bool_input(input: &str) -> UiResult<Option<bool>> {
+    if input.trim().is_empty() {
+        return Ok(None);
+    }
+    match input.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" => Ok(Some(true)),
+        "false" | "no" | "off" => Ok(Some(false)),
+        other => Err(format!(
+            "invalid boolean `{other}`; expected true/false, yes/no, or on/off"
+        )),
+    }
+}
+
+fn parse_string_list_input(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for token in input
+        .lines()
+        .flat_map(|line| line.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let value = token.to_string();
+        if !out.contains(&value) {
+            out.push(value);
+        }
+    }
+    out
+}
+
+fn agent_config_path(agent_name: &str, suffix: &str) -> String {
+    format!("agents.{}.{}", quoted_settings_segment(agent_name), suffix)
+}
+
+fn agent_permission_path(agent_name: &str, field: AgentPermissionField) -> String {
+    match field {
+        AgentPermissionField::InheritPath => {
+            agent_config_path(agent_name, "permission.inherit.path")
+        }
+        AgentPermissionField::InheritNetwork => {
+            agent_config_path(agent_name, "permission.inherit.network")
+        }
+        AgentPermissionField::InheritEntries => {
+            agent_config_path(agent_name, "permission.inherit.entries")
+        }
+        AgentPermissionField::PathConfig => agent_config_path(agent_name, "permission.path"),
+        AgentPermissionField::NetworkConfig => {
+            agent_config_path(agent_name, "permission.network")
+        }
+        AgentPermissionField::EntryConfig => agent_config_path(agent_name, "permission.entries"),
+        AgentPermissionField::FullConfig => agent_config_path(agent_name, "permission"),
+    }
 }
 
 fn settings_studio_provider_items(
@@ -13009,12 +14636,18 @@ impl PersistentComposerItem {
 
 impl Default for TranscriptState {
     fn default() -> Self {
-        Self::new(I18n::english())
+        Self::new(
+            I18n::english(),
+            TranscriptDetailDefaults {
+                tool_output_expanded: false,
+                thinking_expanded: false,
+            },
+        )
     }
 }
 
 impl TranscriptState {
-    fn new(i18n: I18n) -> Self {
+    fn new(i18n: I18n, detail_expanded_by_default: TranscriptDetailDefaults) -> Self {
         Self {
             i18n,
             session_id: None,
@@ -13030,10 +14663,13 @@ impl TranscriptState {
             pending_restore_draft: None,
             follow_tail: true,
             scroll: 0,
+            cursor_line: 0,
             search_query: String::new(),
             search_match_index: None,
             execution: None,
             last_event_seq: None,
+            detail_expanded_by_default,
+            node_expansions: BTreeMap::new(),
             rendered: None,
         }
     }
@@ -13052,10 +14688,12 @@ impl TranscriptState {
         self.pending_restore_draft = None;
         self.follow_tail = true;
         self.scroll = 0;
+        self.cursor_line = 0;
         self.execution = None;
         self.last_event_seq = None;
         self.search_query.clear();
         self.search_match_index = None;
+        self.node_expansions.clear();
         self.invalidate_render();
     }
 
@@ -13101,6 +14739,9 @@ impl TranscriptState {
         let new_total = self.rendered(width).lines.len();
         self.scroll = self
             .scroll
+            .saturating_add(new_total.saturating_sub(old_total));
+        self.cursor_line = self
+            .cursor_line
             .saturating_add(new_total.saturating_sub(old_total));
         self.clamp_scroll(width, height);
     }
@@ -13322,10 +14963,7 @@ impl TranscriptState {
 
         self.search_match_index = Some(next_index);
         let line = matches[next_index];
-        let padding = height.saturating_div(3) as usize;
-        self.scroll = line.saturating_sub(padding);
-        self.follow_tail = false;
-        self.clamp_scroll(width, height);
+        self.set_cursor_line(width, height, line);
     }
 
     fn jump_to_message(&mut self, width: u16, height: u16, message_id: i64) {
@@ -13338,10 +14976,7 @@ impl TranscriptState {
         else {
             return;
         };
-        let padding = height.saturating_div(3) as usize;
-        self.scroll = line.saturating_sub(padding);
-        self.follow_tail = false;
-        self.clamp_scroll(width, height);
+        self.set_cursor_line(width, height, line);
     }
 
     fn should_load_older(&self) -> bool {
@@ -13363,17 +14998,21 @@ impl TranscriptState {
 
         let mut lines = Vec::new();
         let mut message_line_starts = Vec::new();
+        let mut nodes = Vec::new();
+        let mut line_nodes = Vec::new();
         if self.session_id.is_some() {
             if self.loading_older {
                 lines.push(RenderedLine::dim(ui_text::t(
                     &self.i18n,
                     "transcript-loading-older",
                 )));
+                line_nodes.push(None);
             } else if self.has_more_older {
                 lines.push(RenderedLine::dim(ui_text::t(
                     &self.i18n,
                     "transcript-more-older",
                 )));
+                line_nodes.push(None);
             }
         }
 
@@ -13382,11 +15021,38 @@ impl TranscriptState {
                 &self.i18n,
                 "transcript-empty-session",
             )));
+            line_nodes.push(None);
         }
 
         for message in &self.messages {
             message_line_starts.push((message.id, lines.len()));
-            lines.extend(render_message(message, width, &self.i18n));
+            let rendered = render_message_detailed(
+                message,
+                width,
+                &self.i18n,
+                self.detail_expanded_by_default,
+                &self.node_expansions,
+            );
+            let base_line = lines.len();
+            let base_node = nodes.len();
+            lines.extend(rendered.lines);
+            nodes.extend(rendered.nodes.into_iter().map(|node| RenderedTranscriptNode {
+                start_line: node.start_line.saturating_add(base_line),
+                end_line: node.end_line.saturating_add(base_line),
+                ..node
+            }));
+            let added_lines = lines.len().saturating_sub(base_line);
+            line_nodes.extend((0..added_lines).map(|offset| {
+                nodes
+                    .iter()
+                    .enumerate()
+                    .skip(base_node)
+                    .find(|(_, node)| {
+                        let line_index = base_line.saturating_add(offset);
+                        line_index >= node.start_line && line_index < node.end_line
+                    })
+                    .map(|(index, _)| index)
+            }));
         }
 
         let search_matches = if self.search_query.trim().is_empty() {
@@ -13407,6 +15073,8 @@ impl TranscriptState {
             lines,
             search_matches,
             message_line_starts,
+            nodes,
+            line_nodes,
         });
         self.rendered.as_ref().expect("render cache should exist")
     }
@@ -13418,27 +15086,29 @@ impl TranscriptState {
     fn clamp_scroll(&mut self, width: u16, height: u16) {
         let max_scroll = self.max_scroll(width, height);
         self.scroll = min(self.scroll, max_scroll);
+        self.cursor_line = min(self.cursor_line, self.rendered(width).lines.len().saturating_sub(1));
     }
 
     fn scroll_to_bottom(&mut self, width: u16, height: u16) {
         self.scroll = self.max_scroll(width, height);
         self.follow_tail = true;
+        self.cursor_line = self.rendered(width).lines.len().saturating_sub(1);
     }
 
     fn scroll_to_top(&mut self, width: u16, height: u16) {
         self.scroll = 0;
+        self.cursor_line = 0;
         self.follow_tail = self.is_at_bottom(width, height);
     }
 
     fn scroll_by_lines(&mut self, width: u16, height: u16, delta: isize) {
         self.follow_tail = false;
-        if delta.is_negative() {
-            self.scroll = self.scroll.saturating_sub(delta.unsigned_abs());
+        let next = if delta.is_negative() {
+            self.cursor_line.saturating_sub(delta.unsigned_abs())
         } else {
-            self.scroll = self.scroll.saturating_add(delta as usize);
-        }
-        self.clamp_scroll(width, height);
-        self.follow_tail = self.is_at_bottom(width, height);
+            self.cursor_line.saturating_add(delta as usize)
+        };
+        self.set_cursor_line(width, height, next);
     }
 
     fn scroll_by_page(&mut self, width: u16, height: u16, forward: bool) {
@@ -13474,6 +15144,35 @@ impl TranscriptState {
 
     fn is_at_bottom(&mut self, width: u16, height: u16) -> bool {
         self.scroll >= self.max_scroll(width, height)
+    }
+
+    fn set_cursor_line(&mut self, width: u16, height: u16, target: usize) {
+        let total_lines = self.rendered(width).lines.len();
+        self.cursor_line = if total_lines == 0 {
+            0
+        } else {
+            min(target, total_lines.saturating_sub(1))
+        };
+        self.follow_tail = false;
+        let visible = height.max(1) as usize;
+        if self.cursor_line < self.scroll {
+            self.scroll = self.cursor_line;
+        } else if self.cursor_line >= self.scroll.saturating_add(visible) {
+            self.scroll = self.cursor_line.saturating_add(1).saturating_sub(visible);
+        }
+        self.clamp_scroll(width, height);
+        self.follow_tail = self.is_at_bottom(width, height);
+    }
+
+    fn current_cursor_node<'a>(&'a mut self, width: u16) -> Option<&'a RenderedTranscriptNode> {
+        let cursor_line = self.cursor_line;
+        let rendered = self.rendered(width);
+        let node_index = rendered.line_nodes.get(cursor_line).and_then(|value| *value)?;
+        rendered.nodes.get(node_index)
+    }
+
+    fn current_cursor_node_cloned(&mut self, width: u16) -> Option<RenderedTranscriptNode> {
+        self.current_cursor_node(width).cloned()
     }
 }
 
@@ -17061,6 +18760,7 @@ fn slash_command_suggestion_context_for_text(
 mod tests {
     use super::*;
     use agena::message::{MessagePart, PartContent};
+    use agena::plugin::status::{PluginRunState, PluginStatus};
     use chrono::Utc;
 
     fn permission_request(request_id: &str) -> PermissionRequest {
@@ -17248,5 +18948,33 @@ mod tests {
         );
         assert_eq!(format_tokens_k(12_400), "12k");
         assert_eq!(format_token_progress_label(101), "100%");
+    }
+
+    #[test]
+    fn settings_plugin_entries_include_runtime_builtin_plugins() {
+        let sources = ConfigJsonSources {
+            config_path: PathBuf::from("/tmp/agena-config.json"),
+            config_found: true,
+            file: json!({}),
+            effective: json!({ "plugins": { "list": {} } }),
+        };
+        let items = settings_studio_plugin_entry_items(
+            &sources,
+            &[PluginStatus {
+                plugin_id: "agena.fs".to_string(),
+                kind: "static",
+                state: PluginRunState::Running,
+                pid: None,
+                restart_count: 0,
+                last_exit_code: None,
+                last_restart_at_ms: None,
+                last_error: None,
+            }],
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].label, "agena.fs");
+        assert!(items[0].value.contains("builtin"));
+        assert!(items[0].detail.contains("built-in plugin"));
     }
 }

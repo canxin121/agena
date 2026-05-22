@@ -36,6 +36,104 @@ pub(super) fn render_message(
     lines
 }
 
+pub(super) fn render_message_detailed(
+    message: &MessageResource,
+    width: u16,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> RenderedMessageBlock {
+    let mut lines = Vec::new();
+    let mut nodes = Vec::new();
+    let header_start = lines.len();
+    push_message_header(&mut lines, message, width, i18n);
+
+    match message.parts.as_ref() {
+        Some(parts) if parts.is_empty() => {
+            lines.push(RenderedLine::dim(format!(
+                "  {}",
+                ui_text::t(i18n, "message-empty")
+            )));
+            nodes.push(RenderedTranscriptNode {
+                key: TranscriptNodeKey::MessagePart {
+                    message_id: message.id,
+                    part_id: None,
+                },
+                kind: TranscriptNodeKind::Message,
+                message_id: message.id,
+                start_line: header_start,
+                end_line: lines.len(),
+                copy_text: String::new(),
+                toggleable: false,
+                expanded: true,
+                requires_full_message: false,
+            });
+        }
+        Some(parts) => {
+            let mut attached_header = false;
+            for part in parts {
+                let start_line = if attached_header {
+                    lines.len()
+                } else {
+                    header_start
+                };
+                let node = render_part_node(message, part, width, &mut lines, i18n, defaults, expansions);
+                if lines.len() > start_line {
+                    nodes.push(RenderedTranscriptNode {
+                        key: node.key,
+                        kind: node.kind,
+                        message_id: message.id,
+                        start_line,
+                        end_line: lines.len(),
+                        copy_text: node.copy_text,
+                        toggleable: node.toggleable,
+                        expanded: node.expanded,
+                        requires_full_message: node.requires_full_message,
+                    });
+                    attached_header = true;
+                }
+            }
+        }
+        None => {
+            let text =
+                ui_text::message_parts_not_loaded(i18n, message.part_count as usize);
+            lines.push(RenderedLine::dim(format!("  {text}")));
+            nodes.push(RenderedTranscriptNode {
+                key: TranscriptNodeKey::MessagePart {
+                    message_id: message.id,
+                    part_id: None,
+                },
+                kind: TranscriptNodeKind::Message,
+                message_id: message.id,
+                start_line: header_start,
+                end_line: lines.len(),
+                copy_text: text,
+                toggleable: false,
+                expanded: true,
+                requires_full_message: true,
+            });
+        }
+    }
+
+    RenderedMessageBlock { lines, nodes }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RenderedMessageBlock {
+    pub lines: Vec<RenderedLine>,
+    pub nodes: Vec<RenderedTranscriptNode>,
+}
+
+#[derive(Debug, Clone)]
+struct RenderedNodeDraft {
+    key: TranscriptNodeKey,
+    kind: TranscriptNodeKind,
+    copy_text: String,
+    toggleable: bool,
+    expanded: bool,
+    requires_full_message: bool,
+}
+
 pub(super) fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String {
     let preview = message
         .parts
@@ -246,7 +344,9 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
                 width,
             );
         }
-        Some(PartContent::Operation(tool)) => render_tool_execution(part, tool, out, width, i18n),
+        Some(PartContent::Operation(tool)) => {
+            render_tool_execution(part, tool, out, width, i18n, false)
+        }
         Some(PartContent::Error(error)) => {
             push_multiline(
                 out,
@@ -303,12 +403,245 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
     }
 }
 
+fn render_part_node(
+    message: &MessageResource,
+    part: &MessagePart,
+    width: u16,
+    out: &mut Vec<RenderedLine>,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> RenderedNodeDraft {
+    match part.content.as_ref() {
+        Some(PartContent::Text(text)) => {
+            push_markdown(out, "  ", text.text.as_str(), width);
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::MessagePart {
+                    message_id: message.id,
+                    part_id: Some(part.id),
+                },
+                kind: TranscriptNodeKind::Message,
+                copy_text: text.text.clone(),
+                toggleable: false,
+                expanded: true,
+                requires_full_message: false,
+            }
+        }
+        Some(PartContent::Reasoning(reasoning)) => {
+            let key = TranscriptNodeKey::Reasoning {
+                message_id: message.id,
+                part_id: part.id,
+            };
+            let expanded = expansions
+                .get(&key)
+                .copied()
+                .unwrap_or(defaults.thinking_expanded);
+            let summary = reasoning.preferred_text();
+            push_section_heading(
+                out,
+                "  thinking",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+                width,
+            );
+            if expanded {
+                push_multiline(
+                    out,
+                    "    ",
+                    summary.as_str(),
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                );
+            } else {
+                push_collapsible_text(
+                    out,
+                    "    ",
+                    summary.as_str(),
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                    i18n,
+                );
+            }
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Reasoning,
+                copy_text: summary,
+                toggleable: true,
+                expanded,
+                requires_full_message: false,
+            }
+        }
+        Some(PartContent::Operation(tool)) => {
+            let key = TranscriptNodeKey::Tool {
+                message_id: message.id,
+                part_id: part.id,
+            };
+            let expanded = expansions
+                .get(&key)
+                .copied()
+                .unwrap_or(defaults.tool_output_expanded);
+            render_tool_execution(part, tool, out, width, i18n, expanded);
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Tool,
+                copy_text: tool_output_copy_text(part, tool),
+                toggleable: true,
+                expanded,
+                requires_full_message: false,
+            }
+        }
+        Some(PartContent::Error(error)) => {
+            let text = i18n.text_args(
+                "message-error",
+                &crate::fl_args!(
+                    "code" => error.code.as_str(),
+                    "message" => error.message.as_str(),
+                ),
+            );
+            push_multiline(out, "  ", &text, Style::default().fg(Color::Red), width);
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::MessagePart {
+                    message_id: message.id,
+                    part_id: Some(part.id),
+                },
+                kind: TranscriptNodeKind::Message,
+                copy_text: text,
+                toggleable: false,
+                expanded: true,
+                requires_full_message: false,
+            }
+        }
+        Some(PartContent::Attachment(attachment)) => {
+            push_section_heading(
+                out,
+                &format!("  {}", ui_text::t(i18n, "message-attachments")),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+                width,
+            );
+            let mut labels = Vec::new();
+            for item in &attachment.attachments {
+                let label = item
+                    .title
+                    .as_ref()
+                    .or(item.filename.as_ref())
+                    .cloned()
+                    .unwrap_or_else(|| item.mime.clone());
+                push_label_value(out, "    - ", label.as_str(), Style::default(), width);
+                labels.push(label);
+            }
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::MessagePart {
+                    message_id: message.id,
+                    part_id: Some(part.id),
+                },
+                kind: TranscriptNodeKind::Message,
+                copy_text: labels.join("\n"),
+                toggleable: false,
+                expanded: true,
+                requires_full_message: false,
+            }
+        }
+        Some(PartContent::Request(RequestPart::Permission(permission))) => {
+            render_permission_request(permission, out, width, i18n);
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::MessagePart {
+                    message_id: message.id,
+                    part_id: Some(part.id),
+                },
+                kind: TranscriptNodeKind::Message,
+                copy_text: ui_text::permission_summary(i18n, permission),
+                toggleable: false,
+                expanded: true,
+                requires_full_message: false,
+            }
+        }
+        Some(PartContent::Request(RequestPart::UserInput(request))) => {
+            render_user_input_request(request, out, width, i18n);
+            RenderedNodeDraft {
+                key: TranscriptNodeKey::MessagePart {
+                    message_id: message.id,
+                    part_id: Some(part.id),
+                },
+                kind: TranscriptNodeKind::Message,
+                copy_text: request
+                    .request
+                    .questions
+                    .iter()
+                    .map(|question| question.question.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                toggleable: false,
+                expanded: true,
+                requires_full_message: false,
+            }
+        }
+        None => {
+            let fallback = part
+                .summary
+                .clone()
+                .unwrap_or_else(|| ui_text::t(i18n, "message-part-detail-unavailable"));
+            let (key, kind, toggleable, expanded) = match part.kind {
+                agena::message::PartKind::Reasoning => {
+                    let key = TranscriptNodeKey::Reasoning {
+                        message_id: message.id,
+                        part_id: part.id,
+                    };
+                    let expanded = expansions
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(defaults.thinking_expanded);
+                    (key, TranscriptNodeKind::Reasoning, true, expanded)
+                }
+                agena::message::PartKind::Operation => {
+                    let key = TranscriptNodeKey::Tool {
+                        message_id: message.id,
+                        part_id: part.id,
+                    };
+                    let expanded = expansions
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(defaults.tool_output_expanded);
+                    (key, TranscriptNodeKind::Tool, true, expanded)
+                }
+                _ => (
+                    TranscriptNodeKey::MessagePart {
+                        message_id: message.id,
+                        part_id: Some(part.id),
+                    },
+                    TranscriptNodeKind::Message,
+                    false,
+                    true,
+                ),
+            };
+            push_multiline(
+                out,
+                "  ",
+                fallback.as_str(),
+                Style::default().fg(Color::DarkGray),
+                width,
+            );
+            RenderedNodeDraft {
+                key,
+                kind,
+                copy_text: fallback,
+                toggleable,
+                expanded,
+                requires_full_message: true,
+            }
+        }
+    }
+}
+
 fn render_tool_execution(
     part: &MessagePart,
     tool: &OperationPart,
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
+    expanded: bool,
 ) {
     let label = if tool.title.trim().is_empty() {
         tool_invocation_label(&tool.invocation)
@@ -344,14 +677,24 @@ fn render_tool_execution(
     }
 
     if !tool.model_output.text.trim().is_empty() {
-        push_tool_output_preview(
-            out,
-            "    ",
-            tool.model_output.text.as_str(),
-            Style::default(),
-            width,
-            i18n,
-        );
+        if expanded {
+            push_multiline(
+                out,
+                "    ",
+                tool.model_output.text.as_str(),
+                Style::default(),
+                width,
+            );
+        } else {
+            push_collapsible_text(
+                out,
+                "    ",
+                tool.model_output.text.as_str(),
+                Style::default(),
+                width,
+                i18n,
+            );
+        }
     }
 
     if let Some(diff) = apply_patch_diff(&tool.details) {
@@ -362,17 +705,27 @@ fn render_tool_execution(
             Style::default().fg(Color::DarkGray),
             width,
         );
-        push_tool_output_preview(
-            out,
-            "    ",
-            diff.as_str(),
-            Style::default().fg(Color::DarkGray),
-            width,
-            i18n,
-        );
+        if expanded {
+            push_multiline(
+                out,
+                "    ",
+                diff.as_str(),
+                Style::default().fg(Color::DarkGray),
+                width,
+            );
+        } else {
+            push_collapsible_text(
+                out,
+                "    ",
+                diff.as_str(),
+                Style::default().fg(Color::DarkGray),
+                width,
+                i18n,
+            );
+        }
     }
 
-    render_operation_blocks(tool.blocks.as_slice(), out, width, i18n);
+    render_operation_blocks(tool.blocks.as_slice(), out, width, i18n, expanded);
 }
 
 fn render_operation_blocks(
@@ -380,12 +733,11 @@ fn render_operation_blocks(
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
+    expanded: bool,
 ) {
     for block in blocks {
         match block {
-            OperationBlock::Text { text } => {
-                push_multiline(out, "    ", text, Style::default(), width);
-            }
+            OperationBlock::Text { text } => push_multiline(out, "    ", text, Style::default(), width),
             OperationBlock::Markdown { text } => {
                 push_markdown(out, "    ", text, width);
             }
@@ -406,19 +758,40 @@ fn render_operation_blocks(
                 if let Some(stdout) = stdout
                     && !stdout.trim().is_empty()
                 {
-                    push_tool_output_preview(out, "      ", stdout, Style::default(), width, i18n);
+                    if expanded {
+                        push_multiline(out, "      ", stdout, Style::default(), width);
+                    } else {
+                        push_collapsible_text(
+                            out,
+                            "      ",
+                            stdout,
+                            Style::default(),
+                            width,
+                            i18n,
+                        );
+                    }
                 }
                 if let Some(stderr) = stderr
                     && !stderr.trim().is_empty()
                 {
-                    push_tool_output_preview(
-                        out,
-                        "      ",
-                        stderr,
-                        Style::default().fg(Color::Red),
-                        width,
-                        i18n,
-                    );
+                    if expanded {
+                        push_multiline(
+                            out,
+                            "      ",
+                            stderr,
+                            Style::default().fg(Color::Red),
+                            width,
+                        );
+                    } else {
+                        push_collapsible_text(
+                            out,
+                            "      ",
+                            stderr,
+                            Style::default().fg(Color::Red),
+                            width,
+                            i18n,
+                        );
+                    }
                 }
                 if let Some(exit_code) = exit_code
                     && *exit_code != 0
@@ -433,14 +806,24 @@ fn render_operation_blocks(
                 }
             }
             OperationBlock::Diff { diff, .. } => {
-                push_tool_output_preview(
-                    out,
-                    "    ",
-                    diff,
-                    Style::default().fg(Color::DarkGray),
-                    width,
-                    i18n,
-                );
+                if expanded {
+                    push_multiline(
+                        out,
+                        "    ",
+                        diff,
+                        Style::default().fg(Color::DarkGray),
+                        width,
+                    );
+                } else {
+                    push_collapsible_text(
+                        out,
+                        "    ",
+                        diff,
+                        Style::default().fg(Color::DarkGray),
+                        width,
+                        i18n,
+                    );
+                }
             }
             OperationBlock::FileChanges { changes } => {
                 render_file_changes(changes, out, width, i18n)
@@ -513,7 +896,18 @@ fn render_operation_blocks(
                 if let Some(text) = text
                     && !text.trim().is_empty()
                 {
-                    push_tool_output_preview(out, "      ", text, Style::default(), width, i18n);
+                    if expanded {
+                        push_multiline(out, "      ", text, Style::default(), width);
+                    } else {
+                        push_collapsible_text(
+                            out,
+                            "      ",
+                            text,
+                            Style::default(),
+                            width,
+                            i18n,
+                        );
+                    }
                 }
             }
             OperationBlock::Media { artifact, .. } => {
@@ -750,7 +1144,7 @@ fn push_label_value(
     push_wrapped_line(out, label, continuation.as_str(), value, style, width);
 }
 
-fn push_tool_output_preview(
+fn push_collapsible_text(
     out: &mut Vec<RenderedLine>,
     prefix: &str,
     text: &str,
@@ -771,6 +1165,117 @@ fn push_tool_output_preview(
             Style::default().fg(Color::DarkGray),
             width,
         );
+    }
+}
+
+fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart) -> String {
+    let label = if tool.title.trim().is_empty() {
+        tool_invocation_label(&tool.invocation)
+    } else {
+        tool.title.clone()
+    };
+    let mut sections = vec![tool_execution_preview(part, tool), label];
+    if !tool.model_output.text.trim().is_empty() {
+        sections.push(tool.model_output.text.trim().to_string());
+    }
+    if let Some(diff) = apply_patch_diff(&tool.details)
+        && !diff.trim().is_empty()
+    {
+        sections.push(diff.trim().to_string());
+    }
+    let operation_blocks = tool.blocks.iter().map(operation_block_copy_text).collect::<Vec<_>>();
+    if !operation_blocks.is_empty() {
+        sections.push(operation_blocks.join("\n\n"));
+    }
+    sections
+        .into_iter()
+        .filter(|section| !section.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn operation_block_copy_text(block: &OperationBlock) -> String {
+    match block {
+        OperationBlock::Text { text }
+        | OperationBlock::Markdown { text }
+        | OperationBlock::Diff { diff: text, .. } => text.clone(),
+        OperationBlock::Command {
+            command,
+            exit_code,
+            stdout,
+            stderr,
+            ..
+        } => {
+            let mut parts = vec![format!("$ {command}")];
+            if let Some(stdout) = stdout
+                && !stdout.trim().is_empty()
+            {
+                parts.push(stdout.trim().to_string());
+            }
+            if let Some(stderr) = stderr
+                && !stderr.trim().is_empty()
+            {
+                parts.push(stderr.trim().to_string());
+            }
+            if let Some(exit_code) = exit_code {
+                parts.push(format!("exit {exit_code}"));
+            }
+            parts.join("\n")
+        }
+        OperationBlock::SearchResults { query, results } => {
+            let mut out = Vec::new();
+            if let Some(query) = query {
+                out.push(format!("search: {query}"));
+            }
+            for result in results {
+                out.push(result.title.clone());
+                out.push(result.uri.clone());
+                if let Some(snippet) = &result.snippet
+                    && !snippet.trim().is_empty()
+                {
+                    out.push(snippet.clone());
+                }
+            }
+            out.join("\n")
+        }
+        OperationBlock::EmbeddedResource { uri, text, .. } => text
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| uri.clone()),
+        OperationBlock::Checklist { items } => items
+            .iter()
+            .map(|item| item.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        OperationBlock::FileChanges { changes } => changes
+            .iter()
+            .map(|change| change.path.clone())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        OperationBlock::ResourceLink { uri, title, .. }
+        | OperationBlock::Citation { uri, title, .. } => {
+            title.clone().unwrap_or_else(|| uri.clone())
+        }
+        OperationBlock::Image { url, .. }
+        | OperationBlock::Audio { url, .. }
+        | OperationBlock::File { url, .. } => url.clone(),
+        OperationBlock::Media { artifact, .. } => artifact
+            .name
+            .clone()
+            .unwrap_or_else(|| artifact.uri.clone()),
+        OperationBlock::Progress { message, .. } => message.clone(),
+        OperationBlock::NestedTask {
+            task_id,
+            title,
+            status,
+        } => format!(
+            "{} ({status:?})",
+            title.as_deref().unwrap_or(task_id.as_str())
+        ),
+        OperationBlock::Json { .. }
+        | OperationBlock::Table { .. }
+        | OperationBlock::Log { .. }
+        | OperationBlock::Custom { .. } => String::new(),
     }
 }
 

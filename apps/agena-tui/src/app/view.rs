@@ -3828,9 +3828,9 @@ fn trim_empty_line_edges(text: &str) -> String {
 }
 
 pub(super) fn adaptive_modal_width(total_width: u16, target: u16) -> u16 {
-    let max_width = total_width.saturating_sub(2);
+    let max_width = total_width.saturating_sub(2).max(1);
     if total_width <= 72 {
-        max(36, max_width)
+        min(max_width, max(36, target))
     } else if total_width <= 96 {
         min(max_width, max(44, target.saturating_sub(10)))
     } else {
@@ -3839,11 +3839,11 @@ pub(super) fn adaptive_modal_width(total_width: u16, target: u16) -> u16 {
 }
 
 pub(super) fn adaptive_modal_height(total_height: u16, target: u16) -> u16 {
-    let max_height = total_height.saturating_sub(2);
+    let max_height = total_height.saturating_sub(2).max(1);
     if total_height <= 18 {
-        max(6, max_height)
+        min(max_height, max(6, target))
     } else if total_height <= 28 {
-        min(max_height, max(8, target.saturating_sub(6)))
+        min(max_height, max(8, target))
     } else {
         min(target, max_height)
     }
@@ -4482,6 +4482,21 @@ fn permission_overlay_body_height(dialog: &PermissionOverlay, width: u16) -> u16
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adaptive_modal_width_never_exceeds_available_width() {
+        assert_eq!(adaptive_modal_width(30, 96), 28);
+    }
+
+    #[test]
+    fn adaptive_modal_height_preserves_requested_height_when_space_is_available() {
+        assert_eq!(adaptive_modal_height(24, 19), 19);
+    }
+
+    #[test]
+    fn adaptive_modal_height_clamps_to_available_height() {
+        assert_eq!(adaptive_modal_height(24, 40), 22);
+    }
 
     #[test]
     fn estimated_horizontal_panel_widths_follow_stacked_layout() {

@@ -616,13 +616,22 @@ fn render_part_node(
                     true,
                 ),
             };
-            push_multiline(
-                out,
-                "  ",
-                fallback.as_str(),
-                Style::default().fg(Color::DarkGray),
-                width,
-            );
+            match kind {
+                TranscriptNodeKind::Tool => push_single_line(
+                    out,
+                    "  ",
+                    fallback.as_str(),
+                    Style::default().fg(tool_status_key_and_color(part.status).1),
+                    width,
+                ),
+                _ => push_multiline(
+                    out,
+                    "  ",
+                    fallback.as_str(),
+                    Style::default().fg(Color::DarkGray),
+                    width,
+                ),
+            }
             RenderedNodeDraft {
                 key,
                 kind,
@@ -648,13 +657,17 @@ fn render_tool_execution(
     } else {
         tool.title.clone()
     };
-    let (message_key, color) = match part.status {
-        ExecutionStatus::Pending => ("message-tool-pending", Color::Magenta),
-        ExecutionStatus::InProgress => ("message-tool-running", Color::Magenta),
-        ExecutionStatus::Completed => ("message-tool-done", Color::Green),
-        ExecutionStatus::Failed => ("message-tool-failed", Color::Red),
-        ExecutionStatus::Cancelled => ("message-tool-failed", Color::DarkGray),
-    };
+    let (message_key, color) = tool_status_key_and_color(part.status);
+    if !expanded {
+        push_single_line(
+            out,
+            "  ",
+            tool_execution_collapsed_summary(part, tool, i18n).as_str(),
+            Style::default().fg(color),
+            width,
+        );
+        return;
+    }
     push_multiline(
         out,
         "  ",
@@ -1107,18 +1120,11 @@ fn preview_for_part(part: &MessagePart, i18n: &I18n) -> Option<String> {
 }
 
 fn tool_execution_preview(part: &MessagePart, tool: &OperationPart) -> String {
-    let label = if tool.title.trim().is_empty() {
+    format!(
+        "[tool] {} | {}",
+        tool_execution_status_token(part.status),
         tool_invocation_label(&tool.invocation)
-    } else {
-        tool.title.clone()
-    };
-    match part.status {
-        ExecutionStatus::Pending => format!("tool pending {label}"),
-        ExecutionStatus::InProgress => format!("tool running {label}"),
-        ExecutionStatus::Completed => format!("tool done {label}"),
-        ExecutionStatus::Failed => format!("tool failed {label}"),
-        ExecutionStatus::Cancelled => format!("tool cancelled {label}"),
-    }
+    )
 }
 
 fn first_non_empty_preview_line(text: &str) -> Option<String> {
@@ -1142,6 +1148,26 @@ fn push_label_value(
 ) {
     let continuation = " ".repeat(UnicodeWidthStr::width(label));
     push_wrapped_line(out, label, continuation.as_str(), value, style, width);
+}
+
+fn push_single_line(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    style: Style,
+    width: u16,
+) {
+    let available_width = width.max(1) as usize;
+    let prefix_width = UnicodeWidthStr::width(prefix);
+    if prefix_width >= available_width {
+        out.push(RenderedLine::plain(
+            truncate_display_width(prefix, available_width),
+            style,
+        ));
+        return;
+    }
+    let body = truncate_display_width(text, available_width.saturating_sub(prefix_width));
+    out.push(RenderedLine::plain(format!("{prefix}{body}"), style));
 }
 
 fn push_collapsible_text(
@@ -1192,6 +1218,38 @@ fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart) -> String {
         .filter(|section| !section.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn tool_status_key_and_color(status: ExecutionStatus) -> (&'static str, Color) {
+    match status {
+        ExecutionStatus::Pending => ("message-tool-pending", Color::Magenta),
+        ExecutionStatus::InProgress => ("message-tool-running", Color::Magenta),
+        ExecutionStatus::Completed => ("message-tool-done", Color::Green),
+        ExecutionStatus::Failed => ("message-tool-failed", Color::Red),
+        ExecutionStatus::Cancelled => ("message-tool-failed", Color::DarkGray),
+    }
+}
+
+fn tool_execution_status_token(status: ExecutionStatus) -> &'static str {
+    match status {
+        ExecutionStatus::Pending => "pending",
+        ExecutionStatus::InProgress => "running",
+        ExecutionStatus::Completed => "completed",
+        ExecutionStatus::Failed => "failed",
+        ExecutionStatus::Cancelled => "cancelled",
+    }
+}
+
+fn tool_execution_collapsed_summary(
+    part: &MessagePart,
+    tool: &OperationPart,
+    i18n: &I18n,
+) -> String {
+    format!(
+        "[tool] {} | {}",
+        ui_text::execution_status_label(i18n, part.status),
+        tool_invocation_label(&tool.invocation)
+    )
 }
 
 fn operation_block_copy_text(block: &OperationBlock) -> String {
@@ -2084,6 +2142,23 @@ mod tests {
     use super::*;
     use agena::message::ReasoningPart;
     use chrono::Utc;
+    use serde_json::json;
+
+    fn transcript_message(parts: Vec<MessagePart>) -> MessageResource {
+        MessageResource {
+            id: 1,
+            session_id: 1,
+            role: MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            metadata: Default::default(),
+            usage: None,
+            finish: None,
+            part_count: parts.len() as u64,
+            parts: Some(parts),
+        }
+    }
 
     #[test]
     fn trim_empty_line_edges_removes_outer_blank_lines_only() {
@@ -2178,5 +2253,75 @@ mod tests {
         );
         assert!(!rendered.iter().any(|line| line.contains("/m ore")));
         assert!(!rendered.iter().any(|line| line.contains("The  user")));
+    }
+
+    #[test]
+    fn collapsed_tool_output_renders_as_a_single_summary_line() {
+        let invocation = ToolInvocation::new(
+            "bash",
+            serde_json::from_value(json!({ "command": "ls -la src" }))
+                .expect("valid structured input"),
+        );
+        let tool = OperationPart::completed(
+            7,
+            invocation,
+            "alpha\nbeta\ngamma",
+            vec![OperationBlock::Command {
+                command: "ls -la src".to_string(),
+                cwd: None,
+                exit_code: Some(0),
+                stdout: Some("file-a\nfile-b\nfile-c".to_string()),
+                stderr: None,
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), false);
+
+        let rendered = out.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert_eq!(rendered.len(), 1, "collapsed tool output should stay on one line");
+        assert!(rendered[0].contains("[tool]"));
+        assert!(rendered[0].contains("completed"));
+        assert!(rendered[0].contains("bash"));
+    }
+
+    #[test]
+    fn plain_message_parts_are_not_toggleable() {
+        let message = transcript_message(vec![MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Text(agena::message::TextPart {
+                text: "hello\nworld".to_string(),
+                synthetic: false,
+                ignored: false,
+            }),
+        )]);
+
+        let rendered = render_message_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                tool_output_expanded: false,
+                thinking_expanded: false,
+            },
+            &std::collections::BTreeMap::new(),
+        );
+
+        assert_eq!(rendered.nodes.len(), 1);
+        assert!(!rendered.nodes[0].toggleable);
+        assert!(rendered.nodes[0].expanded);
     }
 }

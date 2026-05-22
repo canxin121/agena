@@ -149,41 +149,6 @@ impl ApiService {
             .ok_or_else(|| ApiError::not_found(format!("session not found: {session_id}")))
     }
 
-    async fn infer_session_model(
-        &self,
-        manager: &SessionManager,
-        session_id: i64,
-    ) -> ApiResult<Option<ModelRef>> {
-        let session = manager
-            .get_session(session_id)
-            .await
-            .map_err(api_error_from_app)?;
-        let mut sorted: Vec<&Message> = session.messages.iter().collect();
-        sorted.sort_by(|a, b| {
-            (b.created_at.timestamp_millis(), b.id).cmp(&(a.created_at.timestamp_millis(), a.id))
-        });
-        for m in sorted {
-            let provider_id = m.metadata.model_provider_id.trim();
-            let adapter_id = m.metadata.model_adapter_id.as_deref().map(str::trim);
-            let model_id = m.metadata.model_id.trim();
-            if provider_id.is_empty() || model_id.is_empty() {
-                continue;
-            }
-            let model = match adapter_id.filter(|value| !value.is_empty()) {
-                Some(adapter_id) => {
-                    ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id)
-                }
-                None => ModelRef::try_new(provider_id, model_id),
-            };
-            return model.map(Some).map_err(|error| {
-                ApiError::bad_request(format!(
-                    "session {session_id} contains invalid persisted model metadata: {error}"
-                ))
-            });
-        }
-        Ok(None)
-    }
-
     async fn workspace_id_by_path(&self, path: &str) -> ApiResult<Option<i64>> {
         agena::db::crud::workspace::get_workspace_id_by_path(self.db.as_ref(), path)
             .await

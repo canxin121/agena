@@ -524,7 +524,7 @@ impl ToolExecutor {
                 .clone()
                 .with_allowed_tools(session_context.allowed_tools.iter().map(String::as_str));
         }
-        if let Some(model_id) = session_context.model_id.as_ref() {
+        if let Some(model_id) = session_context.selection.model.as_ref() {
             scoped.model_id = Some(model_id.clone());
         }
         scoped

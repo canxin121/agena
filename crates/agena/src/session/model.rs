@@ -6,6 +6,7 @@ use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    execution_prefs::ExecutionSelection,
     message::{
         ExecutionStatus, Message, MessagePart, MessageStatus, PartContent, PermissionRequestPart,
         RequestPart, TimeRange, ToolInvocation, UserInputRequest, UserInputRequestPart,
@@ -461,8 +462,8 @@ pub struct SessionRuntimeState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
 pub struct SessionExecutionContext {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_profile: Option<String>,
+    #[serde(flatten)]
+    pub selection: ExecutionSelection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_mode: Option<crate::agent::AgentMode>,
     #[serde(default)]
@@ -482,20 +483,6 @@ pub struct SessionExecutionContext {
         skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
     pub agent_permission: crate::agent::PermissionConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_provider_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_adapter_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_parallel_tool_calls: Option<bool>,
     #[serde(
         default,
         skip_serializing_if = "crate::agent::AgentRunConfig::is_empty"
@@ -509,7 +496,7 @@ pub struct SessionExecutionContext {
 
 impl SessionExecutionContext {
     pub fn is_empty(&self) -> bool {
-        self.agent_profile.is_none()
+        self.selection.is_empty()
             && self.agent_mode.is_none()
             && !self.agent_hidden
             && self.agent_color.is_none()
@@ -518,13 +505,6 @@ impl SessionExecutionContext {
             && self.system_prompt_override.is_none()
             && self.allowed_tools.is_empty()
             && self.agent_permission.is_empty()
-            && self.model_provider_id.is_none()
-            && self.model_adapter_id.is_none()
-            && self.model_id.is_none()
-            && self.model_thinking_mode.is_none()
-            && self.model_speed_mode.is_none()
-            && self.model_verbosity.is_none()
-            && self.model_parallel_tool_calls.is_none()
             && self.agent_run.is_empty()
             && self.effective_workspace_root.is_none()
             && self.task_id.is_none()
@@ -571,26 +551,26 @@ impl SessionRuntimeState {
 
     pub fn model_override(&self) -> Option<(&str, Option<&str>, &str)> {
         Some((
-            self.execution.model_provider_id.as_deref()?,
-            self.execution.model_adapter_id.as_deref(),
-            self.execution.model_id.as_deref()?,
+            self.execution.selection.provider.as_deref()?,
+            self.execution.selection.adapter.as_deref(),
+            self.execution.selection.model.as_deref()?,
         ))
     }
 
     pub fn model_thinking_mode_override(&self) -> Option<&str> {
-        self.execution.model_thinking_mode.as_deref()
+        self.execution.selection.thinking_mode.as_deref()
     }
 
     pub fn model_speed_mode_override(&self) -> Option<&str> {
-        self.execution.model_speed_mode.as_deref()
+        self.execution.selection.speed_mode.as_deref()
     }
 
     pub fn model_verbosity_override(&self) -> Option<&str> {
-        self.execution.model_verbosity.as_deref()
+        self.execution.selection.verbosity.as_deref()
     }
 
     pub fn model_parallel_tool_calls_override(&self) -> Option<bool> {
-        self.execution.model_parallel_tool_calls
+        self.execution.selection.parallel_tool_calls
     }
 
     pub fn set_model_override(
@@ -599,9 +579,9 @@ impl SessionRuntimeState {
         adapter_id: Option<String>,
         model_id: Option<String>,
     ) {
-        self.execution.model_provider_id = provider_id.filter(|value| !value.trim().is_empty());
-        self.execution.model_adapter_id = adapter_id.filter(|value| !value.trim().is_empty());
-        self.execution.model_id = model_id.filter(|value| !value.trim().is_empty());
+        self.execution
+            .selection
+            .set_model_override(provider_id, adapter_id, model_id);
     }
 
     pub fn set_model_mode_overrides(
@@ -611,10 +591,12 @@ impl SessionRuntimeState {
         verbosity: Option<String>,
         parallel_tool_calls: Option<bool>,
     ) {
-        self.execution.model_thinking_mode = thinking_mode.filter(|value| !value.trim().is_empty());
-        self.execution.model_speed_mode = speed_mode.filter(|value| !value.trim().is_empty());
-        self.execution.model_verbosity = verbosity.filter(|value| !value.trim().is_empty());
-        self.execution.model_parallel_tool_calls = parallel_tool_calls;
+        self.execution.selection.set_model_mode_overrides(
+            thinking_mode,
+            speed_mode,
+            verbosity,
+            parallel_tool_calls,
+        );
     }
 
     pub fn provider_anchor(

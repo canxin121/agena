@@ -5958,7 +5958,7 @@ while True:
                 "goal clear should remove the active goal from the session"
             );
             assert_eq!(
-                session.runtime.execution.agent_profile, None,
+                session.runtime.execution.selection.agent, None,
                 "final agent restore should return the session to the default runtime context"
             );
         });

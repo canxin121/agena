@@ -4,6 +4,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
+use crate::execution_prefs::ExecutionSelection;
 use crate::provider::{
     CapabilityFamily, ConfiguredModelDefinition, GeminiStreamMode, OpenAiApiMode, OpenAiBackend,
     OpenAiStreamMode, ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
@@ -126,27 +127,7 @@ impl ResolvedConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DefaultConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    pub agent: String,
-}
-
-impl Default for DefaultConfig {
-    fn default() -> Self {
-        Self {
-            provider: None,
-            adapter: None,
-            model: None,
-            agent: "build".to_owned(),
-        }
-    }
-}
+pub type DefaultConfig = ExecutionSelection;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TracingConfig {

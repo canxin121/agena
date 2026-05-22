@@ -195,7 +195,7 @@ impl SessionManager {
             .store
             .load_session(session_id, state.cache_policy())
             .await?;
-        let previous_agent = session.runtime.execution.agent_profile.clone();
+        let previous_agent = session.runtime.execution.selection.agent.clone();
         if push_previous {
             session
                 .runtime
@@ -221,7 +221,7 @@ impl SessionManager {
                     .await?
             }
         };
-        let current_agent = session.runtime.execution.agent_profile.clone();
+        let current_agent = session.runtime.execution.selection.agent.clone();
         let stack_depth = session.runtime.execution.agent_stack.len();
         session = self
             .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
@@ -243,13 +243,13 @@ impl SessionManager {
             .store
             .load_session(session_id, state.cache_policy())
             .await?;
-        let previous_agent = session.runtime.execution.agent_profile.clone();
+        let previous_agent = session.runtime.execution.selection.agent.clone();
         let Some(target_agent) = session.runtime.execution.agent_stack.pop() else {
             return Ok(SessionAgentRestoreOutcome {
                 session_id,
                 restored: false,
                 previous_agent,
-                current_agent: session.runtime.execution.agent_profile,
+                current_agent: session.runtime.execution.selection.agent,
                 stack_depth: 0,
             });
         };
@@ -266,7 +266,7 @@ impl SessionManager {
                     .await?
             }
         };
-        let current_agent = session.runtime.execution.agent_profile.clone();
+        let current_agent = session.runtime.execution.selection.agent.clone();
         let stack_depth = session.runtime.execution.agent_stack.len();
         session = self
             .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
@@ -289,45 +289,12 @@ impl SessionManager {
         session_id: i64,
     ) -> Result<SessionRunOptions, AppError> {
         let session = self.get_session(session_id).await?;
-        if let Some(model) = infer_session_model(&session)? {
-            return self.apply_execution_context_to_run_options(
-                &session,
-                SessionRunOptions {
-                    model,
-                    thinking_mode: None,
-                    speed_mode: None,
-                    verbosity: None,
-                    thinking: None,
-                    request_override: Default::default(),
-                    system: None,
-                    temperature: None,
-                    max_output_tokens: None,
-                    agent_profile: None,
-                    max_turn_loops: None,
-                },
-            );
-        }
-
-        let provider_registry = self.execution_state().processor.provider_registry().clone();
-        let provider_ids = provider_registry.provider_ids();
-        if provider_ids.len() != 1 {
-            return Err(AppError::Internal(
-                "model is required when the session has no previous model and multiple providers are configured"
-                    .to_string(),
-            ));
-        }
-        let provider_id = provider_ids.into_iter().next().ok_or_else(|| {
-            AppError::Internal("no providers configured for scheduled run".to_string())
-        })?;
-        let provider = provider_registry.get(provider_id.as_str()).ok_or_else(|| {
-            AppError::Internal(format!(
-                "provider not found for scheduled run: {provider_id}"
-            ))
-        })?;
+        let state = self.execution_state();
+        let model = self.model_from_session_or_default(&session, &state)?;
         self.apply_execution_context_to_run_options(
             &session,
             SessionRunOptions {
-                model: ModelRef::new(provider_id, provider.default_model().to_string()),
+                model,
                 thinking_mode: None,
                 speed_mode: None,
                 verbosity: None,

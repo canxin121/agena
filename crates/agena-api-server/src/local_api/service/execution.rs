@@ -63,17 +63,28 @@ impl ApiService {
                 ensure_provider_exists(provider_registry, &model)?;
                 model
             }
-            None => match self.infer_session_model(manager, session_id).await? {
-                Some(model) => {
-                    ensure_provider_exists(provider_registry, &model)?;
-                    model
-                }
-                None => default_model.or_else(|| default_model_from_registry(provider_registry)).ok_or_else(|| {
+            None => {
+                let session = manager
+                    .get_session(session_id)
+                    .await
+                    .map_err(api_error_from_app)?;
+                let selection = session.runtime().execution.selection.model_ref().map_err(|error| {
+                    ApiError::internal(format!(
+                        "session {session_id} contains invalid execution model selection: {error}"
+                    ))
+                })?;
+                match selection {
+                    Some(model) => {
+                        ensure_provider_exists(provider_registry, &model)?;
+                        model
+                    }
+                    None => default_model.ok_or_else(|| {
                     ApiError::bad_request(
-                        "model is required when the session has no previous model and multiple providers are configured",
+                        "model is required when neither the request, session, nor global default specifies one",
                     )
                 })?,
-            },
+                }
+            }
         };
 
         if let Some(temperature) = request.temperature
@@ -213,7 +224,7 @@ impl ApiService {
             latest_event_seq: self.latest_session_event_seq(manager, session.id).await?,
             automation: session_automation_resource(&scheduler_jobs, session.id),
             execution: SessionExecutionContextResource {
-                agent_profile: session.runtime().execution.agent_profile.clone(),
+                agent_profile: session.runtime().execution.selection.agent.clone(),
                 agent_mode: session.runtime().execution.agent_mode,
                 agent_hidden: session.runtime().execution.agent_hidden,
                 agent_color: session.runtime().execution.agent_color.clone(),
@@ -221,13 +232,17 @@ impl ApiService {
                 system_prompt_override: session.runtime().execution.system_prompt_override.clone(),
                 allowed_tools: session.runtime().execution.allowed_tools.clone(),
                 agent_permission: session.runtime().execution.agent_permission.clone(),
-                model_provider_id: session.runtime().execution.model_provider_id.clone(),
-                model_adapter_id: session.runtime().execution.model_adapter_id.clone(),
-                model_id: session.runtime().execution.model_id.clone(),
-                model_thinking_mode: session.runtime().execution.model_thinking_mode.clone(),
-                model_speed_mode: session.runtime().execution.model_speed_mode.clone(),
-                model_verbosity: session.runtime().execution.model_verbosity.clone(),
-                model_parallel_tool_calls: session.runtime().execution.model_parallel_tool_calls,
+                model_provider_id: session.runtime().execution.selection.provider.clone(),
+                model_adapter_id: session.runtime().execution.selection.adapter.clone(),
+                model_id: session.runtime().execution.selection.model.clone(),
+                model_thinking_mode: session.runtime().execution.selection.thinking_mode.clone(),
+                model_speed_mode: session.runtime().execution.selection.speed_mode.clone(),
+                model_verbosity: session.runtime().execution.selection.verbosity.clone(),
+                model_parallel_tool_calls: session
+                    .runtime()
+                    .execution
+                    .selection
+                    .parallel_tool_calls,
                 agent_run: session.runtime().execution.agent_run.clone(),
                 effective_workspace_root: session
                     .runtime()
@@ -316,19 +331,6 @@ fn ensure_provider_exists(provider_registry: &ProviderRegistry, model: &ModelRef
             model.provider_id
         )))
     }
-}
-
-fn default_model_from_registry(provider_registry: &ProviderRegistry) -> Option<ModelRef> {
-    let provider_ids = provider_registry.provider_ids();
-    if provider_ids.len() != 1 {
-        return None;
-    }
-
-    let provider_id = provider_ids.into_iter().next()?;
-    let provider = provider_registry.get(provider_id.as_str())?;
-    let mut model = ModelRef::new(provider_id, provider.default_model().to_string());
-    model.adapter_id = provider.default_adapter().cloned();
-    Some(model)
 }
 
 pub async fn list_scheduled_jobs(manager: &SessionManager) -> Vec<agena_scheduler::ScheduledJob> {

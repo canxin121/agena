@@ -1,6 +1,8 @@
 use super::*;
 use agena::message::{ExecutionStatus, FileChangeKind, MessageStatus, OperationBlock, RequestPart};
 use textwrap::{Options as WrapOptions, WordSplitter, wrap};
+use tui_markdown::from_str as markdown_to_text;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 pub(super) fn render_message(
@@ -217,10 +219,7 @@ fn push_message_header(
     let header_style = style_for_role(message.role).add_modifier(Modifier::BOLD);
 
     if UnicodeWidthStr::width(header.as_str()) <= width.max(1) as usize {
-        out.push(RenderedLine {
-            text: header,
-            style: header_style,
-        });
+        out.push(RenderedLine::plain(header, header_style));
     } else {
         push_wrapped_line(out, "", "", header.as_str(), header_style, width);
     }
@@ -228,9 +227,7 @@ fn push_message_header(
 
 fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n: &I18n) {
     match part.content.as_ref() {
-        Some(PartContent::Text(text)) => {
-            push_multiline(out, "  ", text.text.as_str(), Style::default(), width)
-        }
+        Some(PartContent::Text(text)) => push_markdown(out, "  ", text.text.as_str(), width),
         Some(PartContent::Reasoning(reasoning)) => {
             let summary = if !reasoning.summary.is_empty() {
                 reasoning.summary.join(" ")
@@ -390,7 +387,12 @@ fn render_operation_blocks(
 ) {
     for block in blocks {
         match block {
-            OperationBlock::Text { .. } | OperationBlock::Markdown { .. } => {}
+            OperationBlock::Text { text } => {
+                push_multiline(out, "    ", text, Style::default(), width);
+            }
+            OperationBlock::Markdown { text } => {
+                push_markdown(out, "    ", text, width);
+            }
             OperationBlock::Command {
                 command,
                 exit_code,
@@ -803,6 +805,19 @@ fn trim_empty_line_edges(text: &str) -> String {
     lines[first_non_empty..=last_non_empty].join("\n")
 }
 
+fn push_markdown(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, width: u16) {
+    let sanitized = sanitize_terminal_text(text);
+    let markdown = trim_empty_line_edges(sanitized.as_str());
+    if markdown.is_empty() {
+        return;
+    }
+
+    let rendered = markdown_to_text(markdown.as_str());
+    for line in rendered.lines {
+        push_wrapped_rich_line(out, prefix, prefix, owned_line(&line), width);
+    }
+}
+
 fn push_wrapped_line(
     out: &mut Vec<RenderedLine>,
     initial_prefix: &str,
@@ -812,19 +827,13 @@ fn push_wrapped_line(
     width: u16,
 ) {
     if text.is_empty() {
-        out.push(RenderedLine {
-            text: initial_prefix.to_string(),
-            style,
-        });
+        out.push(RenderedLine::plain(initial_prefix.to_string(), style));
         return;
     }
 
     let initial = format!("{initial_prefix}{text}");
     if width <= 1 || UnicodeWidthStr::width(initial.as_str()) <= width as usize {
-        out.push(RenderedLine {
-            text: initial,
-            style,
-        });
+        out.push(RenderedLine::plain(initial, style));
         return;
     }
 
@@ -832,10 +841,7 @@ fn push_wrapped_line(
     let continuation_width = UnicodeWidthStr::width(continuation_prefix);
     let available_width = width as usize;
     if available_width <= initial_width.max(continuation_width).saturating_add(1) {
-        out.push(RenderedLine {
-            text: initial,
-            style,
-        });
+        out.push(RenderedLine::plain(initial, style));
         return;
     }
 
@@ -846,17 +852,198 @@ fn push_wrapped_line(
         .word_splitter(WordSplitter::NoHyphenation);
     let wrapped = wrap(text, options);
     if wrapped.is_empty() {
-        out.push(RenderedLine {
-            text: initial_prefix.to_string(),
-            style,
-        });
+        out.push(RenderedLine::plain(initial_prefix.to_string(), style));
         return;
     }
 
-    out.extend(wrapped.into_iter().map(|segment| RenderedLine {
-        text: segment.into_owned(),
-        style,
-    }));
+    out.extend(
+        wrapped
+            .into_iter()
+            .map(|segment| RenderedLine::plain(segment.into_owned(), style)),
+    );
+}
+
+fn push_wrapped_rich_line(
+    out: &mut Vec<RenderedLine>,
+    initial_prefix: &str,
+    continuation_prefix: &str,
+    line: Line<'static>,
+    width: u16,
+) {
+    if line.spans.is_empty() {
+        out.push(RenderedLine::rich(Line::from(Span::raw(
+            initial_prefix.to_string(),
+        ))));
+        return;
+    }
+
+    let plain_text = line_plain_text(&line);
+    let available_width = width.max(1) as usize;
+    let initial_prefix_width = UnicodeWidthStr::width(initial_prefix);
+    let continuation_prefix_width = UnicodeWidthStr::width(continuation_prefix);
+    let initial_total_width =
+        initial_prefix_width.saturating_add(UnicodeWidthStr::width(plain_text.as_str()));
+    if initial_total_width <= available_width
+        || available_width
+            <= initial_prefix_width
+                .max(continuation_prefix_width)
+                .saturating_add(1)
+    {
+        out.push(RenderedLine::rich(prefix_rich_line(initial_prefix, line)));
+        return;
+    }
+
+    let wrapped_lines = wrap_rich_line(
+        line.spans.as_slice(),
+        available_width.saturating_sub(initial_prefix_width).max(1),
+        available_width
+            .saturating_sub(continuation_prefix_width)
+            .max(1),
+    );
+    if wrapped_lines.is_empty() {
+        out.push(RenderedLine::rich(prefix_rich_line(initial_prefix, line)));
+        return;
+    }
+
+    for (index, wrapped_line) in wrapped_lines.into_iter().enumerate() {
+        let prefix = if index == 0 {
+            initial_prefix
+        } else {
+            continuation_prefix
+        };
+        out.push(RenderedLine::rich(prefix_rich_line(prefix, wrapped_line)));
+    }
+}
+
+fn prefix_rich_line(prefix: &str, line: Line<'static>) -> Line<'static> {
+    if prefix.is_empty() {
+        return line;
+    }
+    let mut spans = Vec::with_capacity(line.spans.len().saturating_add(1));
+    spans.push(Span::raw(prefix.to_string()));
+    spans.extend(line.spans);
+    Line::from(spans)
+}
+
+fn owned_line(line: &Line<'_>) -> Line<'static> {
+    Line::from(
+        line.spans
+            .iter()
+            .map(|span| Span::styled(span.content.to_string(), span.style))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn line_plain_text(line: &Line<'static>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>()
+}
+
+#[derive(Debug, Clone)]
+struct StyledGrapheme {
+    text: String,
+    style: Style,
+    width: usize,
+    whitespace: bool,
+}
+
+fn wrap_rich_line(
+    spans: &[Span<'static>],
+    initial_width: usize,
+    continuation_width: usize,
+) -> Vec<Line<'static>> {
+    let tokens = spans
+        .iter()
+        .flat_map(|span| {
+            let style = span.style;
+            span.content
+                .as_ref()
+                .graphemes(true)
+                .map(move |grapheme| StyledGrapheme {
+                    text: grapheme.to_string(),
+                    style,
+                    width: UnicodeWidthStr::width(grapheme),
+                    whitespace: grapheme.chars().all(char::is_whitespace),
+                })
+        })
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return vec![Line::default()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    let mut current_width = 0_usize;
+    let mut width_limit = initial_width.max(1);
+    let mut last_break_index = None;
+
+    for token in tokens {
+        let mut pending = Some(token);
+        while let Some(token) = pending.take() {
+            let token_fits =
+                current.is_empty() || current_width.saturating_add(token.width) <= width_limit;
+            if token_fits {
+                if token.whitespace {
+                    last_break_index = Some(current.len());
+                }
+                current_width = current_width.saturating_add(token.width);
+                current.push(token);
+                continue;
+            }
+
+            if let Some(break_index) = last_break_index.filter(|index| *index > 0) {
+                let line_tokens = current[..break_index].to_vec();
+                let mut carry = current[break_index + 1..].to_vec();
+                while carry.first().is_some_and(|grapheme| grapheme.whitespace) {
+                    carry.remove(0);
+                }
+                lines.push(styled_tokens_to_line(line_tokens));
+                current = carry;
+                current_width = current.iter().map(|grapheme| grapheme.width).sum();
+                width_limit = continuation_width.max(1);
+                last_break_index = current.iter().rposition(|grapheme| grapheme.whitespace);
+                pending = Some(token);
+                continue;
+            }
+
+            if current.is_empty() {
+                current_width = current_width.saturating_add(token.width);
+                current.push(token);
+                continue;
+            }
+
+            lines.push(styled_tokens_to_line(current));
+            current = Vec::new();
+            current_width = 0;
+            width_limit = continuation_width.max(1);
+            last_break_index = None;
+            pending = Some(token);
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(styled_tokens_to_line(current));
+    }
+    if lines.is_empty() {
+        lines.push(Line::default());
+    }
+    lines
+}
+
+fn styled_tokens_to_line(tokens: Vec<StyledGrapheme>) -> Line<'static> {
+    let mut spans = Vec::<Span<'static>>::new();
+    for token in tokens {
+        if let Some(last) = spans.last_mut()
+            && last.style == token.style
+        {
+            last.content = format!("{}{}", last.content.as_ref(), token.text).into();
+        } else {
+            spans.push(Span::styled(token.text, token.style));
+        }
+    }
+    Line::from(spans)
 }
 
 fn strip_terminal_ansi_sequences(text: &str) -> String {
@@ -970,5 +1157,15 @@ mod tests {
         let preview = tool_output_preview("\n\nalpha\nbeta\n\n");
         assert_eq!(preview.text, "alpha\nbeta");
         assert_eq!(preview.omitted_lines, 0);
+    }
+
+    #[test]
+    fn push_markdown_emits_rich_transcript_lines() {
+        let mut out = Vec::new();
+        push_markdown(&mut out, "  ", "# hello\n\n**world**", 40);
+        assert!(!out.is_empty());
+        assert!(out.iter().all(|line| line.rich_line.is_some()));
+        assert!(out.iter().any(|line| line.text.contains("hello")));
+        assert!(out.iter().any(|line| line.text.contains("world")));
     }
 }

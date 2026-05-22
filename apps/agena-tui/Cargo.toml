@@ -33,6 +33,7 @@ textwrap = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 toml = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+tui-markdown = "0.3.7"
 unic-langid = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }

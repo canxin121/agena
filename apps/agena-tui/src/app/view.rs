@@ -142,13 +142,19 @@ impl App {
                 .map(|(idx, line)| {
                     let line_is_active = active_match == Some(idx);
                     let line_has_match = matches.contains(&idx);
-                    highlight_search_line(
-                        line.text.as_str(),
-                        line.style,
-                        self.transcript.search_query.as_str(),
-                        line_is_active,
-                        line_has_match,
-                    )
+                    if !line_has_match && self.transcript.search_query.trim().is_empty() {
+                        line.rich_line.clone().unwrap_or_else(|| {
+                            Line::from(Span::styled(line.text.clone(), line.style))
+                        })
+                    } else {
+                        highlight_search_line(
+                            line.text.as_str(),
+                            line.style,
+                            self.transcript.search_query.as_str(),
+                            line_is_active,
+                            line_has_match,
+                        )
+                    }
                 })
                 .collect::<Vec<_>>()
         };

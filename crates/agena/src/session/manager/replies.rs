@@ -16,7 +16,7 @@ pub(super) struct AggregatedPermissionRequest {
 
 pub(super) enum AggregatedPermissionOutcome {
     Allow,
-    Request(AggregatedPermissionRequest),
+    Request(Box<AggregatedPermissionRequest>),
     Deny { reason: String },
 }
 
@@ -1371,6 +1371,7 @@ impl SessionManager {
         {
             AggregatedPermissionOutcome::Allow => {}
             AggregatedPermissionOutcome::Request(request) => {
+                let request = *request;
                 return self
                     .apply_permission_request(
                         session,
@@ -1692,7 +1693,7 @@ impl SessionManager {
                     request.reason
                 );
             }
-            return Ok(AggregatedPermissionOutcome::Request(request));
+            return Ok(AggregatedPermissionOutcome::Request(Box::new(request)));
         }
 
         Ok(AggregatedPermissionOutcome::Allow)

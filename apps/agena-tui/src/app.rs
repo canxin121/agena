@@ -899,7 +899,7 @@ struct PermissionOverlay {
 enum PendingInteractiveOverlayTarget {
     Permission {
         session_id: i64,
-        request: PermissionRequest,
+        request: Box<PermissionRequest>,
     },
     UserInput {
         session_id: i64,
@@ -6877,7 +6877,7 @@ impl App {
                     .map(
                         |(session_id, request)| PendingInteractiveOverlayTarget::Permission {
                             session_id,
-                            request,
+                            request: Box::new(request),
                         },
                     )
             }
@@ -6990,7 +6990,7 @@ impl App {
                 self.seen_permission_request_ids
                     .insert(request.request_id.clone());
                 self.overlay = Some(Overlay::Permission(Self::build_permission_overlay(
-                    session_id, request,
+                    session_id, *request,
                 )));
             }
             Some(PendingInteractiveOverlayTarget::UserInput {
@@ -17107,6 +17107,8 @@ mod tests {
                 tool_name: "shell".to_string(),
                 qualifier: None,
             },
+            related_actions: Vec::new(),
+            requested_actions: Vec::new(),
             reason: "needs approval".to_string(),
             explanation: String::new(),
             source: None,

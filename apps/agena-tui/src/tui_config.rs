@@ -22,20 +22,19 @@ pub struct TuiConfig {
     pub double_esc_window_ms: u64,
     pub status_line: TuiStatusLineConfig,
     pub theme: Option<String>,
-    pub composer_mode: TuiComposerMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum TuiComposerMode {
-    #[default]
-    Emacs,
-    Vim,
+    pub transcript: TuiTranscriptConfig,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct TuiStatusLineConfig {
     pub command: Option<String>,
     pub refresh_interval_ms: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TuiTranscriptConfig {
+    pub tool_output_default_expanded: bool,
+    pub thinking_default_expanded: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -46,6 +45,7 @@ struct RawTuiConfig {
     status_line: RawStatusLineConfig,
     theme: Option<String>,
     composer_mode: Option<String>,
+    transcript: RawTranscriptConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -59,6 +59,13 @@ struct RawKeybindings {
 struct RawStatusLineConfig {
     command: Option<String>,
     refresh_interval_ms: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawTranscriptConfig {
+    tool_output_default_expanded: Option<bool>,
+    thinking_default_expanded: Option<bool>,
 }
 
 impl TuiConfig {
@@ -119,7 +126,7 @@ impl TuiConfig {
             double_esc_window_ms: 600,
             status_line: TuiStatusLineConfig::default(),
             theme: None,
-            composer_mode: TuiComposerMode::Emacs,
+            transcript: TuiTranscriptConfig::default(),
         }
     }
 
@@ -133,16 +140,12 @@ impl TuiConfig {
             .theme
             .map(|theme| theme.trim().to_string())
             .filter(|theme| !theme.is_empty());
-        let composer_mode = raw
-            .composer_mode
-            .as_deref()
-            .map(parse_composer_mode)
-            .transpose()
-            .unwrap_or_else(|err| {
-                eprintln!("[agena-tui] invalid composer_mode: {err}");
-                None
-            })
-            .unwrap_or(TuiComposerMode::Emacs);
+        if let Some(mode) = raw.composer_mode.as_deref() {
+            match mode.trim().to_ascii_lowercase().as_str() {
+                "" | "default" | "vim" | "emacs" => {}
+                other => eprintln!("[agena-tui] invalid composer_mode: expected `vim`, got `{other}`"),
+            }
+        }
         Self {
             keybindings,
             double_esc_window_ms: raw.double_esc_window_ms.unwrap_or(600),
@@ -155,15 +158,52 @@ impl TuiConfig {
                     .max(250),
             },
             theme,
-            composer_mode,
+            transcript: TuiTranscriptConfig {
+                tool_output_default_expanded: raw
+                    .transcript
+                    .tool_output_default_expanded
+                    .unwrap_or(false),
+                thinking_default_expanded: raw
+                    .transcript
+                    .thinking_default_expanded
+                    .unwrap_or(false),
+            },
         }
     }
 }
 
-fn parse_composer_mode(raw: &str) -> Result<TuiComposerMode, String> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "" | "emacs" | "default" => Ok(TuiComposerMode::Emacs),
-        "vim" => Ok(TuiComposerMode::Vim),
-        other => Err(format!("expected `emacs` or `vim`, got `{other}`")),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_raw_reads_transcript_defaults() {
+        let config = TuiConfig::from_raw(
+            RawTuiConfig {
+                transcript: RawTranscriptConfig {
+                    tool_output_default_expanded: Some(true),
+                    thinking_default_expanded: Some(true),
+                },
+                ..RawTuiConfig::default()
+            },
+            ComposerKeyBindings::default(),
+        );
+
+        assert!(config.transcript.tool_output_default_expanded);
+        assert!(config.transcript.thinking_default_expanded);
+    }
+
+    #[test]
+    fn from_raw_accepts_legacy_composer_mode_but_keeps_defaults() {
+        let config = TuiConfig::from_raw(
+            RawTuiConfig {
+                composer_mode: Some("emacs".to_string()),
+                ..RawTuiConfig::default()
+            },
+            ComposerKeyBindings::default(),
+        );
+
+        assert!(!config.transcript.tool_output_default_expanded);
+        assert!(!config.transcript.thinking_default_expanded);
     }
 }

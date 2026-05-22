@@ -142,19 +142,24 @@ impl App {
                 .map(|(idx, line)| {
                     let line_is_active = active_match == Some(idx);
                     let line_has_match = matches.contains(&idx);
-                    if !line_has_match && self.transcript.search_query.trim().is_empty() {
-                        line.rich_line.clone().unwrap_or_else(|| {
-                            Line::from(Span::styled(line.text.clone(), line.style))
-                        })
-                    } else {
-                        highlight_search_line(
-                            line.text.as_str(),
-                            line.style,
-                            self.transcript.search_query.as_str(),
-                            line_is_active,
-                            line_has_match,
-                        )
+                    let mut rendered_line =
+                        if !line_has_match && self.transcript.search_query.trim().is_empty() {
+                            line.rich_line.clone().unwrap_or_else(|| {
+                                Line::from(Span::styled(line.text.clone(), line.style))
+                            })
+                        } else {
+                            highlight_search_line(
+                                line.text.as_str(),
+                                line.style,
+                                self.transcript.search_query.as_str(),
+                                line_is_active,
+                                line_has_match,
+                            )
+                        };
+                    if self.focus == Focus::Transcript && idx == self.transcript.cursor_line {
+                        rendered_line = apply_line_highlight(rendered_line);
                     }
+                    rendered_line
                 })
                 .collect::<Vec<_>>()
         };
@@ -170,36 +175,7 @@ impl App {
     }
 
     fn transcript_surface_top_right(&self) -> Vec<String> {
-        let mut top_right = Vec::new();
-        if let Some(wait_state) = self.current_session_wait_state_text() {
-            top_right.push(wait_state);
-        } else {
-            let is_running = self
-                .transcript
-                .execution
-                .as_ref()
-                .is_some_and(|execution| execution.run_state != SessionRunState::Idle);
-            if is_running && !self.transcript.submitting {
-                top_right.push(ui_text::t(&self.i18n, "session-running"));
-            }
-        }
-        if self.transcript.submitting {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-busy"));
-        }
-        if self.transcript.loading_initial {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-loading"));
-        } else if self.transcript.loading_older {
-            top_right.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
-        }
-        if !self.transcript.search_query.trim().is_empty() {
-            top_right.push(ui_text::transcript_search_summary(
-                &self.i18n,
-                self.transcript.search_query.as_str(),
-                self.transcript.current_search_match_number(),
-                self.transcript.current_search_match_count(),
-            ));
-        }
-        top_right
+        vec![self.main_surface_mode_label().to_string()]
     }
 
     fn transcript_surface_title(&self) -> String {
@@ -225,17 +201,17 @@ impl App {
 
     fn render_composer(&self, frame: &mut Frame, area: Rect) {
         let status_rows = u16::from(!self.composer_status_parts().is_empty());
-        let (composer_area, status_area) = if status_rows > 0 && area.height > status_rows {
+        let (status_area, composer_area) = if status_rows > 0 && area.height > status_rows {
             let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(area.height.saturating_sub(status_rows)),
                     Constraint::Length(status_rows),
+                    Constraint::Length(area.height.saturating_sub(status_rows)),
                 ])
                 .split(area);
-            (rows[0], Some(rows[1]))
+            (Some(rows[0]), rows[1])
         } else {
-            (area, None)
+            (None, area)
         };
 
         let block = Block::default().borders(Borders::ALL);
@@ -789,8 +765,21 @@ impl App {
 
     fn composer_status_parts(&self) -> Vec<String> {
         let mut parts = self.current_session_status_parts();
-        if self.composer_mode.is_vim() {
-            parts.push(format!("mode {}", self.composer_mode.status_label()));
+        if self.transcript.submitting {
+            parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
+        }
+        if self.transcript.loading_initial {
+            parts.push(ui_text::t(&self.i18n, "transcript-header-loading"));
+        } else if self.transcript.loading_older {
+            parts.push(ui_text::t(&self.i18n, "transcript-header-loading-older"));
+        }
+        if !self.transcript.search_query.trim().is_empty() {
+            parts.push(ui_text::transcript_search_summary(
+                &self.i18n,
+                self.transcript.search_query.as_str(),
+                self.transcript.current_search_match_number(),
+                self.transcript.current_search_match_count(),
+            ));
         }
         if let Some(selected) = self
             .selected_composer_item
@@ -857,6 +846,14 @@ impl App {
             ));
         }
         parts
+    }
+
+    fn main_surface_mode_label(&self) -> &'static str {
+        if self.focus == Focus::Composer {
+            "INSERT"
+        } else {
+            "VIEW"
+        }
     }
 
     fn theme_color(&self, key: &str, fallback: Color) -> Color {
@@ -1007,6 +1004,12 @@ impl App {
             }
             Route::SettingsStudio(dialog) => {
                 self.render_settings_studio_overlay(frame, area, dialog, SurfaceMode::Route);
+            }
+            Route::AgentStudio(dialog) => {
+                self.render_agent_studio_overlay(frame, area, dialog, SurfaceMode::Route);
+            }
+            Route::AgentPermissionStudio(dialog) => {
+                self.render_agent_permission_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::SessionSearch(dialog) => {
                 self.render_session_search_overlay(frame, area, dialog, SurfaceMode::Route);
@@ -2818,6 +2821,336 @@ impl App {
         );
     }
 
+    fn render_agent_studio_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &AgentStudioOverlay,
+        surface: SurfaceMode,
+    ) {
+        let title_width = surface.outer_width(area, 138);
+        let content_width = surface.content_width(area, 138);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
+        let content_height = agent_studio_content_height(dialog, content_width);
+        let title_summary = format!(
+            "{} · {}",
+            dialog.profile.scope.as_str(),
+            if dialog.editable { "config-owned" } else { "file-backed" }
+        );
+        let area = surface.outer_rect(
+            area,
+            138,
+            content_height
+                .saturating_add(footer_height)
+                .saturating_add(2),
+        );
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(overlay_title_with_summary(
+                dialog.title.as_str(),
+                title_summary.as_str(),
+                title_width,
+            )))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(content_height),
+                Constraint::Length(footer_height),
+            ])
+            .split(inner);
+
+        let content = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(36), Constraint::Min(60)])
+            .split(rows[0]);
+        let list_area = top_aligned_panel_rect(
+            content[0],
+            list_panel_height(dialog.items.len().max(1), 2, 6, 16),
+        );
+        let right_area = content[1];
+        let overview_text = agent_studio_overview_text(
+            &dialog.profile,
+            dialog.default_agent_name.as_deref(),
+            dialog.editable,
+        );
+        let selected_item = dialog.items.get(dialog.selected);
+        let detail_text = selected_item
+            .map(|item| {
+                agent_studio_item_detail_text(
+                    &dialog.profile,
+                    item,
+                    dialog.editable,
+                    dialog.default_agent_name.as_deref(),
+                )
+            })
+            .unwrap_or_else(|| "Select a field to inspect or edit it.".to_string());
+        let overview_height =
+            bordered_paragraph_height(overview_text.as_str(), right_area.width, 2, 5);
+        let detail_height = bordered_paragraph_height(detail_text.as_str(), right_area.width, 3, 10);
+        let right_rows = top_aligned_vertical_areas(right_area, &[overview_height, detail_height]);
+
+        let list_items = dialog
+            .items
+            .iter()
+            .map(|item| {
+                let mut first_line = vec![Span::styled(
+                    sanitize_display_text(item.label.as_str()),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )];
+                if !item.value.trim().is_empty() {
+                    first_line.push(Span::raw("  "));
+                    first_line.push(Span::styled(
+                        sanitize_display_text(item.value.as_str()),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                }
+                ListItem::new(vec![
+                    Line::from(first_line),
+                    Line::from(Span::styled(
+                        sanitize_display_text(item.detail.as_str()),
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(" Agent Fields "))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(selection_highlight_style())
+            .highlight_symbol(">> ");
+        let mut state = ListState::default();
+        state.select((!dialog.items.is_empty()).then_some(dialog.selected));
+        frame.render_stateful_widget(list, list_area, &mut state);
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(overview_text))
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(" Overview "))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right_rows[0],
+        );
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(detail_text))
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(" Details "))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right_rows[1],
+        );
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[1],
+        );
+
+        if let Some(editor) = dialog.editor.as_ref() {
+            self.render_workbench_editor(frame, area, &editor.title, &editor.prompt, &editor.footer, &editor.input, editor.multiline);
+        }
+    }
+
+    fn render_agent_permission_studio_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &AgentPermissionStudioOverlay,
+        surface: SurfaceMode,
+    ) {
+        let title_width = surface.outer_width(area, 132);
+        let content_width = surface.content_width(area, 132);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
+        let content_height = agent_permission_studio_content_height(dialog, content_width);
+        let title_summary = format!(
+            "{} · {}",
+            dialog.profile.scope.as_str(),
+            if dialog.editable { "editable" } else { "read-only" }
+        );
+        let area = surface.outer_rect(
+            area,
+            132,
+            content_height
+                .saturating_add(footer_height)
+                .saturating_add(2),
+        );
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(overlay_title_with_summary(
+                dialog.title.as_str(),
+                title_summary.as_str(),
+                title_width,
+            )))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(content_height),
+                Constraint::Length(footer_height),
+            ])
+            .split(inner);
+
+        let content = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(34), Constraint::Min(58)])
+            .split(rows[0]);
+        let list_area = top_aligned_panel_rect(
+            content[0],
+            list_panel_height(dialog.items.len().max(1), 2, 6, 16),
+        );
+        let right_area = content[1];
+        let overview_text = format!(
+            "Agent: {}\nSource: {}\nSummary: {}",
+            dialog.profile.name,
+            agent_profile_source_label(&dialog.profile),
+            agent_permission_summary(&dialog.profile.frontmatter.permission),
+        );
+        let selected_item = dialog.items.get(dialog.selected);
+        let detail_text = selected_item
+            .map(|item| {
+                agent_permission_studio_item_detail_text(&dialog.profile, item, dialog.editable)
+            })
+            .unwrap_or_else(|| "Select a permission section to inspect or edit it.".to_string());
+        let overview_height =
+            bordered_paragraph_height(overview_text.as_str(), right_area.width, 2, 5);
+        let detail_height = bordered_paragraph_height(detail_text.as_str(), right_area.width, 4, 12);
+        let right_rows = top_aligned_vertical_areas(right_area, &[overview_height, detail_height]);
+
+        let list_items = dialog
+            .items
+            .iter()
+            .map(|item| {
+                let mut first_line = vec![Span::styled(
+                    sanitize_display_text(item.label.as_str()),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )];
+                if !item.value.trim().is_empty() {
+                    first_line.push(Span::raw("  "));
+                    first_line.push(Span::styled(
+                        sanitize_display_text(item.value.as_str()),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                }
+                ListItem::new(vec![
+                    Line::from(first_line),
+                    Line::from(Span::styled(
+                        sanitize_display_text(item.detail.as_str()),
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .title(sanitize_display_text(" Permission Sections "))
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(selection_highlight_style())
+            .highlight_symbol(">> ");
+        let mut state = ListState::default();
+        state.select((!dialog.items.is_empty()).then_some(dialog.selected));
+        frame.render_stateful_widget(list, list_area, &mut state);
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(overview_text))
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(" Overview "))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right_rows[0],
+        );
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(detail_text))
+                .block(
+                    Block::default()
+                        .title(sanitize_display_text(" Details "))
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: false }),
+            right_rows[1],
+        );
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[1],
+        );
+
+        if let Some(editor) = dialog.editor.as_ref() {
+            self.render_workbench_editor(frame, area, &editor.title, &editor.prompt, &editor.footer, &editor.input, editor.multiline);
+        }
+    }
+
+    fn render_workbench_editor(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        title: &str,
+        prompt: &str,
+        footer: &str,
+        input: &Editor,
+        multiline: bool,
+    ) {
+        let target_width = if multiline { 96 } else { 78 };
+        let prompt_height = wrapped_text_height(
+            prompt,
+            adaptive_modal_width(area.width, target_width).saturating_sub(2),
+        )
+        .clamp(1, 3);
+        let footer_height = wrapped_text_height(
+            footer,
+            adaptive_modal_width(area.width, target_width).saturating_sub(2),
+        )
+        .clamp(1, 2);
+        let input_height = editor_input_panel_height(input, multiline);
+        let editor_height = prompt_height
+            .saturating_add(footer_height)
+            .saturating_add(input_height)
+            .saturating_add(2);
+        let area = preferred_overlay_rect(area, target_width, editor_height);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(format!(" {} ", title)))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(prompt_height),
+                Constraint::Length(input_height),
+                Constraint::Length(footer_height),
+            ])
+            .split(inner);
+        frame.render_widget(Paragraph::new(sanitize_display_text(prompt)), rows[0]);
+        let input_view = input.render_view(
+            rows[1].width.saturating_sub(2),
+            rows[1].height.saturating_sub(2).max(1),
+        );
+        frame.render_widget(
+            Paragraph::new(Text::from(input_view.lines.clone()))
+                .block(Block::default().borders(Borders::ALL)),
+            rows[1],
+        );
+        frame.render_widget(Paragraph::new(sanitize_display_text(footer)), rows[2]);
+        frame.set_cursor_position((
+            rows[1].x.saturating_add(1).saturating_add(input_view.cursor_x),
+            rows[1].y.saturating_add(1).saturating_add(input_view.cursor_y),
+        ));
+    }
+
     fn render_provider_studio_overlay(
         &self,
         frame: &mut Frame,
@@ -3653,6 +3986,27 @@ fn selection_highlight_style() -> Style {
         .add_modifier(Modifier::REVERSED | Modifier::BOLD)
 }
 
+fn apply_line_highlight(line: Line<'static>) -> Line<'static> {
+    let style = selection_highlight_style();
+    let spans = line
+        .spans
+        .into_iter()
+        .map(|span| {
+            let mut span_style = span.style;
+            if style.fg.is_some() {
+                span_style.fg = style.fg;
+            }
+            if style.bg.is_some() {
+                span_style.bg = style.bg;
+            }
+            span_style = span_style.add_modifier(style.add_modifier);
+            span_style = span_style.remove_modifier(style.sub_modifier);
+            Span::styled(span.content, span_style)
+        })
+        .collect::<Vec<_>>();
+    Line::from(spans)
+}
+
 fn parse_tui_color(value: &str) -> Option<Color> {
     let value = value.trim();
     let lower = value.to_ascii_lowercase();
@@ -4006,6 +4360,61 @@ fn settings_studio_content_height(dialog: &SettingsStudioOverlay, width: u16) ->
             .saturating_add(item_list_height)
             .saturating_add(detail_panel_height),
     )
+}
+
+fn agent_studio_content_height(dialog: &AgentStudioOverlay, width: u16) -> u16 {
+    let left_height = list_panel_height(dialog.items.len().max(1), 2, 6, 16);
+    let right_width = width.saturating_sub(36).max(1);
+    let overview_height = bordered_paragraph_height(
+        agent_studio_overview_text(
+            &dialog.profile,
+            dialog.default_agent_name.as_deref(),
+            dialog.editable,
+        )
+        .as_str(),
+        right_width,
+        2,
+        5,
+    );
+    let detail_text = dialog
+        .items
+        .get(dialog.selected)
+        .map(|item| {
+            agent_studio_item_detail_text(
+                &dialog.profile,
+                item,
+                dialog.editable,
+                dialog.default_agent_name.as_deref(),
+            )
+        })
+        .unwrap_or_else(|| "Select a field to inspect or edit it.".to_string());
+    let detail_height = bordered_paragraph_height(detail_text.as_str(), right_width, 3, 10);
+    max(left_height, overview_height.saturating_add(detail_height))
+}
+
+fn agent_permission_studio_content_height(
+    dialog: &AgentPermissionStudioOverlay,
+    width: u16,
+) -> u16 {
+    let left_height = list_panel_height(dialog.items.len().max(1), 2, 6, 16);
+    let right_width = width.saturating_sub(34).max(1);
+    let overview_text = format!(
+        "Agent: {}\nSource: {}\nSummary: {}",
+        dialog.profile.name,
+        agent_profile_source_label(&dialog.profile),
+        agent_permission_summary(&dialog.profile.frontmatter.permission),
+    );
+    let overview_height =
+        bordered_paragraph_height(overview_text.as_str(), right_width, 2, 5);
+    let detail_text = dialog
+        .items
+        .get(dialog.selected)
+        .map(|item| {
+            agent_permission_studio_item_detail_text(&dialog.profile, item, dialog.editable)
+        })
+        .unwrap_or_else(|| "Select a permission section to inspect or edit it.".to_string());
+    let detail_height = bordered_paragraph_height(detail_text.as_str(), right_width, 4, 12);
+    max(left_height, overview_height.saturating_add(detail_height))
 }
 
 fn provider_studio_content_height(dialog: &ProviderStudioOverlay, width: u16) -> u16 {

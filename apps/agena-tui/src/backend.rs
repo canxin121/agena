@@ -1571,6 +1571,10 @@ impl Backend {
         self.runtime.current_snapshot().agents().list_descriptors()
     }
 
+    pub fn get_agent_profile(&self, name: &str) -> Option<agena::agents::AgentProfile> {
+        self.runtime.current_snapshot().agents().get(name.trim())
+    }
+
     pub fn default_agent_name(&self) -> Option<String> {
         let snapshot = self.runtime.current_snapshot();
         let configured = snapshot
@@ -2726,7 +2730,7 @@ impl Backend {
 
         loop {
             let page = self
-                .list_messages(session_id, cursor.clone(), 200)
+                .list_messages_with_parts(session_id, cursor.clone(), 200, PartLoadMode::Full)
                 .await
                 .context("failed to list full session message history")?;
             cursor = page.page.next_cursor.clone();
@@ -2764,13 +2768,24 @@ impl Backend {
         cursor: Option<String>,
         limit: u64,
     ) -> Result<PaginatedResponse<MessageResource>> {
+        self.list_messages_with_parts(session_id, cursor, limit, PartLoadMode::Summary)
+            .await
+    }
+
+    pub async fn list_messages_with_parts(
+        &self,
+        session_id: i64,
+        cursor: Option<String>,
+        limit: u64,
+        parts: PartLoadMode,
+    ) -> Result<PaginatedResponse<MessageResource>> {
         match dispatch::dispatch_query(
             &self.app_state,
             Query::ListMessages(ListMessagesParams {
                 session_id,
                 cursor,
                 limit: Some(limit),
-                parts: PartLoadMode::Full,
+                parts,
             }),
         )
         .await
@@ -2780,6 +2795,24 @@ impl Backend {
             other => Err(anyhow!("unexpected query result: {:?}", other)),
         }
         .context("failed to list session messages")
+    }
+
+    pub async fn get_message(
+        &self,
+        message_id: i64,
+        parts: PartLoadMode,
+    ) -> Result<Option<MessageResource>> {
+        match dispatch::dispatch_query(
+            &self.app_state,
+            Query::GetMessage(agena_api::queries::GetMessageParams { message_id, parts }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::Message(message) => Ok(Some(message)),
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to fetch message")
     }
 
     pub async fn refresh_session(
@@ -2822,7 +2855,7 @@ impl Backend {
 
         let execution = self.get_session_state(session_id).await?;
         let latest_messages = self
-            .list_messages(session_id, None, latest_message_limit)
+            .list_messages_with_parts(session_id, None, latest_message_limit, PartLoadMode::Summary)
             .await
             .context("failed to refresh latest message window")?;
 
@@ -4810,6 +4843,13 @@ fn detect_mime(path: &Path, bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agena::{
+        config::LoadConfigRequest,
+        memory,
+        tracing as tracing_config,
+    };
+    use std::{collections::BTreeSet, sync::Arc};
+    use tempfile::tempdir;
 
     #[test]
     fn merge_provider_model_adapter_patch_preserves_existing_models() {
@@ -4838,5 +4878,51 @@ mod tests {
                 "base_url": "https://example.com"
             })
         );
+    }
+
+    #[tokio::test]
+    async fn plugin_statuses_include_all_builtin_runtime_plugins() {
+        let temp = tempdir().expect("temp workspace");
+        let config_path = temp.path().join("config.json");
+        fs::write(&config_path, "{}").expect("write empty config");
+        let db = tracing_config::connect_database("sqlite::memory:", &Default::default())
+            .await
+            .expect("connect sqlite");
+        let runtime = AgenaRuntime::builder()
+            .with_load_request(LoadConfigRequest {
+                config_path: Some(config_path),
+                overrides: Vec::new(),
+            })
+            .with_workspace_root(temp.path())
+            .with_database_connection(db.clone())
+            .build()
+            .await
+            .expect("build runtime");
+        let backend = Backend::new(runtime, Arc::new(db), temp.path().to_path_buf());
+
+        let loaded = backend
+            .plugin_statuses()
+            .into_iter()
+            .map(|status| status.plugin_id)
+            .collect::<BTreeSet<_>>();
+
+        let required = BTreeSet::from([
+            tool::skills_plugin_id().to_string(),
+            tool::lsp_plugin_id().to_string(),
+            tool::cron_plugin_id().to_string(),
+            tool::fs_plugin_id().to_string(),
+            tool::settings_plugin_id().to_string(),
+            tool::shell_plugin_id().to_string(),
+            tool::web_plugin_id().to_string(),
+            tool::workflow_plugin_id().to_string(),
+            memory::memory_plugin_id().to_string(),
+        ]);
+
+        for plugin_id in required {
+            assert!(
+                loaded.contains(plugin_id.as_str()),
+                "missing builtin runtime plugin {plugin_id}; loaded={loaded:?}"
+            );
+        }
     }
 }

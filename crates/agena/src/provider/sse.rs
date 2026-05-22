@@ -143,7 +143,6 @@ pub fn json_events(
     })
 }
 
-#[allow(dead_code)]
 pub fn json_lines(
     response: reqwest::Response,
 ) -> std::pin::Pin<Box<dyn Stream<Item = Result<Value, AppError>> + Send>> {

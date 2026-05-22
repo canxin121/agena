@@ -2,16 +2,16 @@
 //!
 //! `TurnBuffer` is the bridge between two worlds:
 //!
-//! * **Streaming** — providers push text deltas, reasoning deltas, partial
-//!   tool-call arguments, and tool outputs as they happen. The UI wants this
-//!   live for responsiveness.
+//! * **Streaming** — providers push text deltas, reasoning deltas, and
+//!   partial tool-call arguments as they happen. The UI wants this live for
+//!   responsiveness.
 //! * **Append-only history** — only fully terminal events ever land in the
 //!   `session_history_event` table.
 //!
 //! The buffer holds the live, mutable accumulator entirely in memory. When
 //! the turn closes successfully, [`TurnBuffer::commit`] produces an ordered
 //! `Vec<EventKind>` containing exclusively *terminal* events
-//! (`AssistantMessageCompleted`, `ToolCallIssued`, `ToolCallCompleted`, …).
+//! (`AssistantMessageCompleted`, `ToolCallIssued`, …).
 //! These events are then appended in a single transaction.
 //!
 //! If the process dies mid-turn, the buffer is lost and **nothing was ever
@@ -29,9 +29,8 @@ use thiserror::Error;
 use crate::message::MessageMetadata;
 
 use super::{
-    AssistantMessageCompleted, FinishReason, MessageId, ToolCallCompleted, ToolCallId,
-    ToolCallIssued, TurnId, UserMessageAppended,
-    transcript::{TranscriptBlock, TranscriptContent, TranscriptToolOutput},
+    AssistantMessageCompleted, FinishReason, MessageId, ToolCallId, ToolCallIssued, TurnId,
+    transcript::{TranscriptBlock, TranscriptContent},
 };
 use crate::event::EventKind;
 
@@ -85,13 +84,9 @@ struct ToolCallInProgress {
     /// Set the moment the provider tells us the tool name. Required at commit.
     name: Option<SmolStr>,
     /// Streamed argument JSON. Providers may stream as text fragments; we
-    /// concatenate and parse on commit. Pre-parsed `Value`s win when both
-    /// are supplied.
+    /// concatenate and parse on commit.
     arguments_text: String,
-    arguments_value: Option<Value>,
-    output: Option<TranscriptToolOutput>,
     issued_at: DateTime<Utc>,
-    completed_at: Option<DateTime<Utc>>,
 }
 
 /// One assistant message under construction.
@@ -112,12 +107,6 @@ struct AssistantInProgress {
 /// One commit-bounded sub-section of a turn.
 #[derive(Debug)]
 enum Section {
-    UserInput {
-        message_id: MessageId,
-        created_at: DateTime<Utc>,
-        content: TranscriptContent,
-        metadata: MessageMetadata,
-    },
     Assistant {
         message_id: MessageId,
         in_progress: AssistantInProgress,
@@ -137,29 +126,6 @@ impl TurnBuffer {
             turn_id,
             sections: Vec::new(),
         }
-    }
-
-    pub fn turn_id(&self) -> TurnId {
-        self.turn_id
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.sections.is_empty()
-    }
-
-    /// Record the user message that opened the turn.
-    pub fn record_user_input(
-        &mut self,
-        message_id: MessageId,
-        content: TranscriptContent,
-        metadata: MessageMetadata,
-    ) {
-        self.sections.push(Section::UserInput {
-            message_id,
-            created_at: Utc::now(),
-            content,
-            metadata,
-        });
     }
 
     /// Begin a new assistant message inside this turn. Returns the freshly
@@ -247,36 +213,6 @@ impl TurnBuffer {
         Ok(())
     }
 
-    pub fn set_tool_arguments_value(
-        &mut self,
-        call_id: &ToolCallId,
-        value: Value,
-    ) -> Result<(), TurnBufferError> {
-        let asst = self.current_assistant()?;
-        let entry = asst
-            .tool_calls
-            .get_mut(call_id)
-            .ok_or_else(|| TurnBufferError::UnknownToolCall(call_id.clone()))?;
-        entry.arguments_value = Some(value);
-        Ok(())
-    }
-
-    /// Record the final result of a previously issued tool call.
-    pub fn complete_tool_call(
-        &mut self,
-        call_id: &ToolCallId,
-        output: TranscriptToolOutput,
-    ) -> Result<(), TurnBufferError> {
-        let asst = self.current_assistant()?;
-        let entry = asst
-            .tool_calls
-            .get_mut(call_id)
-            .ok_or_else(|| TurnBufferError::UnknownToolCall(call_id.clone()))?;
-        entry.output = Some(output);
-        entry.completed_at = Some(Utc::now());
-        Ok(())
-    }
-
     pub fn set_finish_reason(&mut self, reason: FinishReason) -> Result<(), TurnBufferError> {
         self.current_assistant()?.finish_reason = reason;
         Ok(())
@@ -298,9 +234,7 @@ impl TurnBuffer {
     /// Drain the buffer into the canonical sequence of append-only events.
     ///
     /// Ordering inside the returned vector is the chronological order events
-    /// must appear in the history log. Tool-call issuance precedes the
-    /// matching `ToolCallCompleted` so that any reader that streams events
-    /// can rely on `call_id` being introduced before it is referenced again.
+    /// must appear in the history log.
     ///
     /// `ids` is kept in the signature for callers that already allocate turn
     /// message ids before committing; tool completions now update the owning
@@ -314,21 +248,6 @@ impl TurnBuffer {
 
         for section in sections {
             match section {
-                Section::UserInput {
-                    message_id,
-                    created_at,
-                    content,
-                    metadata,
-                } => {
-                    items.push(EventKind::UserMessageAppended(UserMessageAppended {
-                        message_id,
-                        turn_id,
-                        created_at,
-                        content,
-                        parts: Vec::new(),
-                        metadata,
-                    }));
-                }
                 Section::Assistant {
                     message_id,
                     in_progress,
@@ -356,7 +275,6 @@ impl TurnBuffer {
                         },
                     ));
 
-                    let mut completions: Vec<EventKind> = Vec::new();
                     for call_id in tool_call_order {
                         let entry = tool_calls
                             .remove(&call_id)
@@ -365,13 +283,8 @@ impl TurnBuffer {
                             .name
                             .clone()
                             .ok_or_else(|| TurnBufferError::ToolCallMissingName(call_id.clone()))?;
-                        let arguments = entry.arguments_value.unwrap_or_else(|| {
-                            // Best-effort parse; fall back to a JSON string
-                            // if the chunks weren't valid JSON. We never
-                            // panic on malformed provider data.
-                            serde_json::from_str(&entry.arguments_text)
-                                .unwrap_or(Value::String(entry.arguments_text.clone()))
-                        });
+                        let arguments = serde_json::from_str(&entry.arguments_text)
+                            .unwrap_or(Value::String(entry.arguments_text.clone()));
                         items.push(EventKind::ToolCallIssued(ToolCallIssued {
                             message_id,
                             turn_id,
@@ -380,19 +293,7 @@ impl TurnBuffer {
                             arguments,
                             created_at: entry.issued_at,
                         }));
-                        if let Some(output) = entry.output {
-                            completions.push(EventKind::ToolCallCompleted(ToolCallCompleted {
-                                message_id,
-                                call_id,
-                                turn_id,
-                                tool_name: name,
-                                part: None,
-                                output,
-                                completed_at: entry.completed_at.unwrap_or_else(Utc::now),
-                            }));
-                        }
                     }
-                    items.extend(completions);
                 }
             }
         }

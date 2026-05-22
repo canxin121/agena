@@ -27,7 +27,7 @@ fn is_safe_env_name(name: &str) -> bool {
 }
 
 pub async fn env_check_post(
-    State(_state): State<Arc<crate::AppState>>,
+    State(_): State<Arc<crate::AppState>>,
     Json(body): Json<EnvCheckRequest>,
 ) -> ApiResult<Json<EnvCheckResponse>> {
     let mut present = Vec::<String>::new();

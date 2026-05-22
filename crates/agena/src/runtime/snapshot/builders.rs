@@ -300,7 +300,7 @@ pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionMa
 
 pub(super) fn register_config_agents(
     registry: &crate::agents::SubagentRegistry,
-    _resolution: &ConfigResolution,
+    _: &ConfigResolution,
     agents: &std::collections::BTreeMap<String, crate::config::AgentConfig>,
 ) {
     for (name, config) in agents {
@@ -332,7 +332,7 @@ pub(super) fn register_config_agents(
 pub(super) fn build_profile_agent(
     name: impl Into<String>,
     permission: crate::agent::PermissionConfig,
-    _resolution: &ConfigResolution,
+    _: &ConfigResolution,
 ) -> Agent {
     let agent = Agent::new(name, crate::permission::PermissionPolicy::allow_all());
     match agent.try_with_permission_config(&permission) {

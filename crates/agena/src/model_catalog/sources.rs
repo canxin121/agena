@@ -1055,29 +1055,41 @@ fn source_priority_for_definition(
     base: &CatalogDefinitionSourcePriority,
 ) -> CatalogDefinitionSourcePriority {
     CatalogDefinitionSourcePriority {
-        sort_priority: (!definition.is_empty())
-            .then_some(base.sort_priority)
-            .unwrap_or_default(),
-        descriptive_priority: definition_has_descriptive_fields(definition)
-            .then_some(base.descriptive_priority)
-            .unwrap_or_default(),
-        limits_priority: definition_has_limit_fields(definition)
-            .then_some(base.limits_priority)
-            .unwrap_or_default(),
-        capability_priority: definition_has_capability_fields(definition)
-            .then_some(base.capability_priority)
-            .unwrap_or_default(),
-        semantics_priority: definition_has_semantic_fields(definition)
-            .then_some(base.semantics_priority)
-            .unwrap_or_default(),
-        pricing_priority: definition
-            .pricing
-            .is_some()
-            .then_some(base.pricing_priority)
-            .unwrap_or_default(),
-        mode_priority: definition_has_mode_fields(definition)
-            .then_some(base.mode_priority)
-            .unwrap_or_default(),
+        sort_priority: if !definition.is_empty() {
+            base.sort_priority
+        } else {
+            Default::default()
+        },
+        descriptive_priority: if definition_has_descriptive_fields(definition) {
+            base.descriptive_priority
+        } else {
+            Default::default()
+        },
+        limits_priority: if definition_has_limit_fields(definition) {
+            base.limits_priority
+        } else {
+            Default::default()
+        },
+        capability_priority: if definition_has_capability_fields(definition) {
+            base.capability_priority
+        } else {
+            Default::default()
+        },
+        semantics_priority: if definition_has_semantic_fields(definition) {
+            base.semantics_priority
+        } else {
+            Default::default()
+        },
+        pricing_priority: if definition.pricing.is_some() {
+            base.pricing_priority
+        } else {
+            Default::default()
+        },
+        mode_priority: if definition_has_mode_fields(definition) {
+            base.mode_priority
+        } else {
+            Default::default()
+        },
     }
 }
 
@@ -1254,10 +1266,7 @@ fn models_dev_assistant_reasoning_field(
                 "reasoning_content" | "reasoning_details" => Some(value),
                 _ => None,
             }),
-        Some(ModelsDevInterleaved::Enabled(enabled)) => {
-            let _enabled = *enabled;
-            None
-        }
+        Some(ModelsDevInterleaved::Enabled(_)) => None,
         _ => None,
     }
 }

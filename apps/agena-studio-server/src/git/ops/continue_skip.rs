@@ -6,9 +6,7 @@ use super::super::{
 };
 
 #[derive(Debug, Deserialize)]
-pub struct GitContinueBody {
-    pub _dummy: Option<bool>,
-}
+pub struct GitContinueBody {}
 
 async fn run_continue_command(q: &DirectoryQuery, args: &[&str]) -> Response {
     let (dir, _guard) = match require_locked_directory(q).await {

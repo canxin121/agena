@@ -6,10 +6,7 @@ use super::super::{
 };
 
 #[derive(Debug, Deserialize)]
-pub struct GitAbortBody {
-    // reserved for future
-    pub _dummy: Option<bool>,
-}
+pub struct GitAbortBody {}
 
 async fn run_abort_command(q: &DirectoryQuery, args: &[&str]) -> Response {
     let (dir, _guard) = match require_locked_directory(q).await {

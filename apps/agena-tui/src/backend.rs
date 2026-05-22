@@ -4495,9 +4495,7 @@ fn build_provider_patch_value(
     .map_err(api_error)?;
     let overlay =
         draft.to_provider_overlay(default_adapter, default_model, adapters, include_defaults)?;
-    serde_json::to_value(overlay)
-        .map_err(api_error)
-        .map_err(Into::into)
+    serde_json::to_value(overlay).map_err(api_error)
 }
 
 fn build_provider_auth_patch_value(

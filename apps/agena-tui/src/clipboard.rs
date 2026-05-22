@@ -71,7 +71,7 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
                 .map_err(|error| PasteImageError::IoError(error.to_string()))?;
             std::fs::write(file.path(), png)
                 .map_err(|error| PasteImageError::IoError(error.to_string()))?;
-            let (_file, path) = file
+            let (_, path) = file
                 .keep()
                 .map_err(|error| PasteImageError::IoError(error.error.to_string()))?;
             Ok((path, info))
@@ -99,7 +99,7 @@ pub fn set_clipboard_text(text: &str) -> Result<(), ClipboardTextError> {
 }
 
 #[cfg(target_os = "android")]
-pub fn set_clipboard_text(_text: &str) -> Result<(), ClipboardTextError> {
+pub fn set_clipboard_text(_: &str) -> Result<(), ClipboardTextError> {
     Err(ClipboardTextError(
         "clipboard text copy is unsupported on Android".to_string(),
     ))

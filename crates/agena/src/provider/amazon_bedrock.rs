@@ -81,6 +81,14 @@ enum BedrockAuthMode {
     },
 }
 
+struct Sigv4Request<'a> {
+    method: reqwest::Method,
+    url: String,
+    body: Option<Vec<u8>>,
+    headers: Vec<(String, String)>,
+    body_debug: Option<&'a Value>,
+}
+
 #[derive(Clone)]
 pub struct AmazonBedrockAdapter {
     client: reqwest::Client,
@@ -291,12 +299,15 @@ impl AmazonBedrockAdapter {
         operation: &str,
         profile: Option<&str>,
         static_credentials: Option<&Credentials>,
-        method: reqwest::Method,
-        url: String,
-        body: Option<Vec<u8>>,
-        headers: Vec<(String, String)>,
-        body_debug: Option<&Value>,
+        request_input: Sigv4Request<'_>,
     ) -> Result<reqwest::Response, AppError> {
+        let Sigv4Request {
+            method,
+            url,
+            body,
+            headers,
+            body_debug,
+        } = request_input;
         let credentials = self
             .resolve_sigv4_credentials(profile, static_credentials)
             .await?;
@@ -372,11 +383,13 @@ impl AmazonBedrockAdapter {
                 "list_models",
                 profile,
                 static_credentials,
-                reqwest::Method::GET,
-                self.models_endpoint(),
-                None,
-                Vec::new(),
-                None,
+                Sigv4Request {
+                    method: reqwest::Method::GET,
+                    url: self.models_endpoint(),
+                    body: None,
+                    headers: Vec::new(),
+                    body_debug: None,
+                },
             )
             .await?;
 
@@ -850,11 +863,13 @@ impl AmazonBedrockAdapter {
                 "complete.native_anthropic",
                 profile,
                 static_credentials,
-                reqwest::Method::POST,
-                self.native_anthropic_invoke_endpoint(model.as_str(), false)?,
-                Some(serde_json::to_vec(&body_json)?),
-                headers,
-                Some(&body_json),
+                Sigv4Request {
+                    method: reqwest::Method::POST,
+                    url: self.native_anthropic_invoke_endpoint(model.as_str(), false)?,
+                    body: Some(serde_json::to_vec(&body_json)?),
+                    headers,
+                    body_debug: Some(&body_json),
+                },
             )
             .await?;
 
@@ -893,11 +908,13 @@ impl AmazonBedrockAdapter {
                 "complete_stream.native_anthropic",
                 profile,
                 static_credentials,
-                reqwest::Method::POST,
-                self.native_anthropic_invoke_endpoint(model.as_str(), true)?,
-                Some(serde_json::to_vec(&body_json)?),
-                headers,
-                Some(&body_json),
+                Sigv4Request {
+                    method: reqwest::Method::POST,
+                    url: self.native_anthropic_invoke_endpoint(model.as_str(), true)?,
+                    body: Some(serde_json::to_vec(&body_json)?),
+                    headers,
+                    body_debug: Some(&body_json),
+                },
             )
             .await?;
 
@@ -1204,11 +1221,13 @@ impl AmazonBedrockAdapter {
                 "complete.chat",
                 profile,
                 static_credentials,
-                reqwest::Method::POST,
-                self.completions_endpoint(),
-                Some(serde_json::to_vec(&body_json)?),
-                headers,
-                Some(&body_json),
+                Sigv4Request {
+                    method: reqwest::Method::POST,
+                    url: self.completions_endpoint(),
+                    body: Some(serde_json::to_vec(&body_json)?),
+                    headers,
+                    body_debug: Some(&body_json),
+                },
             )
             .await?;
 
@@ -1271,11 +1290,13 @@ impl AmazonBedrockAdapter {
                 "complete_stream.chat",
                 profile,
                 static_credentials,
-                reqwest::Method::POST,
-                self.completions_endpoint(),
-                Some(serde_json::to_vec(&body_json)?),
-                headers,
-                Some(&body_json),
+                Sigv4Request {
+                    method: reqwest::Method::POST,
+                    url: self.completions_endpoint(),
+                    body: Some(serde_json::to_vec(&body_json)?),
+                    headers,
+                    body_debug: Some(&body_json),
+                },
             )
             .await?;
 

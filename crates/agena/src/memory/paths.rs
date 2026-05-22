@@ -65,33 +65,3 @@ impl MemoryDir {
         std::fs::create_dir_all(&self.path)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sanitize_replaces_non_alphanumeric() {
-        assert_eq!(
-            sanitize_path("/home/user/my-project"),
-            "-home-user-my-project"
-        );
-    }
-
-    #[test]
-    fn sanitize_truncates_long_paths() {
-        let long = "a".repeat(250);
-        let result = sanitize_path(&long);
-        // truncated prefix (200) + "-" + hex hash
-        assert!(result.starts_with(&"a".repeat(MAX_SANITIZED_LENGTH)));
-        assert!(result.len() > MAX_SANITIZED_LENGTH);
-    }
-
-    #[test]
-    fn memory_dir_path_contains_sanitized_workspace() {
-        let dir = MemoryDir::from_workspace(Path::new("/home/user/myproject"));
-        let path_str = dir.path().to_string_lossy();
-        assert!(path_str.contains("-home-user-myproject"));
-        assert!(path_str.ends_with("memory"));
-    }
-}

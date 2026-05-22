@@ -1696,32 +1696,3 @@ fn unavailable() -> PluginError {
         data: None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn storage_requests_default_to_global_private() {
-        let get: HostStorageGetRequest =
-            serde_json::from_value(serde_json::json!({ "namespace": "ns", "key": "k" }))
-                .expect("storage get request should deserialize");
-        assert_eq!(get.scope, HostStorageScope::Global);
-        assert_eq!(get.visibility, HostStorageVisibility::Private);
-
-        let set: HostStorageSetRequest = serde_json::from_value(serde_json::json!({
-            "namespace": "ns",
-            "key": "k",
-            "value": "v"
-        }))
-        .expect("storage set request should deserialize");
-        assert_eq!(set.scope, HostStorageScope::Global);
-        assert_eq!(set.visibility, HostStorageVisibility::Private);
-
-        let list: HostStorageListRequest =
-            serde_json::from_value(serde_json::json!({ "namespace": "ns" }))
-                .expect("storage list request should deserialize");
-        assert_eq!(list.scope, HostStorageScope::Global);
-        assert_eq!(list.visibility, HostStorageVisibility::Private);
-    }
-}

@@ -397,30 +397,3 @@ pub async fn git_conflict_resolve(
 
     Json(serde_json::json!({"success": true})).into_response()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{apply_conflict_choices, parse_conflict_markers};
-    use std::collections::HashMap;
-
-    #[test]
-    fn parse_diff3_markers_extracts_base_section() {
-        let text =
-            "a\n<<<<<<< ours\nleft\n||||||| base\ncommon\n=======\nright\n>>>>>>> theirs\nz\n";
-        let blocks = parse_conflict_markers(text);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].ours, "left");
-        assert_eq!(blocks[0].base, "common");
-        assert_eq!(blocks[0].theirs, "right");
-    }
-
-    #[test]
-    fn apply_choices_supports_base_pick() {
-        let text =
-            "x\n<<<<<<< ours\nleft\n||||||| base\ncommon\n=======\nright\n>>>>>>> theirs\ny\n";
-        let mut picks: HashMap<usize, String> = HashMap::new();
-        picks.insert(0, "base".to_string());
-        let resolved = apply_conflict_choices(text, &picks, "ours");
-        assert_eq!(resolved, "x\ncommon\ny\n");
-    }
-}

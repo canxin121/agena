@@ -17,11 +17,6 @@ use agena::{
     session::{GoalStatus, SessionStatus, SessionSummary},
 };
 
-#[cfg(test)]
-use agena::message::ExecutionStatus;
-#[cfg(test)]
-use agena::role::Role;
-
 mod access;
 mod auth;
 mod marketplace;

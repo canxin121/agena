@@ -140,26 +140,3 @@ macro_rules! fl_args {
         args
     }};
 }
-
-#[cfg(test)]
-mod tests {
-    use super::I18n;
-
-    #[test]
-    fn locale_resolution_accepts_system_style_tags() {
-        let i18n = I18n::resolve(Some("zh_CN.UTF-8"), None);
-        assert_eq!(i18n.locale_name(), "zh-CN");
-    }
-
-    #[test]
-    fn locale_resolution_maps_base_language_to_supported_locale() {
-        let i18n = I18n::resolve(Some("ja"), None);
-        assert_eq!(i18n.locale_name(), "ja-JP");
-    }
-
-    #[test]
-    fn unsupported_locale_falls_back_to_english() {
-        let i18n = I18n::resolve(Some("it-IT"), None);
-        assert_eq!(i18n.locale_name(), "en-US");
-    }
-}

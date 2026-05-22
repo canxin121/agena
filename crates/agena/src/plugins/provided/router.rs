@@ -312,17 +312,3 @@ pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -
         attachments: execution.view.attachments,
     }
 }
-
-#[cfg(test)]
-pub(crate) fn payload_to_tool_output(
-    tool_name: &str,
-    payload: Option<&JsonValue>,
-) -> Result<ToolPayloadOutput, serde_json::Error> {
-    let output =
-        crate::message::ToolOutput::from_json_payload(payload).map_err(serde::de::Error::custom)?;
-    ToolPayloadOutput::from_tool_output(tool_name, &output).ok_or_else(|| {
-        serde::de::Error::custom(format!(
-            "payload for tool `{tool_name}` did not match tool payload schema"
-        ))
-    })
-}

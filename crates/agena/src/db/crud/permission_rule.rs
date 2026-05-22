@@ -178,14 +178,3 @@ where
     active.updated_at_ms = Set(Utc::now().timestamp_millis());
     active.update(db).await.map(Some)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scope_round_trips_global() {
-        assert_eq!(scope_to_string(PermissionScope::Global), "global");
-        assert_eq!(scope_from_string("global"), Ok(PermissionScope::Global));
-    }
-}

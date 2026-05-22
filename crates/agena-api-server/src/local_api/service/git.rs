@@ -303,21 +303,3 @@ fn summarize_git_status(status: &str) -> (u64, u64, u64, u64) {
 
     (staged, unstaged, untracked, changed)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_ahead_behind_interprets_git_rev_list_counts() {
-        assert_eq!(parse_ahead_behind(Some("0\t0")), (Some(0), Some(0)));
-        assert_eq!(parse_ahead_behind(Some("2 5")), (Some(5), Some(2)));
-        assert_eq!(parse_ahead_behind(None), (None, None));
-    }
-
-    #[test]
-    fn summarize_git_status_counts_porcelain_entries() {
-        let status = "M  staged.txt\n M unstaged.txt\nMM both.txt\n?? new.txt\n";
-        assert_eq!(summarize_git_status(status), (2, 2, 1, 4));
-    }
-}

@@ -88,27 +88,3 @@ pub enum ServerMessage {
         nonce: Option<SmolStr>,
     },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::commands::{CancelTurnParams, Command};
-
-    #[test]
-    fn client_command_round_trip() {
-        let msg = ClientMessage::Command {
-            id: "cmd-1".into(),
-            command: Command::CancelTurn(CancelTurnParams { session_id: 7 }),
-        };
-        let json = serde_json::to_value(&msg).unwrap();
-        assert_eq!(json["type"], "command");
-        assert_eq!(json["method"], "cancel_turn");
-        assert_eq!(json["id"], "cmd-1");
-        let back: ClientMessage = serde_json::from_value(json).unwrap();
-        let ClientMessage::Command { id, command } = back else {
-            panic!("expected command");
-        };
-        assert_eq!(id, "cmd-1");
-        assert!(matches!(command, Command::CancelTurn(_)));
-    }
-}

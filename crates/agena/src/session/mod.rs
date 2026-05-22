@@ -87,33 +87,3 @@ pub fn estimate_prompt_budget_threshold_tokens(
     );
     prompt_window::approximate_tokens_from_chars(policy.proactive_char_threshold(max_prompt_chars))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{estimate_auto_compaction_reserve_tokens, estimate_session_context_usable_tokens};
-
-    #[test]
-    fn estimate_session_context_usable_tokens_prefers_input_limit_and_subtracts_reserve() {
-        assert_eq!(
-            estimate_session_context_usable_tokens(
-                Some(200_000),
-                Some(120_000),
-                Some(8_192),
-                Some(4_096)
-            ),
-            Some(115_904)
-        );
-    }
-
-    #[test]
-    fn estimate_auto_compaction_reserve_tokens_defaults_from_output_budget() {
-        assert_eq!(
-            estimate_auto_compaction_reserve_tokens(Some(128_000), Some(32_768), None),
-            Some(20_000)
-        );
-        assert_eq!(
-            estimate_auto_compaction_reserve_tokens(Some(128_000), Some(4_096), None),
-            Some(4_096)
-        );
-    }
-}

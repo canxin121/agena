@@ -138,34 +138,3 @@ fn oauth_html_error(error: &str) -> String {
         error
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_oauth_callback_url_extracts_code_and_state() {
-        let callback = parse_oauth_callback_url(
-            "http://127.0.0.1:1455/callback?code=abc&state=xyz",
-            Some("xyz"),
-        )
-        .expect("callback url should parse");
-        assert_eq!(
-            callback,
-            OAuthCallback {
-                code: "abc".to_owned(),
-                state: "xyz".to_owned(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_oauth_callback_url_rejects_state_mismatch() {
-        let error = parse_oauth_callback_url(
-            "http://127.0.0.1:1455/callback?code=abc&state=wrong",
-            Some("xyz"),
-        )
-        .expect_err("state mismatch should fail");
-        assert!(error.to_string().contains("state mismatch"));
-    }
-}

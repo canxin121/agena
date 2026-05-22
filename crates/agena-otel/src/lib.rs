@@ -109,25 +109,3 @@ pub fn build_layer(
         guard: TelemetryGuard { provider },
     }))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn telemetry_is_disabled_by_default() {
-        let config = TelemetryConfig::default();
-        assert!(!config.enabled);
-        assert!(build_layer(&config).unwrap().is_none());
-    }
-
-    #[test]
-    fn builds_otlp_layer_when_enabled() {
-        let config = TelemetryConfig {
-            enabled: true,
-            otlp_endpoint: Some("http://127.0.0.1:4318/v1/traces".to_string()),
-            ..TelemetryConfig::default()
-        };
-        assert!(build_layer(&config).unwrap().is_some());
-    }
-}

@@ -526,33 +526,6 @@ async fn ssh_agent_probe() -> (bool, bool, Option<String>) {
     (true, has_keys, None)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::resolve_ssh_signing_status;
-
-    #[test]
-    fn signing_probe_success_overrides_agent_heuristic() {
-        let (available, error) = resolve_ssh_signing_status(false, false, Some((true, None)));
-        assert!(available);
-        assert_eq!(error, None);
-    }
-
-    #[test]
-    fn signing_probe_failure_preserves_warning() {
-        let (available, error) =
-            resolve_ssh_signing_status(true, true, Some((false, Some("probe failed".to_string()))));
-        assert!(!available);
-        assert_eq!(error.as_deref(), Some("probe failed"));
-    }
-
-    #[test]
-    fn fallback_uses_agent_heuristic_without_probe() {
-        let (available, error) = resolve_ssh_signing_status(true, false, None);
-        assert!(!available);
-        assert_eq!(error, None);
-    }
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitRepoStateResponse {

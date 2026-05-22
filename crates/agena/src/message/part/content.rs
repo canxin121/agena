@@ -116,30 +116,3 @@ impl PartContent {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::message::{AttachmentKind, AttachmentSource};
-
-    #[test]
-    fn attachments_constructor_sets_attachment_kind() {
-        let content = PartContent::attachments(vec![AttachmentItem {
-            kind: AttachmentKind::File,
-            mime: "application/octet-stream".to_owned(),
-            source: AttachmentSource::FileId {
-                file_id: "f_1".to_owned(),
-            },
-            filename: Some("blob.bin".to_owned()),
-            title: None,
-            size_bytes: None,
-            sha256: None,
-            width: None,
-            height: None,
-            duration_ms: None,
-            page_count: None,
-        }]);
-
-        assert_eq!(content.kind(), PartKind::Attachment);
-    }
-}

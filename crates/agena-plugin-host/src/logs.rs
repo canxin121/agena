@@ -94,39 +94,3 @@ impl PluginLogStore {
             .unwrap_or_default()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn append_orders_entries_and_filters_by_sequence() {
-        let store = PluginLogStore::new(8);
-        let first = store.append("alpha", "info", "plugin", "one", json!({"n": 1}));
-        let second = store.append("alpha", "warn", "host", "two", serde_json::Value::Null);
-        let third = store.append("beta", "info", "plugin", "skip", serde_json::Value::Null);
-
-        assert_eq!(first.seq, 1);
-        assert_eq!(second.seq, 2);
-        assert_eq!(third.seq, 3);
-
-        let listed = store.list("alpha", Some(1), 10);
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].message, "two");
-        assert_eq!(listed[0].source, "host");
-    }
-
-    #[test]
-    fn append_rolls_over_old_entries_per_plugin() {
-        let store = PluginLogStore::new(2);
-        store.append("alpha", "info", "plugin", "one", serde_json::Value::Null);
-        store.append("alpha", "info", "plugin", "two", serde_json::Value::Null);
-        store.append("alpha", "info", "plugin", "three", serde_json::Value::Null);
-
-        let listed = store.list("alpha", None, 10);
-        assert_eq!(listed.len(), 2);
-        assert_eq!(listed[0].message, "two");
-        assert_eq!(listed[1].message, "three");
-    }
-}

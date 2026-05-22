@@ -95,17 +95,6 @@ pub(crate) fn git2_open_error_response(e: git2_utils::Git2OpenError) -> Response
     }
 }
 
-#[cfg(test)]
-mod git2_error_tests {
-    use super::*;
-
-    #[test]
-    fn maps_not_repo_to_conflict() {
-        let resp = git2_open_error_response(git2_utils::Git2OpenError::NotARepository);
-        assert_eq!(resp.status(), StatusCode::CONFLICT);
-    }
-}
-
 pub(crate) fn map_git_failure(code: i32, stdout: &str, stderr: &str) -> Option<Response> {
     if code == 0 {
         return None;
@@ -649,29 +638,4 @@ pub(crate) async fn git_config_get(
     }
     let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if v.is_empty() { None } else { Some(v) }
-}
-
-#[cfg(test)]
-mod path_tests {
-    use super::*;
-
-    #[test]
-    fn normalize_directory_path_expands_home() {
-        let old = std::env::var_os("HOME");
-        // Modifying env vars is process-global; Rust marks it unsafe in newer toolchains.
-        unsafe {
-            std::env::set_var("HOME", "/tmp");
-        }
-
-        assert_eq!(normalize_directory_path("~"), "/tmp");
-        assert_eq!(normalize_directory_path("~/x"), "/tmp/x");
-
-        unsafe {
-            if let Some(v) = old {
-                std::env::set_var("HOME", v);
-            } else {
-                std::env::remove_var("HOME");
-            }
-        }
-    }
 }

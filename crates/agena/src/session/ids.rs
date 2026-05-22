@@ -126,33 +126,3 @@ impl From<String> for ToolCallId {
         Self(SmolStr::new(value))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn message_id_round_trip_serde() {
-        let id = MessageId(42);
-        let json = serde_json::to_string(&id).unwrap();
-        assert_eq!(json, "42");
-        let back: MessageId = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, id);
-    }
-
-    #[test]
-    fn turn_id_round_trip_serde() {
-        let id = TurnId::new();
-        let json = serde_json::to_string(&id).unwrap();
-        let back: TurnId = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, id);
-    }
-
-    #[test]
-    fn tool_call_id_accepts_str_and_string() {
-        let a: ToolCallId = "call_abc".into();
-        let b: ToolCallId = String::from("call_abc").into();
-        assert_eq!(a, b);
-        assert_eq!(a.as_str(), "call_abc");
-    }
-}

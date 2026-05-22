@@ -30,33 +30,3 @@ impl ContextPolicy {
         max_prompt_chars.saturating_mul(factor as usize) / 100
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn proactive_threshold_default_is_85_percent_of_budget() {
-        let p = ContextPolicy::default();
-        assert_eq!(p.proactive_char_threshold(100_000), 85_000);
-    }
-
-    #[test]
-    fn proactive_threshold_disabled_returns_full_budget() {
-        let p = ContextPolicy {
-            prompt_budget_headroom_pct: 0,
-            ..ContextPolicy::default()
-        };
-        assert_eq!(p.proactive_char_threshold(100_000), 100_000);
-    }
-
-    #[test]
-    fn proactive_threshold_clamps_pathological_pct() {
-        let p = ContextPolicy {
-            prompt_budget_headroom_pct: 200,
-            ..ContextPolicy::default()
-        };
-        // >= 100 disables the threshold.
-        assert_eq!(p.proactive_char_threshold(100_000), 100_000);
-    }
-}

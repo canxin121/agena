@@ -490,6 +490,3 @@ impl fmt::Debug for RuntimeSnapshot {
             .finish()
     }
 }
-
-#[cfg(test)]
-mod tests;

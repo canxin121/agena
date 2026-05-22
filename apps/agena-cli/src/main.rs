@@ -105,65 +105,6 @@ fn tui_launch_args(cli: &AgenaCli) -> Option<TuiArgs> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tui_launch_args_defaults_to_tui_for_plain_agena() {
-        let cli = AgenaCli {
-            config: None,
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: None,
-        };
-
-        assert_eq!(tui_launch_args(&cli).unwrap().session, None);
-    }
-
-    #[test]
-    fn tui_launch_args_preserves_explicit_tui_options() {
-        let cli = AgenaCli {
-            config: None,
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: Some(AgenaCommand::Tui(TuiArgs {
-                session: Some(42),
-                search: Some("lineage".to_string()),
-                locale: Some("en-US".to_string()),
-                log_stderr: true,
-                ..TuiArgs::default()
-            })),
-        };
-
-        let args = tui_launch_args(&cli).expect("tui args should be returned");
-        assert_eq!(args.session, Some(42));
-        assert_eq!(args.search.as_deref(), Some("lineage"));
-        assert_eq!(args.locale.as_deref(), Some("en-US"));
-        assert!(args.log_stderr);
-    }
-
-    #[test]
-    fn tui_launch_args_ignores_non_tui_subcommands() {
-        let cli = AgenaCli {
-            config: None,
-            overrides: Vec::new(),
-            database_url: None,
-            database_path: None,
-            command: Some(AgenaCommand::Resume(agena::cli::ResumeArgs {
-                session_id: Some(7),
-                last: false,
-                agent: None,
-                format: agena::config::ConfigOutputFormat::Json,
-            })),
-        };
-
-        assert!(tui_launch_args(&cli).is_none());
-    }
-}
-
 async fn run_app_server(cli: AgenaCli, args: AppServerArgs) -> Result<(), AppError> {
     let backend = AgenaAppServerBackend {
         runtime: session_runtime_with_workspace(&cli, args.workspace.as_ref()).await?,

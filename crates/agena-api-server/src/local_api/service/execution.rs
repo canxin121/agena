@@ -293,12 +293,6 @@ fn session_usage_limit_basis_resource(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    // execution resource usage projection is covered through agena session manager tests
-}
-
 fn resolve_mode_request_override(
     request_override: &ModelSpeedModeRequestOverride,
     adapter_overrides: &std::collections::BTreeMap<String, ModelSpeedModeRequestOverride>,

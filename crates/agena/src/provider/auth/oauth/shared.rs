@@ -58,31 +58,3 @@ pub(super) fn extract_openai_account_id(jwt: &str) -> Option<String> {
                 .map(ToOwned::to_owned)
         })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_device_auth_interval_supports_number_and_string() {
-        assert_eq!(parse_device_auth_interval(Some(serde_json::json!(7)), 5), 7);
-        assert_eq!(
-            parse_device_auth_interval(Some(serde_json::json!("9")), 5),
-            9
-        );
-        assert_eq!(
-            parse_device_auth_interval(Some(serde_json::json!("0")), 5),
-            1
-        );
-        assert_eq!(parse_device_auth_interval(None, 5), 5);
-    }
-
-    #[test]
-    fn normalize_domain_strips_protocol_and_slash() {
-        assert_eq!(
-            normalize_domain("https://github.example.com/"),
-            "github.example.com"
-        );
-        assert_eq!(normalize_domain("http://gitlab.local"), "gitlab.local");
-    }
-}

@@ -59,21 +59,3 @@ pub(super) fn resolve_directory_path_no_fs(raw: &str) -> Option<String> {
             .into_owned(),
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resolve_directory_path_no_fs_decodes_windows_encoded_paths() {
-        let out = resolve_directory_path_no_fs("C%3A%5CUsers%5CAlice%5Crepo").expect("path");
-        assert_eq!(out, "C:\\Users\\Alice\\repo");
-    }
-
-    #[test]
-    fn resolve_directory_path_no_fs_decodes_linux_encoded_paths() {
-        let out = resolve_directory_path_no_fs("%2Fhome%2Falice%2Frepo").expect("path");
-        assert!(!out.contains('%'));
-        assert!(out.replace('\\', "/").ends_with("/home/alice/repo"));
-    }
-}

@@ -46,8 +46,7 @@ struct CompleteGoalToolInput {}
     tags(ToolTag::ReadOnly),
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = true,
-    load = "always",
-    fallback = parse_legacy_workflow_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WorkflowToolInput {
@@ -73,12 +72,11 @@ enum WorkflowToolInput {
     entry = "tools",
     description = "Tool catalog command. Use action `search` to find or load deferred tools, or `help` to fetch detailed usage for a tool.",
     summary = "Search tools or fetch detailed tool help.",
-    help = "Use action `search` with `query`, optional `load`, and optional `limit` to discover tools and load deferred tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. Legacy `command/args` inputs are still accepted for compatibility.",
+    help = "Use action `search` with `query`, optional `load`, and optional `limit` to discover tools and load deferred tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool.",
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
     host_capabilities(HostCapability::ListTools),
     concurrency_safe = true,
-    load = "always",
-    fallback = parse_legacy_tools_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ToolsToolInput {
@@ -111,8 +109,7 @@ fn default_include_schema() -> bool {
     description = "Runtime agent command. Use action `switch` or `restore`; pass any action payload directly on the request.",
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = false,
-    load = "always",
-    fallback = parse_legacy_agent_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum AgentToolInput {
@@ -134,8 +131,7 @@ enum AgentToolInput {
     description = "Todo command. Use action `write` to replace the session todo list.",
     tags(ToolTag::Mutating, ToolTag::Planning),
     concurrency_safe = false,
-    load = "always",
-    fallback = parse_legacy_todo_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum TodoToolInput {
@@ -153,8 +149,7 @@ enum TodoToolInput {
     tags(ToolTag::Task, ToolTag::Subtask),
     host_capabilities(HostCapability::SpawnSubtask),
     concurrency_safe = false,
-    load = "deferred",
-    fallback = parse_legacy_task_entry
+    load = "deferred"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum TaskEntryToolInput {
@@ -177,9 +172,7 @@ struct SessionRenameToolInput {
     tags(ToolTag::ReadOnly, ToolTag::Mutating),
     host_capabilities(HostCapability::SessionRegistry),
     concurrency_safe = false,
-    load = "always",
-    legacy_entries("session_edit"),
-    fallback = parse_legacy_session_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SessionToolInput {
@@ -199,9 +192,7 @@ enum SessionToolInput {
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Goal),
     host_capabilities(HostCapability::GoalRegistry),
     concurrency_safe = false,
-    load = "always",
-    legacy_entries("goal_edit"),
-    fallback = parse_legacy_goal_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum GoalToolInput {
@@ -234,8 +225,7 @@ enum GoalToolInput {
     tags(ToolTag::ReadOnly, ToolTag::Interactive),
     host_capabilities(HostCapability::AskUser),
     concurrency_safe = false,
-    load = "always",
-    fallback = parse_legacy_user_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum UserToolInput {
@@ -251,8 +241,7 @@ enum UserToolInput {
     tags(ToolTag::ReadOnly, ToolTag::Planning, ToolTag::FilesystemWrite),
     host_capabilities(HostCapability::PlanRegistry, HostCapability::AgentRegistry),
     concurrency_safe = true,
-    load = "always",
-    fallback = parse_legacy_plan_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum PlanToolInput {
@@ -275,8 +264,7 @@ enum PlanToolInput {
     tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree),
     host_capabilities(HostCapability::WorktreeRegistry),
     concurrency_safe = false,
-    load = "deferred",
-    fallback = parse_legacy_worktree_entry
+    load = "deferred"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WorktreeToolInput {
@@ -328,158 +316,6 @@ struct ExitWorktreeCommandInput {
     discard_changes: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-struct LegacyGoalUpdateInput {
-    status: LegacyGoalUpdateStatus,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-enum LegacyGoalUpdateStatus {
-    Complete,
-}
-
-fn legacy_command_args_to_action_value(
-    input: serde_json::Value,
-    primary: &PluginError,
-) -> SdkResult<serde_json::Value> {
-    let Some(command) = input
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .filter(|command| !command.trim().is_empty())
-    else {
-        return Err(primary.clone());
-    };
-    let args = input
-        .get("args")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    let mut args = match args {
-        serde_json::Value::Object(map) => map,
-        serde_json::Value::Null => serde_json::Map::new(),
-        _ => return Err(primary.clone()),
-    };
-    args.insert(
-        "action".to_string(),
-        serde_json::Value::String(command.to_string()),
-    );
-    Ok(serde_json::Value::Object(args))
-}
-
-fn parse_legacy_workflow_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    WorkflowToolInput::resolve_entry(
-        "workflow",
-        legacy_command_args_to_action_value(input, &primary)?,
-    )
-}
-
-fn parse_legacy_tools_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    ToolsToolInput::resolve_entry(
-        "tools",
-        legacy_command_args_to_action_value(input, &primary)?,
-    )
-}
-
-fn parse_legacy_agent_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    AgentToolInput::resolve_entry(
-        "agent",
-        legacy_command_args_to_action_value(input, &primary)?,
-    )
-}
-
-fn parse_legacy_todo_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    TodoToolInput::resolve_entry(
-        "todo",
-        legacy_command_args_to_action_value(input, &primary)?,
-    )
-}
-
-fn parse_legacy_task_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    if let Ok(action_input) = legacy_command_args_to_action_value(input.clone(), &primary) {
-        return TaskEntryToolInput::resolve_entry("task", action_input);
-    }
-    let serde_json::Value::Object(mut action_input) = input else {
-        return Err(primary);
-    };
-    action_input.insert(
-        "action".to_string(),
-        serde_json::Value::String("run".to_string()),
-    );
-    TaskEntryToolInput::resolve_entry("task", serde_json::Value::Object(action_input))
-}
-
-fn parse_legacy_session_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    SessionToolInput::resolve_entry(
-        "session",
-        legacy_command_args_to_action_value(input, &primary)?,
-    )
-}
-
-fn parse_legacy_goal_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    let command = input
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if command == "update" {
-        let args = input
-            .get("args")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({}));
-        let legacy =
-            serde_json::from_value::<LegacyGoalUpdateInput>(args).map_err(|_| primary.clone())?;
-        return match legacy.status {
-            LegacyGoalUpdateStatus::Complete => {
-                GoalToolInput::resolve_entry("goal", serde_json::json!({ "action": "complete" }))
-            }
-        };
-    }
-    GoalToolInput::resolve_entry(
-        "goal",
-        legacy_command_args_to_action_value(input, &primary)?,
-    )
-}
-
-fn parse_legacy_user_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    UserToolInput::resolve_entry(
-        "user",
-        legacy_command_args_to_action_value(input, &primary)?,
-    )
-}
-
-fn parse_legacy_plan_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    PlanToolInput::resolve_entry(
-        "plan",
-        legacy_command_args_to_action_value(input, &primary)?,
-    )
-}
-
 fn parse_worktree_enter_input(input: serde_json::Value) -> SdkResult<EnterWorktreeToolInput> {
     match serde_json::from_value::<EnterWorktreeCommandInput>(input.clone()) {
         Ok(EnterWorktreeCommandInput::New { name }) => {
@@ -507,51 +343,6 @@ fn parse_worktree_exit_input(input: serde_json::Value) -> SdkResult<ExitWorktree
             serde_json::from_value::<ExitWorktreeToolInput>(input).map_err(|_| primary)
         }
     }
-}
-
-fn parse_legacy_worktree_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    let command = input
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    let args = input
-        .get("args")
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
-    let mut args = match args {
-        serde_json::Value::Object(map) => map,
-        _ => return Err(primary),
-    };
-
-    match command {
-        "enter" => {
-            if !args.contains_key("target") {
-                if let Some(path) = args.remove("path") {
-                    args.insert(
-                        "target".to_string(),
-                        serde_json::Value::String("existing".to_string()),
-                    );
-                    args.insert("path".to_string(), path);
-                } else {
-                    args.insert(
-                        "target".to_string(),
-                        serde_json::Value::String("new".to_string()),
-                    );
-                }
-            }
-        }
-        "exit" => {}
-        _ => return Err(primary),
-    }
-
-    args.insert(
-        "action".to_string(),
-        serde_json::Value::String(command.to_string()),
-    );
-    WorktreeToolInput::resolve_entry("worktree", serde_json::Value::Object(args))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1221,7 +1012,7 @@ impl Plugin for WorkflowPlugin {
                     ))),
                 }
             }
-            "session" | "session_edit" => {
+            "session" => {
                 let (action, action_input) =
                     SessionToolInput::resolve_entry(input.tool_name.as_str(), input.input)?;
                 match action.as_str() {
@@ -1238,7 +1029,7 @@ impl Plugin for WorkflowPlugin {
                     ))),
                 }
             }
-            "goal" | "goal_edit" => {
+            "goal" => {
                 let (action, action_input) =
                     GoalToolInput::resolve_entry(input.tool_name.as_str(), input.input)?;
                 match action.as_str() {
@@ -1865,20 +1656,6 @@ mod tests {
         }
     }
 
-    fn invoke_command<T: serde::Serialize>(
-        tool_name: &str,
-        command: &str,
-        args: T,
-    ) -> ToolInvokeInput {
-        invoke_input(
-            tool_name,
-            serde_json::json!({
-                "command": command,
-                "args": serde_json::to_value(args).expect("serialize command args"),
-            }),
-        )
-    }
-
     fn invoke_action<T: serde::Serialize>(
         tool_name: &str,
         action: &str,
@@ -2039,28 +1816,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn legacy_goal_edit_update_still_completes_goal() {
-        let (plugin, host) = initialized_plugin().await;
-        let output = plugin
-            .tool_invoke(invoke_command(
-                "goal_edit",
-                "update",
-                serde_json::json!({ "status": "complete" }),
-            ))
-            .await
-            .expect("legacy goal_edit update invoke");
-
-        assert!(output.output_text.contains("Goal 7 is completed"));
-        assert_eq!(
-            host.recorded_update_goal_request(),
-            Some(RecordedUpdateGoalRequest {
-                objective: None,
-                status: Some(HostGoalStatus::Completed),
-            })
-        );
-    }
-
     #[test]
     fn goal_command_schema_exposes_complete_command() {
         let schema = crate::entry::definition::json_schema_for::<GoalToolInput>();
@@ -2190,28 +1945,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_session_edit_rename_alias_still_works() {
-        let (plugin, host) = initialized_plugin().await;
-        let output = plugin
-            .tool_invoke(invoke_command(
-                "session_edit",
-                "rename",
-                SessionRenameToolInput {
-                    title: "Compat rename".to_string(),
-                },
-            ))
-            .await
-            .expect("legacy session_edit rename invoke");
-
-        assert!(
-            output
-                .output_text
-                .contains("Renamed session #1 to Compat rename.")
-        );
-        assert_eq!(host.current_session().title, "Compat rename");
-    }
-
-    #[tokio::test]
     async fn plan_and_worktree_entries_invoke_explicit_host_apis() {
         let (plugin, host) = initialized_plugin().await;
 
@@ -2312,34 +2045,6 @@ mod tests {
         }
         let restores = host.recorded_agent_restores();
         assert_eq!(restores.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn legacy_worktree_command_args_shape_still_works() {
-        let (plugin, _) = initialized_plugin().await;
-        let output = plugin
-            .tool_invoke(invoke_command(
-                "worktree",
-                "enter",
-                EnterWorktreeToolInput {
-                    name: Some("demo".to_string()),
-                    path: None,
-                },
-            ))
-            .await
-            .expect("legacy worktree enter invoke");
-        let output = crate::plugins::provided::router::payload_to_tool_output(
-            "enter_worktree",
-            output.payload.as_ref(),
-        )
-        .unwrap();
-        match output {
-            ToolPayloadOutput::EnterWorktree { path, branch } => {
-                assert_eq!(path, "/tmp/wt");
-                assert_eq!(branch, "agena/demo");
-            }
-            other => panic!("unexpected output: {other:?}"),
-        }
     }
 
     #[tokio::test]

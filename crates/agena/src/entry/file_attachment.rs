@@ -5,7 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use mime_guess::MimeGuess;
 
 use crate::entry::payload::ReadAttachmentOutput;
-use crate::message::{AttachmentKind, AttachmentSource, ToolAttachment, ViewFileToolInput};
+use crate::message::{AttachmentKind, AttachmentSource, ToolAttachment};
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
@@ -41,38 +41,9 @@ impl PreparedFileAttachment {
         }
     }
 
-    fn view_file_output(&self) -> ToolPayloadOutput {
-        ToolPayloadOutput::ViewFile {
-            path: self.path.clone(),
-            kind: self.kind,
-            mime: self.mime.clone(),
-            size_bytes: self.size_bytes,
-            filename: self.filename.clone(),
-            width: self.width,
-            height: self.height,
-            duration_ms: self.duration_ms,
-            page_count: self.page_count,
-        }
-    }
-
     fn into_attachment(self) -> ToolAttachment {
         self.attachment
     }
-}
-
-pub(super) fn execute(
-    executor: &ToolExecutor,
-    input: &ViewFileToolInput,
-) -> Result<ToolPayloadExecution, ToolError> {
-    let prepared = prepare_file_attachment(executor, input.path.as_str())?;
-    let output = prepared.view_file_output();
-    let mut view = ToolExecutionView::simple(
-        format!("View file {}", prepared.path),
-        prepared.summary.clone(),
-    );
-    populate_view_metadata(&mut view, &prepared);
-    view.attachments.push(prepared.into_attachment());
-    Ok(ToolPayloadExecution::new(output, view))
 }
 
 pub(super) fn execute_for_read_attachment(
@@ -250,88 +221,19 @@ fn detect_dimensions(bytes: &[u8]) -> (Option<u32>, Option<u32>) {
     }
 }
 
-fn detect_mime(path: &Path, bytes: &[u8]) -> String {
-    if looks_like_png(bytes) {
-        return "image/png".to_string();
-    }
-    if looks_like_jpeg(bytes) {
-        return "image/jpeg".to_string();
-    }
-    if looks_like_gif(bytes) {
-        return "image/gif".to_string();
-    }
-    if looks_like_webp(bytes) {
-        return "image/webp".to_string();
-    }
-    if looks_like_bmp(bytes) {
-        return "image/bmp".to_string();
-    }
-    if looks_like_svg(bytes) {
-        return "image/svg+xml".to_string();
-    }
-    if looks_like_pdf(bytes) {
-        return "application/pdf".to_string();
-    }
-    if looks_like_utf8_text(bytes) {
-        return MimeGuess::from_path(path)
-            .first_raw()
-            .filter(|mime| {
-                mime.starts_with("text/")
-                    || matches!(
-                        *mime,
-                        "application/json"
-                            | "application/xml"
-                            | "application/yaml"
-                            | "application/x-yaml"
-                            | "application/javascript"
-                    )
-            })
-            .map(str::to_owned)
-            .unwrap_or_else(|| "text/plain".to_string());
-    }
-
-    MimeGuess::from_path(path)
+fn detect_mime(path: &Path, _bytes: &[u8]) -> String {
+    let guess = MimeGuess::from_path(path);
+    guess
         .first_raw()
-        .map(str::to_owned)
-        .unwrap_or_else(|| "application/octet-stream".to_string())
-}
-
-fn looks_like_png(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-}
-
-fn looks_like_jpeg(bytes: &[u8]) -> bool {
-    bytes.len() >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff
-}
-
-fn looks_like_gif(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")
-}
-
-fn looks_like_webp(bytes: &[u8]) -> bool {
-    bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP"
-}
-
-fn looks_like_bmp(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"BM")
-}
-
-fn looks_like_svg(bytes: &[u8]) -> bool {
-    let prefix_len = bytes.len().min(2048);
-    let sample = String::from_utf8_lossy(&bytes[..prefix_len]);
-    let trimmed = sample.trim_start_matches('\u{feff}').trim_start();
-    let lowered = trimmed.to_ascii_lowercase();
-    lowered.starts_with("<svg") || lowered.starts_with("<?xml") && lowered.contains("<svg")
-}
-
-fn looks_like_pdf(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"%PDF-")
+        .unwrap_or("application/octet-stream")
+        .to_string()
 }
 
 fn looks_like_utf8_text(bytes: &[u8]) -> bool {
-    if bytes.contains(&0) {
-        return false;
-    }
-
-    std::str::from_utf8(bytes).is_ok()
+    std::str::from_utf8(bytes)
+        .map(|text| {
+            text.chars()
+                .all(|ch| ch == '\n' || ch == '\r' || ch == '\t' || !ch.is_control())
+        })
+        .unwrap_or(false)
 }

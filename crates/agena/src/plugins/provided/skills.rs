@@ -33,12 +33,6 @@ enum SkillToolInput {
     },
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum LegacySkillToolInput {
-    Run(WorkflowPromptToolInput),
-}
-
 #[derive(Clone)]
 enum DiscoveredEntryKind {
     Skill,
@@ -87,15 +81,9 @@ impl SkillsPlugin {
     }
 
     fn parse_skill_input(input: serde_json::Value) -> SdkResult<WorkflowPromptToolInput> {
-        match serde_json::from_value::<SkillToolInput>(input.clone()) {
+        match serde_json::from_value::<SkillToolInput>(input) {
             Ok(SkillToolInput::Run { args }) => Ok(args),
-            Err(primary) => {
-                let primary = PluginError::invalid_params(primary.to_string());
-                match serde_json::from_value::<LegacySkillToolInput>(input) {
-                    Ok(LegacySkillToolInput::Run(args)) => Ok(args),
-                    Err(_) => Err(primary),
-                }
-            }
+            Err(primary) => Err(PluginError::invalid_params(primary.to_string())),
         }
     }
 
@@ -286,20 +274,6 @@ mod tests {
 
         assert_eq!(input.args.as_deref(), Some("inspect auth flow"));
     }
-
-    #[test]
-    fn parse_skill_input_accepts_legacy_command_args_shape() {
-        let input = SkillsPlugin::parse_skill_input(serde_json::json!({
-            "command": "run",
-            "args": {
-                "args": "inspect auth flow"
-            }
-        }))
-        .expect("legacy command/args skill input should parse");
-
-        assert_eq!(input.args.as_deref(), Some("inspect auth flow"));
-    }
-
     #[test]
     fn skill_input_schema_uses_action_discriminator() {
         let schema = crate::entry::definition::json_schema_for::<SkillToolInput>();

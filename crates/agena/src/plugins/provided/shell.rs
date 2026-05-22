@@ -25,13 +25,12 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
     entry = "shell",
     description = "Shell command dispatcher. Set action to exec, monitor_start, monitor_list, monitor_read, or monitor_stop. Exec payloads must declare `shell = bash|powershell` plus filesystem_effects for paths the command may read or write.",
     summary = "Run shell, PowerShell, or monitor commands.",
-    help = "Use action `exec` for one-shot shell commands, with `shell = bash|powershell`. Use `monitor_start`, `monitor_list`, `monitor_read`, and `monitor_stop` for long-running processes. Legacy `command/args`, `bash`, `powershell`, and nested `monitor` actions are still accepted for compatibility. Shell execution payloads must declare `filesystem_effects` for any paths the command may read or write.",
+    help = "Use action `exec` for one-shot shell commands, with `shell = bash|powershell`. Use `monitor_start`, `monitor_list`, `monitor_read`, and `monitor_stop` for long-running processes. Shell execution payloads must declare `filesystem_effects` for any paths the command may read or write.",
     tags(ToolTag::Mutating, ToolTag::Shell),
     host_capabilities(HostCapability::MonitorRegistry),
     concurrency_safe = false,
     load = "deferred",
-    streaming = "streaming",
-    fallback = parse_legacy_shell_input
+    streaming = "streaming"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ShellToolInput {
@@ -84,25 +83,6 @@ struct ShellExecInput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum LegacyShellCommandInput {
-    Exec(ShellExecInput),
-    MonitorStart(ShellMonitorStartInput),
-    MonitorList(ShellMonitorListInput),
-    MonitorRead(ShellMonitorReadInput),
-    MonitorStop(ShellMonitorStopInput),
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum LegacyShellToolInput {
-    Bash(BashToolInput),
-    #[serde(rename = "powershell")]
-    PowerShell(PowerShellToolInput),
-    Monitor(MonitorToolInput),
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 struct ShellMonitorStartInput {
     command: String,
     #[serde(default)]
@@ -143,27 +123,6 @@ struct ShellMonitorStopInput {
 
 fn default_capture_stderr() -> bool {
     true
-}
-
-fn parse_legacy_shell_input(
-    input: JsonValue,
-    primary: PluginError,
-) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    if let Ok(parsed) = serde_json::from_value::<LegacyShellCommandInput>(input.clone()) {
-        return match parsed {
-            LegacyShellCommandInput::Exec(args) => shell_exec_tool_args(args),
-            LegacyShellCommandInput::MonitorStart(args) => shell_monitor_start_tool_args(args),
-            LegacyShellCommandInput::MonitorList(args) => shell_monitor_list_tool_args(args),
-            LegacyShellCommandInput::MonitorRead(args) => shell_monitor_read_tool_args(args),
-            LegacyShellCommandInput::MonitorStop(args) => shell_monitor_stop_tool_args(args),
-        };
-    }
-    match serde_json::from_value::<LegacyShellToolInput>(input) {
-        Ok(LegacyShellToolInput::Bash(args)) => tool_args("bash", args),
-        Ok(LegacyShellToolInput::PowerShell(args)) => tool_args("powershell", args),
-        Ok(LegacyShellToolInput::Monitor(args)) => tool_args("monitor", args),
-        Err(_) => Err(primary),
-    }
 }
 
 fn tool_args<T: serde::Serialize>(
@@ -294,24 +253,5 @@ mod tests {
 
         assert_eq!(tool, "powershell");
         assert_eq!(input["command"], "Get-Location");
-    }
-
-    #[test]
-    fn resolve_legacy_bash_alias_still_works() {
-        let (tool, input) = ShellToolInput::resolve_entry(
-            "shell",
-            json!({
-                "command": "bash",
-                "args": {
-                    "command": "pwd",
-                    "description": "",
-                    "filesystem_effects": []
-                }
-            }),
-        )
-        .expect("legacy bash alias should resolve");
-
-        assert_eq!(tool, "bash");
-        assert_eq!(input["command"], "pwd");
     }
 }

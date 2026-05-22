@@ -4,6 +4,7 @@ pub(crate) mod bash;
 pub(crate) mod catalog;
 pub(crate) mod cron;
 pub(crate) mod definition;
+pub(crate) mod file_attachment;
 pub(crate) mod glob;
 pub(crate) mod grep;
 pub(crate) mod lsp;
@@ -21,7 +22,6 @@ pub(crate) mod task;
 pub(crate) mod todo_write;
 pub(crate) mod tool_search;
 pub(crate) mod truncation;
-pub(crate) mod view_file;
 pub(crate) mod web_fetch;
 pub(crate) mod web_search;
 pub(crate) mod worktree;
@@ -1699,26 +1699,13 @@ fn plugin_invocation_name(invocation: &PluginInvocation) -> String {
 }
 
 fn canonical_entry_name(name: &str) -> &str {
-    match name {
-        "fs_edit" => "fs",
-        "settings_edit" => "settings",
-        "schedule_edit" => "schedule",
-        "session_edit" => "session",
-        "goal_edit" => "goal",
-        "mcp_call" => "mcp",
-        _ => name,
-    }
+    name
 }
 
 fn command_from_input(input: &StructuredObject) -> Option<&str> {
     input
         .get("action")
         .and_then(crate::message::StructuredValue::as_text)
-        .or_else(|| {
-            input
-                .get("command")
-                .and_then(crate::message::StructuredValue::as_text)
-        })
 }
 
 fn invocation_effective_tags(
@@ -1730,11 +1717,8 @@ fn invocation_effective_tags(
         return tags;
     };
 
-    match (
-        canonical_entry_name(definition.exposed_name.as_str()),
-        command,
-    ) {
-        ("fs", "read" | "view_file" | "glob" | "grep") => {
+    match (definition.exposed_name.as_str(), command) {
+        ("fs", "read" | "glob" | "grep") => {
             set_invocation_access_tags(&mut tags, true, false, true, false)
         }
         ("fs", "apply_patch" | "notebook_edit") => {
@@ -1753,15 +1737,13 @@ fn invocation_effective_tags(
         ("session", "get") => set_invocation_access_tags(&mut tags, true, false, false, false),
         ("session", "rename") => set_invocation_access_tags(&mut tags, false, true, false, false),
         ("goal", "get") => set_invocation_access_tags(&mut tags, true, false, false, false),
-        ("goal", "create" | "clear" | "complete" | "update") => {
+        ("goal", "create" | "clear" | "complete") => {
             set_invocation_access_tags(&mut tags, false, true, false, false)
         }
         ("mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => {
             set_invocation_access_tags(&mut tags, true, false, false, false)
         }
-        ("mcp", "call" | "tool") => {
-            set_invocation_access_tags(&mut tags, false, true, false, false)
-        }
+        ("mcp", "call") => set_invocation_access_tags(&mut tags, false, true, false, false),
         _ => {}
     }
 
@@ -1806,8 +1788,8 @@ fn is_concurrency_safe_entry_invocation(
         return entry.decl.concurrency_safe;
     };
 
-    match (canonical_entry_name(entry.exposed_name.as_str()), command) {
-        ("fs", "read" | "view_file" | "glob" | "grep") => true,
+    match (entry.exposed_name.as_str(), command) {
+        ("fs", "read" | "glob" | "grep") => true,
         ("fs", "apply_patch" | "notebook_edit") => false,
         ("settings", "get" | "list" | "validate") => true,
         ("settings", "set" | "delete" | "patch") => false,
@@ -1816,9 +1798,9 @@ fn is_concurrency_safe_entry_invocation(
         ("session", "get") => true,
         ("session", "rename") => false,
         ("goal", "get") => true,
-        ("goal", "create" | "clear" | "complete" | "update") => false,
+        ("goal", "create" | "clear" | "complete") => false,
         ("mcp", "list_resources" | "read_resource" | "list_prompts" | "get_prompt") => true,
-        ("mcp", "call" | "tool") => false,
+        ("mcp", "call") => false,
         _ => entry.decl.concurrency_safe,
     }
 }
@@ -2111,7 +2093,7 @@ mod tests {
         FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, Message,
         OperationPart, PartContent, ReadToolInput, StructuredObject, TaskSubagentType,
         TaskToolInput, TimeRange, TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput,
-        ToolInvocation, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
+        ToolInvocation, ToolSearchToolInput, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -2808,31 +2790,6 @@ mod tests {
         match &attachment.source {
             crate::message::AttachmentSource::Base64 { data } => assert!(!data.is_empty()),
             other => panic!("expected base64 attachment source, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn view_file_compatibility_alias_still_attaches_files() {
-        let workspace = TempWorkspace::new();
-        let file_path = workspace.root.join("pixel.png");
-        fs::write(&file_path, sample_png_bytes()).expect("failed to seed png");
-
-        let executor = build_executor(&workspace.root);
-        let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::ViewFile(ViewFileToolInput {
-                path: "pixel.png".to_string(),
-            }))
-            .expect("legacy view_file alias should still succeed");
-
-        match result.output {
-            ToolPayloadOutput::ViewFile {
-                path, kind, mime, ..
-            } => {
-                assert_eq!(path, "pixel.png");
-                assert_eq!(kind, crate::message::AttachmentKind::Image);
-                assert_eq!(mime, "image/png");
-            }
-            other => panic!("expected view_file output, got {other:?}"),
         }
     }
 

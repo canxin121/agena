@@ -24,12 +24,10 @@ struct SurfaceConfig {
     help: Option<LitStr>,
     tags: Vec<Expr>,
     host_capabilities: Vec<Expr>,
-    legacy_entries: Vec<LitStr>,
     concurrency_safe: Option<bool>,
     strict: Option<bool>,
     load: Option<LitStr>,
     streaming: Option<LitStr>,
-    fallback: Option<Path>,
 }
 
 enum VariantMapping {
@@ -111,22 +109,17 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         quote! {}
     };
 
-    let legacy_entries = surface.legacy_entries;
-    let fallback = surface.fallback.map(|path| {
-        quote! {
-            return #path(input, primary);
-        }
-    });
-    let fallback = fallback.unwrap_or_else(|| quote! { return Err(primary); });
-
-    let accepted_entry_match = if legacy_entries.is_empty() {
-        quote! { #entry }
-    } else {
-        quote! { #entry | #( #legacy_entries )|* }
-    };
-
     Ok(quote! {
         impl #name {
+            pub(crate) fn parse_input(
+                input: serde_json::Value,
+            ) -> crate::plugin::sdk::Result<Self> {
+                match serde_json::from_value::<Self>(input) {
+                    Ok(parsed) => Ok(parsed),
+                    Err(primary) => Err(crate::plugin::PluginError::invalid_params(primary.to_string())),
+                }
+            }
+
             pub(crate) fn tool_decl() -> crate::plugin::sdk::PluginToolDecl {
                 crate::plugin::sdk::PluginToolDecl::new(
                     #entry,
@@ -148,7 +141,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                 input: serde_json::Value,
             ) -> crate::plugin::sdk::Result<(String, serde_json::Value)> {
                 match entry {
-                    #accepted_entry_match => {}
+                    #entry => {}
                     other => {
                         return Err(crate::plugin::PluginError::invalid_params(format!(
                             "unknown {} entry '{other}'",
@@ -159,10 +152,7 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
 
                 let parsed = match serde_json::from_value::<Self>(input.clone()) {
                     Ok(parsed) => parsed,
-                    Err(primary) => {
-                        let primary = crate::plugin::PluginError::invalid_params(primary.to_string());
-                        #fallback
-                    }
+                    Err(primary) => return Err(crate::plugin::PluginError::invalid_params(primary.to_string())),
                 };
 
                 match parsed {
@@ -272,7 +262,6 @@ fn apply_surface_name_value(config: &mut SurfaceConfig, value: MetaNameValue) ->
         "strict" => config.strict = Some(expr_lit_bool(&value.value, "strict")?),
         "load" => config.load = Some(expr_lit_str(&value.value, "load")?),
         "streaming" => config.streaming = Some(expr_lit_str(&value.value, "streaming")?),
-        "fallback" => config.fallback = Some(expr_path(&value.value, "fallback")?),
         other => {
             return Err(syn::Error::new_spanned(
                 ident,
@@ -293,9 +282,6 @@ fn apply_surface_list(config: &mut SurfaceConfig, list: MetaList) -> Result<()> 
         }
         "host_capabilities" => {
             config.host_capabilities = parse_expr_list(list.tokens)?;
-        }
-        "legacy_entries" => {
-            config.legacy_entries = parse_lit_str_list(list.tokens)?;
         }
         other => {
             return Err(syn::Error::new_spanned(
@@ -351,12 +337,6 @@ fn parse_expr_list(tokens: proc_macro2::TokenStream) -> Result<Vec<Expr>> {
         .map(|items| items.into_iter().collect())
 }
 
-fn parse_lit_str_list(tokens: proc_macro2::TokenStream) -> Result<Vec<LitStr>> {
-    Punctuated::<LitStr, Token![,]>::parse_terminated
-        .parse2(tokens)
-        .map(|items| items.into_iter().collect())
-}
-
 fn expr_lit_str(expr: &Expr, field: &str) -> Result<LitStr> {
     match expr {
         Expr::Lit(ExprLit {
@@ -383,7 +363,7 @@ fn expr_lit_bool(expr: &Expr, field: &str) -> Result<bool> {
     }
 }
 
-fn expr_path(expr: &Expr, field: &str) -> Result<Path> {
+fn expr_path(expr: &Expr, field: &str) -> Result<syn::Path> {
     match expr {
         Expr::Path(ExprPath { path, .. }) => Ok(path.clone()),
         _ => Err(syn::Error::new_spanned(

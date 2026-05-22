@@ -24,8 +24,8 @@ pub use part::{
     TableColumn, TaskSubagentType, TaskToolInput, TextPart, TimeRange, TodoItem, TodoPriority,
     TodoStatus, TodoWriteToolInput, ToolAttachment, ToolInvocation, ToolOutput,
     ToolSearchToolInput, UpdateGoalStatus, UpdateGoalToolInput, UserInputOption, UserInputQuestion,
-    UserInputReply, UserInputReplyKind, UserInputRequest, UserInputRequestPart, ViewFileToolInput,
-    WebFetchToolInput, WebSearchResult, WebSearchToolInput, WorkflowPromptToolInput,
+    UserInputReply, UserInputReplyKind, UserInputRequest, UserInputRequestPart, WebFetchToolInput,
+    WebSearchResult, WebSearchToolInput, WorkflowPromptToolInput,
 };
 pub(crate) use part::{deserialize_user_input_answers, user_input_answers_is_empty};
 pub use usage::MessageUsage;

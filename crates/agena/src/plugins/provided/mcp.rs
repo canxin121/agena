@@ -185,12 +185,10 @@ impl McpEntryTarget {
     entry = "mcp",
     description = "MCP command surface.",
     summary = "Read MCP resources/prompts or call discovered MCP tools.",
-    help = "Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call`. Legacy `command/args` inputs are still accepted for compatibility.",
+    help = "Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call`.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp),
     concurrency_safe = false,
-    load = "deferred",
-    legacy_entries("mcp_call"),
-    fallback = parse_legacy_mcp_entry
+    load = "deferred"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum McpToolInput {
@@ -224,21 +222,6 @@ enum McpToolInput {
         #[serde(flatten)]
         args: CallToolInput,
     },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum LegacyMcpToolInput {
-    #[serde(alias = "resources_list")]
-    ListResources(McpServerInput),
-    #[serde(alias = "resources_read")]
-    ReadResource(ReadResourceInput),
-    #[serde(alias = "prompts_list")]
-    ListPrompts(McpServerInput),
-    #[serde(alias = "prompts_get")]
-    GetPrompt(GetPromptInput),
-    #[serde(alias = "tool")]
-    Call(CallToolInput),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
@@ -340,7 +323,7 @@ fn mcp_decl(
 
 fn mcp_help(servers: &[String], tools: &[(String, ToolDescriptor)]) -> String {
     let mut lines = vec![
-        "Use action `list_resources` to list resources, `read_resource` to read a resource URI, `list_prompts` to list prompts, `get_prompt` to fetch a prompt, and `call` with `server`, `name`, and optional `arguments` to call a discovered MCP tool. Legacy `command/args` inputs are still accepted for compatibility.".to_string(),
+        "Use action `list_resources` to list resources, `read_resource` to read a resource URI, `list_prompts` to list prompts, `get_prompt` to fetch a prompt, and `call` with `server`, `name`, and optional `arguments` to call a discovered MCP tool.".to_string(),
         "Configured servers:".to_string(),
     ];
     for server in servers {
@@ -361,24 +344,6 @@ fn mcp_help(servers: &[String], tools: &[(String, ToolDescriptor)]) -> String {
         }
     }
     lines.join("\n")
-}
-
-fn parse_legacy_mcp_entry(input: Value, primary: PluginError) -> SdkResult<(String, Value)> {
-    match serde_json::from_value::<LegacyMcpToolInput>(input) {
-        Ok(LegacyMcpToolInput::ListResources(args)) => tool_args("list_resources", args),
-        Ok(LegacyMcpToolInput::ReadResource(args)) => tool_args("read_resource", args),
-        Ok(LegacyMcpToolInput::ListPrompts(args)) => tool_args("list_prompts", args),
-        Ok(LegacyMcpToolInput::GetPrompt(args)) => tool_args("get_prompt", args),
-        Ok(LegacyMcpToolInput::Call(args)) => tool_args("call", args),
-        Err(_) => Err(primary),
-    }
-}
-
-fn tool_args<T: serde::Serialize>(action: &str, args: T) -> SdkResult<(String, Value)> {
-    Ok((
-        action.to_string(),
-        serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
-    ))
 }
 
 fn maybe_network_tag(entry: PluginToolDecl, has_network_servers: bool) -> PluginToolDecl {

@@ -1,5 +1,31 @@
 use super::*;
 
+#[derive(Clone, Copy)]
+enum SurfaceMode {
+    Overlay,
+    Route,
+}
+
+impl SurfaceMode {
+    fn outer_width(self, area: Rect, target_width: u16) -> u16 {
+        match self {
+            Self::Overlay => adaptive_modal_width(area.width, target_width),
+            Self::Route => area.width,
+        }
+    }
+
+    fn content_width(self, area: Rect, target_width: u16) -> u16 {
+        self.outer_width(area, target_width).saturating_sub(2)
+    }
+
+    fn outer_rect(self, area: Rect, target_width: u16, target_height: u16) -> Rect {
+        match self {
+            Self::Overlay => preferred_overlay_rect(area, target_width, target_height),
+            Self::Route => area,
+        }
+    }
+}
+
 impl App {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
         let area = frame.area();
@@ -942,22 +968,27 @@ impl App {
                 self.render_confirm_overlay(frame, area, dialog);
             }
             Overlay::SessionSearch(dialog) => {
-                self.render_session_search_overlay(frame, area, dialog);
+                self.render_session_search_overlay(frame, area, dialog, SurfaceMode::Overlay);
             }
             Overlay::Picker(dialog) => {
-                self.render_picker_overlay(frame, area, dialog);
+                self.render_picker_overlay(frame, area, dialog, SurfaceMode::Overlay);
             }
             Overlay::SessionModelChooser(dialog) => {
-                self.render_session_model_chooser_overlay(frame, area, dialog);
+                self.render_session_model_chooser_overlay(
+                    frame,
+                    area,
+                    dialog,
+                    SurfaceMode::Overlay,
+                );
             }
             Overlay::Timeline(dialog) => {
-                self.render_timeline_overlay(frame, area, dialog);
+                self.render_timeline_overlay(frame, area, dialog, SurfaceMode::Overlay);
             }
             Overlay::ProviderStudio(dialog) => {
-                self.render_provider_studio_overlay(frame, area, dialog);
+                self.render_provider_studio_overlay(frame, area, dialog, SurfaceMode::Overlay);
             }
             Overlay::ModelCatalogStudio(dialog) => {
-                self.render_model_catalog_studio_overlay(frame, area, dialog);
+                self.render_model_catalog_studio_overlay(frame, area, dialog, SurfaceMode::Overlay);
             }
         }
     }
@@ -965,30 +996,32 @@ impl App {
     fn render_route(&self, frame: &mut Frame, area: Rect) {
         match &self.current_route {
             Route::Main => {}
-            Route::Help(dialog) => self.render_help_overlay(frame, area, dialog),
+            Route::Help(dialog) => {
+                self.render_help_overlay(frame, area, dialog, SurfaceMode::Route)
+            }
             Route::SettingsStudio(dialog) => {
-                self.render_settings_studio_overlay(frame, area, dialog);
+                self.render_settings_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::SessionSearch(dialog) => {
-                self.render_session_search_overlay(frame, area, dialog);
+                self.render_session_search_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::Picker(dialog) => {
-                self.render_picker_overlay(frame, area, dialog);
+                self.render_picker_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::SessionModelChooser(dialog) => {
-                self.render_session_model_chooser_overlay(frame, area, dialog);
+                self.render_session_model_chooser_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::Timeline(dialog) => {
-                self.render_timeline_overlay(frame, area, dialog);
+                self.render_timeline_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::PluginInspector(dialog) => {
-                self.render_plugin_inspector_overlay(frame, area, dialog);
+                self.render_plugin_inspector_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::ProviderStudio(dialog) => {
-                self.render_provider_studio_overlay(frame, area, dialog);
+                self.render_provider_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::ModelCatalogStudio(dialog) => {
-                self.render_model_catalog_studio_overlay(frame, area, dialog);
+                self.render_model_catalog_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
         }
         self.render_overlay(frame, area);
@@ -1692,7 +1725,13 @@ impl App {
         );
     }
 
-    fn render_help_overlay(&self, frame: &mut Frame, area: Rect, dialog: &HelpOverlay) {
+    fn render_help_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &HelpOverlay,
+        surface: SurfaceMode,
+    ) {
         let text = ui_text::help_lines(&self.i18n)
             .into_iter()
             .map(|line| match line.kind {
@@ -1710,15 +1749,16 @@ impl App {
                 ui_text::HelpLineKind::Spacer => Line::from(""),
             })
             .collect::<Vec<_>>();
-        let target_width = adaptive_modal_width(area.width, 132);
-        let body_height = help_overlay_body_height(text.as_slice(), target_width);
+        let content_width = surface.content_width(area, 132);
+        let body_height =
+            help_overlay_body_height(text.as_slice(), content_width.saturating_add(2));
         let footer_height = overlay_text_height(
             ui_text::t(&self.i18n, "overlay-help-footer").as_str(),
-            target_width.saturating_sub(2),
+            content_width,
             1,
             2,
         );
-        let area = preferred_overlay_rect(
+        let area = surface.outer_rect(
             area,
             132,
             body_height.saturating_add(footer_height).saturating_add(2),
@@ -1759,12 +1799,11 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &SessionSearchOverlay,
+        surface: SurfaceMode,
     ) {
-        let target_width = adaptive_modal_width(area.width, 128);
-        let prompt_height =
-            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
-        let footer_height =
-            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let content_width = surface.content_width(area, 128);
+        let prompt_height = overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
         let list_height = list_panel_height(
             if dialog.loading || dialog.items.is_empty() {
                 1
@@ -1779,7 +1818,7 @@ impl App {
             5,
             12,
         );
-        let area = preferred_overlay_rect(
+        let area = surface.outer_rect(
             area,
             128,
             prompt_height
@@ -1888,12 +1927,16 @@ impl App {
         ));
     }
 
-    fn render_picker_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PickerOverlay) {
-        let target_width = adaptive_modal_width(area.width, 120);
-        let prompt_height =
-            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
-        let footer_height =
-            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+    fn render_picker_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &PickerOverlay,
+        surface: SurfaceMode,
+    ) {
+        let content_width = surface.content_width(area, 120);
+        let prompt_height = overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
         let list_height = list_panel_height(
             if dialog.loading || dialog.items.is_empty() {
                 1
@@ -1908,7 +1951,7 @@ impl App {
             4,
             10,
         );
-        let area = preferred_overlay_rect(
+        let area = surface.outer_rect(
             area,
             120,
             prompt_height
@@ -2000,12 +2043,11 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &SessionModelChooserOverlay,
+        surface: SurfaceMode,
     ) {
-        let target_width = adaptive_modal_width(area.width, 128);
-        let prompt_height =
-            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
-        let footer_height =
-            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
+        let content_width = surface.content_width(area, 128);
+        let prompt_height = overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
         let visible_items = if dialog.loading || dialog.items.is_empty() {
             1
         } else {
@@ -2021,7 +2063,7 @@ impl App {
             5,
             12,
         );
-        let area = preferred_overlay_rect(
+        let area = surface.outer_rect(
             area,
             128,
             prompt_height
@@ -2233,15 +2275,18 @@ impl App {
         ));
     }
 
-    fn render_timeline_overlay(&self, frame: &mut Frame, area: Rect, dialog: &TimelineOverlay) {
-        let target_width = adaptive_modal_width(area.width, 122);
-        let prompt_height =
-            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
-        let footer_height =
-            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
-        let content_height =
-            timeline_overlay_content_height(dialog, target_width.saturating_sub(2));
-        let area = preferred_overlay_rect(
+    fn render_timeline_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &TimelineOverlay,
+        surface: SurfaceMode,
+    ) {
+        let content_width = surface.content_width(area, 122);
+        let prompt_height = overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
+        let content_height = timeline_overlay_content_height(dialog, content_width);
+        let area = surface.outer_rect(
             area,
             122,
             prompt_height
@@ -2383,15 +2428,13 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &PluginInspectorOverlay,
+        surface: SurfaceMode,
     ) {
-        let target_width = adaptive_modal_width(area.width, 122);
-        let prompt_height =
-            overlay_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2), 1, 2);
-        let footer_height =
-            overlay_text_height(dialog.footer.as_str(), target_width.saturating_sub(2), 1, 2);
-        let content_height =
-            plugin_inspector_content_height(dialog, target_width.saturating_sub(2));
-        let area = preferred_overlay_rect(
+        let content_width = surface.content_width(area, 122);
+        let prompt_height = overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
+        let content_height = plugin_inspector_content_height(dialog, content_width);
+        let area = surface.outer_rect(
             area,
             122,
             prompt_height
@@ -2553,16 +2596,17 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &SettingsStudioOverlay,
+        surface: SurfaceMode,
     ) {
-        let target_width = adaptive_modal_width(area.width, 136);
-        let content_width = target_width.saturating_sub(2);
+        let title_width = surface.outer_width(area, 136);
+        let content_width = surface.content_width(area, 136);
         let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
         let content_height = settings_studio_content_height(dialog, content_width);
         let current_section = dialog.sections.get(dialog.selected_section);
         let section_summary = current_section
             .map(|section| format!("{}  ·  {} item(s)", section.summary, section.items.len()))
             .unwrap_or_else(|| "no settings available".to_string());
-        let area = preferred_overlay_rect(
+        let area = surface.outer_rect(
             area,
             136,
             content_height
@@ -2574,7 +2618,7 @@ impl App {
             .title(sanitize_display_text(overlay_title_with_summary(
                 dialog.title.as_str(),
                 section_summary.as_str(),
-                target_width,
+                title_width,
             )))
             .borders(Borders::ALL);
         let inner = block.inner(area);
@@ -2773,12 +2817,12 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &ProviderStudioOverlay,
+        surface: SurfaceMode,
     ) {
-        let target_width = adaptive_modal_width(area.width, 140);
-        let content_width = target_width.saturating_sub(2);
+        let content_width = surface.content_width(area, 140);
         let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
         let content_height = provider_studio_content_height(dialog, content_width);
-        let area = preferred_overlay_rect(
+        let area = surface.outer_rect(
             area,
             122,
             content_height
@@ -3239,9 +3283,10 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         dialog: &ModelCatalogStudioOverlay,
+        surface: SurfaceMode,
     ) {
-        let target_width = adaptive_modal_width(area.width, 136);
-        let content_width = target_width.saturating_sub(2);
+        let title_width = surface.outer_width(area, 136);
+        let content_width = surface.content_width(area, 136);
         let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
         let content_height = model_catalog_content_height(dialog, content_width);
         let summary = format!(
@@ -3257,7 +3302,7 @@ impl App {
             dialog.summary.official_entry_count,
             dialog.summary.custom_entry_count,
         );
-        let area = preferred_overlay_rect(
+        let area = surface.outer_rect(
             area,
             136,
             content_height
@@ -3269,7 +3314,7 @@ impl App {
             .title(sanitize_display_text(overlay_title_with_summary(
                 dialog.title.as_str(),
                 summary.as_str(),
-                target_width,
+                title_width,
             )))
             .borders(Borders::ALL);
         let inner = block.inner(area);

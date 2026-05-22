@@ -165,13 +165,17 @@ where
     F: std::future::Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    match handle.runtime_flavor() {
-        tokio::runtime::RuntimeFlavor::MultiThread => {
+    if let Ok(current) = tokio::runtime::Handle::try_current() {
+        return if current.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread {
             tokio::task::block_in_place(|| handle.block_on(fut))
-        }
-        tokio::runtime::RuntimeFlavor::CurrentThread => block_on_new_thread(fut),
-        _ => block_on_new_thread(fut),
+        } else {
+            std::thread::spawn(move || handle.block_on(fut))
+                .join()
+                .expect("plugin host runtime thread panicked")
+        };
     }
+
+    handle.block_on(fut)
 }
 
 fn block_on_new_thread<F>(fut: F) -> F::Output
@@ -206,6 +210,32 @@ where
             })
             .join()
             .expect("plugin host fallback runtime thread panicked")
+    })
+}
+
+fn block_on_runtime_scoped_thread<F>(runtime: &tokio::runtime::Runtime, fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || runtime.block_on(fut))
+            .join()
+            .expect("plugin host runtime thread panicked")
+    })
+}
+
+fn block_on_handle_scoped_thread<F>(handle: &tokio::runtime::Handle, fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    std::thread::scope(|scope| {
+        scope
+            .spawn(move || handle.block_on(fut))
+            .join()
+            .expect("plugin host runtime thread panicked")
     })
 }
 
@@ -461,36 +491,38 @@ impl PluginHost {
         F: std::future::Future + Send,
         F::Output: Send,
     {
+        let current = tokio::runtime::Handle::try_current().ok();
+        let current_is_multithread = current.as_ref().is_some_and(|handle| {
+            handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        });
+
         if let Some(rt) = &self.runtime {
-            if let Ok(current) = tokio::runtime::Handle::try_current() {
-                return match current.runtime_flavor() {
-                    tokio::runtime::RuntimeFlavor::MultiThread => {
-                        tokio::task::block_in_place(|| rt.block_on(fut))
-                    }
-                    _ => block_on_scoped_thread(fut),
+            if current.is_some() {
+                return if current_is_multithread {
+                    tokio::task::block_in_place(|| rt.block_on(fut))
+                } else {
+                    block_on_runtime_scoped_thread(rt, fut)
                 };
             }
             return rt.block_on(fut);
         }
 
         if let Some(handle) = &self.runtime_handle {
-            if tokio::runtime::Handle::try_current().is_ok() {
-                return match handle.runtime_flavor() {
-                    tokio::runtime::RuntimeFlavor::MultiThread => {
-                        tokio::task::block_in_place(|| handle.block_on(fut))
-                    }
-                    _ => block_on_scoped_thread(fut),
+            if current.is_some() {
+                return if current_is_multithread {
+                    tokio::task::block_in_place(|| handle.block_on(fut))
+                } else {
+                    block_on_handle_scoped_thread(handle, fut)
                 };
             }
             return handle.block_on(fut);
         }
 
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            return match handle.runtime_flavor() {
-                tokio::runtime::RuntimeFlavor::MultiThread => {
+        if let Some(handle) = current {
+            return if current_is_multithread {
                     tokio::task::block_in_place(|| handle.block_on(fut))
-                }
-                _ => block_on_scoped_thread(fut),
+            } else {
+                block_on_scoped_thread(fut)
             };
         }
 
@@ -4127,6 +4159,66 @@ impl HostClient for ScopedHostClient {
     async fn todo_write(&self, req: HostTodoWriteRequest) -> crate::sdk::Result<ToolInvokeOutput> {
         let inner = self.handle.inner.read().await.clone();
         host_api::with_host_callback_context(self.context(), inner.todo_write(req)).await
+    }
+
+    async fn get_session(
+        &self,
+        req: crate::sdk::host_api::HostGetSessionRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostGetSessionResponse> {
+        self.require_capability("host/session.get", HostCapability::SessionRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.get_session(req)).await
+    }
+
+    async fn rename_session(
+        &self,
+        req: crate::sdk::host_api::HostRenameSessionRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostRenameSessionResponse> {
+        self.require_capability("host/session.rename", HostCapability::SessionRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.rename_session(req)).await
+    }
+
+    async fn get_goal(
+        &self,
+        req: crate::sdk::host_api::HostGetGoalRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostGetGoalResponse> {
+        self.require_capability("host/goal.get", HostCapability::GoalRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.get_goal(req)).await
+    }
+
+    async fn create_goal(
+        &self,
+        req: crate::sdk::host_api::HostCreateGoalRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostCreateGoalResponse> {
+        self.require_capability("host/goal.create", HostCapability::GoalRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.create_goal(req)).await
+    }
+
+    async fn update_goal(
+        &self,
+        req: crate::sdk::host_api::HostUpdateGoalRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostUpdateGoalResponse> {
+        self.require_capability("host/goal.update", HostCapability::GoalRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.update_goal(req)).await
+    }
+
+    async fn clear_goal(
+        &self,
+        req: crate::sdk::host_api::HostClearGoalRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostClearGoalResponse> {
+        self.require_capability("host/goal.clear", HostCapability::GoalRegistry)
+            .await?;
+        let inner = self.handle.inner.read().await.clone();
+        host_api::with_host_callback_context(self.context(), inner.clear_goal(req)).await
     }
 
     async fn enter_plan_mode(

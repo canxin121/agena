@@ -133,6 +133,7 @@ dependencies = [
  "aws-smithy-eventstream",
  "aws-smithy-http",
  "aws-smithy-types",
+ "axum",
  "base64 0.22.1",
  "blake3",
  "chrono",

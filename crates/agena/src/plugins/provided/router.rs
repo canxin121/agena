@@ -83,18 +83,34 @@ fn current_executor(
         call_id,
         tool_name: tool_name.to_string(),
     };
+    let entry_key = routed_entry_name(tool_name).map(|entry_name| InProcessContextKey {
+        session_id,
+        call_id,
+        tool_name: entry_name.to_string(),
+    });
     IN_PROCESS_TOOL_CTX_BY_CALL
         .lock()
         .ok()
         .and_then(|contexts| {
-            contexts.get(&key).cloned().or_else(|| {
-                contexts
-                    .iter()
-                    .find(|(key, _)| key.session_id == session_id && key.call_id == call_id)
-                    .map(|(_, executor)| executor.clone())
-            })
+            contexts
+                .get(&key)
+                .cloned()
+                .or_else(|| entry_key.as_ref().and_then(|key| contexts.get(key).cloned()))
         })
         .ok_or_else(|| PluginError::new("static plugin invoked without executor context"))
+}
+
+fn routed_entry_name(tool_name: &str) -> Option<&'static str> {
+    match tool_name {
+        "read" | "glob" | "grep" | "apply_patch" | "notebook_edit" => Some("fs"),
+        "bash" | "powershell" | "monitor" => Some("shell"),
+        "web_fetch" | "web_search" => Some("web"),
+        "cron_list" | "cron_create" | "cron_delete" | "schedule_wakeup" => Some("schedule"),
+        "lsp_servers" | "lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics" => {
+            Some("lsp")
+        }
+        _ => None,
+    }
 }
 
 pub(crate) struct InProcessToolPlugin {

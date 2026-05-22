@@ -657,7 +657,16 @@ fn resolve_pending_tool(
     session: &Session,
     pending_tool: &SessionPendingTool,
 ) -> Result<ResolvedPendingTool, AppError> {
-    let part = session.part(&pending_tool.part).ok_or_else(|| {
+    let normalized_part = session.resolve_part_ref(&pending_tool.part).ok_or_else(|| {
+        AppError::Internal(format!(
+            "pending tool part not found: message={}, part={}",
+            pending_tool.part.message_id, pending_tool.part.part_id
+        ))
+    })?;
+    let normalized_pending = SessionPendingTool {
+        part: normalized_part,
+    };
+    let part = session.part(&normalized_pending.part).ok_or_else(|| {
         AppError::Internal(format!(
             "pending tool part not found: message={}, part={}",
             pending_tool.part.message_id, pending_tool.part.part_id
@@ -670,7 +679,7 @@ fn resolve_pending_tool(
         ))
     })?;
     let (call_id, invocation, lifecycle) = session
-        .pending_tool_execution(pending_tool)
+        .pending_tool_execution(&normalized_pending)
         .ok_or_else(|| {
             AppError::Internal(format!(
                 "pending tool payload missing: message={}, part={}",
@@ -679,7 +688,7 @@ fn resolve_pending_tool(
         })?;
 
     Ok(ResolvedPendingTool {
-        pending: pending_tool.clone(),
+        pending: normalized_pending,
         operation_id,
         call_id,
         invocation: invocation.clone(),

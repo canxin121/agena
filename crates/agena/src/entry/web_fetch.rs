@@ -3,8 +3,10 @@
 //!
 //! Cache: 15-minute TTL keyed by canonicalized URL (LRU, capped at 64).
 //!
-//! Security: HTTP is upgraded to HTTPS; localhost / link-local hosts are
-//! rejected to limit SSRF blast-radius.  Bytes capped at 5 MB.
+//! Security: non-loopback HTTP URLs are upgraded to HTTPS. Loopback hosts keep
+//! their original scheme so local development and runtime tests can exercise
+//! the real fetch path under the existing network-permission policy. Bytes are
+//! capped at 5 MB.
 
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -45,8 +47,11 @@ pub(super) fn execute(
         ));
     }
 
-    // HTTP -> HTTPS upgrade.
-    let url_string = if let Some(rest) = raw_url.strip_prefix("http://") {
+    // Preserve loopback HTTP so runtime tests and local integrations can use a
+    // plain local server without weakening the regular non-loopback upgrade.
+    let url_string = if let Some(rest) = raw_url.strip_prefix("http://")
+        && should_upgrade_http(raw_url)
+    {
         format!("https://{rest}")
     } else {
         raw_url.to_string()
@@ -169,6 +174,23 @@ fn fetch_async(
 fn looks_like_html(body: &str) -> bool {
     let head = body.trim_start();
     head.starts_with('<') || head.to_ascii_lowercase().contains("<html")
+}
+
+fn should_upgrade_http(raw_url: &str) -> bool {
+    let Ok(url) = url::Url::parse(raw_url) else {
+        return true;
+    };
+    let Some(host) = url.host_str() else {
+        return true;
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return false;
+    }
+    match url.host() {
+        Some(url::Host::Ipv4(addr)) => !addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => !addr.is_loopback(),
+        Some(url::Host::Domain(_)) | None => true,
+    }
 }
 
 fn make_execution(

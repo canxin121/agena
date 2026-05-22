@@ -11,8 +11,7 @@ use super::request::{
 use super::store::{PermissionRuleStore, PermissionStoreError};
 use super::{PermissionDecision, PermissionMode, PermissionRiskLevel};
 use crate::plugin::{
-    PermissionAdvice as PluginPermissionAdvice,
-    PermissionAskInput as PluginPermissionAskInput,
+    PermissionAdvice as PluginPermissionAdvice, PermissionAskInput as PluginPermissionAskInput,
     PermissionAskOutcome as PluginPermissionAskOutcome,
     PermissionDecision as PluginPermissionDecision, PluginHost,
 };
@@ -61,7 +60,8 @@ where
     }
 
     /// Same as [`decide_or_request`] but consults the plugin host's
-    /// `permission.ask` hook before falling back to the default flow. A
+    /// `permission.ask_permission` hook before falling back to the default
+    /// flow. A
     /// plugin returning `Decide(Allow|Deny)` short-circuits the runtime; a
     /// plugin returning `Defer` lets the next plugin or the default base
     /// decision win.
@@ -138,6 +138,8 @@ where
                     request_id: Uuid::new_v4().to_string(),
                     session_id,
                     action,
+                    related_actions: Vec::new(),
+                    requested_actions: Vec::new(),
                     reason,
                     explanation: "matched static permission policy".to_string(),
                     source: Some("static_policy".to_string()),
@@ -236,25 +238,31 @@ fn apply_plugin_advice<S>(
         operator: None,
     };
     match apply_advisory_permission_decision(base, advice.decision, &explanation) {
-        PermissionDecision::Allow => PermissionRuntimeDecision::Immediate(PermissionDecision::Allow),
+        PermissionDecision::Allow => {
+            PermissionRuntimeDecision::Immediate(PermissionDecision::Allow)
+        }
         PermissionDecision::Deny { reason } => {
             PermissionRuntimeDecision::Immediate(PermissionDecision::Deny { reason })
         }
-        PermissionDecision::Ask { reason } => PermissionRuntimeDecision::Pending(PendingPermission {
-            request: PermissionRequest {
-                request_id: Uuid::new_v4().to_string(),
-                session_id,
-                action,
-                reason,
-                explanation,
-                source: Some("plugin_permission_advice".to_string()),
-                scope: None,
-                operator: None,
-                risk: plugin_risk_to_core(advice.risk),
-                trace: vec![trace_step],
-                created_at: Utc::now(),
-            },
-        }),
+        PermissionDecision::Ask { reason } => {
+            PermissionRuntimeDecision::Pending(PendingPermission {
+                request: PermissionRequest {
+                    request_id: Uuid::new_v4().to_string(),
+                    session_id,
+                    action,
+                    related_actions: Vec::new(),
+                    requested_actions: Vec::new(),
+                    reason,
+                    explanation,
+                    source: Some("plugin_permission_advice".to_string()),
+                    scope: None,
+                    operator: None,
+                    risk: plugin_risk_to_core(advice.risk),
+                    trace: vec![trace_step],
+                    created_at: Utc::now(),
+                },
+            })
+        }
     }
 }
 

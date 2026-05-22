@@ -83,10 +83,10 @@ pub(super) fn execute(
 
     let analysis = analyze_command(input.command.as_str());
     if input.filesystem_effects.is_empty()
-        && let CommandClassification::Mutating { reason } = &analysis.classification
+        && let Some(reason) = filesystem_command_reason(input.command.as_str())
     {
         return Err(ToolError::InvalidInput(format!(
-            "bash filesystem_effects must declare at least one path because the command appears to modify files: {reason}"
+            "bash filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
         )));
     }
 
@@ -97,6 +97,7 @@ pub(super) fn execute(
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());
     executor.ensure_read_permission(&cwd)?;
     executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
+    executor.ensure_network_effects_permission(&input.network_effects)?;
 
     let mut env = inherited_environment();
     env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);
@@ -302,6 +303,34 @@ pub(super) fn mutating_command_reason(command: &str) -> Option<String> {
     }
 }
 
+pub(crate) fn filesystem_command_reason(command: &str) -> Option<String> {
+    if let Some(reason) = mutating_command_reason(command) {
+        return Some(reason);
+    }
+
+    if contains_input_redirection(command) {
+        return Some("uses shell input redirection".to_string());
+    }
+
+    let tokens = shell_tokens(command);
+    for segment in command_segments(tokens.as_slice()) {
+        if let Some(reason) = filesystem_segment_reason(segment) {
+            return Some(reason);
+        }
+    }
+    None
+}
+
+pub(crate) fn network_command_reason(command: &str) -> Option<String> {
+    let tokens = shell_tokens(command);
+    for segment in command_segments(tokens.as_slice()) {
+        if let Some(reason) = network_segment_reason(segment) {
+            return Some(reason);
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExitInterpretation {
     Success,
@@ -432,6 +461,390 @@ fn classify_segment(tokens: &[String]) -> CommandClassification {
     }
 
     CommandClassification::Unknown
+}
+
+fn network_segment_reason(tokens: &[String]) -> Option<String> {
+    let (Some(primary), subcommand, args) = first_command(tokens) else {
+        return None;
+    };
+    let primary_norm = primary.to_ascii_lowercase();
+    let subcommand_norm = subcommand.as_deref().map(str::to_ascii_lowercase);
+
+    if matches!(
+        primary_norm.as_str(),
+        "curl"
+            | "wget"
+            | "ssh"
+            | "scp"
+            | "sftp"
+            | "rsync"
+            | "telnet"
+            | "nc"
+            | "ncat"
+            | "socat"
+            | "ping"
+            | "traceroute"
+            | "dig"
+            | "nslookup"
+            | "host"
+            | "ftp"
+            | "tftp"
+            | "invoke-webrequest"
+            | "invoke-restmethod"
+            | "start-bitstransfer"
+            | "test-netconnection"
+    ) {
+        return Some(format!("invokes network command '{primary}'"));
+    }
+
+    if primary_norm == "git"
+        && matches!(
+            subcommand_norm.as_deref(),
+            Some("fetch" | "pull" | "push" | "ls-remote")
+        )
+    {
+        return Some(format!(
+            "invokes git subcommand '{}' that may contact a remote",
+            subcommand.unwrap_or_default()
+        ));
+    }
+
+    if primary_norm == "git"
+        && subcommand_norm.as_deref() == Some("clone")
+        && args
+            .iter()
+            .filter(|arg| !arg.starts_with('-'))
+            .any(|arg| looks_like_remote_target(arg))
+    {
+        return Some("invokes git clone with a remote target".to_string());
+    }
+
+    None
+}
+
+fn filesystem_segment_reason(tokens: &[String]) -> Option<String> {
+    let (Some(primary), subcommand, args) = first_command(tokens) else {
+        return Some("contains a command that could not be classified".to_string());
+    };
+    let primary_norm = primary.to_ascii_lowercase();
+    let subcommand_norm = subcommand.as_deref().map(str::to_ascii_lowercase);
+
+    if primary_norm == "curl" {
+        return curl_filesystem_reason(args.as_slice());
+    }
+
+    if matches!(
+        primary_norm.as_str(),
+        "invoke-webrequest" | "invoke-restmethod"
+    ) {
+        return powershell_web_cmdlet_filesystem_reason(primary.as_str(), args.as_slice());
+    }
+
+    if primary_norm == "start-bitstransfer" {
+        return Some("invokes Start-BitsTransfer which may read or write local files".to_string());
+    }
+
+    if matches!(
+        primary_norm.as_str(),
+        "pwd"
+            | "echo"
+            | "printf"
+            | "env"
+            | "printenv"
+            | "date"
+            | "uname"
+            | "whoami"
+            | "id"
+            | "hostname"
+            | "sleep"
+            | "true"
+            | "false"
+            | "yes"
+            | "seq"
+            | "ps"
+            | "kill"
+            | "get-location"
+            | "ping"
+            | "traceroute"
+            | "dig"
+            | "nslookup"
+            | "host"
+            | "telnet"
+            | "nc"
+            | "ncat"
+            | "socat"
+            | "test-netconnection"
+    ) {
+        return None;
+    }
+
+    if matches!(
+        primary_norm.as_str(),
+        "cat"
+            | "ls"
+            | "find"
+            | "grep"
+            | "rg"
+            | "diff"
+            | "cmp"
+            | "head"
+            | "tail"
+            | "sed"
+            | "awk"
+            | "sort"
+            | "uniq"
+            | "wc"
+            | "stat"
+            | "file"
+            | "basename"
+            | "dirname"
+            | "realpath"
+            | "which"
+            | "type"
+            | "du"
+            | "tree"
+            | "wget"
+    ) {
+        return Some(format!("invokes filesystem command '{primary}'"));
+    }
+
+    if primary_norm == "git" {
+        return Some(match subcommand_norm.as_deref() {
+            Some(subcommand) => format!("invokes git subcommand '{subcommand}'"),
+            None => "invokes git".to_string(),
+        });
+    }
+
+    if matches!(
+        primary_norm.as_str(),
+        "python"
+            | "python3"
+            | "node"
+            | "perl"
+            | "ruby"
+            | "php"
+            | "lua"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "fish"
+            | "pwsh"
+            | "powershell"
+            | "cmd"
+            | "make"
+            | "just"
+            | "cargo"
+            | "go"
+            | "java"
+            | "javac"
+            | "rustc"
+            | "npm"
+            | "pnpm"
+            | "yarn"
+            | "bun"
+            | "scp"
+            | "sftp"
+            | "rsync"
+            | "ssh"
+    ) {
+        return Some(format!(
+            "invokes '{primary}' which may read or write local files"
+        ));
+    }
+
+    Some(format!(
+        "invokes command '{primary}' that is not proven to avoid filesystem access"
+    ))
+}
+
+fn curl_filesystem_reason(args: &[String]) -> Option<String> {
+    if args.iter().any(|arg| arg.starts_with("file://")) {
+        return Some("invokes curl with a local file URL".to_string());
+    }
+
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        match arg {
+            "-o" | "--output" => {
+                if args.get(index + 1).is_none_or(|value| value != "-") {
+                    return Some("invokes curl output option that writes a local file".to_string());
+                }
+            }
+            "-O" | "--remote-name" => {
+                return Some(
+                    "invokes curl remote-name output which writes to the current directory"
+                        .to_string(),
+                );
+            }
+            "-T" | "--upload-file" => {
+                return Some("invokes curl upload option that reads a local file".to_string());
+            }
+            "-K" | "--config" => {
+                return Some("invokes curl config option that reads a local file".to_string());
+            }
+            "-c" | "--cookie-jar" => {
+                return Some("invokes curl cookie-jar option that writes a local file".to_string());
+            }
+            "--cacert" | "--cert" | "--key" => {
+                return Some(format!(
+                    "invokes curl option '{arg}' that reads a local file"
+                ));
+            }
+            "-b" | "--cookie" => {
+                if args
+                    .get(index + 1)
+                    .is_some_and(|value| curl_cookie_option_uses_file(value.as_str()))
+                {
+                    return Some(
+                        "invokes curl cookie option that reads from a local file".to_string(),
+                    );
+                }
+            }
+            "-d" | "--data" | "--data-ascii" | "--data-binary" | "--data-raw" | "--json" => {
+                if args
+                    .get(index + 1)
+                    .is_some_and(|value| curl_data_option_uses_file(value.as_str()))
+                {
+                    return Some(format!(
+                        "invokes curl option '{arg}' that reads request data from a local file"
+                    ));
+                }
+            }
+            "-F" | "--form" => {
+                if args
+                    .get(index + 1)
+                    .is_some_and(|value| curl_form_option_uses_file(value.as_str()))
+                {
+                    return Some("invokes curl form upload that reads a local file".to_string());
+                }
+            }
+            _ => {
+                if arg.starts_with("-o") && arg.len() > 2 && &arg[2..] != "-" {
+                    return Some("invokes curl output option that writes a local file".to_string());
+                }
+                if arg.starts_with("-T") && arg.len() > 2 {
+                    return Some("invokes curl upload option that reads a local file".to_string());
+                }
+                if arg.starts_with("-K") && arg.len() > 2 {
+                    return Some("invokes curl config option that reads a local file".to_string());
+                }
+                if arg.starts_with("--upload-file=") {
+                    return Some("invokes curl upload option that reads a local file".to_string());
+                }
+                if arg.starts_with("--output=") && arg != "--output=-" {
+                    return Some("invokes curl output option that writes a local file".to_string());
+                }
+                if arg.starts_with("--config=") {
+                    return Some("invokes curl config option that reads a local file".to_string());
+                }
+                if arg.starts_with("--cookie-jar=") {
+                    return Some(
+                        "invokes curl cookie-jar option that writes a local file".to_string(),
+                    );
+                }
+                if arg.starts_with("--cacert=")
+                    || arg.starts_with("--cert=")
+                    || arg.starts_with("--key=")
+                {
+                    return Some(format!(
+                        "invokes curl option '{arg}' that reads a local file"
+                    ));
+                }
+                if arg.starts_with("--cookie=")
+                    && curl_cookie_option_uses_file(
+                        arg.split_once('=').map(|(_, value)| value).unwrap_or(""),
+                    )
+                {
+                    return Some(
+                        "invokes curl cookie option that reads from a local file".to_string(),
+                    );
+                }
+                if arg.starts_with("--data=")
+                    || arg.starts_with("--data-ascii=")
+                    || arg.starts_with("--data-binary=")
+                    || arg.starts_with("--data-raw=")
+                    || arg.starts_with("--json=")
+                {
+                    let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
+                    if curl_data_option_uses_file(value) {
+                        return Some(
+                            "invokes curl data option that reads request data from a local file"
+                                .to_string(),
+                        );
+                    }
+                }
+                if arg.starts_with("--form=") {
+                    let value = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
+                    if curl_form_option_uses_file(value) {
+                        return Some(
+                            "invokes curl form upload that reads a local file".to_string(),
+                        );
+                    }
+                }
+                if arg.starts_with("-c") && arg.len() > 2 {
+                    return Some(
+                        "invokes curl cookie-jar option that writes a local file".to_string(),
+                    );
+                }
+                if arg.starts_with("-b") && arg.len() > 2 {
+                    if curl_cookie_option_uses_file(&arg[2..]) {
+                        return Some(
+                            "invokes curl cookie option that reads from a local file".to_string(),
+                        );
+                    }
+                }
+                if arg.starts_with("-d") && arg.len() > 2 {
+                    if curl_data_option_uses_file(&arg[2..]) {
+                        return Some(
+                            "invokes curl data option that reads request data from a local file"
+                                .to_string(),
+                        );
+                    }
+                }
+                if arg.starts_with("-F") && arg.len() > 2 {
+                    if curl_form_option_uses_file(&arg[2..]) {
+                        return Some(
+                            "invokes curl form upload that reads a local file".to_string(),
+                        );
+                    }
+                }
+            }
+        }
+        index += 1;
+    }
+
+    None
+}
+
+fn powershell_web_cmdlet_filesystem_reason(primary: &str, args: &[String]) -> Option<String> {
+    for arg in args {
+        let lower = arg.to_ascii_lowercase();
+        if lower == "-outfile" || lower.starts_with("-outfile:") {
+            return Some(format!(
+                "invokes {primary} with -OutFile which writes a local file"
+            ));
+        }
+        if lower == "-infile" || lower.starts_with("-infile:") {
+            return Some(format!(
+                "invokes {primary} with -InFile which reads a local file"
+            ));
+        }
+    }
+    None
+}
+
+fn curl_cookie_option_uses_file(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty() && !trimmed.contains('=')
+}
+
+fn curl_data_option_uses_file(value: &str) -> bool {
+    value.trim_start().starts_with('@')
+}
+
+fn curl_form_option_uses_file(value: &str) -> bool {
+    value.contains('@') || value.contains('<')
 }
 
 fn interpret_exit_code(
@@ -591,6 +1004,42 @@ fn contains_write_redirection(command: &str) -> bool {
     false
 }
 
+fn contains_input_redirection(command: &str) -> bool {
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut escape = false;
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if escape {
+            escape = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if !single_quote => {
+                escape = true;
+            }
+            '\'' if !double_quote => {
+                single_quote = !single_quote;
+            }
+            '"' if !single_quote => {
+                double_quote = !double_quote;
+            }
+            '<' if !single_quote && !double_quote => {
+                if chars.peek() == Some(&'<') {
+                    chars.next();
+                    continue;
+                }
+                return true;
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
 fn is_known_read_only_command(primary: &str, subcommand: Option<&str>, args: &[String]) -> bool {
     if matches!(
         primary,
@@ -707,4 +1156,16 @@ fn is_assignment(token: &str) -> bool {
 
 fn is_command_wrapper(token: &str) -> bool {
     matches!(token, "env" | "command" | "builtin" | "nohup")
+}
+
+fn looks_like_remote_target(arg: &str) -> bool {
+    let trimmed = arg.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    trimmed.contains("://")
+        || trimmed.starts_with("ssh://")
+        || trimmed.starts_with("git@")
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
 }

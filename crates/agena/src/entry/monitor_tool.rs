@@ -26,6 +26,7 @@ pub(crate) fn execute(
             description,
             workdir,
             filesystem_effects,
+            network_effects,
             timeout_ms,
             persistent,
             include_pattern,
@@ -33,10 +34,10 @@ pub(crate) fn execute(
             capture_stderr,
         } => {
             if filesystem_effects.is_empty()
-                && let Some(reason) = super::bash::mutating_command_reason(command)
+                && let Some(reason) = super::bash::filesystem_command_reason(command)
             {
                 return Err(ToolError::InvalidInput(format!(
-                    "monitor filesystem_effects must declare at least one path because the command appears to modify files: {reason}"
+                    "monitor filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
                 )));
             }
             let cwd = workdir
@@ -45,6 +46,7 @@ pub(crate) fn execute(
                 .unwrap_or_else(|| executor.workspace_root().to_path_buf());
             executor.ensure_read_permission(&cwd)?;
             executor.ensure_filesystem_effects_permission(filesystem_effects, &cwd)?;
+            executor.ensure_network_effects_permission(network_effects)?;
 
             let env = inherited_environment();
             let started = registry

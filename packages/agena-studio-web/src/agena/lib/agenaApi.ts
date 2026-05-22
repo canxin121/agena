@@ -799,15 +799,29 @@ export type MessageResource = {
 
 export type PartLoadMode = 'none' | 'summary' | 'full'
 
+export type PermissionRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+
+export type PermissionDecisionTraceStep = {
+  source_kind: 'static_policy' | 'persisted_rule' | 'plugin_advice' | 'managed_policy'
+  summary: string
+  source?: string | null
+  scope?: 'session' | 'workspace' | 'global' | null
+  operator?: string | null
+}
+
 export type PermissionRequest = {
   request_id: string
   session_id?: number | null
   action: Record<string, unknown>
+  related_actions?: Record<string, unknown>[]
+  requested_actions?: Record<string, unknown>[]
   reason: string
   explanation?: string
   source?: string | null
   scope?: 'session' | 'workspace' | 'global' | null
   operator?: string | null
+  risk?: PermissionRiskLevel | null
+  trace?: PermissionDecisionTraceStep[]
   created_at: string
 }
 

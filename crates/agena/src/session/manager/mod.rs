@@ -840,18 +840,17 @@ fn persisted_mode_for_reply(kind: PermissionReplyKind) -> Option<PermissionMode>
     }
 }
 
-async fn persisted_rule_for_reply(
+async fn persisted_rules_for_reply(
     store: &SessionStore,
     session_id: i64,
-    action: &PermissionAction,
+    actions: &[PermissionAction],
     reply: &PermissionReply,
     operator: Option<&str>,
-) -> Result<Option<PersistedPermissionRule>, AppError> {
+) -> Result<Vec<PersistedPermissionRule>, AppError> {
     let Some(mode) = persisted_mode_for_reply(reply.kind) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     let scope = reply.scope.unwrap_or(PermissionScope::Session);
-    let action_key = permission_action_key(action)?;
     let workspace_id = match scope {
         PermissionScope::Session | PermissionScope::Global => None,
         PermissionScope::Workspace => Some(store.current_workspace_id().await?),
@@ -860,19 +859,28 @@ async fn persisted_rule_for_reply(
         PermissionScope::Session => Some(session_id),
         PermissionScope::Workspace | PermissionScope::Global => None,
     };
-    Ok(Some(PersistedPermissionRule {
-        action_key,
-        mode,
-        scope,
-        session_id: session_rule_id,
-        workspace_id,
-        source: "permission_reply".to_string(),
-        reason: reply.reason.clone(),
-        operator: operator.map(str::to_string),
-        revoked_at_ms: None,
-        revoked_reason: None,
-        revoked_by: None,
-    }))
+    let mut seen = HashSet::new();
+    let mut rules = Vec::new();
+    for action in actions {
+        let action_key = permission_action_key(action)?;
+        if !seen.insert(action_key.clone()) {
+            continue;
+        }
+        rules.push(PersistedPermissionRule {
+            action_key,
+            mode,
+            scope,
+            session_id: session_rule_id,
+            workspace_id,
+            source: "permission_reply".to_string(),
+            reason: reply.reason.clone(),
+            operator: operator.map(str::to_string),
+            revoked_at_ms: None,
+            revoked_reason: None,
+            revoked_by: None,
+        });
+    }
+    Ok(rules)
 }
 
 fn permission_scope_label(scope: PermissionScope) -> String {

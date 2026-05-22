@@ -76,6 +76,10 @@ pub struct PermissionRequest {
     pub request_id: String,
     pub session_id: Option<i64>,
     pub action: PermissionAction,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_actions: Vec<PermissionAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_actions: Vec<PermissionAction>,
     pub reason: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub explanation: String,

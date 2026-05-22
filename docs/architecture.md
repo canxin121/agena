@@ -336,7 +336,7 @@ Plugin host can invoke hooks for:
 - tool invoke and streaming tool invoke.
 - chat message/params/headers/system transform.
 - auth and provider list.
-- permission ask.
+- `permission.ask_permission` hook.
 - command before/after and shell env.
 - config notification.
 - session start/end. Runtime provider prompts are kept append-only for cache stability.
@@ -359,7 +359,7 @@ Static config produces base policy. During runtime:
 
 1. ToolExecutor derives the requested action.
 2. Permission runtime checks persisted permission rules.
-3. Plugin `permission.ask` hooks can decide or advise.
+3. Plugin `permission.ask_permission` hooks can decide or advise.
 4. Static policy allows, denies, or creates a pending permission request.
 5. Pending request appears in session execution state and UI/API.
 6. User reply can apply once or persist a session/workspace/global rule.

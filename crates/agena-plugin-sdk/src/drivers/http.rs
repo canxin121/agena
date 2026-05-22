@@ -157,14 +157,20 @@ impl HostClient for HttpCallbackHostClient {
         &self,
         req: PermissionAskInput,
     ) -> crate::error::Result<PermissionDecision> {
-        self.call(
-            method::HOST_PERMISSION_ASK,
-            with_current_context(
-                serde_json::to_value(req)
-                    .map_err(|e| PluginError::invalid_params(e.to_string()))?,
-            ),
-        )
-        .await
+        let params = with_current_context(
+            serde_json::to_value(req).map_err(|e| PluginError::invalid_params(e.to_string()))?,
+        );
+        match self.call(method::HOST_PERMISSION_ASK, params.clone()).await {
+            Ok(decision) => Ok(decision),
+            Err(err)
+                if err.code == crate::error::PluginErrorCode::NotImplemented
+                    || err.message.contains("method not found")
+                    || err.message.contains("not implemented") =>
+            {
+                self.call(method::HOST_PERMISSION_ASK_LEGACY, params).await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn check_path_permission(

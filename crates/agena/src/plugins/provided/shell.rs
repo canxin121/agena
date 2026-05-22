@@ -1,6 +1,8 @@
 //! `agena.shell` plugin: exec, monitor.
 
-use crate::message::{BashToolInput, FilesystemEffect, MonitorToolInput, PowerShellToolInput};
+use crate::message::{
+    BashToolInput, FilesystemEffect, MonitorToolInput, NetworkEffect, PowerShellToolInput,
+};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{HostCapability, ToolTag};
 use crate::plugins::provided::router::InProcessToolPlugin;
@@ -23,9 +25,9 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "shell",
-    description = "Shell command dispatcher. Set action to exec, monitor_start, monitor_list, monitor_read, or monitor_stop. Exec payloads must declare `shell = bash|powershell` plus filesystem_effects for paths the command may read or write.",
+    description = "Shell command dispatcher. Set action to exec, monitor_start, monitor_list, monitor_read, or monitor_stop. Exec payloads must declare `shell = bash|powershell` plus filesystem_effects and network_effects for every path or network target the command may access.",
     summary = "Run shell, PowerShell, or monitor commands.",
-    help = "Use action `exec` for one-shot shell commands, with `shell = bash|powershell`. Use `monitor_start`, `monitor_list`, `monitor_read`, and `monitor_stop` for long-running processes. Shell execution payloads must declare `filesystem_effects` for any paths the command may read or write.",
+    help = "Use action `exec` for one-shot shell commands, with `shell = bash|powershell`. Use `monitor_start`, `monitor_list`, `monitor_read`, and `monitor_stop` for long-running processes. Shell execution payloads must declare `filesystem_effects` and `network_effects` for any paths or outbound targets the command may access; pass empty arrays when there is no filesystem or network effect beyond entering `workdir`.",
     tags(ToolTag::Mutating, ToolTag::Shell),
     host_capabilities(HostCapability::MonitorRegistry),
     concurrency_safe = false,
@@ -80,6 +82,7 @@ struct ShellExecInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workdir: Option<String>,
     filesystem_effects: Vec<FilesystemEffect>,
+    network_effects: Vec<NetworkEffect>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -90,6 +93,7 @@ struct ShellMonitorStartInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     workdir: Option<String>,
     filesystem_effects: Vec<FilesystemEffect>,
+    network_effects: Vec<NetworkEffect>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     timeout_ms: Option<u64>,
     #[serde(default)]
@@ -145,6 +149,7 @@ fn shell_exec_tool_args(input: ShellExecInput) -> crate::plugin::sdk::Result<(St
                 timeout_ms: input.timeout_ms,
                 workdir: input.workdir,
                 filesystem_effects: input.filesystem_effects,
+                network_effects: input.network_effects,
             },
         ),
         ShellExecKind::PowerShell => tool_args(
@@ -155,6 +160,7 @@ fn shell_exec_tool_args(input: ShellExecInput) -> crate::plugin::sdk::Result<(St
                 timeout_ms: input.timeout_ms,
                 workdir: input.workdir,
                 filesystem_effects: input.filesystem_effects,
+                network_effects: input.network_effects,
             },
         ),
     }
@@ -170,6 +176,7 @@ fn shell_monitor_start_tool_args(
             description: args.description,
             workdir: args.workdir,
             filesystem_effects: args.filesystem_effects,
+            network_effects: args.network_effects,
             timeout_ms: args.timeout_ms,
             persistent: args.persistent,
             include_pattern: args.include_pattern,

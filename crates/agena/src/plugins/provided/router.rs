@@ -13,8 +13,9 @@ use serde_json::Value as JsonValue;
 use crate::entry::result::ToolPayloadExecution;
 use crate::entry::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 use crate::message::{
-    ApplyPatchToolInput, BashToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
-    NotebookEditToolInput, PowerShellToolInput, ReadToolInput, WebFetchToolInput,
+    ApplyPatchToolInput, BashToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
+    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorToolInput,
+    NetworkEffect, NotebookEditToolInput, PowerShellToolInput, ReadToolInput, WebFetchToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
@@ -248,29 +249,57 @@ pub(crate) fn permission_paths_for(
         }
         "bash" => {
             let payload: BashToolInput = serde_json::from_value(input.clone())?;
-            Ok(default_workspace_read(payload.workdir.is_none()))
+            Ok(workdir_read_request(payload.workdir.as_deref()))
         }
         "powershell" => {
             let payload: PowerShellToolInput = serde_json::from_value(input.clone())?;
-            Ok(default_workspace_read(payload.workdir.is_none()))
+            Ok(workdir_read_request(payload.workdir.as_deref()))
         }
         "glob" => {
             let payload: GlobToolInput = serde_json::from_value(input.clone())?;
-            Ok(default_workspace_read(payload.path.is_none()))
+            Ok(base_path_read_request(payload.path.as_deref()))
         }
         "grep" => {
             let payload: GrepToolInput = serde_json::from_value(input.clone())?;
-            Ok(default_workspace_read(payload.path.is_none()))
+            Ok(base_path_read_request(payload.path.as_deref()))
         }
         "monitor" => {
             let payload: MonitorToolInput = serde_json::from_value(input.clone())?;
-            let needs_workspace = matches!(payload, MonitorToolInput::Start { workdir: None, .. });
-            Ok(default_workspace_read(needs_workspace))
+            Ok(match payload {
+                MonitorToolInput::Start { workdir, .. } => workdir_read_request(workdir.as_deref()),
+                MonitorToolInput::List {}
+                | MonitorToolInput::Read { .. }
+                | MonitorToolInput::Stop { .. } => Vec::new(),
+            })
         }
         "notebook_edit" => {
             let payload: NotebookEditToolInput = serde_json::from_value(input.clone())?;
             Ok(vec![crate::plugin::sdk::PathRequest::write(
                 payload.notebook_path,
+            )])
+        }
+        "lsp_definition" => {
+            let payload: LspDefinitionToolInput = serde_json::from_value(input.clone())?;
+            Ok(vec![crate::plugin::sdk::PathRequest::read(
+                payload.file_path,
+            )])
+        }
+        "lsp_references" => {
+            let payload: LspReferencesToolInput = serde_json::from_value(input.clone())?;
+            Ok(vec![crate::plugin::sdk::PathRequest::read(
+                payload.file_path,
+            )])
+        }
+        "lsp_hover" => {
+            let payload: LspHoverToolInput = serde_json::from_value(input.clone())?;
+            Ok(vec![crate::plugin::sdk::PathRequest::read(
+                payload.file_path,
+            )])
+        }
+        "lsp_diagnostics" => {
+            let payload: LspDiagnosticsToolInput = serde_json::from_value(input.clone())?;
+            Ok(vec![crate::plugin::sdk::PathRequest::read(
+                payload.file_path,
             )])
         }
         _ => Ok(Vec::new()),
@@ -282,6 +311,35 @@ pub(crate) fn permission_networks_for(
     input: &serde_json::Value,
 ) -> SdkResult<Vec<NetworkRequest>> {
     match tool {
+        "bash" => {
+            let payload: BashToolInput = serde_json::from_value(input.clone())?;
+            declared_shell_network_requests(
+                "bash",
+                payload.command.as_str(),
+                &payload.network_effects,
+            )
+        }
+        "powershell" => {
+            let payload: PowerShellToolInput = serde_json::from_value(input.clone())?;
+            declared_shell_network_requests(
+                "powershell",
+                payload.command.as_str(),
+                &payload.network_effects,
+            )
+        }
+        "monitor" => {
+            let payload: MonitorToolInput = serde_json::from_value(input.clone())?;
+            match payload {
+                MonitorToolInput::Start {
+                    command,
+                    network_effects,
+                    ..
+                } => declared_shell_network_requests("monitor", command.as_str(), &network_effects),
+                MonitorToolInput::List {}
+                | MonitorToolInput::Read { .. }
+                | MonitorToolInput::Stop { .. } => Ok(Vec::new()),
+            }
+        }
         "web_fetch" => {
             let payload: WebFetchToolInput = serde_json::from_value(input.clone())?;
             Ok(vec![NetworkRequest::connect(payload.url)])
@@ -293,11 +351,41 @@ pub(crate) fn permission_networks_for(
     }
 }
 
-fn default_workspace_read(needs_workspace: bool) -> Vec<crate::plugin::sdk::PathRequest> {
-    needs_workspace
-        .then(|| crate::plugin::sdk::PathRequest::read(""))
-        .into_iter()
-        .collect()
+fn workdir_read_request(workdir: Option<&str>) -> Vec<crate::plugin::sdk::PathRequest> {
+    vec![crate::plugin::sdk::PathRequest::read(
+        normalized_declared_path(workdir),
+    )]
+}
+
+fn base_path_read_request(path: Option<&str>) -> Vec<crate::plugin::sdk::PathRequest> {
+    vec![crate::plugin::sdk::PathRequest::read(
+        normalized_declared_path(path),
+    )]
+}
+
+fn normalized_declared_path(path: Option<&str>) -> String {
+    path.map(str::trim)
+        .filter(|path| !path.is_empty())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn declared_shell_network_requests(
+    tool: &str,
+    command: &str,
+    effects: &[NetworkEffect],
+) -> SdkResult<Vec<NetworkRequest>> {
+    if effects.is_empty()
+        && let Some(reason) = crate::entry::bash::network_command_reason(command)
+    {
+        return Err(PluginError::invalid_params(format!(
+            "{tool} network_effects must declare at least one target because the command appears to use the network: {reason}"
+        )));
+    }
+    Ok(effects
+        .iter()
+        .map(|effect| NetworkRequest::connect(effect.target.clone()))
+        .collect())
 }
 
 pub(crate) fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolInvokeOutput {

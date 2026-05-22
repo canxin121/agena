@@ -183,9 +183,9 @@ impl McpEntryTarget {
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "mcp",
-    description = "MCP command surface.",
-    summary = "Read MCP resources/prompts or call discovered MCP tools.",
-    help = "Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call`.",
+    description = "MCP bridge command. Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call` to access capabilities exposed by configured MCP servers.",
+    summary = "Read MCP resources or prompt templates, or call discovered MCP tools.",
+    help = "Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call`. MCP prompts here are server-provided prompt templates/messages, not Agena chat prompts or permission prompts.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp),
     concurrency_safe = false,
     load = "deferred"
@@ -311,7 +311,7 @@ fn mcp_decl(
     let tool_count = tools.len();
     let entry = McpToolInput::tool_decl()
     .description(format!(
-        "MCP command for {server_count} configured server(s) and {tool_count} discovered tool(s). Set action to list_resources, read_resource, list_prompts, get_prompt, or call."
+        "MCP command for {server_count} configured server(s) and {tool_count} discovered tool(s). Set action to list_resources, read_resource, list_prompts, get_prompt, or call. MCP prompts are server-provided prompt templates/messages, not Agena chat prompts."
     ))
     .summary(format!(
         "Read MCP resources/prompts or call discovered MCP tools across {server_count} server(s)."

@@ -490,7 +490,7 @@ Path 使用点分语法。带点的 table key 用引号包起来，例如 `plugi
 
 Studio controls 会通过同一个 action endpoint 执行。按钮不额外传值；`select`、`toggle`/`checkbox`/`switch`、`text`、`number` 等输入型 controls 会把当前值放到请求 `input.value`，再按上面的合并规则交给 `invoke_tool` action。
 
-Direct UI invocation 会经过 tool registry 和 permission check。当前没有交互式 permission confirmation 响应通道；如果调用需要 ask 或被 deny，接口返回 409。
+Direct UI invocation 会经过 tool registry 和 permission check。当前没有交互式 permission confirmation 响应通道；如果调用需要 `ask_permission` 或被 deny，接口返回 409。
 
 Marketplace search/install 请求示例：
 

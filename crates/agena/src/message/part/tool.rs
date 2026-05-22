@@ -40,6 +40,15 @@ pub struct FilesystemEffect {
     pub access: FilesystemAccess,
 }
 
+/// One outbound network target a command may access.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct NetworkEffect {
+    /// Absolute URL or `host[:port]` target. Shell tools must declare every
+    /// remote endpoint they may connect to; pass an empty list when the
+    /// command has no network effect.
+    pub target: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct BashToolInput {
     pub command: String,
@@ -52,6 +61,9 @@ pub struct BashToolInput {
     /// Filesystem paths the command may read or write. Pass an empty list only
     /// when the command has no filesystem effect beyond entering `workdir`.
     pub filesystem_effects: Vec<FilesystemEffect>,
+    /// Outbound network targets the command may connect to. Pass an empty list
+    /// when the command has no network effect.
+    pub network_effects: Vec<NetworkEffect>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -211,6 +223,8 @@ pub enum MonitorToolInput {
         /// Filesystem paths the command may read or write. Relative paths are
         /// resolved from the monitor working directory.
         filesystem_effects: Vec<FilesystemEffect>,
+        /// Outbound network targets the command may connect to.
+        network_effects: Vec<NetworkEffect>,
         /// Auto-kill after this many ms when not persistent. Default 300000, max 3_600_000.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout_ms: Option<u64>,
@@ -499,6 +513,9 @@ pub struct PowerShellToolInput {
     /// Filesystem paths the command may read or write. Pass an empty list only
     /// when the command has no filesystem effect beyond entering `workdir`.
     pub filesystem_effects: Vec<FilesystemEffect>,
+    /// Outbound network targets the command may connect to. Pass an empty list
+    /// when the command has no network effect.
+    pub network_effects: Vec<NetworkEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

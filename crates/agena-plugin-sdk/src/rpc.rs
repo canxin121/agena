@@ -138,7 +138,8 @@ pub mod method {
     pub const HOOK_CHAT_SYSTEM_TRANSFORM: &str = "hooks/chat.system.transform";
     pub const HOOK_AUTH: &str = "hooks/auth";
     pub const HOOK_PROVIDER_LIST: &str = "hooks/provider.list";
-    pub const HOOK_PERMISSION_ASK: &str = "hooks/permission.ask";
+    pub const HOOK_PERMISSION_ASK: &str = "hooks/permission.ask_permission";
+    pub const HOOK_PERMISSION_ASK_LEGACY: &str = "hooks/permission.ask";
     pub const HOOK_NOTIFICATION: &str = "hooks/notification";
     pub const HOOK_COMMAND_BEFORE: &str = "hooks/command.execute.before";
     pub const HOOK_SHELL_ENV: &str = "hooks/shell.env";
@@ -159,7 +160,8 @@ pub mod method {
     pub const HOST_EVENT_PUBLISH: &str = "host/event.publish";
     pub const HOST_EVENT_SUBSCRIBE: &str = "host/event.subscribe";
     pub const HOST_EVENT_UNSUBSCRIBE: &str = "host/event.unsubscribe";
-    pub const HOST_PERMISSION_ASK: &str = "host/permission.ask";
+    pub const HOST_PERMISSION_ASK: &str = "host/permission.ask_permission";
+    pub const HOST_PERMISSION_ASK_LEGACY: &str = "host/permission.ask";
     pub const HOST_PERMISSION_CHECK_PATH: &str = "host/permission.check_path";
     pub const HOST_PERMISSION_CHECK_NETWORK: &str = "host/permission.check_network";
     pub const HOST_CONFIG_READ: &str = "host/config.read";

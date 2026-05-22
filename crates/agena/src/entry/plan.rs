@@ -16,7 +16,8 @@
 //! 3. The model writes the plan to the file (via apply_patch is fine
 //!    since plan files live under workspace) and then calls
 //!    `exit_plan_mode`.  ExitPlanMode does NOT auto-approve; it surfaces
-//!    a permission ask so the human gets to read the plan first.  On
+//!    a permission confirmation request so the human gets to read the plan
+//!    first. On
 //!    approval, plan mode is cleared and subsequent mutating calls are
 //!    allowed again.
 

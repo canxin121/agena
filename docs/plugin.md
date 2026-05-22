@@ -562,7 +562,7 @@ Studio 使用两条执行路径：
 - runtime skill/command 或 plugin tool 的直接调用走 `POST /api/v1/plugins/ui/invoke-tool`。
 - manifest 中的 Studio command/control/view control action 走 `POST /api/v1/plugins/{plugin_id}/ui/actions/{action_id}`。
 
-这两个 REST 入口都会经过 plugin host 的 tool registry 和 permission 检查。当前 direct UI invocation 没有交互式 permission confirmation 流；如果调用需要 ask/deny，API 会返回 409，Studio 需要把结果作为无法直接执行的操作处理。
+这两个 REST 入口都会经过 plugin host 的 tool registry 和 permission 检查。当前 direct UI invocation 没有交互式 permission confirmation 流；如果调用需要 `ask_permission` 或被 deny，API 会返回 409，Studio 需要把结果作为无法直接执行的操作处理。
 
 ## Hooks
 
@@ -577,7 +577,7 @@ Hook 名称遵循 plugin SDK 协议命名；`tool.*` hook 作用于 plugin tool 
 | tool | `tool.execute.before`, `tool.execute.after`, `tool.execute.failure`, `tool.invoke`, `tool.invoke.stream`, `tool.definition` |
 | chat | `chat.message`, `chat.messages.transform`, `chat.params`, `chat.headers`, `chat.system.transform` |
 | provider/auth | `provider.list`, `auth` |
-| permission | `permission.ask` |
+| permission | `permission.ask_permission` |
 | command/shell | `command.execute.before`, `command.execute.after`, `shell.env` |
 | session | `session.start`, `session.end` |
 | turn | `pre_turn`, `post_turn`, `user.prompt.submit`, `agent.stop` |
@@ -591,7 +591,7 @@ Provider-visible prompt content is append-only within a session so upstream prom
 - 在 `provider.list` 中注入 plugin-provided provider。
 - 在 `chat.headers` 中给 provider request 增加 header。
 - 在 `chat.params` 中调整 temperature、max output tokens 等 request 参数。
-- 在 `permission.ask` 中为组织策略提供建议或决策。
+- 在 `permission.ask_permission` 中为组织策略提供建议或决策。
 - 在 `shell.env` 中注入 shell 环境变量。
 - 在 `tool.execute.before/after` 中改写 tool 调用入参或输出。
 - 在 `tool.definition` 中调整 tool definition。
@@ -636,7 +636,7 @@ Plugin tool 调用会经过同一套 permission system：
 1. Tool manifest 声明 `input_paths`、`input_networks`、`network_access`。
 2. Plugin 可以在运行时通过 `permission_paths` / `permission_networks` 补充动态审计项。
 3. Permission runtime 检查 path/network/tool policy。
-4. `permission.ask` hooks 可以给出建议；拥有 `PermissionDecision` capability 的 plugin 可以返回最终决策。
+4. `permission.ask_permission` hooks 可以给出建议；拥有 `PermissionDecision` capability 的 plugin 可以返回最终决策。
 5. 需要用户确认时，session 状态和 UI/API 会产生 pending permission request。
 
 Manifest 中的权限声明适合 tool 调用前就能知道的资源：

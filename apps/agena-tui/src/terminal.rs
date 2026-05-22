@@ -11,8 +11,8 @@ use crossterm::{
     cursor::{Hide, Show},
     event::{
         DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-        EnableFocusChange, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -102,6 +102,7 @@ fn set_stdio_terminal() -> Result<()> {
         EnterAlternateScreen,
         EnableBracketedPaste,
         EnableFocusChange,
+        EnableMouseCapture,
         EnableAlternateScroll,
         Hide
     )?;

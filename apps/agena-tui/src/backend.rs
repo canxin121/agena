@@ -2520,21 +2520,48 @@ impl Backend {
         } else {
             optional_non_empty(draft.default_model.as_str()).unwrap_or(model_id)
         };
-        let provider_patch = build_provider_patch_value(
-            &draft,
-            default_adapter,
-            default_model,
+        let include_defaults = set_default || draft.source_provider_id.is_none();
+        let existing_adapter = draft
+            .source_provider_id
+            .as_deref()
+            .map(|provider_id| {
+                read_file_setting(
+                    self.runtime.config_resolution().meta.config_path.clone(),
+                    ConfigSettingsGetInput {
+                        path: Some(provider_adapter_settings_path(provider_id, adapter_id)),
+                        source: agena::config::ConfigSettingsSource::File,
+                    },
+                )
+                .map_err(|error| anyhow!(error.to_string()))
+                .context("failed to read configured provider adapter")
+                .map(|response| response.value)
+            })
+            .transpose()?;
+        let adapter_patch =
+            merge_provider_model_adapter_patch(existing_adapter, model_id, model_value)?;
+        let mut provider_patch = JsonMap::new();
+        provider_patch.insert("enabled".to_owned(), JsonValue::Bool(true));
+        provider_patch.insert(
+            "auth".to_owned(),
+            JsonValue::Object(build_provider_auth_patch_value(&draft)?),
+        );
+        provider_patch.insert(
+            "adapters".to_owned(),
             json!({
-                adapter_id: {
-                    "enabled": true,
-                    "models": {
-                        model_id: model_value,
-                    }
-                }
+                adapter_id: adapter_patch,
             }),
-            set_default || draft.source_provider_id.is_none(),
-        )?;
-        self.patch_provider_settings(provider_id, provider_patch)
+        );
+        if include_defaults {
+            provider_patch.insert(
+                "default_adapter".to_owned(),
+                JsonValue::String(default_adapter.to_owned()),
+            );
+            provider_patch.insert(
+                "default_model".to_owned(),
+                JsonValue::String(default_model.to_owned()),
+            );
+        }
+        self.patch_provider_settings(provider_id, JsonValue::Object(provider_patch))
             .await?;
         Ok(format!(
             "Saved configured model {provider_id}/{adapter_id}/{model_id}."
@@ -4493,8 +4520,43 @@ fn provider_model_settings_path(provider_id: &str, adapter_id: &str, model_id: &
     )
 }
 
+fn provider_adapter_settings_path(provider_id: &str, adapter_id: &str) -> String {
+    format!(
+        "providers.{}.adapters.{}",
+        quoted_settings_segment(provider_id),
+        quoted_settings_segment(adapter_id),
+    )
+}
+
 fn provider_settings_path(provider_id: &str) -> String {
     format!("providers.{}", quoted_settings_segment(provider_id))
+}
+
+fn merge_provider_model_adapter_patch(
+    existing_adapter: Option<JsonValue>,
+    model_id: &str,
+    model_value: JsonValue,
+) -> Result<JsonValue> {
+    let mut adapter = match existing_adapter {
+        Some(JsonValue::Object(object)) => object,
+        Some(JsonValue::Null) | None => JsonMap::new(),
+        Some(_) => {
+            return Err(anyhow!(
+                "configured provider adapter settings must be a JSON object"
+            ));
+        }
+    };
+    adapter.insert("enabled".to_owned(), JsonValue::Bool(true));
+    let models = adapter
+        .entry("models".to_owned())
+        .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+    let Some(models_object) = models.as_object_mut() else {
+        return Err(anyhow!(
+            "configured provider adapter models must be a JSON object"
+        ));
+    };
+    models_object.insert(model_id.to_owned(), model_value);
+    Ok(JsonValue::Object(adapter))
 }
 
 fn provider_model_selection_contains(
@@ -4745,4 +4807,38 @@ fn detect_mime(path: &Path, bytes: &[u8]) -> String {
         .first_raw()
         .map(str::to_owned)
         .unwrap_or_else(|| "application/octet-stream".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_provider_model_adapter_patch_preserves_existing_models() {
+        let merged = merge_provider_model_adapter_patch(
+            Some(json!({
+                "enabled": true,
+                "models": {
+                    "model-a": { "display_name": "Model A" },
+                    "model-b": { "display_name": "Model B" }
+                },
+                "base_url": "https://example.com"
+            })),
+            "model-b",
+            json!({ "display_name": "Model B2" }),
+        )
+        .expect("adapter patch should merge");
+
+        assert_eq!(
+            merged,
+            json!({
+                "enabled": true,
+                "models": {
+                    "model-a": { "display_name": "Model A" },
+                    "model-b": { "display_name": "Model B2" }
+                },
+                "base_url": "https://example.com"
+            })
+        );
+    }
 }

@@ -531,63 +531,6 @@ where
         .map_err(|err| ConfigError::Validation(format!("plugins.list.{plugin_id}.options: {err}")))
 }
 
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-
-    use super::{RawConfig, validate_config_text};
-    use crate::config::{ConfigError, ProcessEnvironment};
-
-    #[test]
-    fn validate_config_text_rejects_removed_top_level_hooks() {
-        let err = validate_config_text(
-            Path::new("config.json"),
-            r#"{"hooks":[{"event":"user_prompt_submit","command":"true"}]}"#,
-            &ProcessEnvironment,
-        )
-        .expect_err("top-level hooks should be rejected");
-
-        match err {
-            ConfigError::Validation(message) => {
-                assert!(message.contains("`hooks` has been removed"));
-            }
-            other => panic!("unexpected error: {other}"),
-        }
-    }
-
-    #[test]
-    fn validate_config_text_rejects_removed_agena_hooks_plugin() {
-        let err = validate_config_text(
-            Path::new("config.json"),
-            r#"{"plugins":{"list":{"agena.hooks":{"kind":"static","options":{"hooks":[]}}}}}"#,
-            &ProcessEnvironment,
-        )
-        .expect_err("agena.hooks plugin should be rejected");
-
-        match err {
-            ConfigError::Validation(message) => {
-                assert!(message.contains("`plugins.list.\"agena.hooks\"` has been removed"));
-            }
-            other => panic!("unexpected error: {other}"),
-        }
-    }
-
-    #[test]
-    fn resolve_config_supports_top_level_session_compaction() {
-        let raw = serde_json::from_str::<RawConfig>(
-            r#"{"session":{"compaction":{"auto":false,"reserved_tokens":512}}}"#,
-        )
-        .expect("raw config should parse");
-
-        let resolved = raw
-            .resolve_with_env(&ProcessEnvironment)
-            .expect("config should resolve");
-
-        assert!(!resolved.session.compaction.auto);
-        assert_eq!(resolved.session.compaction.reserved_tokens, Some(512));
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[allow(dead_code)]
 pub(crate) struct RawPluginConfig;

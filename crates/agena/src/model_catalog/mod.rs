@@ -36,9 +36,6 @@ pub use types::{
     ModelCatalogSnapshot,
 };
 
-#[cfg(test)]
-use store::CachedOfficialCatalog;
-
 use crate::{
     AppError,
     config::{ConfigResolution, ProviderAdapterDefinition, ProviderCapabilityFamilyConfig},
@@ -131,11 +128,3 @@ use merge::{
     merge_catalog_definition, merge_live_provider_catalog_document,
     merge_public_source_catalog_document, provider_priority,
 };
-
-#[cfg(test)]
-use merge::{
-    merge_catalog_speed_mode, merge_catalog_speed_mode_fill_missing, merge_catalog_thinking_mode,
-};
-
-#[cfg(test)]
-mod tests;

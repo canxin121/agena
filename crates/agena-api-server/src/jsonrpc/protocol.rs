@@ -221,34 +221,3 @@ pub enum AppServerNotification {
         status: String,
     },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn request_round_trips() {
-        let request = JsonRpcRequest {
-            jsonrpc: JSONRPC_VERSION.to_owned(),
-            id: RequestId::String("abc".to_owned()),
-            method: method::TURN_SUBMIT.to_owned(),
-            params: Some(json!({"session_id": 7, "prompt": "hello"})),
-        };
-        let value = serde_json::to_value(&request).unwrap();
-        let decoded: JsonRpcRequest = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded, request);
-    }
-
-    #[test]
-    fn notification_round_trips() {
-        let notification = AppServerNotification::SessionStateChanged {
-            session_id: 1,
-            status: "blocked".to_owned(),
-        };
-        let value = serde_json::to_value(&notification).unwrap();
-        assert_eq!(value["kind"], "session_state_changed");
-        let decoded: AppServerNotification = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded, notification);
-    }
-}

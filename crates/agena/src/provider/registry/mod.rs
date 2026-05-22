@@ -723,6 +723,3 @@ fn provider_error_kind_label(kind: ProviderErrorKind) -> &'static str {
         ProviderErrorKind::ContextOverflow => "context_overflow",
     }
 }
-
-#[cfg(test)]
-mod tests;

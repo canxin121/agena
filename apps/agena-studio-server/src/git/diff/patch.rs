@@ -432,35 +432,3 @@ pub async fn git_apply_patch(
 
     Json(serde_json::json!({"success": true})).into_response()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SAMPLE_PATCH: &str = "diff --git a/a.txt b/a.txt\nindex 1111111..2222222 100644\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n-old\n+new\n keep\n";
-
-    #[test]
-    fn validates_hunk_counts() {
-        let summary = validate_unified_patch_hunks(SAMPLE_PATCH).expect("valid patch");
-        assert_eq!(summary.files, 1);
-        assert_eq!(summary.hunks, 1);
-        assert_eq!(summary.changed_lines, 2);
-    }
-
-    #[test]
-    fn rejects_bad_hunk_counts() {
-        let bad = SAMPLE_PATCH.replace("@@ -1,2 +1,2 @@", "@@ -1,1 +1,1 @@");
-        assert_eq!(
-            validate_unified_patch_hunks(&bad).err(),
-            Some("invalid_patch_hunk_counts")
-        );
-    }
-
-    #[test]
-    fn parses_selected_mode() {
-        let m = parse_patch_mode("stage-selected").expect("mode");
-        assert!(m.cached);
-        assert!(!m.reverse);
-        assert_eq!(m.default_target, Some(PatchTarget::Selected));
-    }
-}

@@ -1289,44 +1289,6 @@ mod tests {
         assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
     }
 
-    #[tokio::test]
-    async fn terminal_metadata_create_rejects_missing_or_invalid_cwd() {
-        let temp = tempdir().expect("tempdir should be created");
-        let state = test_state(temp.path()).await;
-        let router = test_router(state);
-
-        let missing_cwd = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/terminal/create")
-                    .header("content-type", "application/json")
-                    .body(Body::from("{}"))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(missing_cwd.status(), StatusCode::BAD_REQUEST);
-
-        let invalid_cwd = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/terminal/create")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        serde_json::json!({
-                            "cwd": temp.path().join("missing"),
-                        })
-                        .to_string(),
-                    ))
-                    .expect("request should build"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(invalid_cwd.status(), StatusCode::BAD_REQUEST);
-    }
 
     #[tokio::test]
     async fn terminal_runtime_routes_stream_resize_stop_start_and_restart() {

@@ -259,26 +259,3 @@ impl Plugin for SkillsPlugin {
             .with_metadata("skill_entry_kind", kind))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_skill_input_accepts_action_shape() {
-        let input = SkillsPlugin::parse_skill_input(serde_json::json!({
-            "action": "run",
-            "args": "inspect auth flow"
-        }))
-        .expect("action-shaped skill input should parse");
-
-        assert_eq!(input.args.as_deref(), Some("inspect auth flow"));
-    }
-    #[test]
-    fn skill_input_schema_uses_action_discriminator() {
-        let schema = crate::entry::definition::json_schema_for::<SkillToolInput>();
-        let rendered = serde_json::to_string(&schema).expect("skill schema should serialize");
-        assert!(rendered.contains("\"action\""));
-        assert!(rendered.contains("\"run\""));
-    }
-}

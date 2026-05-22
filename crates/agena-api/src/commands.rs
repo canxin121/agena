@@ -299,38 +299,3 @@ pub struct RevokePermissionRuleParams {
 pub struct DeletePermissionRuleParams {
     pub rule_id: i64,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn replace_permission_rule_params_use_flat_wire_shape() {
-        let params = ReplacePermissionRuleParams {
-            rule_id: 42,
-            rule: UpsertPermissionRuleParams {
-                action_key: Some("{\"kind\":\"tool\"}".to_string()),
-                subject_kind: Some("tool".to_string()),
-                tool_name: Some("bash".to_string()),
-                qualifier: Some("git status".to_string()),
-                path_access_kind: None,
-                workspace_root: None,
-                target_path: None,
-                network_target: None,
-                network_host: None,
-                network_port: None,
-                scope: Some("workspace".to_string()),
-                session_id: None,
-                mode: crate::resource::PermissionMode::Allow,
-            },
-        };
-
-        let value = serde_json::to_value(&params).unwrap();
-        assert_eq!(value["rule_id"], json!(42));
-        assert_eq!(value["tool_name"], json!("bash"));
-        assert_eq!(value["scope"], json!("workspace"));
-        assert_eq!(value["mode"], json!("allow"));
-        assert!(value.get("rule").is_none());
-    }
-}

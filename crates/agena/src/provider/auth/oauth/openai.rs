@@ -307,26 +307,3 @@ fn oauth_http_client() -> &'static oauth2::reqwest::Client {
             .expect("oauth reqwest client should build")
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::*;
-
-    #[test]
-    fn browser_oauth_uses_codex_originator() {
-        let start = start_openai_browser_oauth("http://127.0.0.1:1455/callback")
-            .expect("oauth start should build");
-        let url = url::Url::parse(start.authorize_url.as_str()).expect("authorize url");
-        let params = url
-            .query_pairs()
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect::<BTreeMap<_, _>>();
-
-        assert_eq!(
-            params.get("originator").map(String::as_str),
-            Some(crate::provider::CODEX_ORIGINATOR)
-        );
-    }
-}

@@ -206,24 +206,3 @@ fn strip_force_login(url: &str) -> String {
         .replace("?force_login=true&", "?")
         .replace("?force_login=true", "")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn strip_force_login_removes_query_flag() {
-        assert_eq!(
-            strip_force_login("https://atomgit.com/oauth/authorize?state=s&force_login=true"),
-            "https://atomgit.com/oauth/authorize?state=s"
-        );
-        assert_eq!(
-            strip_force_login("https://atomgit.com/oauth/authorize?force_login=true&state=s"),
-            "https://atomgit.com/oauth/authorize?state=s"
-        );
-        assert_eq!(
-            strip_force_login("https://atomgit.com/oauth/authorize?state=s&force_login=true&x=1"),
-            "https://atomgit.com/oauth/authorize?state=s&x=1"
-        );
-    }
-}

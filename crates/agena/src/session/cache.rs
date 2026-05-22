@@ -102,11 +102,6 @@ impl SessionCache {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn total_bytes(&self) -> usize {
-        self.total_bytes
-    }
-
     fn enforce_limit(&mut self, cache_policy: SessionCachePolicy) {
         while self.entries.len() > cache_policy.max_sessions.max(1)
             || self.total_bytes > cache_policy.max_bytes.max(1)

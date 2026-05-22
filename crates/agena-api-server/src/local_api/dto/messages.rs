@@ -36,35 +36,3 @@ pub struct MessageListQuery {
     #[serde(default)]
     pub parts: PartLoadMode,
 }
-
-#[cfg(test)]
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-pub struct MessagePartWriteRequest {
-    pub content: PartContent,
-    #[serde(default)]
-    pub status: Option<ExecutionStatus>,
-    #[serde(default)]
-    pub operation_id: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<DateTime<Utc>>,
-}
-
-#[cfg(test)]
-#[allow(dead_code)]
-#[derive(Debug, Clone, Deserialize)]
-pub struct MessageWriteRequest {
-    pub role: Role,
-    #[serde(default)]
-    pub state: Option<MessageStatus>,
-    #[serde(default)]
-    pub metadata: Option<MessageMetadata>,
-    #[serde(default)]
-    pub usage: Option<MessageUsage>,
-    #[serde(default)]
-    pub finish: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    pub parts: Vec<MessagePartWriteRequest>,
-}

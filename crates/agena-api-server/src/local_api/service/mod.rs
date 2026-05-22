@@ -62,9 +62,6 @@ mod workspaces;
 
 pub use execution::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
 
-#[cfg(test)]
-use agena::message::MessageStatus;
-
 #[derive(Clone)]
 pub struct ApiService {
     db: Arc<DatabaseConnection>,

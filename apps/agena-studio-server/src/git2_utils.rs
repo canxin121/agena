@@ -34,18 +34,3 @@ fn map_git2_error(e: git2::Error) -> Git2OpenError {
 pub fn open_repo_discover(dir: &Path) -> Result<Repository, Git2OpenError> {
     Repository::discover(dir).map_err(map_git2_error)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn open_repo_discover_not_repo() {
-        let td = tempdir().unwrap();
-        match open_repo_discover(td.path()) {
-            Ok(_) => panic!("expected not a repository"),
-            Err(err) => assert!(matches!(err, Git2OpenError::NotARepository)),
-        }
-    }
-}

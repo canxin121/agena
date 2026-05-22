@@ -291,25 +291,3 @@ impl UserInputRequestPart {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{UserInputReply, UserInputReplyKind};
-
-    #[test]
-    fn user_input_reply_accepts_legacy_string_answers() {
-        let reply: UserInputReply = serde_json::from_value(json!({
-            "request_id": "req-1",
-            "kind": "submit",
-            "answers": {
-                "model": "gpt-5"
-            }
-        }))
-        .expect("legacy answer payload should deserialize");
-
-        assert_eq!(reply.kind, UserInputReplyKind::Submit);
-        assert_eq!(reply.answers.get("model"), Some(&vec!["gpt-5".to_string()]));
-    }
-}

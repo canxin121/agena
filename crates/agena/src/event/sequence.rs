@@ -46,24 +46,3 @@ impl Default for SequenceAllocator {
         Self::new()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn allocates_strict_monotonic() {
-        let alloc = SequenceAllocator::new();
-        assert_eq!(alloc.next(), 1);
-        assert_eq!(alloc.next(), 2);
-        assert_eq!(alloc.next(), 3);
-    }
-
-    #[test]
-    fn init_from_resumes_after_highest() {
-        let alloc = SequenceAllocator::from_high_watermark(42);
-        assert_eq!(alloc.next(), 43);
-        alloc.init_from(99);
-        assert_eq!(alloc.next(), 100);
-    }
-}

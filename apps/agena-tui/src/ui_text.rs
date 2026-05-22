@@ -169,40 +169,6 @@ pub fn session_fallback_title(i18n: &I18n, session_id: i64) -> String {
     i18n.text_args("session-fallback-title", &fl_args!("id" => session_id))
 }
 
-#[cfg(test)]
-pub fn user_input_error_empty(i18n: &I18n) -> String {
-    t(i18n, "user-input-error-empty")
-}
-
-#[cfg(test)]
-pub fn user_input_error_invalid_segment(i18n: &I18n, segment: &str) -> String {
-    i18n.text_args(
-        "user-input-error-invalid-segment",
-        &fl_args!("segment" => segment),
-    )
-}
-
-#[cfg(test)]
-pub fn user_input_error_unknown_question(i18n: &I18n, question_id: &str) -> String {
-    i18n.text_args(
-        "user-input-error-unknown-question",
-        &fl_args!("question_id" => question_id),
-    )
-}
-
-#[cfg(test)]
-pub fn user_input_error_missing_answer(i18n: &I18n, question_id: &str) -> String {
-    i18n.text_args(
-        "user-input-error-missing-answer",
-        &fl_args!("question_id" => question_id),
-    )
-}
-
-#[cfg(test)]
-pub fn user_input_error_no_answers(i18n: &I18n) -> String {
-    t(i18n, "user-input-error-no-answers")
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelpLineKind {
     Header,

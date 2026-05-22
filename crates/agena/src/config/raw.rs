@@ -335,11 +335,6 @@ impl RawConfig {
         Ok(config)
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn resolve(self) -> Result<ResolvedConfig, ConfigError> {
-        self.resolve_with_env(&super::ProcessEnvironment)
-    }
-
     pub(crate) fn resolve_with_env(
         self,
         env: &dyn ConfigEnvironment,
@@ -530,10 +525,6 @@ where
     serde_json::from_value(value)
         .map_err(|err| ConfigError::Validation(format!("plugins.list.{plugin_id}.options: {err}")))
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[allow(dead_code)]
-pub(crate) struct RawPluginConfig;
 
 impl Merge for PluginConfig {
     fn merge_from(&mut self, overlay: Self) {
@@ -1933,7 +1924,6 @@ macro_rules! impl_local_merge_via_crate {
 }
 
 impl_local_merge_via_crate!(
-    RawPluginConfig,
     RawTracingConfig,
     RawTelemetryConfig,
     RawUiConfig,

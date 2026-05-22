@@ -344,7 +344,7 @@ pub(crate) async fn run(args: crate::Args) -> Result<()> {
         settings: Arc::new(RwLock::new(settings_value)),
         runtime: runtime.clone(),
     });
-    let _ = crate::ui_auth::spawn_cleanup_sessions_task_if_enabled(&shared_state.ui_auth);
+    crate::ui_auth::spawn_cleanup_sessions_task_if_enabled(&shared_state.ui_auth);
 
     tracing::info!(
         target: "agena_studio.runtime",

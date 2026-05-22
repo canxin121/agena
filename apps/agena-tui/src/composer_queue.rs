@@ -4,8 +4,6 @@
 //!
 //! * `Now`   — pushed to the front (used for cancel/recovery edge cases).
 //! * `Next`  — normal user submissions while the AI is busy. FIFO.
-//! * `Later` — system notifications / side-channel inputs that must never
-//!   starve real user intent.
 //!
 //! The queue is intentionally a plain in-memory structure with no async
 //! state — it lives inside `App` and is touched only from the UI thread.
@@ -15,11 +13,9 @@ use std::collections::VecDeque;
 use crate::app::ComposerDraft;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // `Later` is reserved for system-notification queueing in M3+
 pub enum QueuePriority {
     Now,
     Next,
-    Later,
 }
 
 #[derive(Debug, Clone)]
@@ -33,7 +29,6 @@ pub struct QueuedMessage {
 pub struct ComposerQueue {
     now: VecDeque<QueuedMessage>,
     next: VecDeque<QueuedMessage>,
-    later: VecDeque<QueuedMessage>,
 }
 
 impl ComposerQueue {
@@ -53,15 +48,11 @@ impl ComposerQueue {
         match msg.priority {
             QueuePriority::Now => self.now.push_back(msg),
             QueuePriority::Next => self.next.push_back(msg),
-            QueuePriority::Later => self.later.push_back(msg),
         }
     }
 
     pub fn pop_next(&mut self) -> Option<QueuedMessage> {
-        self.now
-            .pop_front()
-            .or_else(|| self.next.pop_front())
-            .or_else(|| self.later.pop_front())
+        self.now.pop_front().or_else(|| self.next.pop_front())
     }
 
     /// Pull every editable user message back into a single `ComposerDraft`,
@@ -69,7 +60,7 @@ impl ComposerQueue {
     /// messages are left in place. Returns `None` if no editable items.
     pub fn pop_all_editable(&mut self) -> Option<ComposerDraft> {
         let mut drafts: Vec<ComposerDraft> = Vec::new();
-        for bucket in [&mut self.now, &mut self.next, &mut self.later] {
+        for bucket in [&mut self.now, &mut self.next] {
             bucket.retain(|msg| {
                 if msg.editable {
                     drafts.push(msg.draft.clone());
@@ -100,26 +91,20 @@ impl ComposerQueue {
     }
 
     pub fn len(&self) -> usize {
-        self.now.len() + self.next.len() + self.later.len()
+        self.now.len() + self.next.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.now.clear();
         self.next.clear();
-        self.later.clear();
     }
 
     pub fn first_preview(&self, max_chars: usize) -> Option<String> {
-        let head = self
-            .now
-            .front()
-            .or_else(|| self.next.front())
-            .or_else(|| self.later.front())?;
+        let head = self.now.front().or_else(|| self.next.front())?;
         let preview = head.draft.text.lines().next().unwrap_or("").trim();
         let truncated: String = preview.chars().take(max_chars).collect();
         if preview.chars().count() > max_chars {

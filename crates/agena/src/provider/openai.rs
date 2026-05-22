@@ -1139,7 +1139,7 @@ impl OpenAiAdapter {
             &ws_endpoint,
             api_key.as_str(),
             self.uses_chat_compatible_request_fields()
-                .then(|| request.prompt_cache_key.as_deref())
+                .then_some(request.prompt_cache_key.as_deref())
                 .flatten(),
         )?;
         let handshake_headers = handshake
@@ -1863,7 +1863,6 @@ impl OpenAiAdapter {
             .collect()
     }
 
-    #[allow(dead_code)]
     fn multimodal_function_output_value(
         output_json: &str,
         extra_parts: &[wire_message::WirePart],

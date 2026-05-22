@@ -5,6 +5,15 @@ const COMPACTION_REQUEST_TAG: &str = "compaction_request";
 const COMPACTION_SUMMARY_TAG: &str = "compaction_summary";
 const DEFAULT_TAIL_USER_TURNS: usize = 2;
 
+struct CompactionRuntimeInstall {
+    summary: String,
+    tail_start_message_id: Option<i64>,
+    compacted_at_message_id: Option<i64>,
+    compacted_by_message_id: Option<i64>,
+    strategy: PromptCompactionStrategy,
+    touched_messages: Vec<Message>,
+}
+
 impl SessionManager {
     #[tracing::instrument(skip(self, request), fields(session_id = request.session_id))]
     pub async fn compact_session(
@@ -62,13 +71,15 @@ impl SessionManager {
                 let session = self
                     .install_compaction_runtime(
                         session,
-                        summary,
-                        tail_start,
-                        compacted_at,
-                        compacted_at,
-                        PromptCompactionStrategy::Remote,
                         original_execution,
-                        Vec::new(),
+                        CompactionRuntimeInstall {
+                            summary,
+                            tail_start_message_id: tail_start,
+                            compacted_at_message_id: compacted_at,
+                            compacted_by_message_id: compacted_at,
+                            strategy: PromptCompactionStrategy::Remote,
+                            touched_messages: Vec::new(),
+                        },
                         state,
                     )
                     .await?;
@@ -121,13 +132,15 @@ impl SessionManager {
                 let session = self
                     .install_compaction_runtime(
                         session,
-                        summary,
-                        tail_start,
-                        compacted_at,
-                        compacted_at,
-                        PromptCompactionStrategy::Remote,
                         original_execution,
-                        Vec::new(),
+                        CompactionRuntimeInstall {
+                            summary,
+                            tail_start_message_id: tail_start,
+                            compacted_at_message_id: compacted_at,
+                            compacted_by_message_id: compacted_at,
+                            strategy: PromptCompactionStrategy::Remote,
+                            touched_messages: Vec::new(),
+                        },
                         state,
                     )
                     .await?;
@@ -280,13 +293,15 @@ impl SessionManager {
         let touched = vec![session.messages[assistant_index].clone()];
         self.install_compaction_runtime(
             session,
-            summary,
-            tail_start,
-            compacted_at,
-            Some(assistant_id),
-            PromptCompactionStrategy::LocalAgent,
             original_execution,
-            touched,
+            CompactionRuntimeInstall {
+                summary,
+                tail_start_message_id: tail_start,
+                compacted_at_message_id: compacted_at,
+                compacted_by_message_id: Some(assistant_id),
+                strategy: PromptCompactionStrategy::LocalAgent,
+                touched_messages: touched,
+            },
             state,
         )
         .await
@@ -310,15 +325,18 @@ impl SessionManager {
     async fn install_compaction_runtime(
         &self,
         mut session: Session,
-        summary: String,
-        tail_start_message_id: Option<i64>,
-        compacted_at_message_id: Option<i64>,
-        compacted_by_message_id: Option<i64>,
-        strategy: PromptCompactionStrategy,
         original_execution: SessionExecutionContext,
-        touched_messages: Vec<Message>,
+        install: CompactionRuntimeInstall,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
+        let CompactionRuntimeInstall {
+            summary,
+            tail_start_message_id,
+            compacted_at_message_id,
+            compacted_by_message_id,
+            strategy,
+            touched_messages,
+        } = install;
         session.runtime.execution = original_execution;
         session.runtime.prompt_window.generation =
             session.runtime.prompt_window.generation.saturating_add(1);

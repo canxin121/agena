@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::error::{SkillError, SkillResult};
+use crate::error::SkillResult;
 use crate::skill::Skill;
 
 /// Default discovery roots in priority order.  Workspace skills win over
@@ -79,10 +79,6 @@ fn scan_matching(
     Ok(skills)
 }
 
-pub fn dirs_home_dir() -> Option<PathBuf> {
-    dirs::home_dir()
-}
-
 mod dirs {
     use std::path::PathBuf;
     pub fn home_dir() -> Option<PathBuf> {
@@ -92,7 +88,3 @@ mod dirs {
 
 // Re-export for callers that want to bypass default_roots logic.
 pub use dirs::home_dir;
-
-// Sanity: keep SkillError used (clippy)
-#[allow(dead_code)]
-fn _silence(_: SkillError) {}

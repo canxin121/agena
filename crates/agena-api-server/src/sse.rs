@@ -5,8 +5,7 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
-use agena::event::EventKind;
-use agena::event::{EventBus, bus::SubscriptionItem};
+use agena::event::bus::SubscriptionItem;
 use agena_api::notifications::Notification;
 use axum::{
     extract::{Query, State},
@@ -111,13 +110,4 @@ impl StreamQuery {
             since_seq_global: self.since_seq_global,
         })
     }
-}
-
-// Suppress unused-import warning when EventBus<EventKind> is only used via
-// trait-object dispatch.
-#[allow(dead_code)]
-fn _bus_assertion(
-    b: std::sync::Arc<dyn EventBus<EventKind>>,
-) -> std::sync::Arc<dyn EventBus<EventKind>> {
-    b
 }

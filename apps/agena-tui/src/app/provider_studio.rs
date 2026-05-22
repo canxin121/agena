@@ -288,16 +288,16 @@ pub(super) fn provider_studio_ensure_default_selection(dialog: &mut ProviderStud
                 )
             })
     });
-    if !default_adapter_valid {
-        if let Some(adapter_models) = dialog.adapter_models.iter().find(|adapter_models| {
+    if !default_adapter_valid
+        && let Some(adapter_models) = dialog.adapter_models.iter().find(|adapter_models| {
             adapter_models.error.is_none()
                 && dialog
                     .selected_adapter_ids
                     .contains(adapter_models.adapter_id.as_str())
                 && !provider_studio_selected_models_for_adapter(dialog, adapter_models).is_empty()
-        }) {
-            dialog.draft.default_adapter = adapter_models.adapter_id.clone();
-        }
+        })
+    {
+        dialog.draft.default_adapter = adapter_models.adapter_id.clone();
     }
 
     let default_model_valid =

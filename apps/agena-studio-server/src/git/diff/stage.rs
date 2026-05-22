@@ -19,9 +19,9 @@ fn invalid_file_path_response() -> Response {
         .into_response()
 }
 
-fn validate_repo_paths(paths: &[String]) -> Result<(), Response> {
+fn validate_repo_paths(paths: &[String]) -> Result<(), Box<Response>> {
     if paths.iter().any(|path| !is_safe_repo_rel_path(path)) {
-        return Err(invalid_file_path_response());
+        return Err(Box::new(invalid_file_path_response()));
     }
     Ok(())
 }
@@ -178,7 +178,7 @@ pub async fn git_stage(
         };
         let files = collect_output_paths(&out);
         if let Err(resp) = validate_repo_paths(&files) {
-            return resp;
+            return *resp;
         }
         if files.is_empty() {
             return Json(serde_json::json!({"success": true, "staged": 0})).into_response();
@@ -203,7 +203,7 @@ pub async fn git_stage(
             };
         let files = collect_output_paths(&out);
         if let Err(resp) = validate_repo_paths(&files) {
-            return resp;
+            return *resp;
         }
         if files.is_empty() {
             return Json(serde_json::json!({"success": true, "staged": 0})).into_response();
@@ -239,7 +239,7 @@ pub async fn git_stage(
             .into_response();
     }
     if let Err(resp) = validate_repo_paths(&paths) {
-        return resp;
+        return *resp;
     }
 
     // Stage full files only (non-interactive).
@@ -287,7 +287,7 @@ pub async fn git_unstage(
             .into_response();
     }
     if let Err(resp) = validate_repo_paths(&paths) {
-        return resp;
+        return *resp;
     }
 
     // Unstage full files only.
@@ -338,7 +338,7 @@ pub async fn git_clean(
         .to_ascii_lowercase();
     let paths = collect_body_paths(None, body.paths);
     if let Err(resp) = validate_repo_paths(&paths) {
-        return resp;
+        return *resp;
     }
 
     if scope == "tracked" {

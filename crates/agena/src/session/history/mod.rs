@@ -1,7 +1,6 @@
 mod event;
 mod store;
 mod transcript;
-#[allow(dead_code)]
 mod turn_buffer;
 
 pub(crate) use crate::session::ids::{MessageId, ToolCallId, TurnId};
@@ -17,7 +16,4 @@ pub(crate) use transcript::{
     ProviderTranscript, TranscriptBlock, TranscriptContent, TranscriptFragment, TranscriptToolCall,
     TranscriptToolOutput,
 };
-#[allow(unused_imports)]
-pub(crate) use turn_buffer::{
-    MessageIdAllocator, SequentialIdAllocator, TurnBuffer, TurnBufferError,
-};
+pub(crate) use turn_buffer::{MessageIdAllocator, SequentialIdAllocator, TurnBuffer};

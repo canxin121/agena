@@ -98,29 +98,6 @@ impl Plugin for CapabilityPlugin {
     }
 }
 
-async fn host_with_capability_plugin(
-    capabilities: Vec<HostCapability>,
-) -> Arc<agena_plugin_host::PluginHost> {
-    let mut list = BTreeMap::new();
-    list.insert(
-        "capability-plugin".to_string(),
-        PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-            disabled: false,
-        },
-    );
-    PluginHostBuilder::new(std::env::current_dir().unwrap(), "test")
-        .with_config(PluginsConfig {
-            list,
-            ..Default::default()
-        })
-        .register_static("capability-plugin", CapabilityPlugin::new(capabilities))
-        .build()
-        .await
-        .expect("host builds")
-}
-
 #[derive(Default)]
 struct TestPlugin;
 

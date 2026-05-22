@@ -2684,7 +2684,7 @@ impl SessionManager {
         let base_model = options.model.clone();
         match requested_default.filter(|value| !value.is_empty()) {
             Some(default_config) => self.resolve_agent_default_model_ref(
-                &state.processor.provider_registry(),
+                state.processor.provider_registry(),
                 &base_model,
                 default_config,
             ),
@@ -2910,7 +2910,7 @@ impl SessionManager {
             self.resolve_requested_session_model_ref(&base_model, model_id)?
         } else if let Some(default_config) = requested_default.filter(|value| !value.is_empty()) {
             self.resolve_agent_default_model_ref(
-                &state.processor.provider_registry(),
+                state.processor.provider_registry(),
                 &base_model,
                 default_config,
             )?

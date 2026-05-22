@@ -136,7 +136,7 @@ fn gh_cli_missing_response() -> Response {
 }
 
 pub async fn git_create_github_repo_and_push(
-    State(_state): State<Arc<crate::AppState>>,
+    State(_): State<Arc<crate::AppState>>,
     Query(q): Query<DirectoryQuery>,
     Json(body): Json<GitCreateGithubRepoAndPushBody>,
 ) -> Response {

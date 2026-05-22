@@ -223,7 +223,7 @@ mod stub {
 
     use crate::state::AppState;
 
-    pub async fn serve(_path: PathBuf, _state: AppState) -> std::io::Result<()> {
+    pub async fn serve(_: PathBuf, _: AppState) -> std::io::Result<()> {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "Unix socket IPC is only supported on Unix targets",

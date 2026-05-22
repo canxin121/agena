@@ -1,7 +1,7 @@
 use super::*;
 
 pub async fn search_marketplace_plugins(
-    State(_state): State<AppState>,
+    State(_): State<AppState>,
     Json(request): Json<MarketplaceSearchRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     let registry_id = request
@@ -79,7 +79,7 @@ pub async fn search_marketplace_plugins(
 }
 
 pub async fn sync_marketplace_registry(
-    State(_state): State<AppState>,
+    State(_): State<AppState>,
     Json(request): Json<MarketplaceRegistryRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     let registry_id = request
@@ -117,7 +117,7 @@ pub async fn sync_marketplace_registry(
 }
 
 pub async fn list_marketplace_installed_plugins(
-    State(_state): State<AppState>,
+    State(_): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
     let cache = agena_plugin_marketplace::MarketplaceCache::new(
         agena_plugin_marketplace::default_cache_root(),
@@ -149,7 +149,7 @@ pub async fn list_marketplace_installed_plugins(
 }
 
 pub async fn list_marketplace_outdated_plugins(
-    State(_state): State<AppState>,
+    State(_): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
     let cache = agena_plugin_marketplace::MarketplaceCache::new(
         agena_plugin_marketplace::default_cache_root(),
@@ -242,7 +242,7 @@ pub async fn install_marketplace_plugin(
 }
 
 pub async fn uninstall_marketplace_plugin(
-    State(_state): State<AppState>,
+    State(_): State<AppState>,
     Json(request): Json<MarketplaceUninstallRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     let plugin_id = request.plugin_id.trim().to_string();
@@ -272,7 +272,7 @@ pub async fn uninstall_marketplace_plugin(
 }
 
 pub async fn upgrade_marketplace_plugins(
-    State(_state): State<AppState>,
+    State(_): State<AppState>,
     Json(request): Json<MarketplaceUpgradeRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     if !request.all && request.plugin_id.as_deref().unwrap_or("").trim().is_empty() {

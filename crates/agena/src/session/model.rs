@@ -1087,19 +1087,17 @@ impl Session {
     }
 
     pub(crate) fn resolve_part_ref(&self, part_ref: &SessionPartRef) -> Option<SessionPartRef> {
-        if let Some(message) = self.messages.get(part_ref.message_index) {
-            if message.id == part_ref.message_id {
-                if let Some(part) = message.parts.get(part_ref.part_index) {
-                    if part.id == part_ref.part_id {
-                        return Some(SessionPartRef::new(
-                            part_ref.message_index,
-                            message,
-                            part_ref.part_index,
-                            part,
-                        ));
-                    }
-                }
-            }
+        if let Some(message) = self.messages.get(part_ref.message_index)
+            && message.id == part_ref.message_id
+            && let Some(part) = message.parts.get(part_ref.part_index)
+            && part.id == part_ref.part_id
+        {
+            return Some(SessionPartRef::new(
+                part_ref.message_index,
+                message,
+                part_ref.part_index,
+                part,
+            ));
         }
 
         self.messages

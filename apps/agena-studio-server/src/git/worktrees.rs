@@ -522,16 +522,15 @@ pub async fn git_worktree_migrate(
             .into_response();
     }
 
-    if !delete_from_source {
-        if let Err(resp) = run_git_checked(
+    if !delete_from_source
+        && let Err(resp) = run_git_checked(
             &source,
             &["stash", "pop", "--index", &stash_ref],
             Some("git_worktree_restore_failed"),
         )
         .await
-        {
-            return resp;
-        }
+    {
+        return resp;
     }
 
     Json(serde_json::json!({

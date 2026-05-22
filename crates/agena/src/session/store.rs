@@ -109,7 +109,6 @@ impl SessionStore {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn db(&self) -> &DatabaseConnection {
         &self.db
     }
@@ -621,9 +620,12 @@ impl SessionStore {
     ) -> Result<Option<Session>, AppError> {
         let completed = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             Box::pin(async move {
-                let Some(_goal) = session_goal::mark_completed(txn, session_id).await? else {
+                if session_goal::mark_completed(txn, session_id)
+                    .await?
+                    .is_none()
+                {
                     return Ok::<Option<()>, AppError>(None);
-                };
+                }
                 session::touch_session_updated_at(
                     txn,
                     session_id,
@@ -652,9 +654,9 @@ impl SessionStore {
     ) -> Result<Option<Session>, AppError> {
         let paused = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             Box::pin(async move {
-                let Some(_goal) = session_goal::pause_active(txn, session_id).await? else {
+                if session_goal::pause_active(txn, session_id).await?.is_none() {
                     return Ok::<Option<()>, AppError>(None);
-                };
+                }
                 session::touch_session_updated_at(
                     txn,
                     session_id,
@@ -683,9 +685,12 @@ impl SessionStore {
     ) -> Result<Option<Session>, AppError> {
         let resumed = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             Box::pin(async move {
-                let Some(_goal) = session_goal::resume_paused(txn, session_id).await? else {
+                if session_goal::resume_paused(txn, session_id)
+                    .await?
+                    .is_none()
+                {
                     return Ok::<Option<()>, AppError>(None);
-                };
+                }
                 session::touch_session_updated_at(
                     txn,
                     session_id,
@@ -716,9 +721,12 @@ impl SessionStore {
         let updated = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             let update = update.clone();
             Box::pin(async move {
-                let Some(_goal) = session_goal::update_goal(txn, session_id, update).await? else {
+                if session_goal::update_goal(txn, session_id, update)
+                    .await?
+                    .is_none()
+                {
                     return Ok::<Option<()>, AppError>(None);
-                };
+                }
                 session::touch_session_updated_at(
                     txn,
                     session_id,

@@ -130,19 +130,6 @@ pub(super) fn execute_exit(
     ))
 }
 
-/// Returns true when the executor is currently in plan mode for this
-/// session id (or when session id is unknown — be safe and refuse).
-#[allow(dead_code)]
-pub fn is_active(executor: &ToolExecutor, session_id: Option<i64>) -> bool {
-    let Some(registry) = executor.plan_registry() else {
-        return false;
-    };
-    match session_id {
-        Some(id) => registry.read().contains_key(&id),
-        None => false,
-    }
-}
-
 fn generate_slug(session_id: i64) -> String {
     // Cheap, stable-ish slug — timestamp + session id, suffixed with a
     // word so paths are easy to read.

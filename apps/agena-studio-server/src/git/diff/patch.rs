@@ -9,11 +9,9 @@ use std::sync::Arc;
 
 use super::super::{
     DirectoryQuery, abs_path, git_strict_patch_validation, is_safe_repo_rel_path, map_git_failure,
-    require_directory, require_locked_directory, run_git, run_git_with_input,
+    require_locked_directory, run_git, run_git_with_input,
 };
-use super::unified::{
-    PatchSummary, parse_unified_diff_meta, patch_paths_are_safe, validate_unified_patch_hunks,
-};
+use super::unified::{parse_unified_diff_meta, patch_paths_are_safe, validate_unified_patch_hunks};
 
 #[derive(Debug, Deserialize)]
 pub struct GitDiffQuery {

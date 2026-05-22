@@ -483,7 +483,7 @@ async fn git_rebase_abort_is_covered_by_automated_test() {
             Query(DirectoryQuery {
                 directory: Some(repo_s.clone()),
             }),
-            Json(GitAbortBody { _dummy: None }),
+            Json(GitAbortBody {}),
         )
         .await,
     )
@@ -517,7 +517,7 @@ async fn git_rebase_continue_is_covered_by_automated_test() {
             Query(DirectoryQuery {
                 directory: Some(repo_s.clone()),
             }),
-            Json(GitContinueBody { _dummy: None }),
+            Json(GitContinueBody {}),
         )
         .await,
     )

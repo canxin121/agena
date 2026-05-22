@@ -60,13 +60,12 @@ impl SessionHistoryStore {
         session_id: i64,
         base_runtime: SessionRuntimeState,
     ) -> Result<LoadedSessionProjection, DbErr> {
-        let last_seq = self.ensure_projection_current(session_id).await?;
+        self.ensure_projection_current(session_id).await?;
         let messages = self.read_projected_messages(session_id, true).await?;
 
         Ok(LoadedSessionProjection {
             messages,
             runtime: base_runtime,
-            last_seq,
         })
     }
 
@@ -590,8 +589,6 @@ impl SessionHistoryStore {
 pub(crate) struct LoadedSessionProjection {
     pub messages: Vec<Message>,
     pub runtime: SessionRuntimeState,
-    #[allow(dead_code)]
-    pub last_seq: i64,
 }
 
 fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<chrono::DateTime<Utc>, DbErr> {

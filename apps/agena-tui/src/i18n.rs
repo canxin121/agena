@@ -40,16 +40,6 @@ impl I18n {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn locale(&self) -> &LanguageIdentifier {
-        &self.locale
-    }
-
-    #[allow(dead_code)]
-    pub fn locale_name(&self) -> String {
-        self.locale.to_string()
-    }
-
     pub fn text(&self, key: &str) -> String {
         LOCALES.lookup(&self.locale, key)
     }

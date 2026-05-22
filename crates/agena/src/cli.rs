@@ -1245,7 +1245,7 @@ impl AgenaCli {
         loader: ConfigLoader<ProcessEnvironment>,
         tracing_reload_handle: Option<TracingFilterReloadHandle>,
     ) -> Result<(), AppError> {
-        let _resolution = loader.load(&self.load_request())?;
+        loader.load(&self.load_request())?;
         let mut builder = AgenaRuntime::builder().with_load_request(self.load_request());
         if let Some(handle) = tracing_reload_handle {
             builder = builder.with_tracing_reload_handle(handle);

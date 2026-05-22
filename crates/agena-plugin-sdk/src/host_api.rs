@@ -1344,7 +1344,7 @@ pub enum AgentToolPermissionRules {
     Ordered(IndexMap<String, AgentPermissionMode>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HostAgentDefaultModelConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -1357,16 +1357,6 @@ pub struct HostAgentDefaultModelConfig {
 impl HostAgentDefaultModelConfig {
     pub fn is_empty(&self) -> bool {
         self.provider.is_none() && self.adapter.is_none() && self.model.is_none()
-    }
-}
-
-impl Default for HostAgentDefaultModelConfig {
-    fn default() -> Self {
-        Self {
-            provider: None,
-            adapter: None,
-            model: None,
-        }
     }
 }
 

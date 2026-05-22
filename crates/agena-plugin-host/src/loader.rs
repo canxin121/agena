@@ -512,11 +512,6 @@ pub async fn shutdown_transport(transport: Arc<dyn PluginTransport>) -> Result<(
     transport.close().await
 }
 
-#[allow(dead_code)]
-pub fn manifest_summary(m: &PluginManifest) -> String {
-    format!("{}@{}", m.name, m.version)
-}
-
 /// Verify the sha256 of a file against an expected hex digest. Used by both
 /// the wasm transport (for safety) and the signing helpers.
 #[cfg(any(feature = "wasm", feature = "signing"))]

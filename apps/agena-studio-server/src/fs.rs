@@ -679,7 +679,7 @@ pub async fn fs_download(
         .filter(|p| !p.is_empty())
         .ok_or_else(|| AppError::bad_request("Path is required"))?;
 
-    let (_base, abs) = resolve_workspace_path_from_context(
+    let (_, abs) = resolve_workspace_path_from_context(
         state.as_ref(),
         &headers,
         q.directory.as_deref(),

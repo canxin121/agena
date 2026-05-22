@@ -61,7 +61,6 @@ impl StudioDb {
         &self.path
     }
 
-    #[allow(dead_code)]
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }

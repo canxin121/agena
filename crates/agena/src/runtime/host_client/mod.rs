@@ -6,7 +6,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::event::Scope;
 use async_trait::async_trait;
 
 use crate::message::{
@@ -279,22 +278,12 @@ impl HostClient for RuntimeHostClient {
 
     async fn subscribe_events(
         &self,
-        filter: PluginEventFilter,
+        _: PluginEventFilter,
     ) -> Result<EventSubscription, PluginError> {
         // Translate the SDK filter to agena's filter and confirm; the actual
         // event push back to the plugin already happens via the snapshot's
         // `event_bridge`. Returning a deterministic id so plugins can ack.
         let id = format!("sub-{}", uuid::Uuid::new_v4().simple());
-        let _ = filter; // currently unused beyond existence
-        let _bus = self
-            .runtime
-            .current_snapshot()
-            .session_manager()
-            .map(|mgr| {
-                let _ = mgr
-                    .event_bus()
-                    .subscribe(crate::event::EventFilter::new(Scope::Global));
-            });
         Ok(EventSubscription { id })
     }
 

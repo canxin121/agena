@@ -545,7 +545,7 @@ fn default_profiles() -> Vec<AgentProfile> {
             "Planning agent for read-only decomposition and execution strategy.",
             &["fs", "shell", "todo", "plan", "agent"],
             default_permission(
-                crate::permission::PermissionMode::Deny,
+                crate::permission::PermissionMode::Allow,
                 crate::permission::PermissionMode::Ask,
                 &[
                     ("plan", crate::permission::PermissionMode::Allow),

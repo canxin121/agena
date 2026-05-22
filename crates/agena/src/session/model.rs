@@ -1104,24 +1104,52 @@ impl Session {
             .collect()
     }
 
-    pub(crate) fn part(&self, part_ref: &SessionPartRef) -> Option<&MessagePart> {
-        let message = self.messages.get(part_ref.message_index)?;
-        if message.id != part_ref.message_id {
-            return None;
+    pub(crate) fn resolve_part_ref(&self, part_ref: &SessionPartRef) -> Option<SessionPartRef> {
+        if let Some(message) = self.messages.get(part_ref.message_index) {
+            if message.id == part_ref.message_id {
+                if let Some(part) = message.parts.get(part_ref.part_index) {
+                    if part.id == part_ref.part_id {
+                        return Some(SessionPartRef::new(
+                            part_ref.message_index,
+                            message,
+                            part_ref.part_index,
+                            part,
+                        ));
+                    }
+                }
+            }
         }
 
-        let part = message.parts.get(part_ref.part_index)?;
-        (part.id == part_ref.part_id).then_some(part)
+        self.messages
+            .iter()
+            .enumerate()
+            .find(|(_, message)| message.id == part_ref.message_id)
+            .and_then(|(message_index, message)| {
+                message
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .find(|(_, part)| part.id == part_ref.part_id)
+                    .map(|(part_index, part)| {
+                        SessionPartRef::new(message_index, message, part_index, part)
+                    })
+            })
+    }
+
+    pub(crate) fn part(&self, part_ref: &SessionPartRef) -> Option<&MessagePart> {
+        let resolved = self.resolve_part_ref(part_ref)?;
+        self.messages
+            .get(resolved.message_index)?
+            .parts
+            .get(resolved.part_index)
     }
 
     pub(crate) fn part_mut(&mut self, part_ref: &SessionPartRef) -> Option<&mut MessagePart> {
-        let message = self.messages.get_mut(part_ref.message_index)?;
-        if message.id != part_ref.message_id {
-            return None;
-        }
-
-        let part = message.parts.get_mut(part_ref.part_index)?;
-        (part.id == part_ref.part_id).then_some(part)
+        let resolved = self.resolve_part_ref(part_ref)?;
+        self.messages
+            .get_mut(resolved.message_index)?
+            .parts
+            .get_mut(resolved.part_index)
     }
 
     pub(crate) fn pending_tool_execution(

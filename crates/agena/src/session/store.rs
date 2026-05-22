@@ -585,9 +585,7 @@ impl SessionStore {
         objective: String,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        let cache = Arc::clone(&self.cache);
-        with_transaction_and_app_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
+        with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             let objective = objective.clone();
             Box::pin(async move {
                 session::get_session_by_id(txn, session_id)
@@ -596,7 +594,7 @@ impl SessionStore {
                         AppError::Internal(format!("session not found: {session_id}"))
                     })?;
                 session_goal::upsert_goal(txn, session_id, objective).await?;
-                let model = session::touch_session_updated_at(
+                let _ = session::touch_session_updated_at(
                     txn,
                     session_id,
                     session::get_session_by_id(txn, session_id)
@@ -609,18 +607,11 @@ impl SessionStore {
                 )
                 .await?
                 .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                let mut updated = session_from_model(model)?;
-                updated.goal = load_session_goal_on(txn, session_id).await?;
-                let session_for_cache = updated.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
-                    });
-                });
-                Ok(updated)
+                Ok::<(), AppError>(())
             })
         })
-        .await
+        .await?;
+        self.load_session(session_id, cache_policy).await
     }
 
     pub(crate) async fn complete_goal(
@@ -628,14 +619,12 @@ impl SessionStore {
         session_id: i64,
         cache_policy: SessionCachePolicy,
     ) -> Result<Option<Session>, AppError> {
-        let cache = Arc::clone(&self.cache);
-        with_transaction_and_app_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
+        let completed = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             Box::pin(async move {
-                let Some(goal) = session_goal::mark_completed(txn, session_id).await? else {
-                    return Ok(None);
+                let Some(_goal) = session_goal::mark_completed(txn, session_id).await? else {
+                    return Ok::<Option<()>, AppError>(None);
                 };
-                let model = session::touch_session_updated_at(
+                session::touch_session_updated_at(
                     txn,
                     session_id,
                     session::get_session_by_id(txn, session_id)
@@ -646,18 +635,14 @@ impl SessionStore {
                 )
                 .await?
                 .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                let mut updated = session_from_model(model)?;
-                updated.goal = Some(session_goal_from_model(goal)?);
-                let session_for_cache = updated.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
-                    });
-                });
-                Ok(Some(updated))
+                Ok::<Option<()>, AppError>(Some(()))
             })
         })
-        .await
+        .await?;
+        if completed.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.load_session(session_id, cache_policy).await?))
     }
 
     pub(crate) async fn pause_goal_if_active(
@@ -665,14 +650,12 @@ impl SessionStore {
         session_id: i64,
         cache_policy: SessionCachePolicy,
     ) -> Result<Option<Session>, AppError> {
-        let cache = Arc::clone(&self.cache);
-        with_transaction_and_app_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
+        let paused = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             Box::pin(async move {
-                let Some(goal) = session_goal::pause_active(txn, session_id).await? else {
-                    return Ok(None);
+                let Some(_goal) = session_goal::pause_active(txn, session_id).await? else {
+                    return Ok::<Option<()>, AppError>(None);
                 };
-                let model = session::touch_session_updated_at(
+                session::touch_session_updated_at(
                     txn,
                     session_id,
                     session::get_session_by_id(txn, session_id)
@@ -683,18 +666,14 @@ impl SessionStore {
                 )
                 .await?
                 .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                let mut updated = session_from_model(model)?;
-                updated.goal = Some(session_goal_from_model(goal)?);
-                let session_for_cache = updated.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
-                    });
-                });
-                Ok(Some(updated))
+                Ok::<Option<()>, AppError>(Some(()))
             })
         })
-        .await
+        .await?;
+        if paused.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.load_session(session_id, cache_policy).await?))
     }
 
     pub(crate) async fn resume_goal_if_paused(
@@ -702,14 +681,12 @@ impl SessionStore {
         session_id: i64,
         cache_policy: SessionCachePolicy,
     ) -> Result<Option<Session>, AppError> {
-        let cache = Arc::clone(&self.cache);
-        with_transaction_and_app_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
+        let resumed = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             Box::pin(async move {
-                let Some(goal) = session_goal::resume_paused(txn, session_id).await? else {
-                    return Ok(None);
+                let Some(_goal) = session_goal::resume_paused(txn, session_id).await? else {
+                    return Ok::<Option<()>, AppError>(None);
                 };
-                let model = session::touch_session_updated_at(
+                session::touch_session_updated_at(
                     txn,
                     session_id,
                     session::get_session_by_id(txn, session_id)
@@ -720,18 +697,14 @@ impl SessionStore {
                 )
                 .await?
                 .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                let mut updated = session_from_model(model)?;
-                updated.goal = Some(session_goal_from_model(goal)?);
-                let session_for_cache = updated.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
-                    });
-                });
-                Ok(Some(updated))
+                Ok::<Option<()>, AppError>(Some(()))
             })
         })
-        .await
+        .await?;
+        if resumed.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.load_session(session_id, cache_policy).await?))
     }
 
     pub(crate) async fn update_goal(
@@ -740,15 +713,13 @@ impl SessionStore {
         update: GoalUpdate,
         cache_policy: SessionCachePolicy,
     ) -> Result<Option<Session>, AppError> {
-        let cache = Arc::clone(&self.cache);
-        with_transaction_and_app_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
+        let updated = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             let update = update.clone();
             Box::pin(async move {
-                let Some(goal) = session_goal::update_goal(txn, session_id, update).await? else {
-                    return Ok(None);
+                let Some(_goal) = session_goal::update_goal(txn, session_id, update).await? else {
+                    return Ok::<Option<()>, AppError>(None);
                 };
-                let model = session::touch_session_updated_at(
+                session::touch_session_updated_at(
                     txn,
                     session_id,
                     session::get_session_by_id(txn, session_id)
@@ -759,18 +730,14 @@ impl SessionStore {
                 )
                 .await?
                 .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-                let mut updated = session_from_model(model)?;
-                updated.goal = Some(session_goal_from_model(goal)?);
-                let session_for_cache = updated.clone();
-                effects.push(async move {
-                    with_cache(cache.as_ref(), |guard| {
-                        guard.insert(session_for_cache, cache_policy);
-                    });
-                });
-                Ok(Some(updated))
+                Ok::<Option<()>, AppError>(Some(()))
             })
         })
-        .await
+        .await?;
+        if updated.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(self.load_session(session_id, cache_policy).await?))
     }
 
     pub(crate) async fn load_goal(&self, session_id: i64) -> Result<Option<SessionGoal>, AppError> {
@@ -782,9 +749,7 @@ impl SessionStore {
         session_id: i64,
         cache_policy: SessionCachePolicy,
     ) -> Result<bool, AppError> {
-        let cache = Arc::clone(&self.cache);
-        with_transaction_and_app_effects(&self.db, move |txn, effects| {
-            let cache = Arc::clone(&cache);
+        let cleared = with_transaction_and_app_effects(&self.db, move |txn, _effects| {
             Box::pin(async move {
                 let cleared = session_goal::clear_by_session_id(txn, session_id).await?;
                 if cleared {
@@ -798,19 +763,16 @@ impl SessionStore {
                         .ok_or_else(|| {
                             AppError::Internal(format!("session not found: {session_id}"))
                         })?;
-                    let mut updated = session_from_model(model)?;
-                    updated.goal = None;
-                    let session_for_cache = updated.clone();
-                    effects.push(async move {
-                        with_cache(cache.as_ref(), |guard| {
-                            guard.insert(session_for_cache, cache_policy);
-                        });
-                    });
+                    let _ = session_from_model(model)?;
                 }
-                Ok(cleared)
+                Ok::<bool, AppError>(cleared)
             })
         })
-        .await
+        .await?;
+        if cleared {
+            let _ = self.load_session(session_id, cache_policy).await?;
+        }
+        Ok(cleared)
     }
 
     pub(crate) async fn goal_cost_summary(
@@ -1628,16 +1590,6 @@ async fn load_session_goal(
     db: &DatabaseConnection,
     session_id: i64,
 ) -> Result<Option<SessionGoal>, AppError> {
-    let Some(model) = session_goal::get_by_session_id(db, session_id).await? else {
-        return Ok(None);
-    };
-    Ok(Some(session_goal_from_model(model)?))
-}
-
-async fn load_session_goal_on<C>(db: &C, session_id: i64) -> Result<Option<SessionGoal>, AppError>
-where
-    C: sea_orm::ConnectionTrait,
-{
     let Some(model) = session_goal::get_by_session_id(db, session_id).await? else {
         return Ok(None);
     };

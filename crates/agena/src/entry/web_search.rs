@@ -45,7 +45,8 @@ pub(super) fn execute(
 
     let query = q.to_string();
     let backend_name = backend.name();
-    let target = crate::permission::NetworkTarget::parse(web_search_backend_target(&backend))
+    let request_url = web_search_backend_request_url(executor, &backend);
+    let target = crate::permission::NetworkTarget::parse(request_url.as_str())
         .map_err(|e| ToolError::Plugin(format!("web_search: invalid network target: {e}")))?;
     executor.ensure_network_permission(&target)?;
 
@@ -54,7 +55,9 @@ pub(super) fn execute(
             WebSearchBackend::Tavily { api_key } => tavily_search(&query, max, &api_key).await,
             WebSearchBackend::Exa { api_key } => exa_search(&query, max, &api_key).await,
             WebSearchBackend::Brave { api_key } => brave_search(&query, max, &api_key).await,
-            WebSearchBackend::DuckDuckGoHtml => duckduckgo_html_search(&query, max).await,
+            WebSearchBackend::DuckDuckGoHtml => {
+                duckduckgo_html_search(&query, max, request_url.as_str()).await
+            }
         }
     })?;
 
@@ -104,12 +107,17 @@ fn host_matches(host: &str, pattern: &str) -> bool {
     h == p || h.ends_with(&format!(".{p}"))
 }
 
-pub(crate) fn web_search_backend_target(backend: &WebSearchBackend) -> &'static str {
+fn web_search_backend_request_url(executor: &ToolExecutor, backend: &WebSearchBackend) -> String {
     match backend {
-        WebSearchBackend::Tavily { .. } => "https://api.tavily.com/search",
-        WebSearchBackend::Exa { .. } => "https://api.exa.ai/search",
-        WebSearchBackend::Brave { .. } => "https://api.search.brave.com/res/v1/web/search",
-        WebSearchBackend::DuckDuckGoHtml => "https://html.duckduckgo.com/html/",
+        WebSearchBackend::Tavily { .. } => "https://api.tavily.com/search".to_string(),
+        WebSearchBackend::Exa { .. } => "https://api.exa.ai/search".to_string(),
+        WebSearchBackend::Brave { .. } => {
+            "https://api.search.brave.com/res/v1/web/search".to_string()
+        }
+        WebSearchBackend::DuckDuckGoHtml => executor
+            .web_search_duckduckgo_url_override()
+            .unwrap_or("https://html.duckduckgo.com/html/")
+            .to_string(),
     }
 }
 
@@ -276,7 +284,11 @@ async fn brave_search(
         .collect())
 }
 
-async fn duckduckgo_html_search(query: &str, max: u32) -> Result<Vec<WebSearchHit>, ToolError> {
+async fn duckduckgo_html_search(
+    query: &str,
+    max: u32,
+    request_url: &str,
+) -> Result<Vec<WebSearchHit>, ToolError> {
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .user_agent(crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT)
@@ -284,7 +296,7 @@ async fn duckduckgo_html_search(query: &str, max: u32) -> Result<Vec<WebSearchHi
         .map_err(|e| ToolError::Plugin(e.to_string()))?;
     let body = format!("q={}", urlencoding::encode(query));
     let resp = client
-        .post("https://html.duckduckgo.com/html/")
+        .post(request_url)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()

@@ -187,7 +187,13 @@ impl SessionManager {
             .contains_key(request.reply.request_id.as_str());
         if is_host_request {
             let response = host_user_input_response(&user_input_request, &request.reply)?;
-            let assistant_message = session.messages[pending.tool.part.message_index].clone();
+            let tool_part_ref = session.resolve_part_ref(&pending.tool.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending tool part not found: message={}, part={}",
+                    pending.tool.part.message_id, pending.tool.part.part_id
+                ))
+            })?;
+            let assistant_message = session.messages[tool_part_ref.message_index].clone();
             session = self
                 .persist_session_changes(
                     session,
@@ -1655,10 +1661,10 @@ impl SessionManager {
         };
 
         {
-            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 AppError::Internal(format!(
                     "pending tool part not found: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
+                    resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
             tool_part.set_content(PartContent::Operation(OperationPart::pending(
@@ -1674,15 +1680,15 @@ impl SessionManager {
         let permission_part_id = self.store.reserve_part_id().await?;
         let permission_part = build_permission_part(
             permission_part_id,
-            pending_tool.part.message_id,
+            resolved.pending.part.message_id,
             resolved.operation_id.as_str(),
             PermissionRequestPart::pending(request.clone()),
         );
-        session.messages[pending_tool.part.message_index]
+        session.messages[resolved.pending.part.message_index]
             .parts
             .push(permission_part.clone());
 
-        let assistant_message = session.messages[pending_tool.part.message_index].clone();
+        let assistant_message = session.messages[resolved.pending.part.message_index].clone();
         self.publisher
             .publish(
                 crate::event::PublishContext::for_session(session.id),
@@ -1742,10 +1748,10 @@ impl SessionManager {
         };
 
         {
-            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 AppError::Internal(format!(
                     "pending tool part not found: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
+                    resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
             tool_part.set_content(PartContent::Operation(OperationPart::pending(
@@ -1765,15 +1771,15 @@ impl SessionManager {
         let input_part_id = self.store.reserve_part_id().await?;
         let input_part = build_user_input_part(
             input_part_id,
-            pending_tool.part.message_id,
+            resolved.pending.part.message_id,
             resolved.operation_id.as_str(),
             UserInputRequestPart::pending(request.clone()),
         );
-        session.messages[pending_tool.part.message_index]
+        session.messages[resolved.pending.part.message_index]
             .parts
             .push(input_part.clone());
 
-        let assistant_message = session.messages[pending_tool.part.message_index].clone();
+        let assistant_message = session.messages[resolved.pending.part.message_index].clone();
         self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
             .await
     }
@@ -1798,7 +1804,13 @@ impl SessionManager {
                 .store
                 .load_session(session.id, state.cache_policy())
                 .await?;
-            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+            let tool_part_ref = session.resolve_part_ref(&pending_tool.part).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "streaming tool part not found: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                ))
+            })?;
+            let tool_part = session.part_mut(&tool_part_ref).ok_or_else(|| {
                 AppError::Internal(format!(
                     "streaming tool part not found: message={}, part={}",
                     pending_tool.part.message_id, pending_tool.part.part_id
@@ -1817,7 +1829,7 @@ impl SessionManager {
                 tool_part.status = ExecutionStatus::InProgress;
             }
 
-            let assistant_message = session.messages[pending_tool.part.message_index].clone();
+            let assistant_message = session.messages[tool_part_ref.message_index].clone();
             session = self
                 .persist_session_changes(
                     session,
@@ -1889,10 +1901,10 @@ impl SessionManager {
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
         {
-            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 AppError::Internal(format!(
                     "pending tool part not found: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
+                    resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
             tool_part.set_content(PartContent::Operation(OperationPart::completed(
@@ -1907,7 +1919,7 @@ impl SessionManager {
             tool_part.status = ExecutionStatus::Completed;
         }
 
-        let assistant_message = session.messages[pending_tool.part.message_index].clone();
+        let assistant_message = session.messages[resolved.pending.part.message_index].clone();
         let tool_call_id = tool_call_id_for(&resolved);
         let completed_part = assistant_message
             .parts
@@ -1966,10 +1978,10 @@ impl SessionManager {
         );
 
         {
-            let tool_part = session.part_mut(&pending_tool.part).ok_or_else(|| {
+            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 AppError::Internal(format!(
                     "pending tool part not found: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
+                    resolved.pending.part.message_id, resolved.pending.part.part_id
                 ))
             })?;
             tool_part.set_content(PartContent::Operation(OperationPart::failed(
@@ -1985,7 +1997,7 @@ impl SessionManager {
             tool_part.status = ExecutionStatus::Failed;
         }
 
-        let assistant_message = session.messages[pending_tool.part.message_index].clone();
+        let assistant_message = session.messages[resolved.pending.part.message_index].clone();
         let tool_call_id = tool_call_id_for(&resolved);
         let completed_part = assistant_message
             .parts

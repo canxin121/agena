@@ -41,20 +41,16 @@ impl LspPlugin {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, schemars::JsonSchema)]
-struct LspServersInput {}
-
 #[derive(Debug, Deserialize, schemars::JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "lsp",
     description = "LSP command dispatcher. Set action to servers, definition, references, hover, or diagnostics.",
     summary = "Query configured language servers.",
-    help = "Use action `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics. Legacy `command/args` inputs are still accepted for compatibility.",
+    help = "Use action `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics.",
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
     host_capabilities(HostCapability::LspRegistry),
     concurrency_safe = true,
-    load = "always",
-    fallback = parse_legacy_lsp_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum LspToolInput {
@@ -80,16 +76,6 @@ enum LspToolInput {
         #[serde(flatten)]
         args: LspDiagnosticsToolInput,
     },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum LegacyLspToolInput {
-    Servers(LspServersInput),
-    Definition(LspDefinitionToolInput),
-    References(LspReferencesToolInput),
-    Hover(LspHoverToolInput),
-    Diagnostics(LspDiagnosticsToolInput),
 }
 
 #[derive(Debug, Serialize)]
@@ -220,44 +206,8 @@ fn lsp_route(input: serde_json::Value) -> SdkResult<(String, serde_json::Value)>
     LspToolInput::resolve_entry("lsp", input)
 }
 
-fn tool_args<T: serde::Serialize>(tool: &str, args: T) -> SdkResult<(String, serde_json::Value)> {
-    Ok((
-        tool.to_string(),
-        serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
-    ))
-}
-
 fn parse_lsp_input(input: serde_json::Value) -> SdkResult<LspToolInput> {
-    match serde_json::from_value::<LspToolInput>(input.clone()) {
-        Ok(parsed) => Ok(parsed),
-        Err(primary) => {
-            let primary = PluginError::invalid_params(primary.to_string());
-            match serde_json::from_value::<LegacyLspToolInput>(input) {
-                Ok(LegacyLspToolInput::Servers(_)) => Ok(LspToolInput::Servers),
-                Ok(LegacyLspToolInput::Definition(args)) => Ok(LspToolInput::Definition { args }),
-                Ok(LegacyLspToolInput::References(args)) => Ok(LspToolInput::References { args }),
-                Ok(LegacyLspToolInput::Hover(args)) => Ok(LspToolInput::Hover { args }),
-                Ok(LegacyLspToolInput::Diagnostics(args)) => Ok(LspToolInput::Diagnostics { args }),
-                Err(_) => Err(primary),
-            }
-        }
-    }
-}
-
-fn parse_legacy_lsp_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    match serde_json::from_value::<LegacyLspToolInput>(input) {
-        Ok(LegacyLspToolInput::Servers(_)) => {
-            Ok(("lsp_servers".to_string(), serde_json::json!({})))
-        }
-        Ok(LegacyLspToolInput::Definition(args)) => tool_args("lsp_definition", args),
-        Ok(LegacyLspToolInput::References(args)) => tool_args("lsp_references", args),
-        Ok(LegacyLspToolInput::Hover(args)) => tool_args("lsp_hover", args),
-        Ok(LegacyLspToolInput::Diagnostics(args)) => tool_args("lsp_diagnostics", args),
-        Err(_) => Err(primary),
-    }
+    LspToolInput::parse_input(input)
 }
 
 #[cfg(test)]

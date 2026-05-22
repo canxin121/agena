@@ -14,8 +14,7 @@ use crate::entry::result::ToolPayloadExecution;
 use crate::entry::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 use crate::message::{
     ApplyPatchToolInput, BashToolInput, GlobToolInput, GrepToolInput, MonitorToolInput,
-    NotebookEditToolInput, PowerShellToolInput, ReadToolInput, ViewFileToolInput,
-    WebFetchToolInput,
+    NotebookEditToolInput, PowerShellToolInput, ReadToolInput, WebFetchToolInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
@@ -220,10 +219,6 @@ pub(crate) fn permission_paths_for(
             Ok(vec![crate::plugin::sdk::PathRequest::read(
                 payload.file_path,
             )])
-        }
-        "view_file" => {
-            let payload: ViewFileToolInput = serde_json::from_value(input.clone())?;
-            Ok(vec![crate::plugin::sdk::PathRequest::read(payload.path)])
         }
         "apply_patch" => {
             let payload: ApplyPatchToolInput = serde_json::from_value(input.clone())?;

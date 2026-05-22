@@ -848,7 +848,7 @@ mod tests {
     use super::*;
     use crate::message::{MessageMetadata, MessageSource, MessageStatus, PartContent};
     use crate::role::Role;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
 
     fn assistant(provider: &str, model: &str, usage: MessageUsage) -> Message {
         let mut msg = Message::prompt_parts(Role::Assistant, vec![PartContent::text("hi")]);
@@ -1022,7 +1022,10 @@ mod tests {
 
     #[test]
     fn summarizes_usage_records_by_day_model_provider_and_session() {
-        let first_at = Utc::now();
+        let first_at = Utc
+            .with_ymd_and_hms(2025, 1, 15, 12, 0, 0)
+            .single()
+            .expect("fixed UTC timestamp");
         let second_at = first_at + Duration::hours(2);
         let records = vec![
             UsageStatRecord {

@@ -29,12 +29,11 @@ pub(crate) struct CronPlugin {
     entry = "schedule",
     description = "Schedule command. Set action to list, create, delete, or wakeup.",
     summary = "List, create, delete, or trigger scheduled work.",
-    help = "Use action `list` to inspect registered cron jobs and one-shot wakeups, `create` for cron jobs, `delete` to remove a scheduled job, and `wakeup` for a one-shot wakeup. Legacy `command/args` inputs are still accepted for compatibility.",
+    help = "Use action `list` to inspect registered cron jobs and one-shot wakeups, `create` for cron jobs, `delete` to remove a scheduled job, and `wakeup` for a one-shot wakeup.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Scheduler),
     host_capabilities(HostCapability::Scheduler),
     concurrency_safe = false,
-    load = "always",
-    fallback = parse_legacy_schedule_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ScheduleToolInput {
@@ -58,15 +57,6 @@ enum ScheduleToolInput {
         #[serde(flatten)]
         args: crate::message::ScheduleWakeupToolInput,
     },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum LegacyScheduleToolInput {
-    List(crate::message::CronListToolInput),
-    Create(crate::message::CronCreateToolInput),
-    Delete(crate::message::CronDeleteToolInput),
-    Wakeup(crate::message::ScheduleWakeupToolInput),
 }
 
 impl CronPlugin {
@@ -113,27 +103,4 @@ impl Plugin for CronPlugin {
 
 fn schedule_decl() -> PluginToolDecl {
     ScheduleToolInput::tool_decl()
-}
-
-fn parse_legacy_schedule_entry(
-    input: serde_json::Value,
-    primary: PluginError,
-) -> SdkResult<(String, serde_json::Value)> {
-    match serde_json::from_value::<LegacyScheduleToolInput>(input) {
-        Ok(LegacyScheduleToolInput::List(args)) => tool_args("cron_list", args),
-        Ok(LegacyScheduleToolInput::Create(args)) => tool_args("cron_create", args),
-        Ok(LegacyScheduleToolInput::Delete(args)) => tool_args("cron_delete", args),
-        Ok(LegacyScheduleToolInput::Wakeup(args)) => tool_args("schedule_wakeup", args),
-        Err(_) => Err(primary),
-    }
-}
-
-fn tool_args<T: serde::Serialize>(
-    tool_name: &str,
-    args: T,
-) -> SdkResult<(String, serde_json::Value)> {
-    Ok((
-        tool_name.to_string(),
-        serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
-    ))
 }

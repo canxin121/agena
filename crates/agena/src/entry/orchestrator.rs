@@ -6,8 +6,8 @@ use crate::message::{FileChangeEntry, FileChangeKind};
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
     ToolRuntimeContext, apply_patch, ask_user, bash, cron, glob, grep, lsp, monitor_tool,
-    notebook_edit, plan, powershell, read, task, todo_write, tool_search, view_file, web_fetch,
-    web_search, worktree,
+    notebook_edit, plan, powershell, read, task, todo_write, tool_search, web_fetch, web_search,
+    worktree,
 };
 
 fn apply_patch_output_text(result: &apply_patch::ApplyPatchExecution) -> String {
@@ -66,7 +66,6 @@ pub(crate) fn execute_tool(
             Ok(ToolPayloadExecution::new(output, view).with_apply_patch(result.clone()))
         }
         "read" => read::execute(executor, &parse_input(input)?),
-        "view_file" => view_file::execute(executor, &parse_input(input)?),
         "glob" => glob::execute(executor, &parse_input(input)?),
         "grep" => grep::execute(executor, &parse_input(input)?),
         "task" => task::execute(executor, &parse_input(input)?),

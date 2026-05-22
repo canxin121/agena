@@ -10,8 +10,7 @@ use crate::message::{
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
     MonitorEvent, MonitorStatus, MonitorToolInput, NotebookEditToolInput, PowerShellToolInput,
     ReadToolInput, ScheduleWakeupToolInput, StructuredObject, TodoItem, TodoWriteToolInput,
-    ToolInvocation, ToolOutput, ToolSearchToolInput, ViewFileToolInput, WebFetchToolInput,
-    WebSearchToolInput,
+    ToolInvocation, ToolOutput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
@@ -20,7 +19,6 @@ use crate::message::{
 pub enum ToolPayloadInput {
     Bash(BashToolInput),
     Read(ReadToolInput),
-    ViewFile(ViewFileToolInput),
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
     Grep(GrepToolInput),
@@ -54,7 +52,6 @@ impl ToolPayloadInput {
         match self {
             Self::Bash(_) => "bash",
             Self::Read(_) => "read",
-            Self::ViewFile(_) => "view_file",
             Self::ApplyPatch(_) => "apply_patch",
             Self::Glob(_) => "glob",
             Self::Grep(_) => "grep",
@@ -164,22 +161,6 @@ pub enum ToolPayloadOutput {
         loaded_paths: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attachment: Option<ReadAttachmentOutput>,
-    },
-    ViewFile {
-        path: String,
-        kind: AttachmentKind,
-        mime: String,
-        size_bytes: u64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        filename: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        width: Option<u32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        height: Option<u32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        duration_ms: Option<u64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        page_count: Option<u32>,
     },
     ApplyPatch {
         operation_id: String,
@@ -350,7 +331,6 @@ impl ToolPayloadOutput {
         match self {
             Self::Bash { .. } => "bash",
             Self::Read { .. } => "read",
-            Self::ViewFile { .. } => "view_file",
             Self::ApplyPatch { .. } => "apply_patch",
             Self::Glob { .. } => "glob",
             Self::Grep { .. } => "grep",
@@ -420,7 +400,6 @@ fn grouped_invocation_for_tool(
 ) -> Option<(&'static str, &'static str)> {
     Some(match tool {
         "read" => ("fs", "read"),
-        "view_file" => ("fs", "view_file"),
         "glob" => ("fs", "glob"),
         "grep" => ("fs", "grep"),
         "apply_patch" => ("fs", "apply_patch"),
@@ -504,37 +483,18 @@ fn grouped_tool_payload_name(
     entry: &str,
     input: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Option<&'static str> {
-    let action = if let Some(action) = input.get("action").and_then(serde_json::Value::as_str) {
-        action.to_string()
-    } else {
-        let command = input.get("command")?.as_str()?.to_string();
-        let args = input
-            .remove("args")
-            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-        *input = match args {
-            serde_json::Value::Object(map) => map,
-            serde_json::Value::Null => serde_json::Map::new(),
-            _ => return None,
-        };
-        command
-    };
+    let action = input.get("action")?.as_str()?.to_string();
     let tool = match (entry, action.as_str()) {
         ("fs", "read") => "read",
-        ("fs", "view_file") => "view_file",
         ("fs", "glob") => "glob",
         ("fs", "grep") => "grep",
         ("fs", "apply_patch") => "apply_patch",
         ("fs", "notebook_edit") => "notebook_edit",
-        ("fs_edit", "apply_patch") => "apply_patch",
-        ("fs_edit", "notebook_edit") => "notebook_edit",
         ("shell", "exec") => match input.get("shell").and_then(serde_json::Value::as_str) {
             Some("bash") => "bash",
             Some("powershell") => "powershell",
             _ => return None,
         },
-        ("shell", "bash") => "bash",
-        ("shell", "powershell") => "powershell",
-        ("shell", "monitor") => "monitor",
         ("shell", "monitor_start") => "monitor",
         ("shell", "monitor_list") => "monitor",
         ("shell", "monitor_read") => "monitor",
@@ -544,19 +504,15 @@ fn grouped_tool_payload_name(
         ("task", "run") => "task",
         ("tools", "search") => "tool_search",
         ("todo", "write") => "todo_write",
-        ("user", "ask") => "ask_user",
         ("user", "request_input") => "ask_user",
         ("plan", "enter") => "enter_plan_mode",
         ("plan", "exit") => "exit_plan_mode",
         ("worktree", "enter") => "enter_worktree",
         ("worktree", "exit") => "exit_worktree",
         ("schedule", "create") => "cron_create",
-        ("schedule_edit", "create") => "cron_create",
         ("schedule", "list") => "cron_list",
         ("schedule", "delete") => "cron_delete",
-        ("schedule_edit", "delete") => "cron_delete",
         ("schedule", "wakeup") => "schedule_wakeup",
-        ("schedule_edit", "wakeup") => "schedule_wakeup",
         ("lsp", "definition") => "lsp_definition",
         ("lsp", "references") => "lsp_references",
         ("lsp", "hover") => "lsp_hover",

@@ -64,7 +64,7 @@ struct SettingsValidateToolInput {}
     entry = "settings",
     description = "Settings command. Set action to get, list, validate, set, delete, or patch. Edits validate config.json and reload by default.",
     summary = "Read, validate, or edit runtime settings.",
-    help = "Use action `get` to inspect one setting path, `list` to enumerate settings, `validate` to validate config text without applying it, and `set`, `delete`, or `patch` to mutate config.json. For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`. Legacy `command/args` inputs are still accepted for compatibility.",
+    help = "Use action `get` to inspect one setting path, `list` to enumerate settings, `validate` to validate config text without applying it, and `set`, `delete`, or `patch` to mutate config.json. For effective reads, prefer explicit `scope = config|meta` with a relative `path` instead of relying on prefixed paths like `config.foo`.",
     tags(
         ToolTag::ReadOnly,
         ToolTag::Mutating,
@@ -77,8 +77,7 @@ struct SettingsValidateToolInput {}
         crate::plugin::sdk::HostCapability::ReloadConfig
     ),
     concurrency_safe = false,
-    load = "always",
-    fallback = parse_legacy_settings_entry
+    load = "always"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SettingsToolInput {
@@ -112,17 +111,6 @@ enum SettingsToolInput {
         #[serde(flatten)]
         args: ConfigSettingsPatchInput,
     },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "command", content = "args", rename_all = "snake_case")]
-enum LegacySettingsToolInput {
-    Get(SettingsGetToolInput),
-    List(SettingsListToolInput),
-    Validate(SettingsValidateToolInput),
-    Set(ConfigSettingsSetInput),
-    Delete(ConfigSettingsDeleteInput),
-    Patch(ConfigSettingsPatchInput),
 }
 
 impl SettingsPlugin {
@@ -377,47 +365,7 @@ fn settings_tag() -> ToolTag {
 }
 
 fn parse_settings_input(input: JsonValue) -> SdkResult<SettingsToolInput> {
-    match serde_json::from_value::<SettingsToolInput>(input.clone()) {
-        Ok(parsed) => Ok(parsed),
-        Err(primary) => {
-            let primary = PluginError::invalid_params(primary.to_string());
-            match serde_json::from_value::<LegacySettingsToolInput>(input) {
-                Ok(LegacySettingsToolInput::Get(args)) => Ok(SettingsToolInput::Get { args }),
-                Ok(LegacySettingsToolInput::List(args)) => Ok(SettingsToolInput::List { args }),
-                Ok(LegacySettingsToolInput::Validate(args)) => {
-                    Ok(SettingsToolInput::Validate { args })
-                }
-                Ok(LegacySettingsToolInput::Set(args)) => Ok(SettingsToolInput::Set { args }),
-                Ok(LegacySettingsToolInput::Delete(args)) => Ok(SettingsToolInput::Delete { args }),
-                Ok(LegacySettingsToolInput::Patch(args)) => Ok(SettingsToolInput::Patch { args }),
-                Err(_) => Err(primary),
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn parse_legacy_settings_entry(
-    input: JsonValue,
-    primary: PluginError,
-) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    match serde_json::from_value::<LegacySettingsToolInput>(input) {
-        Ok(LegacySettingsToolInput::Get(args)) => tool_args("get", args),
-        Ok(LegacySettingsToolInput::List(args)) => tool_args("list", args),
-        Ok(LegacySettingsToolInput::Validate(args)) => tool_args("validate", args),
-        Ok(LegacySettingsToolInput::Set(args)) => tool_args("set", args),
-        Ok(LegacySettingsToolInput::Delete(args)) => tool_args("delete", args),
-        Ok(LegacySettingsToolInput::Patch(args)) => tool_args("patch", args),
-        Err(_) => Err(primary),
-    }
-}
-
-#[allow(dead_code)]
-fn tool_args<T: Serialize>(tool: &str, args: T) -> crate::plugin::sdk::Result<(String, JsonValue)> {
-    Ok((
-        tool.to_string(),
-        serde_json::to_value(args).map_err(|err| PluginError::invalid_params(err.to_string()))?,
-    ))
+    SettingsToolInput::parse_input(input)
 }
 
 fn effective_host_path(path: Option<&str>) -> Option<String> {

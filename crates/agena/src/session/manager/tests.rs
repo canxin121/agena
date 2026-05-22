@@ -501,14 +501,14 @@ impl ModelRuntime for ScriptedProvider {
                     id: Some("call_todo_1".to_string()),
                     name: Some("todo".to_string()),
                     arguments_delta: serde_json::json!({
-                        "command": "write",
-                        "args": TodoWriteToolInput {
+                        "action": "write",
+                        "items": TodoWriteToolInput {
                             items: vec![TodoItem {
                                 content: "confirm permission recovery".to_string(),
                                 status: TodoStatus::Completed,
                                 priority: TodoPriority::Low,
                             }],
-                        },
+                        }.items,
                     })
                     .to_string(),
                 }),
@@ -588,12 +588,13 @@ impl ModelRuntime for ScriptedProvider {
                     id: Some("call_tool_search_1".to_string()),
                     name: Some("tools".to_string()),
                     arguments_delta: serde_json::json!({
-                        "command": "search",
-                        "args": ToolSearchToolInput {
+                        "action": "search",
+                        "query": ToolSearchToolInput {
                             query: "patch file".to_string(),
                             load: vec!["fs".to_string()],
                             limit: None,
-                        },
+                        }.query,
+                        "load": ["fs"],
                     })
                     .to_string(),
                 }),
@@ -614,8 +615,8 @@ impl ModelRuntime for ScriptedProvider {
                     id: Some("call_ask_user_1".to_string()),
                     name: Some("user".to_string()),
                     arguments_delta: serde_json::json!({
-                        "command": "request_input",
-                        "args": AskUserToolInput {
+                        "action": "request_input",
+                        "questions": AskUserToolInput {
                             questions: vec![UserInputQuestion {
                                 id: "model_choice".to_string(),
                                 header: "Model".to_string(),
@@ -635,7 +636,7 @@ impl ModelRuntime for ScriptedProvider {
                                 multiple: false,
                                 allow_custom: false,
                             }],
-                        },
+                        }.questions,
                     })
                     .to_string(),
                 }),
@@ -675,11 +676,11 @@ impl ModelRuntime for ScriptedProvider {
                         id: Some("call_apply_patch_1".to_string()),
                         name: Some("fs".to_string()),
                         arguments_delta: serde_json::json!({
-                            "command": "apply_patch",
-                            "args": ApplyPatchToolInput {
+                            "action": "apply_patch",
+                            "patch": ApplyPatchToolInput {
                                 patch: "*** Begin Patch\n*** Add File: result.txt\n+approved\n*** End Patch"
                                     .to_string(),
-                            },
+                            }.patch,
                         })
                         .to_string(),
                     }),

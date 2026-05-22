@@ -4,7 +4,8 @@ use std::fs;
 use crate::message::{ReadMode, ReadToolInput};
 
 use super::{
-    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput, view_file,
+    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
+    file_attachment,
 };
 
 const DEFAULT_OFFSET: usize = 1;
@@ -60,7 +61,7 @@ pub(super) fn execute(
 
     let content = fs::read(&target)?;
     if should_attach(content.as_slice(), &target, input.mode) {
-        return view_file::execute_for_read_attachment(executor, input.file_path.as_str());
+        return file_attachment::execute_for_read_attachment(executor, input.file_path.as_str());
     }
 
     let text = String::from_utf8(content).map_err(|_| {
@@ -98,7 +99,7 @@ fn should_attach(bytes: &[u8], path: &std::path::Path, mode: ReadMode) -> bool {
     match mode {
         ReadMode::Text => false,
         ReadMode::Attachment => true,
-        ReadMode::Auto => view_file::should_attach_in_read_auto(path, bytes),
+        ReadMode::Auto => file_attachment::should_attach_in_read_auto(path, bytes),
     }
 }
 

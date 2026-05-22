@@ -29,6 +29,6 @@ pub use tool::{
     PluginInvocation, PowerShellToolInput, ReadMode, ReadToolInput, RequestUserInputToolInput,
     ScheduleWakeupToolInput, SearchResultItem, TableColumn, TaskSubagentType, TaskToolInput,
     TodoWriteToolInput, ToolAttachment, ToolInvocation, ToolOutput, ToolSearchToolInput,
-    UpdateGoalStatus, UpdateGoalToolInput, ViewFileToolInput, WebFetchToolInput,
-    WebSearchToolInput, WorkflowPromptToolInput,
+    UpdateGoalStatus, UpdateGoalToolInput, WebFetchToolInput, WebSearchToolInput,
+    WorkflowPromptToolInput,
 };

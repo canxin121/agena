@@ -47,7 +47,6 @@ impl ToolOutputTruncator {
                     *text = truncate_text(text, self.policy.max_chars);
                 }
             }
-            ToolPayloadOutput::ViewFile { .. } => {}
             ToolPayloadOutput::ApplyPatch {
                 inverse_patch,
                 diff,

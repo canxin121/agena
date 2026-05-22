@@ -121,13 +121,21 @@ pub(super) fn render_transcript_export_markdown(
 }
 
 pub(super) fn tool_output_preview(text: &str) -> ToolOutputPreview {
-    let total_lines = text.split('\n').count();
+    let normalized = trim_empty_line_edges(sanitize_terminal_text(text).as_str());
+    if normalized.is_empty() {
+        return ToolOutputPreview {
+            text: String::new(),
+            omitted_lines: 0,
+        };
+    }
+
+    let total_lines = normalized.split('\n').count();
     let mut preview = String::new();
     let mut used_chars = 0_usize;
     let mut included_lines = 0_usize;
     let mut truncated = false;
 
-    for (index, line) in text.split('\n').enumerate() {
+    for (index, line) in normalized.split('\n').enumerate() {
         if index >= TOOL_CARD_PREVIEW_LINES {
             truncated = true;
             break;
@@ -774,9 +782,25 @@ fn push_tool_output_preview(
 
 fn push_multiline(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, style: Style, width: u16) {
     let sanitized = sanitize_terminal_text(text);
-    for raw_line in sanitized.split('\n') {
+    let normalized = trim_empty_line_edges(sanitized.as_str());
+    if normalized.is_empty() {
+        return;
+    }
+    for raw_line in normalized.split('\n') {
         push_wrapped_line(out, prefix, prefix, raw_line, style, width);
     }
+}
+
+fn trim_empty_line_edges(text: &str) -> String {
+    let lines = text.split('\n').collect::<Vec<_>>();
+    let Some(first_non_empty) = lines.iter().position(|line| !line.trim().is_empty()) else {
+        return String::new();
+    };
+    let last_non_empty = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first_non_empty);
+    lines[first_non_empty..=last_non_empty].join("\n")
 }
 
 fn push_wrapped_line(
@@ -921,4 +945,30 @@ fn tool_invocation_label(invocation: &ToolInvocation) -> String {
         }
     }
     invocation.name.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trim_empty_line_edges_removes_outer_blank_lines_only() {
+        let text = "\n\nfirst line\n\nsecond line\n\n";
+        assert_eq!(trim_empty_line_edges(text), "first line\n\nsecond line");
+    }
+
+    #[test]
+    fn push_multiline_ignores_outer_blank_lines() {
+        let mut out = Vec::new();
+        push_multiline(&mut out, "  ", "\n\nhello\nworld\n\n", Style::default(), 80);
+        let rendered = out.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert_eq!(rendered, vec!["  hello".to_string(), "  world".to_string()]);
+    }
+
+    #[test]
+    fn tool_output_preview_ignores_outer_blank_lines() {
+        let preview = tool_output_preview("\n\nalpha\nbeta\n\n");
+        assert_eq!(preview.text, "alpha\nbeta");
+        assert_eq!(preview.omitted_lines, 0);
+    }
 }

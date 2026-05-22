@@ -87,7 +87,7 @@ impl Default for ComposerKeyBindings {
                 KeyChord::new(KeyCode::Char('i'), KeyModifiers::ALT),
             ],
             open_pending_user_input: vec![KeyChord::new(KeyCode::Char('u'), KeyModifiers::ALT)],
-            open_pending_permission: vec![KeyChord::new(KeyCode::Char('p'), KeyModifiers::ALT)],
+            open_pending_permission: vec![KeyChord::new(KeyCode::Char('a'), KeyModifiers::ALT)],
         }
     }
 }
@@ -260,4 +260,23 @@ pub fn parse_chord(s: &str) -> Result<KeyChord, String> {
         other => return Err(format!("unknown key: {other}")),
     };
     Ok(KeyChord { code, modifiers })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_pending_permission_binding_uses_alt_a() {
+        let bindings = ComposerKeyBindings::default();
+
+        assert_eq!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT)),
+            Some(ComposerAction::OpenPendingPermission)
+        );
+        assert_ne!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT)),
+            Some(ComposerAction::OpenPendingPermission)
+        );
+    }
 }

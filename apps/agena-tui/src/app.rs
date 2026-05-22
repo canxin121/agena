@@ -387,6 +387,7 @@ pub struct App {
     focus: Focus,
     overlay: Option<Overlay>,
     overlay_stack: Vec<Overlay>,
+    seen_permission_request_ids: BTreeSet<String>,
     seen_user_input_request_ids: BTreeSet<String>,
     flash: Option<FlashMessage>,
     sessions: SessionListState,
@@ -871,6 +872,24 @@ struct PermissionOverlay {
     session_id: i64,
     request: PermissionRequest,
     selected: usize,
+}
+
+#[derive(Debug, Clone)]
+enum PendingInteractiveOverlayTarget {
+    Permission {
+        session_id: i64,
+        request: PermissionRequest,
+    },
+    UserInput {
+        session_id: i64,
+        request: UserInputRequest,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingInteractiveKind {
+    Permission,
+    UserInput,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1536,6 +1555,7 @@ impl App {
             focus: Focus::Composer,
             overlay: None,
             overlay_stack: Vec::new(),
+            seen_permission_request_ids: BTreeSet::new(),
             seen_user_input_request_ids: BTreeSet::new(),
             flash: None,
             sessions: SessionListState {
@@ -1914,6 +1934,7 @@ impl App {
             Focus::Transcript => self.handle_transcript_key(key),
             Focus::Composer => self.handle_composer_key(key),
         }
+        self.maybe_auto_open_pending_interactive_overlay();
     }
 
     fn handle_overlay_key(&mut self, key: KeyEvent) -> bool {
@@ -1965,6 +1986,8 @@ impl App {
             && let Some(parent) = self.overlay_stack.pop()
         {
             self.overlay = Some(self.refresh_restored_overlay(parent));
+        } else if self.overlay.is_none() {
+            self.maybe_auto_open_pending_interactive_overlay();
         }
 
         true
@@ -5063,8 +5086,8 @@ impl App {
         self.transcript.state_loading = false;
         match result {
             Ok(execution) => {
-                self.transcript.apply_execution(execution);
-                self.maybe_auto_open_user_input_overlay();
+                self.apply_transcript_execution(execution);
+                self.maybe_auto_open_pending_interactive_overlay();
                 self.sessions.select_by_id(session_id);
             }
             Err(error) => self.flash_error(error),
@@ -5117,8 +5140,8 @@ impl App {
         match result {
             Ok(refresh) => {
                 if let Some(execution) = refresh.execution {
-                    self.transcript.apply_execution(execution);
-                    self.maybe_auto_open_user_input_overlay();
+                    self.apply_transcript_execution(execution);
+                    self.maybe_auto_open_pending_interactive_overlay();
                 }
                 if let Some(page) = refresh.latest_messages {
                     self.transcript.merge_latest_messages(
@@ -5157,8 +5180,8 @@ impl App {
                 if self.transcript.session_id != Some(session_id) {
                     self.open_session(session_id, execution.session.title.clone());
                 }
-                self.transcript.apply_execution(execution);
-                self.maybe_auto_open_user_input_overlay();
+                self.apply_transcript_execution(execution);
+                self.maybe_auto_open_pending_interactive_overlay();
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
                 // Pop the next pending message and submit it after the turn.
@@ -5182,7 +5205,7 @@ impl App {
     /// whenever an in-flight turn completes successfully so the user sees
     /// their pending messages run automatically.
     fn try_drain_queue_one(&mut self) {
-        if self.transcript.submitting {
+        if self.transcript.submitting || self.current_session_pending_interactive_kind().is_some() {
             return;
         }
         let Some(msg) = self.queue.pop_next() else {
@@ -5251,8 +5274,8 @@ impl App {
         let transcript_is_target = self.transcript.session_id == Some(session_id);
         if transcript_is_target {
             self.transcript.submitting = false;
-            self.transcript.apply_execution(execution);
-            self.maybe_auto_open_user_input_overlay();
+            self.apply_transcript_execution(execution);
+            self.maybe_auto_open_pending_interactive_overlay();
         }
         self.submitting_session_ids.remove(&session_id);
         if refresh && transcript_is_target {
@@ -5821,8 +5844,8 @@ impl App {
                     self.replace_composer_draft(draft);
                     self.persist_draft_store_with_feedback(true);
                 }
-                self.transcript.apply_execution(execution);
-                self.maybe_auto_open_user_input_overlay();
+                self.apply_transcript_execution(execution);
+                self.maybe_auto_open_pending_interactive_overlay();
                 self.submitting_session_ids.remove(&session_id);
                 self.focus = Focus::Composer;
                 self.request_sessions(false);
@@ -6121,6 +6144,15 @@ impl App {
     }
 
     fn request_submit_turn(&mut self, session_id: i64, draft: ComposerDraft) {
+        if self
+            .pending_interactive_kind_for_session(session_id)
+            .is_some()
+        {
+            self.restore_composer_draft(draft);
+            self.focus = Focus::Composer;
+            self.prompt_for_pending_interactive_on_session(session_id);
+            return;
+        }
         self.transcript.submitting = true;
         self.transcript.pending_restore_draft = Some(draft.clone());
         self.submitting_session_ids.insert(session_id);
@@ -6270,6 +6302,8 @@ impl App {
         self.clear_composer_state();
         self.current_lineage = None;
         self.transcript.reset(session_id, title);
+        self.seen_permission_request_ids.clear();
+        self.seen_user_input_request_ids.clear();
         let _ = self.sessions.select_by_id(session_id);
         self.restore_draft_for_slot(DraftSlot::Session(session_id));
         self.persist_draft_store_with_feedback(true);
@@ -6305,6 +6339,31 @@ impl App {
             }
         });
         self.active_subscription = Some(handle);
+    }
+
+    fn apply_transcript_execution(&mut self, execution: SessionExecutionResource) {
+        self.transcript.apply_execution(execution);
+        self.sync_seen_pending_request_ids();
+    }
+
+    fn sync_seen_pending_request_ids(&mut self) {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            self.seen_permission_request_ids.clear();
+            self.seen_user_input_request_ids.clear();
+            return;
+        };
+        self.seen_permission_request_ids.retain(|request_id| {
+            execution
+                .pending_permission_requests
+                .iter()
+                .any(|request| request.request_id == *request_id)
+        });
+        self.seen_user_input_request_ids.retain(|request_id| {
+            execution
+                .pending_user_input_requests
+                .iter()
+                .any(|request| request.request_id == *request_id)
+        });
     }
 
     fn handle_session_event_arrived(&mut self, session_id: i64, live: LiveEvent) {
@@ -6525,6 +6584,9 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
+        if self.prompt_for_pending_interactive_on_session(session_id) {
+            return;
+        }
         if self.session_is_busy(session_id) {
             self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
             return;
@@ -6537,6 +6599,9 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
+        if self.prompt_for_pending_interactive_on_session(session_id) {
+            return;
+        }
         if self.session_is_busy(session_id) {
             self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
             return;
@@ -6585,6 +6650,13 @@ impl App {
         Some((session_id, request))
     }
 
+    fn pending_permission_overlay_target(&self) -> Option<(i64, PermissionRequest)> {
+        let execution = self.transcript.execution.as_ref()?;
+        let request = execution.pending_permission_requests.first()?.clone();
+        let session_id = self.transcript.session_id?;
+        Some((session_id, request))
+    }
+
     fn build_user_input_overlay(session_id: i64, request: UserInputRequest) -> UserInputOverlay {
         let mut overlay = UserInputOverlay {
             session_id,
@@ -6600,42 +6672,161 @@ impl App {
         overlay
     }
 
-    fn maybe_auto_open_user_input_overlay(&mut self) {
-        if self.overlay.is_some() {
-            return;
-        }
-        let Some((session_id, request)) = self.pending_user_input_overlay_target() else {
-            return;
-        };
-        if !self
-            .seen_user_input_request_ids
-            .insert(request.request_id.clone())
-        {
-            return;
-        }
-        self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-            session_id, request,
-        )));
-    }
-
-    fn open_permission_overlay(&mut self) {
-        let Some(execution) = self.transcript.execution.as_ref() else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
-            return;
-        };
-        let Some(request) = execution.pending_permission_requests.first().cloned() else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
-            return;
-        };
-        let Some(session_id) = self.transcript.session_id else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return;
-        };
-        self.overlay = Some(Overlay::Permission(PermissionOverlay {
+    fn build_permission_overlay(session_id: i64, request: PermissionRequest) -> PermissionOverlay {
+        PermissionOverlay {
             session_id,
             request,
             selected: 0,
-        }));
+        }
+    }
+
+    fn next_pending_interactive_overlay_target(&self) -> Option<PendingInteractiveOverlayTarget> {
+        let execution = self.transcript.execution.as_ref()?;
+        match first_unseen_pending_interactive_kind(
+            execution.pending_permission_requests.as_slice(),
+            &self.seen_permission_request_ids,
+            execution.pending_user_input_requests.as_slice(),
+            &self.seen_user_input_request_ids,
+        )? {
+            PendingInteractiveKind::Permission => {
+                self.pending_permission_overlay_target()
+                    .map(
+                        |(session_id, request)| PendingInteractiveOverlayTarget::Permission {
+                            session_id,
+                            request,
+                        },
+                    )
+            }
+            PendingInteractiveKind::UserInput => {
+                self.pending_user_input_overlay_target()
+                    .map(
+                        |(session_id, request)| PendingInteractiveOverlayTarget::UserInput {
+                            session_id,
+                            request,
+                        },
+                    )
+            }
+        }
+    }
+
+    fn current_session_pending_interactive_kind(&self) -> Option<PendingInteractiveKind> {
+        self.transcript
+            .execution
+            .as_ref()
+            .and_then(pending_interactive_kind_for_execution)
+    }
+
+    fn pending_interactive_kind_for_session(
+        &self,
+        session_id: i64,
+    ) -> Option<PendingInteractiveKind> {
+        (self.transcript.session_id == Some(session_id))
+            .then_some(())
+            .and(self.current_session_pending_interactive_kind())
+    }
+
+    fn current_session_wait_state_text(&self) -> Option<String> {
+        let execution = self.transcript.execution.as_ref()?;
+        match pending_interactive_kind_for_execution(execution) {
+            Some(PendingInteractiveKind::Permission) => {
+                Some(ui_text::t(&self.i18n, "session-awaiting-approval"))
+            }
+            Some(PendingInteractiveKind::UserInput) => {
+                Some(ui_text::t(&self.i18n, "session-awaiting-user-input"))
+            }
+            None if execution.blocked => Some(ui_text::t(&self.i18n, "session-blocked")),
+            None => None,
+        }
+    }
+
+    fn open_pending_interactive_overlay_for_kind(&mut self, kind: PendingInteractiveKind) {
+        match kind {
+            PendingInteractiveKind::Permission => self.open_permission_overlay(),
+            PendingInteractiveKind::UserInput => self.open_user_input_overlay(),
+        }
+    }
+
+    fn prompt_for_pending_interactive_on_session(&mut self, session_id: i64) -> bool {
+        let Some(kind) = self.pending_interactive_kind_for_session(session_id) else {
+            return false;
+        };
+        let key = match kind {
+            PendingInteractiveKind::Permission => "flash-session-awaiting-approval",
+            PendingInteractiveKind::UserInput => "flash-session-awaiting-user-input",
+        };
+        self.flash_warning(ui_text::t(&self.i18n, key));
+        self.open_pending_interactive_overlay_for_kind(kind);
+        true
+    }
+
+    fn has_unseen_pending_interactive_request(&self) -> bool {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            return false;
+        };
+        first_unseen_pending_interactive_kind(
+            execution.pending_permission_requests.as_slice(),
+            &self.seen_permission_request_ids,
+            execution.pending_user_input_requests.as_slice(),
+            &self.seen_user_input_request_ids,
+        )
+        .is_some()
+    }
+
+    fn should_suppress_pending_interactive_overlay(&self) -> bool {
+        composer_input_is_active(
+            self.focus,
+            !self.composer.text().trim().is_empty() || !self.composer_items.is_empty(),
+            self.prompt_history_search.is_some()
+                || self.file_mention_suggestions.is_some()
+                || self.slash_command_suggestions.is_some()
+                || self.selected_composer_item.is_some(),
+        )
+    }
+
+    fn has_suppressed_pending_interactive_overlay(&self) -> bool {
+        self.has_unseen_pending_interactive_request()
+            && self.should_suppress_pending_interactive_overlay()
+    }
+
+    fn maybe_auto_open_pending_interactive_overlay(&mut self) {
+        if self.overlay.is_some() || self.should_suppress_pending_interactive_overlay() {
+            return;
+        }
+        match self.next_pending_interactive_overlay_target() {
+            Some(PendingInteractiveOverlayTarget::Permission {
+                session_id,
+                request,
+            }) => {
+                self.seen_permission_request_ids
+                    .insert(request.request_id.clone());
+                self.overlay = Some(Overlay::Permission(Self::build_permission_overlay(
+                    session_id, request,
+                )));
+            }
+            Some(PendingInteractiveOverlayTarget::UserInput {
+                session_id,
+                request,
+            }) => {
+                self.seen_user_input_request_ids
+                    .insert(request.request_id.clone());
+                self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
+                    session_id, request,
+                )));
+            }
+            None => {}
+        }
+    }
+
+    fn open_permission_overlay(&mut self) {
+        let Some((session_id, request)) = self.pending_permission_overlay_target() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
+            return;
+        };
+        self.seen_permission_request_ids
+            .insert(request.request_id.clone());
+        self.overlay = Some(Overlay::Permission(Self::build_permission_overlay(
+            session_id, request,
+        )));
     }
 
     fn open_file_attach_overlay(&mut self) {
@@ -7957,6 +8148,9 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
+        if self.prompt_for_pending_interactive_on_session(session_id) {
+            return;
+        }
         if self.session_is_busy(session_id) {
             self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
             return;
@@ -10176,7 +10370,11 @@ impl App {
                 .map(ToOwned::to_owned)
                 .or_else(fallback_agent);
             let token_usage = status_line_token_usage(&execution.usage);
-            let mut parts = session_summary_status_parts(model_part, agent, token_usage);
+            let mut parts = Vec::new();
+            if let Some(wait_state) = self.current_session_wait_state_text() {
+                parts.push(wait_state);
+            }
+            parts.extend(session_summary_status_parts(model_part, agent, token_usage));
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
                 && !thinking_mode.trim().is_empty()
             {
@@ -12847,10 +13045,7 @@ impl TranscriptState {
             )));
         }
 
-        for (index, message) in self.messages.iter().enumerate() {
-            if index > 0 {
-                lines.push(RenderedLine::plain(""));
-            }
+        for message in &self.messages {
             message_line_starts.push((message.id, lines.len()));
             lines.extend(render_message(message, width, &self.i18n));
         }
@@ -12944,13 +13139,6 @@ impl TranscriptState {
 }
 
 impl RenderedLine {
-    fn plain(text: impl Into<String>) -> Self {
-        Self {
-            text: text.into(),
-            style: Style::default(),
-        }
-    }
-
     fn dim(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
@@ -13958,6 +14146,57 @@ fn assistant_message_text(message: &MessageResource) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n\n");
     (!text.trim().is_empty()).then_some(text)
+}
+
+fn first_unseen_pending_interactive_kind(
+    pending_permission_requests: &[PermissionRequest],
+    seen_permission_request_ids: &BTreeSet<String>,
+    pending_user_input_requests: &[UserInputRequest],
+    seen_user_input_request_ids: &BTreeSet<String>,
+) -> Option<PendingInteractiveKind> {
+    if pending_permission_requests
+        .first()
+        .is_some_and(|request| !seen_permission_request_ids.contains(&request.request_id))
+    {
+        return Some(PendingInteractiveKind::Permission);
+    }
+    if pending_user_input_requests
+        .first()
+        .is_some_and(|request| !seen_user_input_request_ids.contains(&request.request_id))
+    {
+        return Some(PendingInteractiveKind::UserInput);
+    }
+    None
+}
+
+fn pending_interactive_kind(
+    pending_permission_requests: &[PermissionRequest],
+    pending_user_input_requests: &[UserInputRequest],
+) -> Option<PendingInteractiveKind> {
+    if !pending_permission_requests.is_empty() {
+        return Some(PendingInteractiveKind::Permission);
+    }
+    if !pending_user_input_requests.is_empty() {
+        return Some(PendingInteractiveKind::UserInput);
+    }
+    None
+}
+
+fn pending_interactive_kind_for_execution(
+    execution: &SessionExecutionResource,
+) -> Option<PendingInteractiveKind> {
+    pending_interactive_kind(
+        execution.pending_permission_requests.as_slice(),
+        execution.pending_user_input_requests.as_slice(),
+    )
+}
+
+fn composer_input_is_active(
+    focus: Focus,
+    has_text_or_items: bool,
+    has_auxiliary_input_ui: bool,
+) -> bool {
+    focus == Focus::Composer && (has_text_or_items || has_auxiliary_input_ui)
 }
 
 fn permission_overlay_choice(selected: usize) -> PermissionOverlayChoice {
@@ -16441,4 +16680,135 @@ fn slash_command_suggestion_context_for_text(
         fingerprint: format!("{first_line}:{cursor}"),
         name_range: 0..name_end,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena::message::{MessagePart, PartContent};
+    use chrono::Utc;
+
+    fn permission_request(request_id: &str) -> PermissionRequest {
+        PermissionRequest {
+            request_id: request_id.to_string(),
+            session_id: Some(1),
+            action: PermissionAction::Tool {
+                tool_name: "shell".to_string(),
+                qualifier: None,
+            },
+            reason: "needs approval".to_string(),
+            explanation: String::new(),
+            source: None,
+            scope: None,
+            operator: None,
+            risk: PermissionRiskLevel::Medium,
+            trace: Vec::new(),
+            created_at: Utc::now(),
+        }
+    }
+
+    fn user_input_request(request_id: &str) -> UserInputRequest {
+        UserInputRequest {
+            request_id: request_id.to_string(),
+            session_id: Some(1),
+            questions: Vec::new(),
+            created_at: Utc::now(),
+        }
+    }
+
+    fn transcript_message(id: i64, role: MessageRole, text: &str) -> MessageResource {
+        let created_at = Utc::now();
+        let part = MessagePart::with_content(
+            id.saturating_mul(10),
+            id,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::text(text),
+        );
+        MessageResource {
+            id,
+            session_id: 1,
+            role,
+            state: MessageStatus::Completed,
+            created_at,
+            updated_at: created_at,
+            metadata: Default::default(),
+            usage: None,
+            finish: None,
+            part_count: 1,
+            parts: Some(vec![part]),
+        }
+    }
+
+    #[test]
+    fn pending_interactive_requests_prioritize_permissions() {
+        let permission_requests = vec![permission_request("perm-1")];
+        let user_input_requests = vec![user_input_request("input-1")];
+
+        assert_eq!(
+            first_unseen_pending_interactive_kind(
+                permission_requests.as_slice(),
+                &BTreeSet::new(),
+                user_input_requests.as_slice(),
+                &BTreeSet::new(),
+            ),
+            Some(PendingInteractiveKind::Permission)
+        );
+    }
+
+    #[test]
+    fn seen_permission_request_falls_back_to_user_input() {
+        let permission_requests = vec![permission_request("perm-1")];
+        let user_input_requests = vec![user_input_request("input-1")];
+        let seen_permissions = BTreeSet::from(["perm-1".to_string()]);
+
+        assert_eq!(
+            first_unseen_pending_interactive_kind(
+                permission_requests.as_slice(),
+                &seen_permissions,
+                user_input_requests.as_slice(),
+                &BTreeSet::new(),
+            ),
+            Some(PendingInteractiveKind::UserInput)
+        );
+    }
+
+    #[test]
+    fn pending_interactive_kind_reports_user_input_when_no_permission_is_pending() {
+        let user_input_requests = vec![user_input_request("input-1")];
+
+        assert_eq!(
+            pending_interactive_kind(&[], user_input_requests.as_slice()),
+            Some(PendingInteractiveKind::UserInput)
+        );
+    }
+
+    #[test]
+    fn composer_input_is_active_only_when_the_composer_is_engaged() {
+        assert!(composer_input_is_active(Focus::Composer, true, false));
+        assert!(composer_input_is_active(Focus::Composer, false, true));
+        assert!(!composer_input_is_active(Focus::Composer, false, false));
+        assert!(!composer_input_is_active(Focus::Transcript, true, true));
+    }
+
+    #[test]
+    fn transcript_render_does_not_insert_blank_lines_between_messages() {
+        let first = transcript_message(1, MessageRole::User, "first");
+        let second = transcript_message(2, MessageRole::Assistant, "second");
+        let i18n = I18n::english();
+        let expected_line_count =
+            render_message(&first, 80, &i18n).len() + render_message(&second, 80, &i18n).len();
+
+        let mut transcript = TranscriptState::default();
+        transcript.session_id = Some(1);
+        transcript.messages = vec![first.clone(), second.clone()];
+
+        let rendered = transcript.rendered(80);
+
+        assert_eq!(rendered.lines.len(), expected_line_count);
+        assert!(
+            !rendered.lines.iter().any(|line| line.text.is_empty()),
+            "expected transcript rendering to avoid inserting blank separator lines"
+        );
+    }
 }

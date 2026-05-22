@@ -755,7 +755,10 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ),
     ("auth", HookSubscription::AUTH),
     ("provider.list", HookSubscription::PROVIDER_LIST),
-    ("permission.ask_permission", HookSubscription::PERMISSION_ASK),
+    (
+        "permission.ask_permission",
+        HookSubscription::PERMISSION_ASK,
+    ),
     ("notification", HookSubscription::NOTIFICATION),
     ("command.execute.before", HookSubscription::COMMAND_BEFORE),
     ("command.execute.after", HookSubscription::COMMAND_AFTER),

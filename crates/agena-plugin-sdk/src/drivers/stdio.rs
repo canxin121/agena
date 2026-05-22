@@ -372,7 +372,8 @@ impl HostClient for StdioHostClient {
         &self,
         req: PermissionAskInput,
     ) -> crate::error::Result<PermissionDecision> {
-        let params = serde_json::to_value(req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
+        let params =
+            serde_json::to_value(req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
         match self.call(method::HOST_PERMISSION_ASK, params.clone()).await {
             Ok(decision) => Ok(decision),
             Err(err)

@@ -11,6 +11,7 @@ pub enum CommandId {
     Timeline,
     Plugins,
     Settings,
+    Permissions,
     Model,
     Review,
     Worktree,
@@ -143,6 +144,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["config"],
         arguments: "[query]",
         summary_key: "command-settings-summary",
+    },
+    CommandSpec {
+        id: CommandId::Permissions,
+        name: "permissions",
+        aliases: &["permission"],
+        arguments: "[new|list]",
+        summary_key: "command-permissions-summary",
     },
     CommandSpec {
         id: CommandId::Model,

@@ -592,6 +592,7 @@ dependencies = [
  "agena-api-server",
  "agena-otel",
  "agena-skills",
+ "agena-tui-components",
  "anyhow",
  "arboard",
  "base64 0.22.1",
@@ -621,6 +622,13 @@ dependencies = [
  "unicode-width 0.2.2",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "agena-tui-components"
+version = "0.1.0"
+dependencies = [
+ "ratatui",
 ]
 
 [[package]]

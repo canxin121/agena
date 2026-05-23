@@ -181,6 +181,14 @@ pub(super) fn render_transcript_export_markdown(
 }
 
 pub(super) fn tool_output_preview(text: &str) -> ToolOutputPreview {
+    tool_output_preview_with_limits(text, TOOL_CARD_PREVIEW_LINES, TOOL_CARD_PREVIEW_CHARS)
+}
+
+fn tool_output_preview_with_limits(
+    text: &str,
+    max_lines: usize,
+    max_chars: usize,
+) -> ToolOutputPreview {
     let normalized = trim_empty_line_edges(sanitize_terminal_text(text).as_str());
     if normalized.is_empty() {
         return ToolOutputPreview {
@@ -196,7 +204,7 @@ pub(super) fn tool_output_preview(text: &str) -> ToolOutputPreview {
     let mut truncated = false;
 
     for (index, line) in normalized.split('\n').enumerate() {
-        if index >= TOOL_CARD_PREVIEW_LINES {
+        if index >= max_lines {
             truncated = true;
             break;
         }
@@ -206,12 +214,12 @@ pub(super) fn tool_output_preview(text: &str) -> ToolOutputPreview {
         if used_chars
             .saturating_add(separator_chars)
             .saturating_add(line_chars)
-            > TOOL_CARD_PREVIEW_CHARS
+            > max_chars
         {
             if index > 0 {
                 preview.push('\n');
             }
-            let remaining = TOOL_CARD_PREVIEW_CHARS
+            let remaining = max_chars
                 .saturating_sub(used_chars)
                 .saturating_sub(separator_chars);
             preview.extend(line.chars().take(remaining));
@@ -586,12 +594,13 @@ fn render_tool_execution(
 
     if !tool.model_output.text.trim().is_empty() {
         if expanded {
-            push_multiline(
+            push_limited_tool_text(
                 out,
                 "    ",
                 tool.model_output.text.as_str(),
                 Style::default(),
                 width,
+                i18n,
             );
         } else {
             push_collapsible_text(
@@ -614,12 +623,13 @@ fn render_tool_execution(
             width,
         );
         if expanded {
-            push_multiline(
+            push_limited_tool_text(
                 out,
                 "    ",
                 diff.as_str(),
                 Style::default().fg(Color::DarkGray),
                 width,
+                i18n,
             );
         } else {
             push_collapsible_text(
@@ -646,10 +656,18 @@ fn render_operation_blocks(
     for block in blocks {
         match block {
             OperationBlock::Text { text } => {
-                push_multiline(out, "    ", text, Style::default(), width)
+                if expanded {
+                    push_limited_tool_text(out, "    ", text, Style::default(), width, i18n);
+                } else {
+                    push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
+                }
             }
             OperationBlock::Markdown { text } => {
-                push_markdown(out, "    ", text, width);
+                if expanded {
+                    push_limited_markdown(out, "    ", text, width, i18n);
+                } else {
+                    push_collapsible_text(out, "    ", text, Style::default(), width, i18n);
+                }
             }
             OperationBlock::Command {
                 command,
@@ -669,7 +687,14 @@ fn render_operation_blocks(
                     && !stdout.trim().is_empty()
                 {
                     if expanded {
-                        push_multiline(out, "      ", stdout, Style::default(), width);
+                        push_limited_tool_text(
+                            out,
+                            "      ",
+                            stdout,
+                            Style::default(),
+                            width,
+                            i18n,
+                        );
                     } else {
                         push_collapsible_text(out, "      ", stdout, Style::default(), width, i18n);
                     }
@@ -678,12 +703,13 @@ fn render_operation_blocks(
                     && !stderr.trim().is_empty()
                 {
                     if expanded {
-                        push_multiline(
+                        push_limited_tool_text(
                             out,
                             "      ",
                             stderr,
                             Style::default().fg(Color::Red),
                             width,
+                            i18n,
                         );
                     } else {
                         push_collapsible_text(
@@ -710,12 +736,13 @@ fn render_operation_blocks(
             }
             OperationBlock::Diff { diff, .. } => {
                 if expanded {
-                    push_multiline(
+                    push_limited_tool_text(
                         out,
                         "    ",
                         diff,
                         Style::default().fg(Color::DarkGray),
                         width,
+                        i18n,
                     );
                 } else {
                     push_collapsible_text(
@@ -800,7 +827,7 @@ fn render_operation_blocks(
                     && !text.trim().is_empty()
                 {
                     if expanded {
-                        push_multiline(out, "      ", text, Style::default(), width);
+                        push_limited_tool_text(out, "      ", text, Style::default(), width, i18n);
                     } else {
                         push_collapsible_text(out, "      ", text, Style::default(), width, i18n);
                     }
@@ -816,13 +843,25 @@ fn render_operation_blocks(
                 );
             }
             OperationBlock::Progress { message, .. } => {
-                push_multiline(
-                    out,
-                    "    ",
-                    message,
-                    Style::default().fg(Color::DarkGray),
-                    width,
-                );
+                if expanded {
+                    push_limited_tool_text(
+                        out,
+                        "    ",
+                        message,
+                        Style::default().fg(Color::DarkGray),
+                        width,
+                        i18n,
+                    );
+                } else {
+                    push_collapsible_text(
+                        out,
+                        "    ",
+                        message,
+                        Style::default().fg(Color::DarkGray),
+                        width,
+                        i18n,
+                    );
+                }
             }
             OperationBlock::NestedTask {
                 task_id,
@@ -1062,6 +1101,61 @@ fn push_collapsible_text(
 ) {
     let preview = tool_output_preview(text);
     push_multiline(out, prefix, preview.text.as_str(), style, width);
+    if preview.omitted_lines > 0 {
+        push_multiline(
+            out,
+            prefix,
+            &i18n.text_args(
+                "message-tool-output-collapsed",
+                &crate::fl_args!("lines" => preview.omitted_lines as i64),
+            ),
+            Style::default().fg(Color::DarkGray),
+            width,
+        );
+    }
+}
+
+fn push_limited_tool_text(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    style: Style,
+    width: u16,
+    i18n: &I18n,
+) {
+    let preview = tool_output_preview_with_limits(
+        text,
+        TOOL_EXPANDED_PREVIEW_LINES,
+        TOOL_EXPANDED_PREVIEW_CHARS,
+    );
+    push_multiline(out, prefix, preview.text.as_str(), style, width);
+    if preview.omitted_lines > 0 {
+        push_multiline(
+            out,
+            prefix,
+            &i18n.text_args(
+                "message-tool-output-collapsed",
+                &crate::fl_args!("lines" => preview.omitted_lines as i64),
+            ),
+            Style::default().fg(Color::DarkGray),
+            width,
+        );
+    }
+}
+
+fn push_limited_markdown(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    width: u16,
+    i18n: &I18n,
+) {
+    let preview = tool_output_preview_with_limits(
+        text,
+        TOOL_EXPANDED_PREVIEW_LINES,
+        TOOL_EXPANDED_PREVIEW_CHARS,
+    );
+    push_markdown(out, prefix, preview.text.as_str(), width);
     if preview.omitted_lines > 0 {
         push_multiline(
             out,
@@ -2203,6 +2297,57 @@ mod tests {
         assert!(rendered[0].contains("[tool]"));
         assert!(rendered[0].contains("completed"));
         assert!(rendered[0].contains("bash"));
+    }
+
+    #[test]
+    fn expanded_tool_output_caps_long_histories() {
+        let stdout = (0..(TOOL_EXPANDED_PREVIEW_LINES + 5))
+            .map(|index| format!("line-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let invocation = ToolInvocation::new(
+            "bash",
+            serde_json::from_value(json!({ "command": "tail -f log.txt" }))
+                .expect("valid structured input"),
+        );
+        let tool = OperationPart::completed(
+            8,
+            invocation,
+            String::new(),
+            vec![OperationBlock::Command {
+                command: "tail -f log.txt".to_string(),
+                cwd: None,
+                exit_code: Some(0),
+                stdout: Some(stdout),
+                stderr: None,
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), true);
+
+        let rendered = out.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        assert!(rendered.iter().any(|line| line.contains("line-0")));
+        assert!(
+            rendered.iter().any(|line| line.contains("more")),
+            "expected capped expanded output to advertise hidden history"
+        );
+        assert!(
+            !rendered
+                .iter()
+                .any(|line| line.contains(&format!("line-{}", TOOL_EXPANDED_PREVIEW_LINES + 4))),
+            "expected lines beyond the expanded cap to stay hidden"
+        );
     }
 
     #[test]

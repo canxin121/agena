@@ -356,16 +356,6 @@ pub fn help_lines(i18n: &I18n) -> Vec<HelpLine> {
     ]
 }
 
-pub fn message_parts_not_loaded(i18n: &I18n, count: usize) -> String {
-    format!(
-        "  {}",
-        i18n.text_args(
-            "message-parts-not-loaded",
-            &fl_args!("count" => count as i64),
-        )
-    )
-}
-
 pub fn message_question_line(i18n: &I18n, question: &str, id: &str) -> String {
     format!(
         "    {}",

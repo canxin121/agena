@@ -31,10 +31,19 @@ pub struct TuiStatusLineConfig {
     pub refresh_interval_ms: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TuiTranscriptConfig {
     pub tool_output_default_expanded: bool,
     pub thinking_default_expanded: bool,
+}
+
+impl Default for TuiTranscriptConfig {
+    fn default() -> Self {
+        Self {
+            tool_output_default_expanded: true,
+            thinking_default_expanded: false,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -164,11 +173,11 @@ impl TuiConfig {
                 tool_output_default_expanded: raw
                     .transcript
                     .tool_output_default_expanded
-                    .unwrap_or(false),
+                    .unwrap_or(TuiTranscriptConfig::default().tool_output_default_expanded),
                 thinking_default_expanded: raw
                     .transcript
                     .thinking_default_expanded
-                    .unwrap_or(false),
+                    .unwrap_or(TuiTranscriptConfig::default().thinking_default_expanded),
             },
         }
     }
@@ -205,7 +214,7 @@ mod tests {
             ComposerKeyBindings::default(),
         );
 
-        assert!(!config.transcript.tool_output_default_expanded);
+        assert!(config.transcript.tool_output_default_expanded);
         assert!(!config.transcript.thinking_default_expanded);
     }
 }

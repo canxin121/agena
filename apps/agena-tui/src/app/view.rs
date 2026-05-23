@@ -135,6 +135,7 @@ impl App {
                 .transcript
                 .search_match_index
                 .and_then(|index| matches.get(index).copied());
+            let highlighted_block = self.transcript.highlighted_block_range(layout.body.width);
             rendered
                 .lines
                 .iter()
@@ -156,7 +157,12 @@ impl App {
                                 line_has_match,
                             )
                         };
-                    if self.focus == Focus::Transcript && idx == self.transcript.cursor_line {
+                    let block_selected = highlighted_block
+                        .as_ref()
+                        .is_some_and(|range| idx >= range.start && idx < range.end);
+                    if self.focus == Focus::Transcript
+                        && (idx == self.transcript.cursor_line || block_selected)
+                    {
                         rendered_line = apply_line_highlight(rendered_line);
                     }
                     rendered_line
@@ -960,6 +966,9 @@ impl App {
             Overlay::FileAttach(dialog) => {
                 self.render_file_attach_overlay(frame, area, dialog);
             }
+            Overlay::PathBrowser(dialog) => {
+                self.render_path_browser_overlay(frame, area, dialog);
+            }
             Overlay::Permission(dialog) => {
                 self.render_permission_overlay(frame, area, dialog);
             }
@@ -1015,6 +1024,9 @@ impl App {
                     SurfaceMode::Route,
                 );
             }
+            Route::PermissionRuleStudio(dialog) => {
+                self.render_permission_rule_studio_overlay(frame, area, dialog, SurfaceMode::Route);
+            }
             Route::SessionSearch(dialog) => {
                 self.render_session_search_overlay(frame, area, dialog, SurfaceMode::Route);
             }
@@ -1044,7 +1056,11 @@ impl App {
         let target_width = adaptive_modal_width(area.width, 88);
         let prompt_height =
             wrapped_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2)).clamp(1, 2);
-        let area = preferred_overlay_rect(area, 88, prompt_height.saturating_add(6));
+        let area = preferred_overlay_rect(
+            area,
+            88,
+            framed_overlay_height(prompt_height.saturating_add(4)),
+        );
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(" {} ", dialog.title)))
@@ -1107,10 +1123,12 @@ impl App {
         let area = preferred_overlay_rect(
             area,
             82,
-            prompt_height
-                .saturating_add(help_height)
-                .saturating_add(3)
-                .saturating_add(preview_height),
+            framed_overlay_height(
+                prompt_height
+                    .saturating_add(help_height)
+                    .saturating_add(3)
+                    .saturating_add(preview_height),
+            ),
         );
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -1162,102 +1180,28 @@ impl App {
         area: Rect,
         dialog: &FileAttachOverlay,
     ) {
-        let target_width = adaptive_modal_width(area.width, 88);
-        let prompt_height = overlay_text_height(
-            ui_text::t(&self.i18n, "overlay-attach-prompt").as_str(),
-            target_width.saturating_sub(2),
-            1,
-            2,
-        );
-        let footer_height = overlay_text_height(
-            ui_text::t(&self.i18n, "overlay-attach-footer").as_str(),
-            target_width.saturating_sub(2),
-            1,
-            2,
-        );
-        let list_height = list_panel_height(dialog.results.len().max(1), 1, 4, 10);
-        let area = preferred_overlay_rect(
+        self.render_search_list_overlay(
+            frame,
             area,
-            88,
-            prompt_height
-                .saturating_add(3)
-                .saturating_add(list_height)
-                .saturating_add(footer_height),
+            dialog,
+            SurfaceMode::Overlay,
+            Some(" Matches "),
         );
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(sanitize_display_text(format!(
-                " {} ",
-                ui_text::t(&self.i18n, "overlay-attach-title")
-            )))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+    }
 
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(prompt_height),
-                Constraint::Length(3),
-                Constraint::Min(list_height),
-                Constraint::Length(footer_height),
-            ])
-            .split(inner);
-
-        frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-attach-prompt")),
-            rows[0],
+    fn render_path_browser_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &PathBrowserOverlay,
+    ) {
+        self.render_search_list_overlay(
+            frame,
+            area,
+            dialog,
+            SurfaceMode::Overlay,
+            Some(" Browser "),
         );
-
-        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-
-        let result_items = if dialog.results.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-attach-no-match"),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            dialog
-                .results
-                .iter()
-                .map(|path| ListItem::new(sanitize_display_text(path.to_string_lossy().as_ref())))
-                .collect::<Vec<_>>()
-        };
-        let list = List::new(result_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(sanitize_display_text(format!(
-                        " {} ",
-                        ui_text::t(&self.i18n, "overlay-attach-matches")
-                    ))),
-            )
-            .highlight_style(selection_highlight_style())
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select((!dialog.results.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, rows[2], &mut state);
-
-        frame.render_widget(
-            Paragraph::new(ui_text::t(&self.i18n, "overlay-attach-footer")),
-            rows[3],
-        );
-
-        frame.set_cursor_position((
-            rows[1]
-                .x
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_x),
-            rows[1]
-                .y
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_y),
-        ));
     }
 
     fn render_permission_overlay(&self, frame: &mut Frame, area: Rect, dialog: &PermissionOverlay) {
@@ -1269,7 +1213,7 @@ impl App {
         let area = preferred_overlay_rect(
             area,
             84,
-            body_height.saturating_add(choices_height).saturating_add(1),
+            framed_overlay_height(body_height.saturating_add(choices_height).saturating_add(1)),
         );
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -1379,7 +1323,11 @@ impl App {
         } else if let Some(question) = dialog.request.questions.get(dialog.selected_question) {
             let prompt_height = user_input_prompt_panel_height(question, target_width);
             let choices_height = user_input_choices_panel_height(question, target_width);
-            let custom_height = if question.allow_custom { 3 } else { 0 };
+            let custom_height = if question.allow_custom {
+                user_input_custom_input_height(&dialog.custom_input)
+            } else {
+                0
+            };
             nav_panel_height
                 .saturating_add(prompt_height)
                 .saturating_add(choices_height)
@@ -1391,7 +1339,7 @@ impl App {
         } else {
             12
         };
-        let area = preferred_overlay_rect(area, 92, height);
+        let area = preferred_overlay_rect(area, 92, framed_overlay_height(height));
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(sanitize_display_text(format!(
@@ -1492,7 +1440,11 @@ impl App {
         };
         let prompt_panel_height = user_input_prompt_panel_height(question, inner.width);
         let choices_panel_height = user_input_choices_panel_height(question, inner.width);
-        let custom_height = if question.allow_custom { 3 } else { 0 };
+        let custom_height = if question.allow_custom {
+            user_input_custom_input_height(&dialog.custom_input)
+        } else {
+            0
+        };
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -1653,9 +1605,10 @@ impl App {
         );
 
         if question.allow_custom {
-            let custom_view = dialog
-                .custom_input
-                .render_view(rows[3].width.saturating_sub(2), 1);
+            let custom_view = dialog.custom_input.render_view(
+                rows[3].width.saturating_sub(2),
+                rows[3].height.saturating_sub(2).max(1),
+            );
             frame.render_widget(
                 Paragraph::new(Text::from(custom_view.lines.clone())).block(
                     Block::default()
@@ -1814,130 +1767,7 @@ impl App {
         dialog: &SessionSearchOverlay,
         surface: SurfaceMode,
     ) {
-        let content_width = surface.content_width(area, 128);
-        let prompt_height = overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
-        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
-        let list_height = list_panel_height(
-            if dialog.loading || dialog.items.is_empty() {
-                1
-            } else {
-                dialog.items.len()
-            },
-            if dialog.loading || dialog.items.is_empty() {
-                1
-            } else {
-                2
-            },
-            5,
-            12,
-        );
-        let area = surface.outer_rect(
-            area,
-            128,
-            prompt_height
-                .saturating_add(3)
-                .saturating_add(list_height)
-                .saturating_add(footer_height),
-        );
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(sanitize_display_text(format!(" {} ", dialog.title)))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(prompt_height),
-                Constraint::Length(3),
-                Constraint::Min(list_height),
-                Constraint::Length(footer_height),
-            ])
-            .split(inner);
-
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
-            rows[0],
-        );
-
-        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-
-        let result_items = if dialog.loading {
-            vec![ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-picker-loading"),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else if dialog.items.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                sanitize_display_text(dialog.empty_message.as_str()),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            dialog
-                .items
-                .iter()
-                .map(|session| {
-                    let mut detail_parts = vec![ui_text::session_meta(
-                        &self.i18n,
-                        session.id,
-                        session.message_count,
-                        session.updated_at,
-                    )];
-                    if self.transcript.session_id == Some(session.id) {
-                        detail_parts.push(ui_text::t(&self.i18n, "session-tag-current"));
-                    }
-                    if let Some(parent_id) = session.parent_id {
-                        detail_parts.push(self.i18n.text_args(
-                            "session-summary-parent",
-                            &crate::fl_args!("id" => parent_id),
-                        ));
-                    }
-                    if session.child_session_count > 0 {
-                        detail_parts.push(self.i18n.text_args(
-                            "session-summary-children",
-                            &crate::fl_args!("count" => session.child_session_count as i64),
-                        ));
-                    }
-                    ListItem::new(vec![
-                        Line::from(sanitize_display_text(session.title.as_str())),
-                        Line::from(Span::styled(
-                            sanitize_display_text(detail_parts.join(" | ")),
-                            Style::default().fg(Color::DarkGray),
-                        )),
-                    ])
-                })
-                .collect::<Vec<_>>()
-        };
-
-        let list = List::new(result_items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_style(selection_highlight_style())
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, rows[2], &mut state);
-
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.footer.as_str()))
-                .style(Style::default().fg(Color::DarkGray)),
-            rows[3],
-        );
-        frame.set_cursor_position((
-            rows[1]
-                .x
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_x),
-            rows[1]
-                .y
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_y),
-        ));
+        self.render_search_list_overlay(frame, area, dialog, surface, None);
     }
 
     fn render_picker_overlay(
@@ -1947,108 +1777,7 @@ impl App {
         dialog: &PickerOverlay,
         surface: SurfaceMode,
     ) {
-        let content_width = surface.content_width(area, 120);
-        let prompt_height = overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
-        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
-        let list_height = list_panel_height(
-            if dialog.loading || dialog.items.is_empty() {
-                1
-            } else {
-                dialog.items.len()
-            },
-            if dialog.loading || dialog.items.is_empty() {
-                1
-            } else {
-                2
-            },
-            4,
-            10,
-        );
-        let area = surface.outer_rect(
-            area,
-            120,
-            prompt_height
-                .saturating_add(3)
-                .saturating_add(list_height)
-                .saturating_add(footer_height),
-        );
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(sanitize_display_text(format!(" {} ", dialog.title)))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(prompt_height),
-                Constraint::Length(3),
-                Constraint::Min(list_height),
-                Constraint::Length(footer_height),
-            ])
-            .split(inner);
-
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
-            rows[0],
-        );
-
-        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-
-        let result_items = if dialog.loading {
-            vec![ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-picker-loading"),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else if dialog.items.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                sanitize_display_text(dialog.empty_message.as_str()),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            dialog
-                .items
-                .iter()
-                .map(|item| {
-                    ListItem::new(vec![
-                        Line::from(sanitize_display_text(item.label.as_str())),
-                        Line::from(Span::styled(
-                            sanitize_display_text(item.detail.as_str()),
-                            Style::default().fg(Color::DarkGray),
-                        )),
-                    ])
-                })
-                .collect::<Vec<_>>()
-        };
-
-        let list = List::new(result_items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_style(selection_highlight_style())
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select((!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected));
-        frame.render_stateful_widget(list, rows[2], &mut state);
-
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
-            rows[3],
-        );
-        frame.set_cursor_position((
-            rows[1]
-                .x
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_x),
-            rows[1]
-                .y
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_y),
-        ));
+        self.render_search_list_overlay(frame, area, dialog, surface, None);
     }
 
     fn render_session_model_chooser_overlay(
@@ -2058,145 +1787,47 @@ impl App {
         dialog: &SessionModelChooserOverlay,
         surface: SurfaceMode,
     ) {
-        let content_width = surface.content_width(area, 128);
-        let prompt_height = overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
-        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
-        let visible_items = if dialog.loading || dialog.items.is_empty() {
-            1
-        } else {
-            dialog.page_size.max(1).min(dialog.items.len())
-        };
-        let list_height = list_panel_height(
-            visible_items,
-            if dialog.loading || dialog.items.is_empty() {
-                1
-            } else {
-                2
-            },
-            5,
-            12,
-        );
-        let area = surface.outer_rect(
-            area,
-            128,
-            prompt_height
-                .saturating_add(3)
-                .saturating_add(list_height)
-                .saturating_add(footer_height),
-        );
-        frame.render_widget(Clear, area);
-        let block = Block::default()
-            .title(sanitize_display_text(format!(" {} ", dialog.title)))
-            .borders(Borders::ALL);
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
-
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(prompt_height),
-                Constraint::Length(3),
-                Constraint::Min(list_height),
-                Constraint::Length(footer_height),
-            ])
-            .split(inner);
-
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.prompt.as_str())),
-            rows[0],
-        );
-
-        let input_view = dialog.input.render_view(rows[1].width.saturating_sub(2), 1);
-        frame.render_widget(
-            Paragraph::new(Text::from(input_view.lines.clone()))
-                .block(Block::default().borders(Borders::ALL)),
-            rows[1],
-        );
-
-        let page_size = dialog.page_size.max(1);
-        let page_start = (dialog.selected / page_size) * page_size;
-        let page_items = if dialog.loading {
-            vec![ListItem::new(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-picker-loading"),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else if dialog.items.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                sanitize_display_text(dialog.empty_message.as_str()),
-                Style::default().fg(Color::DarkGray),
-            )))]
-        } else {
-            dialog
-                .items
-                .iter()
-                .skip(page_start)
-                .take(page_size)
-                .map(|item| {
-                    ListItem::new(vec![
-                        Line::from(sanitize_display_text(item.label.as_str())),
-                        Line::from(Span::styled(
-                            sanitize_display_text(item.detail.as_str()),
-                            Style::default().fg(Color::DarkGray),
-                        )),
-                    ])
-                })
-                .collect::<Vec<_>>()
-        };
-        let list_title = if dialog.items.is_empty() {
-            " Models ".to_string()
-        } else {
-            let page = (dialog.selected / page_size) + 1;
-            let page_count = dialog.items.len().div_ceil(page_size);
-            format!(
-                " Models  ·  page {page}/{page_count}  ·  {} match(es) ",
-                dialog.items.len()
-            )
-        };
-        let list = List::new(page_items)
-            .block(
-                Block::default()
-                    .title(sanitize_display_text(list_title))
-                    .borders(Borders::ALL),
-            )
-            .highlight_style(selection_highlight_style())
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select(
-            (!dialog.loading && !dialog.items.is_empty()).then_some(dialog.selected - page_start),
-        );
-        frame.render_stateful_widget(list, rows[2], &mut state);
-
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
-            rows[3],
-        );
-        frame.set_cursor_position((
-            rows[1]
-                .x
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_x),
-            rows[1]
-                .y
-                .saturating_add(1)
-                .saturating_add(input_view.cursor_y),
-        ));
+        self.render_search_list_overlay(frame, area, dialog, surface, Some(" Models "));
     }
 
     fn render_choice_overlay(&self, frame: &mut Frame, area: Rect, dialog: &ChoiceOverlay) {
-        let target_width = adaptive_modal_width(area.width, 96);
-        let prompt_height =
-            wrapped_text_height(dialog.prompt.as_str(), target_width.saturating_sub(2)).clamp(1, 3);
-        let footer_height =
-            wrapped_text_height(dialog.footer.as_str(), target_width.saturating_sub(2)).clamp(1, 2);
-        let choice_rows = Self::choice_overlay_rows(dialog);
-        let list_height = choice_overlay_rows_height(choice_rows.as_slice());
-        let area = preferred_overlay_rect(
+        self.render_search_list_overlay(frame, area, dialog, SurfaceMode::Overlay, None);
+    }
+
+    fn render_search_list_overlay<TItem, TCustom, TMeta>(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &SearchListOverlay<TItem, TCustom, TMeta, Editor>,
+        surface: SurfaceMode,
+        list_title: Option<&str>,
+    ) where
+        TItem: SearchListItem,
+        TCustom: SearchListCustomValue,
+    {
+        let content_width = surface.content_width(area, dialog.config.target_width);
+        let prompt_height = if dialog.prompt.trim().is_empty() {
+            0
+        } else {
+            overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2)
+        };
+        let input_height = editor_input_panel_height(&dialog.input, false);
+        let footer_height = if dialog.footer.trim().is_empty() {
+            0
+        } else {
+            overlay_text_height(dialog.footer.as_str(), content_width, 1, 2)
+        };
+        let rows = dialog.rows();
+        let list_height = search_list_overlay_panel_height(dialog, rows.as_slice(), content_width);
+        let area = surface.outer_rect(
             area,
-            96,
-            3_u16
-                .saturating_add(prompt_height)
-                .saturating_add(list_height)
-                .saturating_add(footer_height),
+            dialog.config.target_width,
+            framed_overlay_height(
+                prompt_height
+                    .saturating_add(input_height)
+                    .saturating_add(list_height)
+                    .saturating_add(footer_height),
+            ),
         );
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -2205,83 +1836,98 @@ impl App {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let rows = Layout::default()
+        let mut constraints = Vec::new();
+        if prompt_height > 0 {
+            constraints.push(Constraint::Length(prompt_height));
+        }
+        constraints.push(Constraint::Length(input_height));
+        constraints.push(Constraint::Length(list_height));
+        if footer_height > 0 {
+            constraints.push(Constraint::Length(footer_height));
+        }
+        let sections = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Length(prompt_height),
-                Constraint::Min(list_height),
-                Constraint::Length(footer_height),
-            ])
+            .constraints(constraints)
             .split(inner);
 
-        let input_view = dialog.input.render_view(rows[0].width.saturating_sub(2), 1);
+        let mut section_index = 0;
+        if prompt_height > 0 {
+            frame.render_widget(
+                Paragraph::new(sanitize_display_text(dialog.prompt.as_str()))
+                    .wrap(Wrap { trim: false }),
+                sections[section_index],
+            );
+            section_index += 1;
+        }
+
+        let input_area = sections[section_index];
+        section_index += 1;
+        let input_view = dialog
+            .input
+            .render_view(input_area.width.saturating_sub(2), 1);
         frame.render_widget(
             Paragraph::new(Text::from(input_view.lines.clone()))
                 .block(Block::default().borders(Borders::ALL)),
-            rows[0],
-        );
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.prompt.as_str()))
-                .wrap(Wrap { trim: false }),
-            rows[1],
+            input_area,
         );
 
-        let has_rows = !choice_rows.is_empty();
-        let result_items = if !has_rows {
-            vec![ListItem::new(Line::from(Span::styled(
-                sanitize_display_text(dialog.empty_message.as_str()),
-                Style::default().fg(Color::DarkGray),
-            )))]
+        let list_area = sections[section_index];
+        section_index += 1;
+        let mut list_block = Block::default().borders(Borders::ALL);
+        if let Some(title) = list_title {
+            list_block = list_block.title(sanitize_display_text(title));
+        }
+        if rows.is_empty() {
+            frame.render_widget(
+                Paragraph::new(sanitize_display_text(dialog.empty_message.as_str()))
+                    .style(Style::default().fg(Color::DarkGray))
+                    .wrap(Wrap { trim: false })
+                    .block(list_block),
+                list_area,
+            );
         } else {
-            choice_rows
-                .into_iter()
+            let row_width = list_area.width.saturating_sub(6).max(1) as usize;
+            let items = rows
+                .iter()
                 .map(|row| {
-                    let (label, detail, style) = match row {
-                        ChoiceRow::Clear => (
-                            "Clear value".to_string(),
-                            choice_overlay_clear_detail(&dialog.action),
-                            Style::default().fg(Color::Yellow),
-                        ),
-                        ChoiceRow::Custom(value) => (
-                            "Use typed value".to_string(),
-                            format!(
-                                "Apply exactly {}",
-                                format_setting_value_inline(&JsonValue::String(value))
-                            ),
-                            Style::default().fg(Color::Cyan),
-                        ),
-                        ChoiceRow::Item(item) => (item.label, item.detail, Style::default()),
-                    };
-                    ListItem::new(vec![
-                        Line::from(Span::styled(sanitize_display_text(label.as_str()), style)),
-                        Line::from(Span::styled(
-                            sanitize_display_text(detail.as_str()),
-                            Style::default().fg(Color::DarkGray),
-                        )),
-                    ])
+                    let label = truncate_display_text(
+                        sanitize_display_text(row.label()).as_str(),
+                        row_width,
+                    );
+                    let mut lines = vec![Line::from(Span::styled(label, row.label_style()))];
+                    if let Some(detail) = row.detail() {
+                        let detail = truncate_display_text(
+                            sanitize_display_text(detail.as_str()).as_str(),
+                            row_width,
+                        );
+                        lines.push(Line::from(Span::styled(detail, row.detail_style())));
+                    }
+                    ListItem::new(Text::from(lines))
                 })
-                .collect::<Vec<_>>()
-        };
+                .collect::<Vec<_>>();
+            let list = List::new(items)
+                .block(list_block)
+                .highlight_style(selection_highlight_style())
+                .highlight_symbol(">> ");
+            let mut state = ListState::default();
+            state.select(Some(min(dialog.selected, rows.len().saturating_sub(1))));
+            frame.render_stateful_widget(list, list_area, &mut state);
+        }
 
-        let list = List::new(result_items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_style(selection_highlight_style())
-            .highlight_symbol(">> ");
-        let mut state = ListState::default();
-        state.select(has_rows.then_some(dialog.selected));
-        frame.render_stateful_widget(list, rows[2], &mut state);
+        if footer_height > 0 {
+            frame.render_widget(
+                Paragraph::new(sanitize_display_text(dialog.footer.as_str()))
+                    .wrap(Wrap { trim: false }),
+                sections[section_index],
+            );
+        }
 
-        frame.render_widget(
-            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
-            rows[3],
-        );
         frame.set_cursor_position((
-            rows[0]
+            input_area
                 .x
                 .saturating_add(1)
                 .saturating_add(input_view.cursor_x),
-            rows[0]
+            input_area
                 .y
                 .saturating_add(1)
                 .saturating_add(input_view.cursor_y),
@@ -2302,10 +1948,12 @@ impl App {
         let area = surface.outer_rect(
             area,
             122,
-            prompt_height
-                .saturating_add(3)
-                .saturating_add(content_height)
-                .saturating_add(footer_height),
+            framed_overlay_height(
+                prompt_height
+                    .saturating_add(3)
+                    .saturating_add(content_height)
+                    .saturating_add(footer_height),
+            ),
         );
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -2450,10 +2098,12 @@ impl App {
         let area = surface.outer_rect(
             area,
             122,
-            prompt_height
-                .saturating_add(3)
-                .saturating_add(content_height)
-                .saturating_add(footer_height),
+            framed_overlay_height(
+                prompt_height
+                    .saturating_add(3)
+                    .saturating_add(content_height)
+                    .saturating_add(footer_height),
+            ),
         );
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -3119,6 +2769,134 @@ impl App {
                 &editor.footer,
                 &editor.input,
                 editor.multiline,
+            );
+        }
+    }
+
+    fn render_permission_rule_studio_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &PermissionRuleStudioOverlay,
+        surface: SurfaceMode,
+    ) {
+        let title_width = surface.outer_width(area, 132);
+        let content_width = surface.content_width(area, 132);
+        let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
+        let area = surface.outer_rect(area, 132, 28);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(sanitize_display_text(overlay_title_with_summary(
+                dialog.title.as_str(),
+                permission_rule_subject_kind_name(dialog.draft.subject_kind),
+                title_width,
+            )))
+            .borders(Borders::ALL);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(24), Constraint::Length(footer_height)])
+            .split(inner);
+        let content = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(40), Constraint::Min(58)])
+            .split(rows[0]);
+        let list_area = top_aligned_panel_rect(
+            content[0],
+            list_panel_height(dialog.items.len().max(1), 2, 8, 18),
+        );
+        let right_area = content[1];
+        let overview_text = format!(
+            "Draft: {}\nMode: {}\nScope: {}\nSession: {}\nWorkspace Root: {}",
+            permission_rule_draft_label(&dialog.draft),
+            permission_rule_mode_label(dialog.draft.mode),
+            dialog.draft.scope,
+            if dialog.draft.session_id.trim().is_empty() {
+                "unset".to_string()
+            } else {
+                dialog.draft.session_id.clone()
+            },
+            if dialog.draft.workspace_root.trim().is_empty() {
+                "runtime default".to_string()
+            } else {
+                dialog.draft.workspace_root.clone()
+            }
+        );
+        let detail_text = dialog
+            .items
+            .get(dialog.selected)
+            .map(|item| permission_rule_studio_detail_text(&dialog.draft, item))
+            .unwrap_or_else(|| "Select a permission field to edit it.".to_string());
+        let overview_height =
+            bordered_paragraph_height(overview_text.as_str(), right_area.width, 3, 8);
+        let detail_height =
+            bordered_paragraph_height(detail_text.as_str(), right_area.width, 4, 14);
+        let right_rows = top_aligned_vertical_areas(right_area, &[overview_height, detail_height]);
+
+        let list_items = dialog
+            .items
+            .iter()
+            .map(|item| {
+                let mut first_line = vec![Span::styled(
+                    sanitize_display_text(item.label.as_str()),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )];
+                if !item.value.trim().is_empty() {
+                    first_line.push(Span::raw("  "));
+                    first_line.push(Span::styled(
+                        sanitize_display_text(item.value.as_str()),
+                        Style::default().fg(Color::Cyan),
+                    ));
+                }
+                ListItem::new(vec![
+                    Line::from(first_line),
+                    Line::from(Span::styled(
+                        sanitize_display_text(item.detail.as_str()),
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let list = List::new(list_items)
+            .block(
+                Block::default()
+                    .title(" Rule Fields ")
+                    .borders(Borders::ALL),
+            )
+            .highlight_style(selection_highlight_style())
+            .highlight_symbol(">> ");
+        let mut state = ListState::default();
+        state.select((!dialog.items.is_empty()).then_some(dialog.selected));
+        frame.render_stateful_widget(list, list_area, &mut state);
+
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(overview_text))
+                .block(Block::default().title(" Overview ").borders(Borders::ALL))
+                .wrap(Wrap { trim: false }),
+            right_rows[0],
+        );
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(detail_text))
+                .block(Block::default().title(" Details ").borders(Borders::ALL))
+                .wrap(Wrap { trim: false }),
+            right_rows[1],
+        );
+        frame.render_widget(
+            Paragraph::new(sanitize_display_text(dialog.footer.as_str())),
+            rows[1],
+        );
+
+        if let Some(editor) = dialog.editor.as_ref() {
+            self.render_workbench_editor(
+                frame,
+                area,
+                &editor.title,
+                &editor.prompt,
+                &editor.footer,
+                &editor.input,
+                false,
             );
         }
     }
@@ -4080,6 +3858,10 @@ fn preferred_overlay_rect(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
+fn framed_overlay_height(content_height: u16) -> u16 {
+    content_height.saturating_add(2)
+}
+
 fn top_aligned_vertical_areas(area: Rect, heights: &[u16]) -> Vec<Rect> {
     let mut constraints = heights
         .iter()
@@ -4564,6 +4346,10 @@ fn user_input_choices_panel_height(question: &UserInputQuestion, width: u16) -> 
     lines.clamp(4, 12).saturating_add(2)
 }
 
+fn user_input_custom_input_height(input: &Editor) -> u16 {
+    editor_input_panel_height(input, true)
+}
+
 fn user_input_review_answer_preview(values: &[String]) -> String {
     if values.is_empty() {
         "unanswered".to_string()
@@ -4587,15 +4373,37 @@ fn user_input_custom_values_preview(values: &[String], width: u16) -> String {
     }
 }
 
-fn choice_overlay_rows_height(rows: &[ChoiceRow]) -> u16 {
-    if rows.is_empty() {
-        return 5;
-    }
-    let line_count = rows.len().saturating_mul(2);
-    u16::try_from(line_count)
-        .unwrap_or(u16::MAX)
-        .clamp(3, 12)
+fn search_list_overlay_panel_height<TItem, TCustom, TMeta>(
+    dialog: &SearchListOverlay<TItem, TCustom, TMeta, Editor>,
+    rows: &[SearchListRow<TItem, TCustom>],
+    width: u16,
+) -> u16
+where
+    TItem: SearchListItem,
+    TCustom: SearchListCustomValue,
+{
+    let body_height = if rows.is_empty() {
+        wrapped_text_height(
+            dialog.empty_message.as_str(),
+            width.saturating_sub(4).max(1),
+        )
+    } else {
+        rows.iter().map(search_list_overlay_row_height).sum::<u16>()
+    };
+    body_height
+        .clamp(
+            dialog.config.min_list_body_height,
+            dialog.config.max_list_body_height,
+        )
         .saturating_add(2)
+}
+
+fn search_list_overlay_row_height<TItem, TCustom>(row: &SearchListRow<TItem, TCustom>) -> u16
+where
+    TItem: SearchListItem,
+    TCustom: SearchListCustomValue,
+{
+    1_u16.saturating_add(u16::from(row.detail().is_some()))
 }
 
 fn timeline_overlay_content_height(dialog: &TimelineOverlay, width: u16) -> u16 {
@@ -4938,6 +4746,11 @@ mod tests {
     }
 
     #[test]
+    fn framed_overlay_height_accounts_for_outer_borders() {
+        assert_eq!(framed_overlay_height(7), 9);
+    }
+
+    #[test]
     fn estimated_horizontal_panel_widths_follow_stacked_layout() {
         let (left, right) = estimated_horizontal_panel_widths(40, 34, 48);
         assert_eq!((left, right), (40, 40));
@@ -4948,5 +4761,14 @@ mod tests {
         let (left, right) = estimated_horizontal_panel_widths(114, 48, 34);
         assert_eq!(left + right, 114);
         assert!(left > right);
+    }
+
+    #[test]
+    fn multiline_editor_input_panel_height_grows_with_content() {
+        let mut editor = Editor::default();
+        editor.set_text("first\nsecond\nthird".to_string());
+
+        assert_eq!(editor_input_panel_height(&editor, false), 3);
+        assert_eq!(editor_input_panel_height(&editor, true), 6);
     }
 }

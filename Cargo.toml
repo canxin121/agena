@@ -6,6 +6,7 @@ members = [
     "apps/agena-studio-desktop/src-tauri-cef",
     "apps/agena-studio-server",
     "apps/agena-tui",
+    "crates/agena-tui-components",
     "crates/agena",
     "crates/agena-api",
     "crates/agena-api-server",
@@ -50,6 +51,7 @@ agena-plugin-marketplace = { path = "crates/agena-plugin-marketplace" }
 agena-plugin-sdk = { path = "crates/agena-plugin-sdk" }
 agena-scheduler = { path = "crates/agena-scheduler" }
 agena-skills = { path = "crates/agena-skills" }
+agena-tui-components = { path = "crates/agena-tui-components" }
 
 # async / runtime
 tokio = { version = "1.52.2", default-features = false }

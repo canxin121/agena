@@ -73,6 +73,11 @@ use crate::ui_text;
 use agena_api_server::local_api::{
     ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse,
 };
+use agena_tui_components::{
+    SearchListClearAction, SearchListCustomValue, SearchListInput, SearchListItem,
+    SearchListNoCustom, SearchListOverlay, SearchListOverlayConfig, SearchListRow,
+    refresh_search_list_overlay,
+};
 
 mod provider_studio;
 mod transcript_view;
@@ -98,6 +103,8 @@ const PASTE_ENTER_SUPPRESS_WINDOW_MS: u64 = 120;
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 const TOOL_CARD_PREVIEW_LINES: usize = 8;
 const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
+const TOOL_EXPANDED_PREVIEW_LINES: usize = 40;
+const TOOL_EXPANDED_PREVIEW_CHARS: usize = 12_000;
 const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
 const MAX_FILE_MENTION_SUGGESTIONS: usize = 8;
 const MAX_PROMPT_HISTORY_SEARCH_RESULTS: usize = 6;
@@ -364,6 +371,7 @@ pub struct App {
     overlay_stack: Vec<Overlay>,
     seen_permission_request_ids: BTreeSet<String>,
     seen_user_input_request_ids: BTreeSet<String>,
+    pending_permission_replay: Option<PermissionReplayState>,
     flash: Option<FlashMessage>,
     sessions: SessionListState,
     transcript: TranscriptState,
@@ -404,6 +412,7 @@ pub struct App {
     status_line: Option<StatusLineState>,
     plugin_theme: Option<agena::plugin::HostThemePalette>,
     keybindings: ComposerKeyBindings,
+    transcript_motion_prefix: Option<String>,
     /// Last time the user pressed Ctrl+C; a second press within the window
     /// exits the application.
     last_ctrl_c_at: Option<Instant>,
@@ -602,6 +611,7 @@ enum Overlay {
     Choice(ChoiceOverlay),
     PermissionRuleEdit(PermissionRuleEditOverlay),
     FileAttach(FileAttachOverlay),
+    PathBrowser(PathBrowserOverlay),
     Permission(PermissionOverlay),
     UserInputReply(UserInputOverlay),
     Confirm(ConfirmOverlay),
@@ -620,6 +630,7 @@ enum Route {
     SettingsStudio(SettingsStudioOverlay),
     AgentStudio(AgentStudioOverlay),
     AgentPermissionStudio(AgentPermissionStudioOverlay),
+    PermissionRuleStudio(PermissionRuleStudioOverlay),
     SessionSearch(SessionSearchOverlay),
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
@@ -825,18 +836,8 @@ struct RuntimeSettingEditOverlay {
 }
 
 #[derive(Debug, Clone)]
-struct ChoiceOverlay {
-    title: String,
-    prompt: String,
-    footer: String,
-    empty_message: String,
-    input: Editor,
-    filter_query: String,
+struct ChoiceOverlayMeta {
     all_items: Vec<ChoiceItem>,
-    items: Vec<ChoiceItem>,
-    selected: usize,
-    allow_custom: bool,
-    allow_clear: bool,
     action: ChoiceOverlayAction,
 }
 
@@ -849,17 +850,26 @@ struct ChoiceItem {
 }
 
 #[derive(Debug, Clone)]
+struct ChoiceCustomValue {
+    raw: String,
+}
+
+type ChoiceOverlay = SearchListOverlay<ChoiceItem, ChoiceCustomValue, ChoiceOverlayMeta, Editor>;
+
+#[derive(Debug, Clone)]
 enum ChoiceOverlayAction {
     SettingsField(SettingsFieldSpec),
     RuntimeSetting(RuntimeSettingSpec),
     ProviderStudioField(ProviderStudioField),
+    PermissionRuleStudio(PermissionRuleStudioChoiceField),
 }
 
-#[derive(Debug, Clone)]
-enum ChoiceRow {
-    Clear,
-    Custom(String),
-    Item(ChoiceItem),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionRuleStudioChoiceField {
+    SubjectKind,
+    PathAccessKind,
+    Scope,
+    Mode,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -952,6 +962,62 @@ enum PermissionRuleSubjectKind {
 }
 
 #[derive(Debug, Clone)]
+struct PermissionRuleStudioOverlay {
+    rule_id: Option<i64>,
+    title: String,
+    footer: String,
+    draft: PermissionRuleDraft,
+    items: Vec<PermissionRuleStudioItem>,
+    selected: usize,
+    editor: Option<PermissionRuleStudioEditor>,
+}
+
+#[derive(Debug, Clone)]
+struct PermissionRuleStudioItem {
+    label: String,
+    value: String,
+    detail: String,
+    action: PermissionRuleStudioAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionRuleStudioAction {
+    SubjectKind,
+    ToolName,
+    Qualifier,
+    PathAccessKind,
+    WorkspaceRoot,
+    BrowseWorkspaceRoot,
+    TargetPath,
+    BrowseTargetPath,
+    NetworkTarget,
+    Scope,
+    SessionId,
+    Mode,
+    Save,
+    Revoke,
+}
+
+#[derive(Debug, Clone)]
+struct PermissionRuleStudioEditor {
+    title: String,
+    prompt: String,
+    footer: String,
+    input: Editor,
+    action: PermissionRuleStudioEditField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionRuleStudioEditField {
+    ToolName,
+    Qualifier,
+    WorkspaceRoot,
+    TargetPath,
+    NetworkTarget,
+    SessionId,
+}
+
+#[derive(Debug, Clone)]
 struct UserInputOverlay {
     session_id: i64,
     request: UserInputRequest,
@@ -1001,6 +1067,16 @@ struct PermissionOverlayChoice {
 }
 
 #[derive(Debug, Clone)]
+struct PermissionReplayState {
+    session_id: i64,
+    fingerprint: String,
+    last_request_id: String,
+    kind: PermissionReplyKind,
+    scope: Option<PermissionScope>,
+    label: String,
+}
+
+#[derive(Debug, Clone)]
 struct ConfirmOverlay {
     title: String,
     body_lines: Vec<String>,
@@ -1027,10 +1103,46 @@ enum ConfirmAction {
 }
 
 #[derive(Debug, Clone)]
-struct FileAttachOverlay {
-    input: Editor,
-    results: Vec<PathBuf>,
-    selected: usize,
+struct FileAttachOverlayMeta;
+
+#[derive(Debug, Clone)]
+struct TypedPathValue {
+    raw: String,
+}
+
+#[derive(Debug, Clone)]
+struct PathBrowserOverlayMeta {
+    mode: PathBrowserMode,
+    target: PathBrowserTarget,
+}
+
+type FileAttachOverlay = SearchListOverlay<PathBuf, TypedPathValue, FileAttachOverlayMeta, Editor>;
+type PathBrowserOverlay =
+    SearchListOverlay<PathBrowserEntry, TypedPathValue, PathBrowserOverlayMeta, Editor>;
+
+#[derive(Debug, Clone)]
+struct PathBrowserEntry {
+    path: PathBuf,
+    label: String,
+    detail: String,
+    is_dir: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathBrowserMode {
+    AnyPath,
+    DirectoryOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathBrowserTarget {
+    PermissionRuleStudio(PermissionRuleStudioPathField),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionRuleStudioPathField {
+    WorkspaceRoot,
+    TargetPath,
 }
 
 #[derive(Debug, Clone)]
@@ -1196,16 +1308,15 @@ struct ModelCatalogStudioOverlay {
 }
 
 #[derive(Debug, Clone)]
-struct SessionSearchOverlay {
-    title: String,
-    prompt: String,
-    empty_message: String,
-    footer: String,
-    input: Editor,
-    items: Vec<SessionResource>,
-    all_items: Vec<SessionResource>,
-    selected: usize,
-    loading: bool,
+struct SessionSearchItem {
+    session: SessionResource,
+    label: String,
+    detail: String,
+}
+
+#[derive(Debug, Clone)]
+struct SessionSearchOverlayMeta {
+    all_items: Vec<SessionSearchItem>,
     mode: SessionViewMode,
     scope_session_id: Option<i64>,
     page_limit: usize,
@@ -1216,33 +1327,29 @@ struct SessionSearchOverlay {
     has_more: bool,
 }
 
+type SessionSearchOverlay =
+    SearchListOverlay<SessionSearchItem, SearchListNoCustom, SessionSearchOverlayMeta, Editor>;
+
 #[derive(Debug, Clone)]
-struct PickerOverlay {
-    title: String,
-    prompt: String,
-    empty_message: String,
-    footer: String,
-    input: Editor,
+struct PickerOverlayMeta {
     all_items: Vec<PickerItem>,
-    items: Vec<PickerItem>,
-    selected: usize,
-    loading: bool,
     kind: PickerKind,
 }
 
+type PickerOverlay = SearchListOverlay<PickerItem, SearchListNoCustom, PickerOverlayMeta, Editor>;
+
 #[derive(Debug, Clone)]
-struct SessionModelChooserOverlay {
-    title: String,
-    prompt: String,
-    footer: String,
-    empty_message: String,
-    input: Editor,
-    loading: bool,
+struct SessionModelChooserOverlayMeta {
     all_items: Vec<SessionModelChoiceItem>,
-    items: Vec<SessionModelChoiceItem>,
-    selected: usize,
     page_size: usize,
 }
+
+type SessionModelChooserOverlay = SearchListOverlay<
+    SessionModelChoiceItem,
+    SearchListNoCustom,
+    SessionModelChooserOverlayMeta,
+    Editor,
+>;
 
 #[derive(Debug, Clone)]
 struct SessionModelChoiceItem {
@@ -1250,6 +1357,186 @@ struct SessionModelChoiceItem {
     detail: String,
     search_text: String,
     model: ModelRef,
+}
+
+impl SearchListItem for ChoiceItem {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        (!self.detail.trim().is_empty()).then_some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.value.clone()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        query.trim().is_empty()
+            || self
+                .search_text
+                .contains(query.trim().to_ascii_lowercase().as_str())
+    }
+}
+
+impl SearchListCustomValue for ChoiceCustomValue {
+    fn search_list_from_input(input: &str) -> Option<Self> {
+        let raw = input.trim().to_string();
+        (!raw.is_empty()).then_some(Self { raw })
+    }
+
+    fn search_list_label(&self) -> String {
+        "Use typed value".to_string()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        Some(format!(
+            "Apply exactly {}",
+            format_setting_value_inline(&JsonValue::String(self.raw.clone()))
+        ))
+    }
+
+    fn search_list_input_text(&self) -> String {
+        self.raw.clone()
+    }
+}
+
+impl SearchListCustomValue for TypedPathValue {
+    fn search_list_from_input(input: &str) -> Option<Self> {
+        let raw = input.trim().to_string();
+        (!raw.is_empty()).then_some(Self { raw })
+    }
+
+    fn search_list_label(&self) -> String {
+        "Use typed path".to_string()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        Some(self.raw.clone())
+    }
+
+    fn search_list_input_text(&self) -> String {
+        self.raw.clone()
+    }
+}
+
+impl SearchListItem for PathBrowserEntry {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        Some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.path.display().to_string()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        query.trim().is_empty()
+            || self
+                .label
+                .to_ascii_lowercase()
+                .contains(query.trim().to_ascii_lowercase().as_str())
+            || self
+                .detail
+                .to_ascii_lowercase()
+                .contains(query.trim().to_ascii_lowercase().as_str())
+    }
+
+    fn search_list_label_style(&self) -> Style {
+        if self.is_dir {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        }
+    }
+}
+
+impl SearchListItem for SessionSearchItem {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        Some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.session.title.clone()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        session_matches_query(&self.session, query.trim())
+    }
+}
+
+impl SearchListItem for PickerItem {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        (!self.detail.trim().is_empty()).then_some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        let query = query.trim();
+        if query.is_empty() {
+            return true;
+        }
+        match &self.value {
+            PickerValue::Command(spec) => {
+                commands::command_matches_query(spec, query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+            }
+            PickerValue::RuntimeEntry(_) => {
+                self.label.to_ascii_lowercase().contains(query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+            }
+            PickerValue::Session(session_id) => {
+                self.label.to_ascii_lowercase().contains(query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+                    || format!("#{session_id}").contains(query)
+            }
+            PickerValue::Message(message_id) => {
+                self.label.to_ascii_lowercase().contains(query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+                    || format!("#{message_id}").contains(query)
+            }
+            _ => {
+                self.label.to_ascii_lowercase().contains(query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+            }
+        }
+    }
+}
+
+impl SearchListItem for SessionModelChoiceItem {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        Some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        query.trim().is_empty()
+            || self
+                .search_text
+                .contains(query.trim().to_ascii_lowercase().as_str())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1370,6 +1657,7 @@ struct TranscriptState {
     follow_tail: bool,
     scroll: usize,
     cursor_line: usize,
+    block_cursor: Option<TranscriptBlockCursor>,
     search_query: String,
     search_match_index: Option<usize>,
     execution: Option<SessionExecutionResource>,
@@ -1568,6 +1856,18 @@ struct TranscriptDetailDefaults {
     thinking_expanded: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptMoveDirection {
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TranscriptBlockCursor {
+    key: TranscriptNodeKey,
+    direction: TranscriptMoveDirection,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum TranscriptNodeKey {
     MessagePart {
@@ -1721,6 +2021,7 @@ impl App {
             overlay_stack: Vec::new(),
             seen_permission_request_ids: BTreeSet::new(),
             seen_user_input_request_ids: BTreeSet::new(),
+            pending_permission_replay: None,
             flash: None,
             sessions: SessionListState {
                 search_query: launch.initial_session_search.unwrap_or_default(),
@@ -1769,6 +2070,7 @@ impl App {
             status_line,
             plugin_theme,
             keybindings,
+            transcript_motion_prefix: None,
             last_ctrl_c_at: None,
             double_esc_window,
         };
@@ -1899,6 +2201,11 @@ impl App {
         self.flush_input_buffers_if_due(Instant::now());
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            if let Some(session_id) = self.active_run_session_id() {
+                self.request_cancel_run(session_id);
+                self.last_ctrl_c_at = None;
+                return;
+            }
             let now = Instant::now();
             let double = self
                 .last_ctrl_c_at
@@ -1923,6 +2230,8 @@ impl App {
             return;
         }
 
+        self.maybe_capture_transcript_motion_prefix(key);
+
         if key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
         {
@@ -1931,19 +2240,6 @@ impl App {
         }
 
         if !self.current_route_is_main() {
-            return;
-        }
-
-        // ESC while a run is in flight has global priority. Cancel the
-        // active run before falling through to focus-specific Esc.
-        if matches!(key.code, KeyCode::Esc)
-            && key.modifiers.is_empty()
-            && self.transcript.submitting
-            && let Some(session_id) = self.transcript.session_id
-        {
-            self.transcript.submitting = false;
-            self.submitting_session_ids.remove(&session_id);
-            self.request_cancel_run(session_id);
             return;
         }
 
@@ -2115,6 +2411,44 @@ impl App {
         self.maybe_auto_open_pending_interactive_overlay();
     }
 
+    fn maybe_capture_transcript_motion_prefix(&mut self, key: KeyEvent) {
+        if self.focus != Focus::Transcript
+            || !self.current_route_is_main()
+            || self.overlay.is_some()
+        {
+            self.transcript_motion_prefix = None;
+            return;
+        }
+        if !key.modifiers.is_empty() {
+            self.transcript_motion_prefix = None;
+            return;
+        }
+        match key.code {
+            KeyCode::Char(digit @ '1'..='9') => {
+                self.transcript_motion_prefix
+                    .get_or_insert_with(String::new)
+                    .push(digit);
+            }
+            KeyCode::Char(digit @ '0') if self.transcript_motion_prefix.is_some() => {
+                if let Some(prefix) = self.transcript_motion_prefix.as_mut() {
+                    prefix.push(digit);
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('h') | KeyCode::Char('l') => {}
+            _ => {
+                self.transcript_motion_prefix = None;
+            }
+        }
+    }
+
+    fn transcript_motion_count(&mut self) -> usize {
+        self.transcript_motion_prefix
+            .take()
+            .and_then(|prefix| prefix.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(1)
+    }
+
     fn handle_overlay_key(&mut self, key: KeyEvent) -> bool {
         let Some(mut overlay) = self.overlay.take() else {
             return false;
@@ -2136,6 +2470,7 @@ impl App {
                 self.handle_permission_rule_edit_overlay_key(key, dialog)
             }
             Overlay::FileAttach(dialog) => self.handle_file_attach_overlay_key(key, dialog),
+            Overlay::PathBrowser(dialog) => self.handle_path_browser_overlay_key(key, dialog),
             Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
             Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
             Overlay::Confirm(dialog) => self.handle_confirm_overlay_key(key, dialog),
@@ -2180,6 +2515,9 @@ impl App {
             Route::AgentStudio(dialog) => self.handle_agent_studio_overlay_key(key, dialog),
             Route::AgentPermissionStudio(dialog) => {
                 self.handle_agent_permission_studio_overlay_key(key, dialog)
+            }
+            Route::PermissionRuleStudio(dialog) => {
+                self.handle_permission_rule_studio_overlay_key(key, dialog)
             }
             Route::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
             Route::Picker(dialog) => self.handle_picker_overlay_key(key, dialog),
@@ -2722,9 +3060,9 @@ impl App {
             }
             KeyCode::Enter => {
                 let choice = permission_overlay_choice(dialog.selected);
-                self.request_permission_reply(
+                self.submit_permission_reply(
                     dialog.session_id,
-                    dialog.request.request_id.clone(),
+                    dialog.request.clone(),
                     choice.kind,
                     choice.scope,
                     permission_overlay_choice_label(&self.i18n, choice),
@@ -2732,9 +3070,9 @@ impl App {
                 true
             }
             KeyCode::Char('a') => {
-                self.request_permission_reply(
+                self.submit_permission_reply(
                     dialog.session_id,
-                    dialog.request.request_id.clone(),
+                    dialog.request.clone(),
                     PermissionReplyKind::AllowOnce,
                     None,
                     ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::AllowOnce),
@@ -2742,9 +3080,9 @@ impl App {
                 true
             }
             KeyCode::Char('s') | KeyCode::Char('A') => {
-                self.request_permission_reply(
+                self.submit_permission_reply(
                     dialog.session_id,
-                    dialog.request.request_id.clone(),
+                    dialog.request.clone(),
                     PermissionReplyKind::AllowAlways,
                     Some(PermissionScope::Session),
                     ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::AllowAlways),
@@ -2752,9 +3090,9 @@ impl App {
                 true
             }
             KeyCode::Char('d') => {
-                self.request_permission_reply(
+                self.submit_permission_reply(
                     dialog.session_id,
-                    dialog.request.request_id.clone(),
+                    dialog.request.clone(),
                     PermissionReplyKind::DenyOnce,
                     None,
                     ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::DenyOnce),
@@ -3140,6 +3478,648 @@ impl App {
         }
     }
 
+    fn handle_permission_rule_studio_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PermissionRuleStudioOverlay,
+    ) -> bool {
+        if dialog.editor.is_some() {
+            if matches!(key.code, KeyCode::Esc) {
+                dialog.editor = None;
+                return false;
+            }
+            let commit = if let Some(editor) = dialog.editor.as_mut() {
+                match key.code {
+                    KeyCode::Enter => {
+                        editor.input.flush_all_pending_input();
+                        Some((editor.action, editor.input.text().to_string()))
+                    }
+                    _ => {
+                        editor.input.handle_line_input_key(key);
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some((action, input)) = commit {
+                if let Err(error) = self.commit_permission_rule_studio_editor(dialog, action, input)
+                {
+                    self.flash_error(error);
+                } else {
+                    dialog.editor = None;
+                }
+            }
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Char('r') => {
+                self.refresh_permission_rule_studio(dialog);
+                false
+            }
+            KeyCode::Char('b') => {
+                self.open_selected_permission_rule_path_browser(dialog);
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.selected = dialog.selected.saturating_sub(8);
+                false
+            }
+            KeyCode::PageDown => {
+                dialog.selected = min(
+                    dialog.selected.saturating_add(8),
+                    dialog.items.len().saturating_sub(1),
+                );
+                false
+            }
+            KeyCode::Home => {
+                dialog.selected = 0;
+                false
+            }
+            KeyCode::End => {
+                dialog.selected = dialog.items.len().saturating_sub(1);
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.selected = dialog.selected.saturating_sub(1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dialog.selected = min(
+                    dialog.selected.saturating_add(1),
+                    dialog.items.len().saturating_sub(1),
+                );
+                false
+            }
+            KeyCode::Enter => self.activate_permission_rule_studio_selection(dialog),
+            _ => false,
+        }
+    }
+
+    fn activate_permission_rule_studio_selection(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+    ) -> bool {
+        let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+            return false;
+        };
+        match item.action {
+            PermissionRuleStudioAction::SubjectKind => self.open_permission_rule_choice_overlay(
+                dialog,
+                PermissionRuleStudioChoiceField::SubjectKind,
+            ),
+            PermissionRuleStudioAction::PathAccessKind => self.open_permission_rule_choice_overlay(
+                dialog,
+                PermissionRuleStudioChoiceField::PathAccessKind,
+            ),
+            PermissionRuleStudioAction::Scope => self.open_permission_rule_choice_overlay(
+                dialog,
+                PermissionRuleStudioChoiceField::Scope,
+            ),
+            PermissionRuleStudioAction::Mode => self
+                .open_permission_rule_choice_overlay(dialog, PermissionRuleStudioChoiceField::Mode),
+            PermissionRuleStudioAction::ToolName => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::ToolName,
+            ),
+            PermissionRuleStudioAction::Qualifier => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::Qualifier,
+            ),
+            PermissionRuleStudioAction::WorkspaceRoot => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::WorkspaceRoot,
+            ),
+            PermissionRuleStudioAction::TargetPath => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::TargetPath,
+            ),
+            PermissionRuleStudioAction::NetworkTarget => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::NetworkTarget,
+            ),
+            PermissionRuleStudioAction::SessionId => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::SessionId,
+            ),
+            PermissionRuleStudioAction::BrowseWorkspaceRoot => {
+                self.open_permission_rule_path_browser(
+                    dialog,
+                    PermissionRuleStudioPathField::WorkspaceRoot,
+                );
+            }
+            PermissionRuleStudioAction::BrowseTargetPath => {
+                self.open_permission_rule_path_browser(
+                    dialog,
+                    PermissionRuleStudioPathField::TargetPath,
+                );
+            }
+            PermissionRuleStudioAction::Save => {
+                if let Err(error) = self.commit_permission_rule_studio_save(dialog) {
+                    self.flash_error(error);
+                }
+            }
+            PermissionRuleStudioAction::Revoke => {
+                if let Some(rule_id) = dialog.rule_id {
+                    match self.block_on_async(self.backend.revoke_permission_rule(rule_id)) {
+                        Ok(_) => {
+                            self.flash_success("revoked permission rule");
+                            self.current_route = self.route_stack.pop().unwrap_or(Route::Main);
+                        }
+                        Err(error) => self.flash_error(error),
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn open_permission_rule_choice_overlay(
+        &mut self,
+        dialog: &PermissionRuleStudioOverlay,
+        field: PermissionRuleStudioChoiceField,
+    ) {
+        let (title, prompt, input, all_items, allow_clear) = match field {
+            PermissionRuleStudioChoiceField::SubjectKind => (
+                "Choose Subject Kind".to_string(),
+                "Pick the rule subject type.".to_string(),
+                Editor::from_text(
+                    permission_rule_subject_kind_name(dialog.draft.subject_kind).to_string(),
+                ),
+                vec![
+                    choice_item("tool", "match a tool or runtime entry"),
+                    choice_item("path_access", "match filesystem access"),
+                    choice_item("network_access", "match network access"),
+                ],
+                false,
+            ),
+            PermissionRuleStudioChoiceField::PathAccessKind => (
+                "Choose Path Access Kind".to_string(),
+                "Pick the filesystem access mode.".to_string(),
+                Editor::from_text(dialog.draft.path_access_kind.clone()),
+                vec![
+                    choice_item("read", "allow file reads only"),
+                    choice_item("write", "allow file writes only"),
+                    choice_item("read_write", "allow both reads and writes"),
+                ],
+                false,
+            ),
+            PermissionRuleStudioChoiceField::Scope => (
+                "Choose Rule Scope".to_string(),
+                "Pick how broadly the rule should persist.".to_string(),
+                Editor::from_text(dialog.draft.scope.clone()),
+                vec![
+                    choice_item("session", "only this session"),
+                    choice_item("workspace", "all sessions in this workspace"),
+                    choice_item("global", "all workspaces"),
+                ],
+                false,
+            ),
+            PermissionRuleStudioChoiceField::Mode => (
+                "Choose Rule Mode".to_string(),
+                "Pick allow, ask, or deny.".to_string(),
+                Editor::from_text(permission_rule_mode_label(dialog.draft.mode).to_string()),
+                vec![
+                    choice_item("allow", "always allow matching actions"),
+                    choice_item("ask", "prompt before allowing matching actions"),
+                    choice_item("deny", "always deny matching actions"),
+                ],
+                false,
+            ),
+        };
+        self.open_choice_overlay(ChoiceOverlay::new(
+            title,
+            prompt,
+            ui_text::t(&self.i18n, "overlay-choice-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            input,
+            SearchListOverlayConfig {
+                target_width: 96,
+                search_enabled: true,
+                custom_value_enabled: true,
+                fill_selected_into_input: true,
+                min_list_body_height: 3,
+                max_list_body_height: 12,
+            },
+            allow_clear.then(|| SearchListClearAction {
+                label: "Clear value".to_string(),
+                detail: choice_overlay_clear_detail(&ChoiceOverlayAction::PermissionRuleStudio(
+                    field,
+                )),
+            }),
+            ChoiceOverlayMeta {
+                all_items,
+                action: ChoiceOverlayAction::PermissionRuleStudio(field),
+            },
+        ));
+    }
+
+    fn open_permission_rule_studio_editor(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+        field: PermissionRuleStudioEditField,
+    ) {
+        let (title, prompt, footer, value) = match field {
+            PermissionRuleStudioEditField::ToolName => (
+                "Edit Tool Name".to_string(),
+                "Enter the exact tool name.".to_string(),
+                "Enter saves | Esc cancels".to_string(),
+                dialog.draft.tool_name.clone(),
+            ),
+            PermissionRuleStudioEditField::Qualifier => (
+                "Edit Qualifier".to_string(),
+                "Enter an optional qualifier or leave empty.".to_string(),
+                "Enter saves | Esc cancels".to_string(),
+                dialog.draft.qualifier.clone(),
+            ),
+            PermissionRuleStudioEditField::WorkspaceRoot => (
+                "Edit Workspace Root".to_string(),
+                "Enter an optional workspace_root directory.".to_string(),
+                "Enter saves | Esc cancels".to_string(),
+                dialog.draft.workspace_root.clone(),
+            ),
+            PermissionRuleStudioEditField::TargetPath => (
+                "Edit Target Path".to_string(),
+                "Enter the target path or pattern.".to_string(),
+                "Enter saves | Esc cancels".to_string(),
+                dialog.draft.target_path.clone(),
+            ),
+            PermissionRuleStudioEditField::NetworkTarget => (
+                "Edit Network Target".to_string(),
+                "Enter a host, host:port, or URL.".to_string(),
+                "Enter saves | Esc cancels".to_string(),
+                dialog.draft.network_target.clone(),
+            ),
+            PermissionRuleStudioEditField::SessionId => (
+                "Edit Session ID".to_string(),
+                "Enter the target session id.".to_string(),
+                "Enter saves | Esc cancels".to_string(),
+                dialog.draft.session_id.clone(),
+            ),
+        };
+        dialog.editor = Some(PermissionRuleStudioEditor {
+            title,
+            prompt,
+            footer,
+            input: Editor::from_text(value),
+            action: field,
+        });
+    }
+
+    fn commit_permission_rule_studio_editor(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+        field: PermissionRuleStudioEditField,
+        input: String,
+    ) -> UiResult<()> {
+        match field {
+            PermissionRuleStudioEditField::ToolName => {
+                dialog.draft.tool_name = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::Qualifier => {
+                dialog.draft.qualifier = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::WorkspaceRoot => {
+                dialog.draft.workspace_root = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::TargetPath => {
+                dialog.draft.target_path = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::NetworkTarget => {
+                dialog.draft.network_target = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::SessionId => {
+                let trimmed = input.trim();
+                if !trimmed.is_empty() && trimmed.parse::<i64>().is_err() {
+                    return Err("session id must be an integer".to_string());
+                }
+                dialog.draft.session_id = trimmed.to_string();
+            }
+        }
+        self.refresh_permission_rule_studio(dialog);
+        Ok(())
+    }
+
+    fn commit_permission_rule_studio_save(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+    ) -> UiResult<()> {
+        let draft = dialog.draft.clone();
+        match draft.subject_kind {
+            PermissionRuleSubjectKind::Tool if draft.tool_name.trim().is_empty() => {
+                return Err("tool rules require a tool name".to_string());
+            }
+            PermissionRuleSubjectKind::PathAccess => {
+                if draft.path_access_kind.trim().is_empty() {
+                    return Err("path rules require path_access_kind".to_string());
+                }
+                if draft.target_path.trim().is_empty() {
+                    return Err("path rules require target_path".to_string());
+                }
+            }
+            PermissionRuleSubjectKind::NetworkAccess if draft.network_target.trim().is_empty() => {
+                return Err("network rules require a network target".to_string());
+            }
+            _ => {}
+        }
+        if draft.scope == "session" {
+            let trimmed = draft.session_id.trim();
+            if trimmed.is_empty() {
+                return Err("session scope requires a session id".to_string());
+            }
+            trimmed
+                .parse::<i64>()
+                .map_err(|_| "session id must be an integer".to_string())?;
+        }
+        let params = permission_rule_params_from_draft(&draft);
+        let saved = match dialog.rule_id {
+            Some(rule_id) => self
+                .block_on_async(self.backend.replace_permission_rule(rule_id, params))
+                .map_err(|error| error.to_string())?,
+            None => self
+                .block_on_async(self.backend.create_permission_rule(params))
+                .map_err(|error| error.to_string())?,
+        };
+        dialog.rule_id = Some(saved.id);
+        dialog.title = format!("Permission Rule · {}", permission_rule_label(&saved));
+        dialog.draft = permission_rule_draft_from_resource(&saved);
+        self.flash_success(format!(
+            "saved permission rule {}",
+            permission_rule_label(&saved)
+        ));
+        self.refresh_permission_rule_studio(dialog);
+        Ok(())
+    }
+
+    fn open_selected_permission_rule_path_browser(&mut self, dialog: &PermissionRuleStudioOverlay) {
+        let Some(item) = dialog.items.get(dialog.selected) else {
+            return;
+        };
+        match item.action {
+            PermissionRuleStudioAction::BrowseWorkspaceRoot => self
+                .open_permission_rule_path_browser(
+                    dialog,
+                    PermissionRuleStudioPathField::WorkspaceRoot,
+                ),
+            PermissionRuleStudioAction::BrowseTargetPath => self.open_permission_rule_path_browser(
+                dialog,
+                PermissionRuleStudioPathField::TargetPath,
+            ),
+            _ => {}
+        }
+    }
+
+    fn open_permission_rule_path_browser(
+        &mut self,
+        dialog: &PermissionRuleStudioOverlay,
+        field: PermissionRuleStudioPathField,
+    ) {
+        let (title, prompt, mode, initial) = match field {
+            PermissionRuleStudioPathField::WorkspaceRoot => (
+                "Choose Workspace Root".to_string(),
+                "Browse directories and press Enter to select one.".to_string(),
+                PathBrowserMode::DirectoryOnly,
+                dialog.draft.workspace_root.clone(),
+            ),
+            PermissionRuleStudioPathField::TargetPath => (
+                "Choose Target Path".to_string(),
+                "Browse files or directories and press Enter to select one.".to_string(),
+                PathBrowserMode::AnyPath,
+                dialog.draft.target_path.clone(),
+            ),
+        };
+        let mut overlay = PathBrowserOverlay::new(
+            title,
+            prompt,
+            "Up/Down move | Enter open/select | h parent | l open | Esc close".to_string(),
+            "No matching files or directories.".to_string(),
+            Editor::from_text(initial),
+            SearchListOverlayConfig {
+                target_width: 96,
+                search_enabled: false,
+                custom_value_enabled: true,
+                fill_selected_into_input: true,
+                min_list_body_height: 6,
+                max_list_body_height: 14,
+            },
+            None,
+            PathBrowserOverlayMeta {
+                mode,
+                target: PathBrowserTarget::PermissionRuleStudio(field),
+            },
+        );
+        Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), &mut overlay);
+        self.overlay = Some(Overlay::PathBrowser(overlay));
+    }
+
+    fn refresh_path_browser_overlay_with_root(
+        workspace_root: &Path,
+        dialog: &mut PathBrowserOverlay,
+    ) {
+        dialog.items = Self::path_browser_entries_with_root(workspace_root, dialog);
+        dialog.clamp_selection();
+    }
+
+    fn handle_path_browser_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PathBrowserOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.move_selection(-1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dialog.move_selection(1);
+                false
+            }
+            KeyCode::Tab => {
+                dialog.fill_input_from_selected();
+                false
+            }
+            KeyCode::Char('h') => {
+                self.path_browser_navigate_parent(dialog);
+                false
+            }
+            KeyCode::Char('l') => {
+                self.path_browser_open_entry(dialog);
+                false
+            }
+            KeyCode::Enter => self.path_browser_activate(dialog),
+            _ => {
+                dialog.input.handle_line_input_key(key);
+                Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), dialog);
+                false
+            }
+        }
+    }
+
+    fn path_browser_activate(&mut self, dialog: &mut PathBrowserOverlay) -> bool {
+        if let Some(selection) = dialog.selected_row() {
+            return match selection {
+                SearchListRow::Item(entry) => {
+                    self.commit_path_browser_selection(dialog, entry.path)
+                }
+                SearchListRow::Custom(value) => {
+                    let path = Self::resolve_browser_input_path_with_root(
+                        self.backend.workspace_root(),
+                        value.raw.as_str(),
+                    );
+                    self.commit_path_browser_selection(dialog, path)
+                }
+                SearchListRow::Clear(_) => false,
+            };
+        }
+        let raw = dialog.input.text().trim();
+        if raw.is_empty() {
+            return false;
+        }
+        let path = Self::resolve_browser_input_path_with_root(self.backend.workspace_root(), raw);
+        self.commit_path_browser_selection(dialog, path)
+    }
+
+    fn path_browser_open_entry(&self, dialog: &mut PathBrowserOverlay) {
+        if let Some(entry) = dialog.items.get(dialog.selected) {
+            if entry.is_dir {
+                dialog.input.set_text(entry.path.display().to_string());
+                Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), dialog);
+            }
+        }
+    }
+
+    fn path_browser_navigate_parent(&self, dialog: &mut PathBrowserOverlay) {
+        let current = Self::resolve_browser_input_path_with_root(
+            self.backend.workspace_root(),
+            dialog.input.text().trim(),
+        );
+        let parent = current.parent().map(Path::to_path_buf);
+        if let Some(parent) = parent {
+            dialog.input.set_text(parent.display().to_string());
+            Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), dialog);
+        }
+    }
+
+    fn commit_path_browser_selection(
+        &mut self,
+        dialog: &PathBrowserOverlay,
+        path: PathBuf,
+    ) -> bool {
+        match dialog.meta.target {
+            PathBrowserTarget::PermissionRuleStudio(field) => {
+                let workspace_root = self.backend.workspace_root();
+                let value = match field {
+                    PermissionRuleStudioPathField::WorkspaceRoot => path.display().to_string(),
+                    PermissionRuleStudioPathField::TargetPath => path
+                        .strip_prefix(workspace_root)
+                        .ok()
+                        .map(|relative| relative.display().to_string())
+                        .filter(|relative| !relative.is_empty())
+                        .unwrap_or_else(|| path.display().to_string()),
+                };
+                match &mut self.current_route {
+                    Route::PermissionRuleStudio(route) => {
+                        match field {
+                            PermissionRuleStudioPathField::WorkspaceRoot => {
+                                route.draft.workspace_root = value;
+                            }
+                            PermissionRuleStudioPathField::TargetPath => {
+                                route.draft.target_path = value;
+                            }
+                        }
+                        refresh_permission_rule_studio_dialog(route);
+                    }
+                    _ => self.flash_error("permission rule studio context was lost"),
+                }
+                true
+            }
+        }
+    }
+
+    fn resolve_browser_input_path_with_root(workspace_root: &Path, raw: &str) -> PathBuf {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return workspace_root.to_path_buf();
+        }
+        let path = PathBuf::from(trimmed);
+        if path.is_absolute() {
+            path
+        } else {
+            workspace_root.join(path)
+        }
+    }
+
+    fn path_browser_entries_with_root(
+        workspace_root: &Path,
+        dialog: &PathBrowserOverlay,
+    ) -> Vec<PathBrowserEntry> {
+        let raw = dialog.input.text().trim();
+        let resolved = Self::resolve_browser_input_path_with_root(workspace_root, raw);
+        let (directory, needle) = if resolved.is_dir() {
+            (resolved, String::new())
+        } else {
+            (
+                resolved
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| workspace_root.to_path_buf()),
+                resolved
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .unwrap_or_default(),
+            )
+        };
+
+        let mut entries = Vec::new();
+        if let Some(parent) = directory.parent() {
+            entries.push(PathBrowserEntry {
+                path: parent.to_path_buf(),
+                label: "../".to_string(),
+                detail: parent.display().to_string(),
+                is_dir: true,
+            });
+        }
+        let Ok(read_dir) = fs::read_dir(&directory) else {
+            return entries;
+        };
+
+        let mut children = read_dir
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let path = entry.path();
+                let is_dir = path.is_dir();
+                if matches!(dialog.meta.mode, PathBrowserMode::DirectoryOnly) && !is_dir {
+                    return None;
+                }
+                let name = entry.file_name();
+                let name = name.to_string_lossy().to_string();
+                if !needle.is_empty() && !name.to_ascii_lowercase().contains(needle.as_str()) {
+                    return None;
+                }
+                Some(PathBrowserEntry {
+                    label: if is_dir {
+                        format!("{name}/")
+                    } else {
+                        name.clone()
+                    },
+                    detail: path.display().to_string(),
+                    path,
+                    is_dir,
+                })
+            })
+            .collect::<Vec<_>>();
+        children.sort_by(|left, right| {
+            (!left.is_dir, left.label.to_ascii_lowercase())
+                .cmp(&(!right.is_dir, right.label.to_ascii_lowercase()))
+        });
+        entries.extend(children);
+        entries
+    }
+
     fn activate_agent_studio_selection(&mut self, dialog: &mut AgentStudioOverlay) -> bool {
         let Some(item) = dialog.items.get(dialog.selected).cloned() else {
             return false;
@@ -3393,51 +4373,39 @@ impl App {
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
+                dialog.move_selection(-1);
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let row_count = Self::choice_overlay_rows(dialog).len();
-                if row_count > 0 {
-                    dialog.selected = min(dialog.selected + 1, row_count.saturating_sub(1));
-                }
+                dialog.move_selection(1);
                 false
             }
             KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
+                dialog.move_selection_page(-1, 10);
                 false
             }
             KeyCode::PageDown => {
-                let row_count = Self::choice_overlay_rows(dialog).len();
-                if row_count > 0 {
-                    dialog.selected = min(dialog.selected + 10, row_count.saturating_sub(1));
-                }
+                dialog.move_selection_page(1, 10);
                 false
             }
             KeyCode::Home => {
-                dialog.selected = 0;
+                dialog.move_selection_home();
                 false
             }
             KeyCode::End => {
-                let row_count = Self::choice_overlay_rows(dialog).len();
-                if row_count > 0 {
-                    dialog.selected = row_count.saturating_sub(1);
-                }
+                dialog.move_selection_end();
                 false
             }
             KeyCode::Tab => {
-                if let Some(ChoiceRow::Item(item)) =
-                    Self::choice_overlay_rows(dialog).get(dialog.selected)
-                {
-                    dialog.input.set_text(item.value.clone());
-                    Self::sync_choice_overlay_query(dialog, true);
+                if dialog.fill_input_from_selected() {
+                    Self::sync_choice_overlay_input(dialog, true);
                 }
                 false
             }
             KeyCode::Enter => self.commit_choice_overlay(dialog),
             _ => {
                 dialog.input.handle_line_input_key(key);
-                Self::sync_choice_overlay_query(dialog, true);
+                Self::sync_choice_overlay_input(dialog, true);
                 false
             }
         }
@@ -3502,28 +4470,25 @@ impl App {
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
+                dialog.move_selection(-1);
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.results.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.results.len().saturating_sub(1));
-                }
+                dialog.move_selection(1);
                 false
             }
             KeyCode::Tab => {
-                if let Some(path) = dialog.results.get(dialog.selected) {
-                    dialog.input.set_text(path.to_string_lossy().to_string());
-                }
+                dialog.fill_input_from_selected();
                 false
             }
             KeyCode::Enter => {
-                let path = dialog
-                    .results
-                    .get(dialog.selected)
-                    .cloned()
-                    .unwrap_or_else(|| PathBuf::from(dialog.input.text().trim()));
+                let Some(path) = dialog.selected_row().and_then(|selection| match selection {
+                    SearchListRow::Clear(_) => None,
+                    SearchListRow::Custom(value) => Some(PathBuf::from(value.raw)),
+                    SearchListRow::Item(path) => Some(path),
+                }) else {
+                    return false;
+                };
                 match self.stage_attachment_from_path(path.as_path(), false) {
                     Ok(()) => true,
                     Err(error) => {
@@ -3583,55 +4548,52 @@ impl App {
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
+                dialog.move_selection(-1);
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
-                }
+                dialog.move_selection(1);
                 false
             }
             KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
+                dialog.move_selection_page(-1, 10);
                 false
             }
             KeyCode::PageDown => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 10, dialog.items.len().saturating_sub(1));
-                }
+                dialog.move_selection_page(1, 10);
                 false
             }
             KeyCode::Home => {
-                dialog.selected = 0;
+                dialog.move_selection_home();
                 false
             }
             KeyCode::End => {
-                if !dialog.items.is_empty() {
-                    dialog.selected = dialog.items.len().saturating_sub(1);
-                }
+                dialog.move_selection_end();
                 false
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                if dialog.loading || dialog.page_index == 0 {
+                if dialog.loading || dialog.meta.page_index == 0 {
                     return false;
                 }
-                dialog.page_index = dialog.page_index.saturating_sub(1);
+                dialog.meta.page_index = dialog.meta.page_index.saturating_sub(1);
                 dialog.selected = 0;
-                match dialog.mode {
+                match dialog.meta.mode {
                     SessionViewMode::Subtree => {
                         self.refresh_session_search_overlay_local(dialog);
                     }
                     SessionViewMode::All | SessionViewMode::Roots => {
-                        let cursor = dialog.cursors.get(dialog.page_index).cloned().flatten();
+                        let cursor = dialog
+                            .meta
+                            .cursors
+                            .get(dialog.meta.page_index)
+                            .cloned()
+                            .flatten();
                         dialog.loading = true;
                         dialog.footer = self.session_search_footer(dialog);
                         self.request_session_search_page(
-                            dialog.mode,
+                            dialog.meta.mode,
                             dialog.input.text().trim().to_string(),
-                            dialog.page_index,
+                            dialog.meta.page_index,
                             cursor,
                         );
                     }
@@ -3639,31 +4601,31 @@ impl App {
                 false
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                if dialog.loading || !dialog.has_more {
+                if dialog.loading || !dialog.meta.has_more {
                     return false;
                 }
-                match dialog.mode {
+                match dialog.meta.mode {
                     SessionViewMode::Subtree => {
-                        dialog.page_index = dialog.page_index.saturating_add(1);
+                        dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
                         dialog.selected = 0;
                         self.refresh_session_search_overlay_local(dialog);
                     }
                     SessionViewMode::All | SessionViewMode::Roots => {
-                        let Some(cursor) = dialog.next_cursor.clone() else {
+                        let Some(cursor) = dialog.meta.next_cursor.clone() else {
                             return false;
                         };
-                        dialog.page_index = dialog.page_index.saturating_add(1);
-                        if dialog.cursors.len() <= dialog.page_index {
-                            dialog.cursors.resize(dialog.page_index + 1, None);
+                        dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
+                        if dialog.meta.cursors.len() <= dialog.meta.page_index {
+                            dialog.meta.cursors.resize(dialog.meta.page_index + 1, None);
                         }
-                        dialog.cursors[dialog.page_index] = Some(cursor.clone());
+                        dialog.meta.cursors[dialog.meta.page_index] = Some(cursor.clone());
                         dialog.selected = 0;
                         dialog.loading = true;
                         dialog.footer = self.session_search_footer(dialog);
                         self.request_session_search_page(
-                            dialog.mode,
+                            dialog.meta.mode,
                             dialog.input.text().trim().to_string(),
-                            dialog.page_index,
+                            dialog.meta.page_index,
                             Some(cursor),
                         );
                     }
@@ -3672,7 +4634,7 @@ impl App {
             }
             KeyCode::Tab => {
                 if let Some(session) = dialog.items.get(dialog.selected) {
-                    let title = session.title.clone();
+                    let title = session.session.title.clone();
                     if dialog.input.text() != title {
                         dialog.input.set_text(title.clone());
                         self.reset_session_search_query(dialog, title);
@@ -3684,7 +4646,7 @@ impl App {
                 let Some(session) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
-                self.open_session(session.id, session.title);
+                self.open_session(session.session.id, session.session.title);
                 self.focus = Focus::Composer;
                 true
             }
@@ -3701,54 +4663,56 @@ impl App {
     }
 
     fn reset_session_search_query(&mut self, dialog: &mut SessionSearchOverlay, query: String) {
-        dialog.page_index = 0;
+        dialog.meta.page_index = 0;
         dialog.selected = 0;
-        dialog.offset = 0;
-        dialog.cursors.clear();
-        dialog.cursors.push(None);
-        dialog.next_cursor = None;
-        dialog.has_more = false;
+        dialog.meta.offset = 0;
+        dialog.meta.cursors.clear();
+        dialog.meta.cursors.push(None);
+        dialog.meta.next_cursor = None;
+        dialog.meta.has_more = false;
         dialog.loading = true;
         dialog.footer = self.session_search_footer(dialog);
-        match dialog.mode {
+        dialog.meta.page_index = 0;
+        match dialog.meta.mode {
             SessionViewMode::Subtree => {
-                if let Some(session_id) = dialog.scope_session_id {
+                if let Some(session_id) = dialog.meta.scope_session_id {
                     self.request_session_search_subtree(session_id, query);
                 }
             }
             SessionViewMode::All | SessionViewMode::Roots => {
-                self.request_session_search_page(dialog.mode, query, 0, None);
+                self.request_session_search_page(dialog.meta.mode, query, 0, None);
             }
         }
     }
 
     fn refresh_session_search_overlay_local(&self, dialog: &mut SessionSearchOverlay) {
-        let query = dialog.input.text().trim().to_ascii_lowercase();
+        let query = dialog.input.text().trim();
         let filtered = dialog
+            .meta
             .all_items
             .iter()
-            .filter(|session| session_matches_query(session, query.as_str()))
+            .filter(|session| session.search_list_matches_query(query))
             .cloned()
             .collect::<Vec<_>>();
         let total = filtered.len();
-        let page_limit = dialog.page_limit.max(1);
+        let page_limit = dialog.meta.page_limit.max(1);
         let max_page_index = total.saturating_sub(1) / page_limit;
-        dialog.page_index = min(dialog.page_index, max_page_index);
-        dialog.offset = dialog.page_index.saturating_mul(page_limit);
+        dialog.meta.page_index = min(dialog.meta.page_index, max_page_index);
+        dialog.meta.offset = dialog.meta.page_index.saturating_mul(page_limit);
         dialog.items = filtered
             .into_iter()
-            .skip(dialog.offset)
+            .skip(dialog.meta.offset)
             .take(page_limit)
             .collect();
-        dialog.has_more = dialog.offset + dialog.items.len() < total;
-        dialog.next_cursor = None;
-        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+        dialog.meta.has_more = dialog.meta.offset + dialog.items.len() < total;
+        dialog.meta.next_cursor = None;
+        dialog.clamp_selection();
         dialog.loading = false;
         dialog.footer = self.session_search_footer(dialog);
     }
 
     fn session_search_footer(&self, dialog: &SessionSearchOverlay) -> String {
-        let scope = match dialog.mode {
+        let scope = match dialog.meta.mode {
             SessionViewMode::All => ui_text::t(&self.i18n, "overlay-session-search-scope-all"),
             SessionViewMode::Roots => ui_text::t(&self.i18n, "overlay-session-search-scope-roots"),
             SessionViewMode::Subtree => {
@@ -3758,24 +4722,20 @@ impl App {
         let start = if dialog.items.is_empty() {
             0
         } else {
-            dialog.offset.saturating_add(1)
+            dialog.meta.offset.saturating_add(1)
         };
-        let end = dialog.offset.saturating_add(dialog.items.len());
-        if dialog.mode == SessionViewMode::Subtree {
+        let end = dialog.meta.offset.saturating_add(dialog.items.len());
+        if dialog.meta.mode == SessionViewMode::Subtree {
             let total = dialog
+                .meta
                 .all_items
                 .iter()
-                .filter(|session| {
-                    session_matches_query(
-                        session,
-                        dialog.input.text().trim().to_ascii_lowercase().as_str(),
-                    )
-                })
+                .filter(|session| session.search_list_matches_query(dialog.input.text().trim()))
                 .count();
             let page_total = if total == 0 {
                 0
             } else {
-                (total + dialog.page_limit.saturating_sub(1)) / dialog.page_limit.max(1)
+                (total + dialog.meta.page_limit.saturating_sub(1)) / dialog.meta.page_limit.max(1)
             };
             return self.i18n.text_args(
                 "overlay-session-search-footer-local",
@@ -3784,13 +4744,13 @@ impl App {
                     "start" => start as i64,
                     "end" => end as i64,
                     "total" => total as i64,
-                    "page" => dialog.page_index.saturating_add(1) as i64,
+                    "page" => dialog.meta.page_index.saturating_add(1) as i64,
                     "pages" => page_total.max(1) as i64,
                 ),
             );
         }
 
-        let end_state = if dialog.has_more {
+        let end_state = if dialog.meta.has_more {
             ui_text::t(&self.i18n, "overlay-session-search-tail-more")
         } else {
             ui_text::t(&self.i18n, "overlay-session-search-tail-end")
@@ -3801,7 +4761,7 @@ impl App {
                 "scope" => scope,
                 "start" => start as i64,
                 "end" => end as i64,
-                "page" => dialog.page_index.saturating_add(1) as i64,
+                "page" => dialog.meta.page_index.saturating_add(1) as i64,
                 "tail" => end_state,
             ),
         )
@@ -3811,28 +4771,25 @@ impl App {
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
+                dialog.move_selection(-1);
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
-                }
+                dialog.move_selection(1);
                 false
             }
             KeyCode::Tab => {
-                if let Some(item) = dialog.items.get(dialog.selected) {
-                    dialog.input.set_text(item.label.clone());
+                if dialog.fill_input_from_selected() {
                     Self::refresh_picker_overlay(dialog);
                 }
                 false
             }
-            KeyCode::Char('n') if matches!(dialog.kind, PickerKind::PermissionRules) => {
-                self.open_permission_rule_editor(None, dialog.input.text(), None);
+            KeyCode::Char('n') if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
+                self.route_stack.push(Route::Picker(dialog.clone()));
+                self.open_permission_rule_studio(None, None);
                 false
             }
-            KeyCode::Char('d') if matches!(dialog.kind, PickerKind::PermissionRules) => {
+            KeyCode::Char('d') if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
@@ -3847,24 +4804,22 @@ impl App {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
-                if matches!(dialog.kind, PickerKind::PermissionRules) {
+                if matches!(dialog.meta.kind, PickerKind::PermissionRules) {
                     match item.value {
                         PickerValue::PermissionRuleCreate => {
-                            self.open_permission_rule_editor(None, dialog.input.text(), None);
+                            self.route_stack.push(Route::Picker(dialog.clone()));
+                            self.open_permission_rule_studio(None, None);
                             return false;
                         }
                         PickerValue::PermissionRule(rule) => {
-                            self.open_permission_rule_editor(
-                                Some(&rule),
-                                dialog.input.text(),
-                                None,
-                            );
+                            self.route_stack.push(Route::Picker(dialog.clone()));
+                            self.open_permission_rule_studio(Some(&rule), None);
                             return false;
                         }
                         _ => {}
                     }
                 }
-                self.handle_picker_selection(dialog.kind.clone(), item);
+                self.handle_picker_selection(dialog.meta.kind.clone(), item);
                 true
             }
             _ => {
@@ -3883,35 +4838,27 @@ impl App {
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
+                dialog.move_selection(-1);
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
-                }
+                dialog.move_selection(1);
                 false
             }
             KeyCode::Left | KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(dialog.page_size.max(1));
+                dialog.move_selection_page(-1, dialog.meta.page_size);
                 false
             }
             KeyCode::Right | KeyCode::PageDown => {
-                if !dialog.items.is_empty() {
-                    dialog.selected = min(
-                        dialog.selected + dialog.page_size.max(1),
-                        dialog.items.len().saturating_sub(1),
-                    );
-                }
+                dialog.move_selection_page(1, dialog.meta.page_size);
                 false
             }
             KeyCode::Home => {
-                dialog.selected = 0;
+                dialog.move_selection_home();
                 false
             }
             KeyCode::End => {
-                dialog.selected = dialog.items.len().saturating_sub(1);
+                dialog.move_selection_end();
                 false
             }
             KeyCode::Enter => {
@@ -4375,22 +5322,29 @@ impl App {
                         handled_route = true;
                     }
                 }
+                Route::PermissionRuleStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.flush_all_pending_input();
+                        editor.input.insert_str(text.as_str());
+                        handled_route = true;
+                    }
+                }
                 Route::SessionSearch(dialog) => {
                     let before = dialog.input.text().trim().to_string();
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
                     let after = dialog.input.text().trim().to_string();
                     if before != after {
-                        dialog.page_index = 0;
+                        dialog.meta.page_index = 0;
                         dialog.selected = 0;
-                        dialog.offset = 0;
-                        dialog.cursors.clear();
-                        dialog.cursors.push(None);
-                        dialog.next_cursor = None;
-                        dialog.has_more = false;
+                        dialog.meta.offset = 0;
+                        dialog.meta.cursors.clear();
+                        dialog.meta.cursors.push(None);
+                        dialog.meta.next_cursor = None;
+                        dialog.meta.has_more = false;
                         dialog.loading = true;
                         pending_session_search_request =
-                            Some((dialog.mode, dialog.scope_session_id, after));
+                            Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
                     }
                     handled_route = true;
                 }
@@ -4466,7 +5420,7 @@ impl App {
                 Overlay::Choice(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
-                    Self::sync_choice_overlay_query(dialog, true);
+                    Self::sync_choice_overlay_input(dialog, true);
                 }
                 Overlay::PermissionRuleEdit(dialog) => {
                     dialog.input.flush_all_pending_input();
@@ -4475,10 +5429,18 @@ impl App {
                 Overlay::FileAttach(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
-                    dialog.results = backend
+                    dialog.items = backend
                         .search_workspace_files(dialog.input.text(), 24)
                         .unwrap_or_default();
-                    dialog.selected = min(dialog.selected, dialog.results.len().saturating_sub(1));
+                    dialog.clamp_selection();
+                }
+                Overlay::PathBrowser(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::refresh_path_browser_overlay_with_root(
+                        self.backend.workspace_root(),
+                        dialog,
+                    );
                 }
                 Overlay::UserInputReply(dialog) => {
                     if dialog.screen == UserInputOverlayScreen::Review {
@@ -4496,16 +5458,16 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                     let after = dialog.input.text().trim().to_string();
                     if before != after {
-                        dialog.page_index = 0;
+                        dialog.meta.page_index = 0;
                         dialog.selected = 0;
-                        dialog.offset = 0;
-                        dialog.cursors.clear();
-                        dialog.cursors.push(None);
-                        dialog.next_cursor = None;
-                        dialog.has_more = false;
+                        dialog.meta.offset = 0;
+                        dialog.meta.cursors.clear();
+                        dialog.meta.cursors.push(None);
+                        dialog.meta.next_cursor = None;
+                        dialog.meta.has_more = false;
                         dialog.loading = true;
                         pending_session_search_request =
-                            Some((dialog.mode, dialog.scope_session_id, after));
+                            Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
                     }
                 }
                 Overlay::Picker(dialog) => {
@@ -4619,7 +5581,11 @@ impl App {
     fn handle_transcript_key(&mut self, key: KeyEvent) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
-        if matches!(key.code, KeyCode::Char('i')) {
+        if matches!(key.code, KeyCode::Char('1'..='9'))
+            || matches!(key.code, KeyCode::Char('0')) && self.transcript_motion_prefix.is_some()
+        {
+            return;
+        } else if matches!(key.code, KeyCode::Char('i')) {
             self.enter_insert_mode();
         } else if matches!(key.code, KeyCode::Char('y')) {
             self.copy_transcript_cursor_node();
@@ -4634,43 +5600,74 @@ impl App {
             KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char(' ')
         ) {
             self.toggle_transcript_cursor_node();
+        } else if matches!(key.code, KeyCode::Char('h')) {
+            let count = self.transcript_motion_count();
+            self.transcript
+                .move_by_blocks(width, height, TranscriptMoveDirection::Up, count);
+            self.maybe_request_older_messages();
+        } else if matches!(key.code, KeyCode::Char('l')) {
+            let count = self.transcript_motion_count();
+            self.transcript
+                .move_by_blocks(width, height, TranscriptMoveDirection::Down, count);
         } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) {
-            self.transcript.scroll_by_lines(width, height, -1);
+            let count = self.transcript_motion_count();
+            self.transcript.scroll_by_lines_with_blocks(
+                width,
+                height,
+                TranscriptMoveDirection::Up,
+                count,
+            );
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) {
-            self.transcript.scroll_by_lines(width, height, 1);
+            let count = self.transcript_motion_count();
+            self.transcript.scroll_by_lines_with_blocks(
+                width,
+                height,
+                TranscriptMoveDirection::Down,
+                count,
+            );
         } else if matches!(key.code, KeyCode::PageUp)
             || matches!(key.code, KeyCode::Char('b'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, false);
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::PageDown)
             || matches!(key.code, KeyCode::Char('f'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, true);
         } else if matches!(key.code, KeyCode::Char(' '))
             && key.modifiers.contains(KeyModifiers::SHIFT)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, false);
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::Char(' ')) {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, true);
         } else if matches!(key.code, KeyCode::Char('u'))
             && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_half_page(width, height, false);
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::Char('d'))
             && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_half_page(width, height, true);
         } else if matches!(key.code, KeyCode::Home | KeyCode::Char('g')) {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_to_top(width, height);
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::End | KeyCode::Char('G')) {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_to_bottom(width, height);
+        } else {
+            self.transcript_motion_prefix = None;
         }
     }
 
@@ -5653,9 +6650,10 @@ impl App {
         self.transcript.state_loading = false;
         match result {
             Ok(execution) => {
+                let session_id = execution.session.id;
                 self.apply_transcript_execution(execution);
-                self.maybe_auto_open_pending_interactive_overlay();
-                self.sessions.select_by_id(session_id);
+                self.sync_pending_interactive_after_execution(session_id);
+                self.sync_session_list_selection_to_current_execution();
             }
             Err(error) => self.flash_error(error),
         }
@@ -5707,8 +6705,10 @@ impl App {
         match result {
             Ok(refresh) => {
                 if let Some(execution) = refresh.execution {
+                    let session_id = execution.session.id;
                     self.apply_transcript_execution(execution);
-                    self.maybe_auto_open_pending_interactive_overlay();
+                    self.sync_pending_interactive_after_execution(session_id);
+                    self.sync_session_list_selection_to_current_execution();
                 }
                 if let Some(page) = refresh.latest_messages {
                     self.transcript.merge_latest_messages(
@@ -5718,7 +6718,7 @@ impl App {
                     );
                 }
                 if refresh.event_count > 0 {
-                    self.sessions.select_by_id(session_id);
+                    self.sync_session_list_selection_to_current_execution();
                 }
                 if refresh.latest_event_seq.is_some() {
                     self.transcript.last_event_seq = refresh.latest_event_seq;
@@ -5748,7 +6748,8 @@ impl App {
                     self.open_session(session_id, execution.session.title.clone());
                 }
                 self.apply_transcript_execution(execution);
-                self.maybe_auto_open_pending_interactive_overlay();
+                self.sync_pending_interactive_after_execution(session_id);
+                self.sync_session_list_selection_to_current_execution();
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
                 // Pop the next pending message and submit it after the run.
@@ -5845,7 +6846,8 @@ impl App {
         if transcript_is_target {
             self.transcript.submitting = false;
             self.apply_transcript_execution(execution);
-            self.maybe_auto_open_pending_interactive_overlay();
+            self.sync_pending_interactive_after_execution(session_id);
+            self.sync_session_list_selection_to_current_execution();
         }
         self.submitting_session_ids.remove(&session_id);
         if refresh && transcript_is_target {
@@ -5913,7 +6915,18 @@ impl App {
     ) {
         match result {
             Ok(execution) => {
-                self.handle_session_execution_updated(session_id, execution, true);
+                let transcript_is_target = self.transcript.session_id == Some(session_id);
+                if transcript_is_target {
+                    self.transcript.submitting = false;
+                    self.apply_transcript_execution(execution);
+                    self.sync_pending_interactive_after_execution(session_id);
+                    self.sync_session_list_selection_to_current_execution();
+                }
+                self.submitting_session_ids.remove(&session_id);
+                if transcript_is_target {
+                    self.request_refresh(session_id, true);
+                }
+                self.request_sessions(false);
                 self.flash_success(self.i18n.text_args(
                     "flash-permission-reply-sent",
                     &crate::fl_args!("label" => label),
@@ -5922,6 +6935,7 @@ impl App {
             Err(error) => {
                 self.transcript.submitting = false;
                 self.submitting_session_ids.remove(&session_id);
+                self.pending_permission_replay = None;
                 self.flash_error(error);
             }
         }
@@ -5953,7 +6967,7 @@ impl App {
         let Some((host, mut dialog)) = self.take_picker_dialog() else {
             return;
         };
-        let PickerKind::Providers(current_purpose) = &dialog.kind else {
+        let PickerKind::Providers(current_purpose) = &dialog.meta.kind else {
             self.restore_picker_dialog(host, dialog);
             return;
         };
@@ -5966,7 +6980,7 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match result {
             Ok(providers) => {
-                dialog.all_items = providers
+                dialog.meta.all_items = providers
                     .into_iter()
                     .map(|provider| PickerItem {
                         label: provider.provider_id.clone(),
@@ -5995,8 +7009,8 @@ impl App {
         let Some((host, mut dialog)) = self.take_session_search_dialog() else {
             return;
         };
-        if dialog.mode != mode
-            || dialog.page_index != page_index
+        if dialog.meta.mode != mode
+            || dialog.meta.page_index != page_index
             || dialog.input.text().trim() != query
         {
             self.restore_session_search_dialog(host, dialog);
@@ -6007,11 +7021,18 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-resume-empty");
         match result {
             Ok(page) => {
-                dialog.items = page.items;
-                dialog.offset = dialog.page_index.saturating_mul(dialog.page_limit);
-                dialog.next_cursor = page.page.next_cursor;
-                dialog.has_more = page.page.has_more;
-                dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+                dialog.items = page
+                    .items
+                    .into_iter()
+                    .map(|session| self.session_search_item(session))
+                    .collect();
+                dialog.meta.offset = dialog
+                    .meta
+                    .page_index
+                    .saturating_mul(dialog.meta.page_limit);
+                dialog.meta.next_cursor = page.page.next_cursor;
+                dialog.meta.has_more = page.page.has_more;
+                dialog.clamp_selection();
                 dialog.footer = self.session_search_footer(&dialog);
             }
             Err(error) => self.flash_error(error),
@@ -6028,8 +7049,8 @@ impl App {
         let Some((host, mut dialog)) = self.take_session_search_dialog() else {
             return;
         };
-        if dialog.mode != SessionViewMode::Subtree
-            || dialog.scope_session_id != Some(session_id)
+        if dialog.meta.mode != SessionViewMode::Subtree
+            || dialog.meta.scope_session_id != Some(session_id)
             || dialog.input.text().trim() != query
         {
             self.restore_session_search_dialog(host, dialog);
@@ -6046,7 +7067,10 @@ impl App {
                         .cmp(&left.updated_at)
                         .then_with(|| right.id.cmp(&left.id))
                 });
-                dialog.all_items = sessions;
+                dialog.meta.all_items = sessions
+                    .into_iter()
+                    .map(|session| self.session_search_item(session))
+                    .collect();
                 self.refresh_session_search_overlay_local(&mut dialog);
             }
             Err(error) => self.flash_error(error),
@@ -6073,7 +7097,7 @@ impl App {
                 };
                 let PickerKind::Lineage {
                     session_id: current_session_id,
-                } = &dialog.kind
+                } = &dialog.meta.kind
                 else {
                     self.restore_picker_dialog(host, dialog);
                     return;
@@ -6085,7 +7109,7 @@ impl App {
 
                 dialog.loading = false;
                 dialog.empty_message = ui_text::t(&self.i18n, "overlay-lineage-empty");
-                dialog.all_items = items
+                dialog.meta.all_items = items
                     .into_iter()
                     .map(|item| self.lineage_session_picker_item(item))
                     .collect();
@@ -6094,7 +7118,7 @@ impl App {
             }
             Err(error) => {
                 if let Some((host, mut dialog)) = self.take_picker_dialog() {
-                    if matches!(dialog.kind, PickerKind::Lineage { session_id: current_session_id } if current_session_id == session_id)
+                    if matches!(dialog.meta.kind, PickerKind::Lineage { session_id: current_session_id } if current_session_id == session_id)
                     {
                         dialog.loading = false;
                         dialog.empty_message = ui_text::t(&self.i18n, "overlay-lineage-empty");
@@ -6116,7 +7140,7 @@ impl App {
         };
         let PickerKind::RewindMessages {
             session_id: current_session_id,
-        } = &dialog.kind
+        } = &dialog.meta.kind
         else {
             self.restore_picker_dialog(host, dialog);
             return;
@@ -6130,7 +7154,7 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-rewind-empty");
         match result {
             Ok(messages) => {
-                dialog.all_items = messages
+                dialog.meta.all_items = messages
                     .into_iter()
                     .filter(is_rewind_target_message)
                     .rev()
@@ -6155,7 +7179,7 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match result {
             Ok(items) => {
-                dialog.all_items = items;
+                dialog.meta.all_items = items;
                 let current_model = self.current_session_model_ref();
                 Self::refresh_session_model_chooser_overlay(
                     &mut dialog,
@@ -6342,7 +7366,7 @@ impl App {
         };
         let PickerKind::ChildSessions {
             parent_session_id: current_parent_id,
-        } = &dialog.kind
+        } = &dialog.meta.kind
         else {
             self.restore_picker_dialog(host, dialog);
             return;
@@ -6356,7 +7380,7 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-children-empty");
         match result {
             Ok(sessions) => {
-                dialog.all_items = sessions
+                dialog.meta.all_items = sessions
                     .into_iter()
                     .map(|session| PickerItem {
                         label: session.title.clone(),
@@ -6415,7 +7439,8 @@ impl App {
                     self.persist_draft_store_with_feedback(true);
                 }
                 self.apply_transcript_execution(execution);
-                self.maybe_auto_open_pending_interactive_overlay();
+                self.sync_pending_interactive_after_execution(rewound_session_id);
+                self.sync_session_list_selection_to_current_execution();
                 self.submitting_session_ids.remove(&session_id);
                 self.focus = Focus::Composer;
                 self.request_sessions(false);
@@ -6875,6 +7900,7 @@ impl App {
         self.transcript.reset(session_id, title);
         self.seen_permission_request_ids.clear();
         self.seen_user_input_request_ids.clear();
+        self.pending_permission_replay = None;
         let _ = self.sessions.select_by_id(session_id);
         self.restore_draft_for_slot(DraftSlot::Session(session_id));
         self.persist_draft_store_with_feedback(true);
@@ -7195,13 +8221,84 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
             return;
         };
-        self.request_permission_reply(
+        self.submit_permission_reply(
             session_id,
-            request.request_id,
+            request,
             kind,
             None,
             ui_text::permission_reply_label(&self.i18n, kind),
         );
+    }
+
+    fn submit_permission_reply(
+        &mut self,
+        session_id: i64,
+        request: PermissionRequest,
+        kind: PermissionReplyKind,
+        scope: Option<PermissionScope>,
+        label: String,
+    ) {
+        self.pending_permission_replay = Some(PermissionReplayState {
+            session_id,
+            fingerprint: permission_request_fingerprint(&request),
+            last_request_id: request.request_id.clone(),
+            kind,
+            scope,
+            label: label.clone(),
+        });
+        self.seen_permission_request_ids
+            .insert(request.request_id.clone());
+        self.request_permission_reply(session_id, request.request_id, kind, scope, label);
+    }
+
+    fn maybe_auto_reply_duplicate_permission_request(&mut self, session_id: i64) -> bool {
+        let Some(replay) = self.pending_permission_replay.clone() else {
+            return false;
+        };
+        if replay.session_id != session_id || self.transcript.session_id != Some(session_id) {
+            self.pending_permission_replay = None;
+            return false;
+        }
+
+        let Some((pending_session_id, request)) = self.pending_permission_overlay_target() else {
+            self.pending_permission_replay = None;
+            return false;
+        };
+        if pending_session_id != session_id {
+            self.pending_permission_replay = None;
+            return false;
+        }
+
+        if permission_request_fingerprint(&request) != replay.fingerprint {
+            self.pending_permission_replay = None;
+            return false;
+        }
+
+        if request.request_id == replay.last_request_id {
+            return false;
+        }
+
+        self.pending_permission_replay = Some(PermissionReplayState {
+            last_request_id: request.request_id.clone(),
+            ..replay.clone()
+        });
+        self.seen_permission_request_ids
+            .insert(request.request_id.clone());
+        self.overlay = None;
+        self.request_permission_reply(
+            session_id,
+            request.request_id,
+            replay.kind,
+            replay.scope,
+            replay.label,
+        );
+        true
+    }
+
+    fn sync_pending_interactive_after_execution(&mut self, session_id: i64) {
+        if !self.maybe_auto_reply_duplicate_permission_request(session_id) {
+            self.maybe_auto_open_pending_interactive_overlay();
+        }
     }
 
     fn open_user_input_overlay(&mut self) {
@@ -7412,11 +8509,23 @@ impl App {
     }
 
     fn open_file_attach_overlay(&mut self) {
-        let mut overlay = FileAttachOverlay {
-            input: Editor::default(),
-            results: Vec::new(),
-            selected: 0,
-        };
+        let mut overlay = FileAttachOverlay::new(
+            ui_text::t(&self.i18n, "overlay-attach-title"),
+            ui_text::t(&self.i18n, "overlay-attach-prompt"),
+            ui_text::t(&self.i18n, "overlay-attach-footer"),
+            ui_text::t(&self.i18n, "overlay-attach-no-match"),
+            Editor::default(),
+            SearchListOverlayConfig {
+                target_width: 88,
+                search_enabled: false,
+                custom_value_enabled: true,
+                fill_selected_into_input: true,
+                min_list_body_height: 4,
+                max_list_body_height: 10,
+            },
+            None,
+            FileAttachOverlayMeta,
+        );
         self.refresh_file_attach_overlay(&mut overlay);
         self.overlay = Some(Overlay::FileAttach(overlay));
     }
@@ -7975,6 +9084,11 @@ impl App {
                 )
                 .map(Route::AgentPermissionStudio)
                 .unwrap_or(Route::AgentPermissionStudio(dialog)),
+            Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
+                self.build_permission_rule_picker_overlay(dialog.input.text())
+                    .map(Route::Picker)
+                    .unwrap_or(Route::Picker(dialog))
+            }
             other => other,
         }
     }
@@ -7987,7 +9101,7 @@ impl App {
         let route_query = query.to_string();
         let should_refresh_current = matches!(
             &self.current_route,
-            Route::Picker(dialog) if matches!(dialog.kind, PickerKind::PermissionRules)
+            Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::PermissionRules)
         );
         if should_refresh_current {
             self.open_permission_rule_picker(route_query.as_str());
@@ -8160,42 +9274,15 @@ impl App {
     }
 
     fn refresh_choice_overlay(dialog: &mut ChoiceOverlay) {
-        let search = dialog.filter_query.trim().to_lowercase();
-        dialog.items = dialog
-            .all_items
-            .iter()
-            .filter(|item| search.is_empty() || item.search_text.contains(search.as_str()))
-            .cloned()
-            .collect();
-        let row_count = Self::choice_overlay_rows(dialog).len();
-        if row_count == 0 {
-            dialog.selected = 0;
-        } else {
-            dialog.selected = min(dialog.selected, row_count.saturating_sub(1));
-        }
+        let all_items = dialog.meta.all_items.clone();
+        refresh_search_list_overlay(dialog, all_items.as_slice());
     }
 
-    fn sync_choice_overlay_query(dialog: &mut ChoiceOverlay, prefer_input_value: bool) {
-        let next_query = dialog.input.text().to_string();
-        let changed = dialog.filter_query != next_query;
-        dialog.filter_query = next_query;
+    fn sync_choice_overlay_input(dialog: &mut ChoiceOverlay, prefer_input_value: bool) {
         Self::refresh_choice_overlay(dialog);
-        if prefer_input_value && changed {
+        if prefer_input_value {
             dialog.selected = Self::preferred_choice_overlay_selection(dialog);
         }
-    }
-
-    fn choice_overlay_rows(dialog: &ChoiceOverlay) -> Vec<ChoiceRow> {
-        let mut rows = Vec::new();
-        if dialog.allow_clear {
-            rows.push(ChoiceRow::Clear);
-        }
-        let trimmed = dialog.input.text().trim();
-        if dialog.allow_custom && !trimmed.is_empty() {
-            rows.push(ChoiceRow::Custom(trimmed.to_string()));
-        }
-        rows.extend(dialog.items.iter().cloned().map(ChoiceRow::Item));
-        rows
     }
 
     fn preferred_choice_overlay_selection(dialog: &ChoiceOverlay) -> usize {
@@ -8204,36 +9291,29 @@ impl App {
             return 0;
         }
 
-        let clear_offset = usize::from(dialog.allow_clear);
-        if dialog.allow_custom {
-            if let Some(index) = dialog.items.iter().position(|item| {
-                item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
-            }) {
-                return clear_offset + usize::from(dialog.allow_custom) + index;
-            }
-            return clear_offset;
-        }
-
+        let clear_offset = usize::from(dialog.clear_action.is_some());
         if let Some(index) = dialog.items.iter().position(|item| {
             item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
         }) {
-            return clear_offset + index;
+            let custom_offset = usize::from(
+                ChoiceCustomValue::search_list_from_input(dialog.input.text()).is_some(),
+            );
+            return clear_offset + custom_offset + index;
         }
 
-        0
+        clear_offset.min(dialog.row_count().saturating_sub(1))
     }
 
     fn commit_choice_overlay(&mut self, dialog: &mut ChoiceOverlay) -> bool {
-        let rows = Self::choice_overlay_rows(dialog);
-        let Some(selection) = rows.get(dialog.selected).cloned() else {
+        let Some(selection) = dialog.selected_row() else {
             return false;
         };
-        match dialog.action.clone() {
+        match dialog.meta.action.clone() {
             ChoiceOverlayAction::SettingsField(field) => {
                 let input = match selection {
-                    ChoiceRow::Clear => String::new(),
-                    ChoiceRow::Custom(value) => value,
-                    ChoiceRow::Item(item) => item.value,
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
                 };
                 match parse_settings_field_input(field, input.as_str()) {
                     Ok(Some(value)) => match self
@@ -8270,9 +9350,9 @@ impl App {
             }
             ChoiceOverlayAction::RuntimeSetting(field) => {
                 let input = match selection {
-                    ChoiceRow::Clear => String::new(),
-                    ChoiceRow::Custom(value) => value,
-                    ChoiceRow::Item(item) => item.value,
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
                 };
                 match self
                     .run_options
@@ -8291,9 +9371,9 @@ impl App {
             }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = match selection {
-                    ChoiceRow::Clear => String::new(),
-                    ChoiceRow::Custom(value) => value,
-                    ChoiceRow::Item(item) => item.value,
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
                 };
                 let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
                     self.flash_error("provider studio context was lost");
@@ -8308,6 +9388,59 @@ impl App {
                         self.restore_provider_studio_dialog(host, parent);
                         self.flash_error(error);
                         false
+                    }
+                }
+            }
+            ChoiceOverlayAction::PermissionRuleStudio(field) => {
+                let value = match selection {
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
+                };
+                let current_session_id = self.current_or_selected_session_id();
+                match &mut self.current_route {
+                    Route::PermissionRuleStudio(parent) => {
+                        match field {
+                            PermissionRuleStudioChoiceField::SubjectKind => {
+                                parent.draft.subject_kind = match value.as_str() {
+                                    "path_access" => PermissionRuleSubjectKind::PathAccess,
+                                    "network_access" => PermissionRuleSubjectKind::NetworkAccess,
+                                    _ => PermissionRuleSubjectKind::Tool,
+                                };
+                            }
+                            PermissionRuleStudioChoiceField::PathAccessKind => {
+                                if !value.trim().is_empty() {
+                                    parent.draft.path_access_kind = value;
+                                }
+                            }
+                            PermissionRuleStudioChoiceField::Scope => {
+                                parent.draft.scope = if value.trim().is_empty() {
+                                    "workspace".to_string()
+                                } else {
+                                    value
+                                };
+                                if parent.draft.scope != "session" {
+                                    parent.draft.session_id.clear();
+                                } else if parent.draft.session_id.trim().is_empty()
+                                    && let Some(session_id) = current_session_id
+                                {
+                                    parent.draft.session_id = session_id.to_string();
+                                }
+                            }
+                            PermissionRuleStudioChoiceField::Mode => {
+                                parent.draft.mode = match value.as_str() {
+                                    "allow" => PermissionMode::Allow,
+                                    "deny" => PermissionMode::Deny,
+                                    _ => PermissionMode::Ask,
+                                };
+                            }
+                        }
+                        refresh_permission_rule_studio_dialog(parent);
+                        true
+                    }
+                    _ => {
+                        self.flash_error("permission rule studio context was lost");
+                        true
                     }
                 }
             }
@@ -8331,20 +9464,29 @@ impl App {
             JsonValue::Null
         };
         if let Some(all_items) = self.settings_field_choice_items(field) {
-            self.open_choice_overlay(ChoiceOverlay {
-                title: format!("Edit {}", field.path),
-                prompt: settings_value_edit_prompt(field, &file_value, &effective_value),
-                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
-                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                input: Editor::from_text(setting_value_input_text(&prefill)),
-                filter_query: String::new(),
-                all_items,
-                items: Vec::new(),
-                selected: 0,
-                allow_custom: true,
-                allow_clear: true,
-                action: ChoiceOverlayAction::SettingsField(field),
-            });
+            self.open_choice_overlay(ChoiceOverlay::new(
+                format!("Edit {}", field.path),
+                settings_value_edit_prompt(field, &file_value, &effective_value),
+                ui_text::t(&self.i18n, "overlay-choice-footer"),
+                ui_text::t(&self.i18n, "overlay-picker-empty"),
+                Editor::from_text(setting_value_input_text(&prefill)),
+                SearchListOverlayConfig {
+                    target_width: 96,
+                    search_enabled: true,
+                    custom_value_enabled: true,
+                    fill_selected_into_input: true,
+                    min_list_body_height: 3,
+                    max_list_body_height: 12,
+                },
+                Some(SearchListClearAction {
+                    label: "Clear value".to_string(),
+                    detail: choice_overlay_clear_detail(&ChoiceOverlayAction::SettingsField(field)),
+                }),
+                ChoiceOverlayMeta {
+                    all_items,
+                    action: ChoiceOverlayAction::SettingsField(field),
+                },
+            ));
             return;
         }
         self.overlay = Some(Overlay::SettingsValueEdit(SettingsValueEditOverlay {
@@ -8358,20 +9500,31 @@ impl App {
     fn open_runtime_setting_editor(&mut self, field: RuntimeSettingSpec, _return_query: &str) {
         let current_summary = self.run_options.runtime_setting_summary(field);
         if let Some(all_items) = self.runtime_setting_choice_items(field) {
-            self.open_choice_overlay(ChoiceOverlay {
-                title: format!("Edit {}", field.label),
-                prompt: runtime_setting_edit_prompt(field, current_summary.as_str()),
-                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
-                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                input: Editor::from_text(self.run_options.runtime_setting_input_text(field)),
-                filter_query: String::new(),
-                all_items,
-                items: Vec::new(),
-                selected: 0,
-                allow_custom: true,
-                allow_clear: true,
-                action: ChoiceOverlayAction::RuntimeSetting(field),
-            });
+            self.open_choice_overlay(ChoiceOverlay::new(
+                format!("Edit {}", field.label),
+                runtime_setting_edit_prompt(field, current_summary.as_str()),
+                ui_text::t(&self.i18n, "overlay-choice-footer"),
+                ui_text::t(&self.i18n, "overlay-picker-empty"),
+                Editor::from_text(self.run_options.runtime_setting_input_text(field)),
+                SearchListOverlayConfig {
+                    target_width: 96,
+                    search_enabled: true,
+                    custom_value_enabled: true,
+                    fill_selected_into_input: true,
+                    min_list_body_height: 3,
+                    max_list_body_height: 12,
+                },
+                Some(SearchListClearAction {
+                    label: "Clear value".to_string(),
+                    detail: choice_overlay_clear_detail(&ChoiceOverlayAction::RuntimeSetting(
+                        field,
+                    )),
+                }),
+                ChoiceOverlayMeta {
+                    all_items,
+                    action: ChoiceOverlayAction::RuntimeSetting(field),
+                },
+            ));
             return;
         }
         self.overlay = Some(Overlay::RuntimeSettingEdit(RuntimeSettingEditOverlay {
@@ -8754,95 +9907,164 @@ impl App {
         query: &str,
         rows: Vec<crate::backend::InspectorRow>,
     ) {
-        let mut overlay = PickerOverlay {
+        let mut overlay = PickerOverlay::new(
             title,
             prompt,
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::from_text(query.to_string()),
-            all_items: rows
-                .into_iter()
-                .map(|row| PickerItem {
-                    label: row.label,
-                    detail: row.detail,
-                    value: PickerValue::Inspector,
-                })
-                .collect(),
-            items: Vec::new(),
-            selected: 0,
-            loading: false,
-            kind: PickerKind::Inspector,
-        };
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            Editor::from_text(query.to_string()),
+            SearchListOverlayConfig {
+                target_width: 120,
+                search_enabled: true,
+                custom_value_enabled: false,
+                fill_selected_into_input: true,
+                min_list_body_height: 4,
+                max_list_body_height: 10,
+            },
+            None,
+            PickerOverlayMeta {
+                all_items: rows
+                    .into_iter()
+                    .map(|row| PickerItem {
+                        label: row.label,
+                        detail: row.detail,
+                        value: PickerValue::Inspector,
+                    })
+                    .collect(),
+                kind: PickerKind::Inspector,
+            },
+        );
         Self::refresh_picker_overlay(&mut overlay);
         self.current_route = Route::Picker(overlay);
     }
 
     fn open_permission_rule_picker(&mut self, query: &str) {
-        match self.block_on_async(self.backend.list_permission_rules()) {
-            Ok(rules) => {
-                let mut all_items = vec![PickerItem {
-                    label: ui_text::t(&self.i18n, "permission-rule-create-label"),
-                    detail: ui_text::t(&self.i18n, "permission-rule-create-detail"),
-                    value: PickerValue::PermissionRuleCreate,
-                }];
-                all_items.extend(rules.into_iter().map(|rule| PickerItem {
-                    label: permission_rule_label(&rule),
-                    detail: permission_rule_detail(&rule),
-                    value: PickerValue::PermissionRule(Box::new(rule)),
-                }));
-                let mut overlay = PickerOverlay {
-                    title: ui_text::t(&self.i18n, "overlay-permission-rules-title"),
-                    prompt: ui_text::t(&self.i18n, "overlay-permission-rules-prompt"),
-                    empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                    footer: ui_text::t(&self.i18n, "overlay-permission-rules-footer"),
-                    input: Editor::from_text(query.to_string()),
-                    all_items,
-                    items: Vec::new(),
-                    selected: 0,
-                    loading: false,
-                    kind: PickerKind::PermissionRules,
-                };
-                Self::refresh_picker_overlay(&mut overlay);
-                self.current_route = Route::Picker(overlay);
-            }
+        match self.build_permission_rule_picker_overlay(query) {
+            Ok(overlay) => self.current_route = Route::Picker(overlay),
             Err(error) => self.flash_error(error),
         }
     }
 
-    fn open_permission_rule_editor(
-        &mut self,
-        rule: Option<&PermissionRuleResource>,
-        return_query: &str,
-        return_overlay: Option<Overlay>,
-    ) {
-        let (rule_id, title, input) = match rule {
-            Some(rule) => {
-                let draft = permission_rule_draft_from_resource(rule);
-                let input = Editor::from_text(render_permission_rule_draft(&draft));
-                (
-                    Some(rule.id),
-                    ui_text::t(&self.i18n, "overlay-permission-rule-edit-title"),
-                    input,
-                )
-            }
-            None => {
-                let draft = PermissionRuleDraft::default();
-                let input = Editor::from_text(render_permission_rule_draft(&draft));
-                (
-                    None,
-                    ui_text::t(&self.i18n, "overlay-permission-rule-create-title"),
-                    input,
-                )
-            }
-        };
-        self.overlay = Some(Overlay::PermissionRuleEdit(PermissionRuleEditOverlay {
+    fn build_permission_rule_picker_overlay(&self, query: &str) -> UiResult<PickerOverlay> {
+        let rules = self
+            .block_on_async(self.backend.list_permission_rules())
+            .map_err(|error| error.to_string())?;
+        let mut all_items = vec![PickerItem {
+            label: ui_text::t(&self.i18n, "permission-rule-create-label"),
+            detail: ui_text::t(&self.i18n, "permission-rule-create-detail"),
+            value: PickerValue::PermissionRuleCreate,
+        }];
+        all_items.extend(rules.into_iter().map(|rule| PickerItem {
+            label: permission_rule_label(&rule),
+            detail: permission_rule_detail(&rule),
+            value: PickerValue::PermissionRule(Box::new(rule)),
+        }));
+        let mut overlay = PickerOverlay::new(
+            ui_text::t(&self.i18n, "overlay-permission-rules-title"),
+            ui_text::t(&self.i18n, "overlay-permission-rules-prompt"),
+            ui_text::t(&self.i18n, "overlay-permission-rules-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            Editor::from_text(query.to_string()),
+            SearchListOverlayConfig {
+                target_width: 120,
+                search_enabled: true,
+                custom_value_enabled: false,
+                fill_selected_into_input: true,
+                min_list_body_height: 4,
+                max_list_body_height: 10,
+            },
+            None,
+            PickerOverlayMeta {
+                all_items,
+                kind: PickerKind::PermissionRules,
+            },
+        );
+        Self::refresh_picker_overlay(&mut overlay);
+        Ok(overlay)
+    }
+
+    fn current_session_permission_rule_draft(&self) -> PermissionRuleDraft {
+        let session_id = self.current_or_selected_session_id();
+        PermissionRuleDraft {
+            subject_kind: PermissionRuleSubjectKind::PathAccess,
+            path_access_kind: "read".to_string(),
+            workspace_root: self.backend.workspace_root().display().to_string(),
+            scope: if session_id.is_some() {
+                "session".to_string()
+            } else {
+                "workspace".to_string()
+            },
+            session_id: session_id
+                .map(|session_id| session_id.to_string())
+                .unwrap_or_default(),
+            ..PermissionRuleDraft::default()
+        }
+    }
+
+    fn build_permission_rule_studio_overlay(
+        &self,
+        rule_id: Option<i64>,
+        title: String,
+        draft: PermissionRuleDraft,
+        preferred_item_label: Option<&str>,
+    ) -> PermissionRuleStudioOverlay {
+        let mut items = permission_rule_studio_items(&draft, rule_id);
+        let selected = preferred_item_label
+            .and_then(|label| items.iter().position(|item| item.label == label))
+            .unwrap_or(0);
+        PermissionRuleStudioOverlay {
             rule_id,
             title,
-            prompt: ui_text::t(&self.i18n, "overlay-permission-rule-prompt"),
-            input,
-            return_query: return_query.to_string(),
-            return_overlay: return_overlay.map(Box::new),
-        }));
+            footer: "Up/Down move | Enter edit/apply | b browse path | r refresh | Esc back"
+                .to_string(),
+            draft,
+            selected: min(selected, items.len().saturating_sub(1)),
+            items: std::mem::take(&mut items),
+            editor: None,
+        }
+    }
+
+    fn open_current_session_permission_studio(&mut self) {
+        let draft = self.current_session_permission_rule_draft();
+        self.route_stack.clear();
+        self.current_route =
+            Route::PermissionRuleStudio(self.build_permission_rule_studio_overlay(
+                None,
+                "Permission Rule".to_string(),
+                draft,
+                None,
+            ));
+    }
+
+    fn open_permission_rule_studio(
+        &mut self,
+        rule: Option<&PermissionRuleResource>,
+        draft_override: Option<PermissionRuleDraft>,
+    ) {
+        let (rule_id, title, draft) = match (rule, draft_override) {
+            (_, Some(draft)) => (
+                rule.map(|rule| rule.id),
+                "Permission Rule".to_string(),
+                draft,
+            ),
+            (Some(rule), None) => (
+                Some(rule.id),
+                format!("Permission Rule · {}", permission_rule_label(rule)),
+                permission_rule_draft_from_resource(rule),
+            ),
+            (None, None) => (
+                None,
+                "Permission Rule".to_string(),
+                PermissionRuleDraft::default(),
+            ),
+        };
+        self.current_route = Route::PermissionRuleStudio(
+            self.build_permission_rule_studio_overlay(rule_id, title, draft, None),
+        );
+    }
+
+    fn refresh_permission_rule_studio(&mut self, dialog: &mut PermissionRuleStudioOverlay) {
+        refresh_permission_rule_studio_dialog(dialog);
     }
 
     fn open_permission_rule_editor_from_request(&mut self, request: &PermissionRequest) {
@@ -8913,18 +10135,26 @@ impl App {
                     value: PickerValue::RuntimeEntry(entry.label),
                 }),
         );
-        let mut overlay = PickerOverlay {
-            title: ui_text::t(&self.i18n, "overlay-commands-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-commands-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items,
-            items: Vec::new(),
-            selected: 0,
-            loading: false,
-            kind: PickerKind::Commands,
-        };
+        let mut overlay = PickerOverlay::new(
+            ui_text::t(&self.i18n, "overlay-commands-title"),
+            ui_text::t(&self.i18n, "overlay-commands-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            Editor::default(),
+            SearchListOverlayConfig {
+                target_width: 120,
+                search_enabled: true,
+                custom_value_enabled: false,
+                fill_selected_into_input: true,
+                min_list_body_height: 4,
+                max_list_body_height: 10,
+            },
+            None,
+            PickerOverlayMeta {
+                all_items,
+                kind: PickerKind::Commands,
+            },
+        );
         Self::refresh_picker_overlay(&mut overlay);
         self.current_route = Route::Picker(overlay);
     }
@@ -8947,29 +10177,38 @@ impl App {
         let scope_session_id = (self.sessions.view_mode == SessionViewMode::Subtree)
             .then(|| self.current_or_selected_session_id())
             .flatten();
-        let mut dialog = SessionSearchOverlay {
-            title: ui_text::t(&self.i18n, "overlay-resume-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-resume-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: String::new(),
+        let mut dialog = SessionSearchOverlay::new(
+            ui_text::t(&self.i18n, "overlay-resume-title"),
+            ui_text::t(&self.i18n, "overlay-resume-prompt"),
+            String::new(),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
             input,
-            items: Vec::new(),
-            all_items: Vec::new(),
-            selected: 0,
-            loading: true,
-            mode: self.sessions.view_mode,
-            scope_session_id,
-            page_limit: 50,
-            page_index: 0,
-            offset: 0,
-            cursors: vec![None],
-            next_cursor: None,
-            has_more: false,
-        };
+            SearchListOverlayConfig {
+                target_width: 128,
+                search_enabled: false,
+                custom_value_enabled: false,
+                fill_selected_into_input: true,
+                min_list_body_height: 5,
+                max_list_body_height: 12,
+            },
+            None,
+            SessionSearchOverlayMeta {
+                all_items: Vec::new(),
+                mode: self.sessions.view_mode,
+                scope_session_id,
+                page_limit: 50,
+                page_index: 0,
+                offset: 0,
+                cursors: vec![None],
+                next_cursor: None,
+                has_more: false,
+            },
+        );
+        dialog.loading = true;
         dialog.footer = self.session_search_footer(&dialog);
-        match dialog.mode {
+        match dialog.meta.mode {
             SessionViewMode::Subtree => {
-                let Some(session_id) = dialog.scope_session_id else {
+                let Some(session_id) = dialog.meta.scope_session_id else {
                     self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
                     return;
                 };
@@ -8980,7 +10219,7 @@ impl App {
             }
             SessionViewMode::All | SessionViewMode::Roots => {
                 self.request_session_search_page(
-                    dialog.mode,
+                    dialog.meta.mode,
                     dialog.input.text().trim().to_string(),
                     0,
                     None,
@@ -8995,21 +10234,31 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.current_route = Route::Picker(PickerOverlay {
-            title: self.i18n.text_args(
+        let mut dialog = PickerOverlay::new(
+            self.i18n.text_args(
                 "overlay-lineage-title",
                 &crate::fl_args!("session" => session_id),
             ),
-            prompt: ui_text::t(&self.i18n, "overlay-lineage-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-            kind: PickerKind::Lineage { session_id },
-        });
+            ui_text::t(&self.i18n, "overlay-lineage-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            SearchListOverlayConfig {
+                target_width: 120,
+                search_enabled: true,
+                custom_value_enabled: false,
+                fill_selected_into_input: true,
+                min_list_body_height: 4,
+                max_list_body_height: 10,
+            },
+            None,
+            PickerOverlayMeta {
+                all_items: Vec::new(),
+                kind: PickerKind::Lineage { session_id },
+            },
+        );
+        dialog.loading = true;
+        self.current_route = Route::Picker(dialog);
         self.request_lineage(session_id);
     }
 
@@ -9025,54 +10274,83 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
             return;
         }
-        self.current_route = Route::Picker(PickerOverlay {
-            title: self.i18n.text_args(
+        let mut dialog = PickerOverlay::new(
+            self.i18n.text_args(
                 "overlay-rewind-title",
                 &crate::fl_args!("session" => session_id),
             ),
-            prompt: ui_text::t(&self.i18n, "overlay-rewind-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-            kind: PickerKind::RewindMessages { session_id },
-        });
+            ui_text::t(&self.i18n, "overlay-rewind-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            SearchListOverlayConfig {
+                target_width: 120,
+                search_enabled: true,
+                custom_value_enabled: false,
+                fill_selected_into_input: true,
+                min_list_body_height: 4,
+                max_list_body_height: 10,
+            },
+            None,
+            PickerOverlayMeta {
+                all_items: Vec::new(),
+                kind: PickerKind::RewindMessages { session_id },
+            },
+        );
+        dialog.loading = true;
+        self.current_route = Route::Picker(dialog);
         self.request_rewind_messages(session_id);
     }
 
     fn open_provider_picker(&mut self, purpose: ProviderPickerPurpose) {
-        self.current_route = Route::Picker(PickerOverlay {
-            title: ui_text::t(&self.i18n, "overlay-providers-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-providers-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-            kind: PickerKind::Providers(purpose),
-        });
+        let mut dialog = PickerOverlay::new(
+            ui_text::t(&self.i18n, "overlay-providers-title"),
+            ui_text::t(&self.i18n, "overlay-providers-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            SearchListOverlayConfig {
+                target_width: 120,
+                search_enabled: true,
+                custom_value_enabled: false,
+                fill_selected_into_input: true,
+                min_list_body_height: 4,
+                max_list_body_height: 10,
+            },
+            None,
+            PickerOverlayMeta {
+                all_items: Vec::new(),
+                kind: PickerKind::Providers(purpose),
+            },
+        );
+        dialog.loading = true;
+        self.current_route = Route::Picker(dialog);
         self.request_providers(purpose);
     }
 
     fn open_session_model_chooser(&mut self) {
-        self.current_route = Route::SessionModelChooser(SessionModelChooserOverlay {
-            title: "Session Model".to_string(),
-            prompt: "Search provider, adapter, or model".to_string(),
-            footer: "Type filter | Up/Down move | Left/Right page | Enter select | Esc close"
-                .to_string(),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            input: Editor::default(),
-            loading: true,
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            page_size: 18,
-        });
+        let mut dialog = SessionModelChooserOverlay::new(
+            "Session Model".to_string(),
+            "Search provider, adapter, or model".to_string(),
+            "Type filter | Up/Down move | Left/Right page | Enter select | Esc close".to_string(),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            SearchListOverlayConfig {
+                target_width: 128,
+                search_enabled: true,
+                custom_value_enabled: false,
+                fill_selected_into_input: false,
+                min_list_body_height: 5,
+                max_list_body_height: 12,
+            },
+            None,
+            SessionModelChooserOverlayMeta {
+                all_items: Vec::new(),
+                page_size: 18,
+            },
+        );
+        dialog.loading = true;
+        self.current_route = Route::SessionModelChooser(dialog);
         self.request_session_model_chooser_items();
     }
 
@@ -9584,20 +10862,31 @@ impl App {
             return;
         }
         if let Some(all_items) = self.provider_studio_field_choice_items(dialog, field) {
-            self.open_choice_overlay(ChoiceOverlay {
-                title: ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
-                prompt: provider_studio_field_prompt(&self.i18n, field),
-                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
-                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                input: Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
-                filter_query: String::new(),
-                all_items,
-                items: Vec::new(),
-                selected: 0,
-                allow_custom: true,
-                allow_clear: provider_studio_field_allows_clear(field),
-                action: ChoiceOverlayAction::ProviderStudioField(field),
-            });
+            self.open_choice_overlay(ChoiceOverlay::new(
+                ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
+                provider_studio_field_prompt(&self.i18n, field),
+                ui_text::t(&self.i18n, "overlay-choice-footer"),
+                ui_text::t(&self.i18n, "overlay-picker-empty"),
+                Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
+                SearchListOverlayConfig {
+                    target_width: 96,
+                    search_enabled: true,
+                    custom_value_enabled: true,
+                    fill_selected_into_input: true,
+                    min_list_body_height: 3,
+                    max_list_body_height: 12,
+                },
+                provider_studio_field_allows_clear(field).then(|| SearchListClearAction {
+                    label: "Clear value".to_string(),
+                    detail: choice_overlay_clear_detail(&ChoiceOverlayAction::ProviderStudioField(
+                        field,
+                    )),
+                }),
+                ChoiceOverlayMeta {
+                    all_items,
+                    action: ChoiceOverlayAction::ProviderStudioField(field),
+                },
+            ));
             return;
         }
         dialog.editor = Some(ProviderStudioEditor {
@@ -10046,21 +11335,31 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.current_route = Route::Picker(PickerOverlay {
-            title: self.i18n.text_args(
+        let mut dialog = PickerOverlay::new(
+            self.i18n.text_args(
                 "overlay-children-title",
                 &crate::fl_args!("session" => parent_session_id),
             ),
-            prompt: ui_text::t(&self.i18n, "overlay-children-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-            kind: PickerKind::ChildSessions { parent_session_id },
-        });
+            ui_text::t(&self.i18n, "overlay-children-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            SearchListOverlayConfig {
+                target_width: 120,
+                search_enabled: true,
+                custom_value_enabled: false,
+                fill_selected_into_input: true,
+                min_list_body_height: 4,
+                max_list_body_height: 10,
+            },
+            None,
+            PickerOverlayMeta {
+                all_items: Vec::new(),
+                kind: PickerKind::ChildSessions { parent_session_id },
+            },
+        );
+        dialog.loading = true;
+        self.current_route = Route::Picker(dialog);
         self.request_child_sessions(parent_session_id);
     }
 
@@ -10124,6 +11423,36 @@ impl App {
         }
     }
 
+    fn session_search_item(&self, session: SessionResource) -> SessionSearchItem {
+        let mut detail_parts = vec![ui_text::session_meta(
+            &self.i18n,
+            session.id,
+            session.message_count,
+            session.updated_at,
+        )];
+        if self.transcript.session_id == Some(session.id) {
+            detail_parts.push(ui_text::t(&self.i18n, "session-tag-current"));
+        }
+        if let Some(parent_id) = session.parent_id {
+            detail_parts.push(self.i18n.text_args(
+                "session-summary-parent",
+                &crate::fl_args!("id" => parent_id),
+            ));
+        }
+        if session.child_session_count > 0 {
+            detail_parts.push(self.i18n.text_args(
+                "session-summary-children",
+                &crate::fl_args!("count" => session.child_session_count as i64),
+            ));
+        }
+
+        SessionSearchItem {
+            label: session.title.clone(),
+            detail: detail_parts.join(" | "),
+            session,
+        }
+    }
+
     fn rewind_message_picker_item(&self, message: MessageResource) -> PickerItem {
         PickerItem {
             label: self.rewind_message_target_label(&message),
@@ -10146,14 +11475,8 @@ impl App {
     }
 
     fn refresh_picker_overlay(dialog: &mut PickerOverlay) {
-        let query = dialog.input.text().trim().to_ascii_lowercase();
-        dialog.items = dialog
-            .all_items
-            .iter()
-            .filter(|item| Self::picker_item_matches(&dialog.kind, item, query.as_str()))
-            .cloned()
-            .collect();
-        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+        let all_items = dialog.meta.all_items.clone();
+        refresh_search_list_overlay(dialog, all_items.as_slice());
     }
 
     fn refresh_session_model_chooser_overlay(
@@ -10167,6 +11490,7 @@ impl App {
             .get(dialog.selected)
             .map(|item| item.model.clone());
         dialog.items = dialog
+            .meta
             .all_items
             .iter()
             .filter(|item| query.is_empty() || item.search_text.contains(query.as_str()))
@@ -10240,36 +11564,6 @@ impl App {
         dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
     }
 
-    fn picker_item_matches(kind: &PickerKind, item: &PickerItem, query: &str) -> bool {
-        if query.is_empty() {
-            return true;
-        }
-        match (kind, &item.value) {
-            (PickerKind::Commands, PickerValue::Command(spec)) => {
-                commands::command_matches_query(spec, query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-            }
-            (PickerKind::Commands, PickerValue::RuntimeEntry(_)) => {
-                item.label.to_ascii_lowercase().contains(query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-            }
-            (PickerKind::Lineage { .. }, PickerValue::Session(session_id)) => {
-                item.label.to_ascii_lowercase().contains(query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-                    || format!("#{session_id}").contains(query)
-            }
-            (PickerKind::RewindMessages { .. }, PickerValue::Message(message_id)) => {
-                item.label.to_ascii_lowercase().contains(query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-                    || format!("#{message_id}").contains(query)
-            }
-            _ => {
-                item.label.to_ascii_lowercase().contains(query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-            }
-        }
-    }
-
     fn handle_picker_selection(&mut self, kind: PickerKind, item: PickerItem) {
         match (kind, item.value) {
             (PickerKind::Commands, PickerValue::Command(spec)) => {
@@ -10310,10 +11604,10 @@ impl App {
                 self.focus = Focus::Transcript;
             }
             (PickerKind::PermissionRules, PickerValue::PermissionRuleCreate) => {
-                self.open_permission_rule_editor(None, "", None);
+                self.open_permission_rule_studio(None, None);
             }
             (PickerKind::PermissionRules, PickerValue::PermissionRule(rule)) => {
-                self.open_permission_rule_editor(Some(&rule), "", None);
+                self.open_permission_rule_studio(Some(&rule), None);
             }
             (PickerKind::Inspector, PickerValue::Inspector) => {}
             _ => {}
@@ -10370,9 +11664,24 @@ impl App {
         }
     }
 
+    fn current_transcript_has_active_run(&self) -> bool {
+        self.transcript.submitting
+            || self.transcript.execution.as_ref().is_some_and(|execution| {
+                execution.run_state != SessionRunState::Idle
+                    && pending_interactive_kind_for_execution(execution).is_none()
+            })
+    }
+
+    fn active_run_session_id(&self) -> Option<i64> {
+        self.transcript
+            .session_id
+            .filter(|_| self.current_transcript_has_active_run())
+    }
+
     fn session_is_busy(&self, session_id: i64) -> bool {
         self.submitting_session_ids.contains(&session_id)
-            || (self.transcript.session_id == Some(session_id) && self.transcript.submitting)
+            || (self.transcript.session_id == Some(session_id)
+                && self.current_transcript_has_active_run())
     }
 
     fn current_or_selected_session_title(&self) -> Option<String> {
@@ -10395,6 +11704,20 @@ impl App {
 
     fn current_parent_session_id(&self) -> Option<i64> {
         self.transcript.execution.as_ref()?.session.parent_id
+    }
+
+    fn sync_session_list_selection_to_current_execution(&mut self) {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            return;
+        };
+        if self.transcript.session_id != Some(execution.session.id) {
+            return;
+        }
+        if let Some(session_id) =
+            preferred_visible_session_selection(&execution.session, self.sessions.items.as_slice())
+        {
+            let _ = self.sessions.select_by_id(session_id);
+        }
     }
 
     fn current_lineage_context_parts(&self) -> Vec<String> {
@@ -10542,6 +11865,7 @@ impl App {
             CommandId::Timeline => self.handle_timeline_command(spec, args),
             CommandId::Plugins => self.handle_plugins_command(spec, args),
             CommandId::Settings => self.handle_settings_command(args),
+            CommandId::Permissions => self.handle_permissions_command(args),
             CommandId::Model => self.open_session_model_chooser(),
             CommandId::Review => self.handle_review_command(args),
             CommandId::Worktree => self.handle_worktree_command(args),
@@ -10767,6 +12091,17 @@ impl App {
 
     fn handle_settings_command(&mut self, args: &str) {
         self.open_settings_studio(args.trim());
+    }
+
+    fn handle_permissions_command(&mut self, args: &str) {
+        match args.trim() {
+            "" | "new" | "session" | "current" => self.open_current_session_permission_studio(),
+            "list" | "rules" | "manage" => self.open_permission_rule_picker(""),
+            other => self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => format!("/permissions [new|list] · got `{other}`")),
+            )),
+        }
     }
 
     fn handle_review_command(&mut self, args: &str) {
@@ -11303,6 +12638,11 @@ impl App {
                     editor.input.flush_pending_input_if_due(now);
                 }
             }
+            Route::PermissionRuleStudio(dialog) => {
+                if let Some(editor) = dialog.editor.as_mut() {
+                    editor.input.flush_pending_input_if_due(now);
+                }
+            }
             Route::SessionSearch(dialog) => dialog.input.flush_pending_input_if_due(now),
             Route::Picker(dialog) => dialog.input.flush_pending_input_if_due(now),
             Route::SessionModelChooser(dialog) => {
@@ -11335,12 +12675,19 @@ impl App {
                 }
                 Overlay::Choice(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
-                    Self::sync_choice_overlay_query(dialog, true);
+                    Self::sync_choice_overlay_input(dialog, true);
                 }
                 Overlay::PermissionRuleEdit(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
                 }
                 Overlay::FileAttach(dialog) => dialog.input.flush_pending_input_if_due(now),
+                Overlay::PathBrowser(dialog) => {
+                    dialog.input.flush_pending_input_if_due(now);
+                    Self::refresh_path_browser_overlay_with_root(
+                        self.backend.workspace_root(),
+                        dialog,
+                    );
+                }
                 Overlay::UserInputReply(dialog) => {
                     if dialog.editing_custom {
                         dialog.custom_input.flush_pending_input_if_due(now);
@@ -11370,11 +12717,11 @@ impl App {
     }
 
     fn refresh_file_attach_overlay(&self, dialog: &mut FileAttachOverlay) {
-        dialog.results = self
+        dialog.items = self
             .backend
             .search_workspace_files(dialog.input.text(), 24)
             .unwrap_or_default();
-        dialog.selected = min(dialog.selected, dialog.results.len().saturating_sub(1));
+        dialog.clamp_selection();
     }
 
     fn try_stage_pasted_path(&mut self, pasted: &str) -> bool {
@@ -14005,6 +15352,18 @@ fn choice_overlay_clear_detail(action: &ChoiceOverlayAction) -> String {
             "Set {} to an empty draft value.",
             provider_studio_field_label(*field)
         ),
+        ChoiceOverlayAction::PermissionRuleStudio(field) => match field {
+            PermissionRuleStudioChoiceField::SubjectKind => {
+                "Reset the subject kind to the default tool rule.".to_string()
+            }
+            PermissionRuleStudioChoiceField::PathAccessKind => {
+                "Clear the path access kind override.".to_string()
+            }
+            PermissionRuleStudioChoiceField::Scope => {
+                "Reset the rule scope to workspace.".to_string()
+            }
+            PermissionRuleStudioChoiceField::Mode => "Reset the rule mode to ask.".to_string(),
+        },
     }
 }
 
@@ -14612,6 +15971,7 @@ impl TranscriptState {
             follow_tail: true,
             scroll: 0,
             cursor_line: 0,
+            block_cursor: None,
             search_query: String::new(),
             search_match_index: None,
             execution: None,
@@ -14637,6 +15997,7 @@ impl TranscriptState {
         self.follow_tail = true;
         self.scroll = 0;
         self.cursor_line = 0;
+        self.block_cursor = None;
         self.execution = None;
         self.last_event_seq = None;
         self.search_query.clear();
@@ -14813,6 +16174,140 @@ impl TranscriptState {
         self.set_cursor_line(width, height, line);
     }
 
+    fn highlighted_block_key(&self) -> Option<TranscriptNodeKey> {
+        self.block_cursor.as_ref().map(|cursor| cursor.key.clone())
+    }
+
+    fn highlighted_block_range(&mut self, width: u16) -> Option<Range<usize>> {
+        let key = self.highlighted_block_key()?;
+        let rendered = self.rendered(width);
+        rendered
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .map(|node| node.start_line..node.end_line)
+    }
+
+    fn step_line_with_block_selection(
+        &mut self,
+        width: u16,
+        height: u16,
+        direction: TranscriptMoveDirection,
+    ) {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            self.block_cursor = None;
+            self.cursor_line = 0;
+            return;
+        }
+
+        let current_line = min(self.cursor_line, total_lines.saturating_sub(1));
+        if let Some(block_cursor) = self.block_cursor.as_ref() {
+            let highlighted_key = block_cursor.key.clone();
+            let highlighted_direction = block_cursor.direction;
+            if let Some(current_node) = self.current_cursor_node_cloned(width) {
+                if current_node.key == highlighted_key && highlighted_direction == direction {
+                    self.block_cursor = None;
+                    self.set_cursor_line(width, height, current_line);
+                    return;
+                }
+            }
+        }
+
+        let next_line = match direction {
+            TranscriptMoveDirection::Up => current_line.saturating_sub(1),
+            TranscriptMoveDirection::Down => min(
+                current_line.saturating_add(1),
+                total_lines.saturating_sub(1),
+            ),
+        };
+        if next_line == current_line {
+            self.block_cursor = None;
+            self.set_cursor_line(width, height, current_line);
+            return;
+        }
+
+        let (current_node, next_node) = {
+            let rendered = self.rendered(width);
+            (
+                rendered
+                    .line_nodes
+                    .get(current_line)
+                    .and_then(|value| *value),
+                rendered.line_nodes.get(next_line).and_then(|value| *value),
+            )
+        };
+        if let Some(next_node_index) = next_node
+            && current_node != Some(next_node_index)
+        {
+            self.set_block_cursor(width, height, next_node_index, direction);
+            return;
+        }
+
+        self.block_cursor = None;
+        self.set_cursor_line(width, height, next_line);
+    }
+
+    fn step_block(&mut self, width: u16, height: u16, direction: TranscriptMoveDirection) {
+        let target_node = match self.current_highlighted_node_index(width) {
+            Some(current) => {
+                let rendered = self.rendered(width);
+                match direction {
+                    TranscriptMoveDirection::Up => current.checked_sub(1),
+                    TranscriptMoveDirection::Down => {
+                        (current + 1 < rendered.nodes.len()).then_some(current + 1)
+                    }
+                }
+            }
+            None => {
+                let cursor_line = self.cursor_line;
+                let rendered = self.rendered(width);
+                match direction {
+                    TranscriptMoveDirection::Up => rendered
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(_, node)| node.end_line <= cursor_line)
+                        .map(|(index, _)| index),
+                    TranscriptMoveDirection::Down => rendered
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .find(|(_, node)| node.start_line > cursor_line)
+                        .map(|(index, _)| index),
+                }
+            }
+        };
+        if let Some(target_node) = target_node {
+            self.set_block_cursor(width, height, target_node, direction);
+        }
+    }
+
+    fn move_by_blocks(
+        &mut self,
+        width: u16,
+        height: u16,
+        direction: TranscriptMoveDirection,
+        count: usize,
+    ) {
+        for _ in 0..count.max(1) {
+            self.step_block(width, height, direction);
+        }
+    }
+
+    fn scroll_by_lines_with_blocks(
+        &mut self,
+        width: u16,
+        height: u16,
+        direction: TranscriptMoveDirection,
+        count: usize,
+    ) {
+        for _ in 0..count.max(1) {
+            self.step_line_with_block_selection(width, height, direction);
+        }
+    }
+
     fn should_load_older(&self) -> bool {
         self.session_id.is_some()
             && self.has_more_older
@@ -14929,22 +16424,28 @@ impl TranscriptState {
             self.cursor_line,
             self.rendered(width).lines.len().saturating_sub(1),
         );
+        if self.current_highlighted_node_index(width).is_none() {
+            self.block_cursor = None;
+        }
     }
 
     fn scroll_to_bottom(&mut self, width: u16, height: u16) {
         self.scroll = self.max_scroll(width, height);
         self.follow_tail = true;
         self.cursor_line = self.rendered(width).lines.len().saturating_sub(1);
+        self.block_cursor = None;
     }
 
     fn scroll_to_top(&mut self, width: u16, height: u16) {
         self.scroll = 0;
         self.cursor_line = 0;
+        self.block_cursor = None;
         self.follow_tail = self.is_at_bottom(width, height);
     }
 
     fn scroll_by_lines(&mut self, width: u16, height: u16, delta: isize) {
         self.follow_tail = false;
+        self.block_cursor = None;
         let next = if delta.is_negative() {
             self.cursor_line.saturating_sub(delta.unsigned_abs())
         } else {
@@ -14995,6 +16496,7 @@ impl TranscriptState {
         } else {
             min(target, total_lines.saturating_sub(1))
         };
+        self.block_cursor = None;
         self.follow_tail = false;
         let visible = height.max(1) as usize;
         if self.cursor_line < self.scroll {
@@ -15007,17 +16509,61 @@ impl TranscriptState {
     }
 
     fn current_cursor_node<'a>(&'a mut self, width: u16) -> Option<&'a RenderedTranscriptNode> {
-        let cursor_line = self.cursor_line;
+        let node_index = self.current_highlighted_node_index(width)?;
         let rendered = self.rendered(width);
-        let node_index = rendered
-            .line_nodes
-            .get(cursor_line)
-            .and_then(|value| *value)?;
         rendered.nodes.get(node_index)
     }
 
     fn current_cursor_node_cloned(&mut self, width: u16) -> Option<RenderedTranscriptNode> {
         self.current_cursor_node(width).cloned()
+    }
+
+    fn current_highlighted_node_index(&mut self, width: u16) -> Option<usize> {
+        if let Some(block_cursor) = self.block_cursor.as_ref() {
+            let highlighted_key = block_cursor.key.clone();
+            let block_index = {
+                let rendered = self.rendered(width);
+                rendered
+                    .nodes
+                    .iter()
+                    .position(|node| node.key == highlighted_key)
+            };
+            if let Some(index) = block_index {
+                return Some(index);
+            }
+            self.block_cursor = None;
+        }
+        let cursor_line = self.cursor_line;
+        let rendered = self.rendered(width);
+        rendered
+            .line_nodes
+            .get(cursor_line)
+            .and_then(|value| *value)
+    }
+
+    fn set_block_cursor(
+        &mut self,
+        width: u16,
+        height: u16,
+        node_index: usize,
+        direction: TranscriptMoveDirection,
+    ) {
+        let target_line = {
+            let rendered = self.rendered(width);
+            let Some(node) = rendered.nodes.get(node_index) else {
+                return;
+            };
+            match direction {
+                TranscriptMoveDirection::Up => node.end_line.saturating_sub(1),
+                TranscriptMoveDirection::Down => node.start_line,
+            }
+        };
+        self.set_cursor_line(width, height, target_line);
+        let key = {
+            let rendered = self.rendered(width);
+            rendered.nodes.get(node_index).map(|node| node.key.clone())
+        };
+        self.block_cursor = key.map(|key| TranscriptBlockCursor { key, direction });
     }
 }
 
@@ -15925,6 +17471,16 @@ impl Editor {
     }
 }
 
+impl SearchListInput for Editor {
+    fn text(&self) -> &str {
+        self.text()
+    }
+
+    fn set_text(&mut self, text: String) {
+        Self::set_text(self, text);
+    }
+}
+
 fn message_sort_key(message: &MessageResource) -> (i64, i64) {
     (message.created_at.timestamp_millis(), message.id)
 }
@@ -16123,6 +17679,36 @@ fn composer_input_is_active(
     has_auxiliary_input_ui: bool,
 ) -> bool {
     focus == Focus::Composer && (has_text_or_items || has_auxiliary_input_ui)
+}
+
+fn preferred_visible_session_selection(
+    session: &SessionResource,
+    visible_sessions: &[SessionResource],
+) -> Option<i64> {
+    [
+        Some(session.id),
+        session.parent_id,
+        (session.root_id != session.id).then_some(session.root_id),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|candidate| visible_sessions.iter().any(|item| item.id == *candidate))
+}
+
+fn permission_request_fingerprint(request: &PermissionRequest) -> String {
+    json!({
+        "action": &request.action,
+        "related_actions": &request.related_actions,
+        "requested_actions": &request.requested_actions,
+        "reason": &request.reason,
+        "explanation": &request.explanation,
+        "source": &request.source,
+        "scope": &request.scope,
+        "operator": &request.operator,
+        "risk": request.risk,
+        "trace": &request.trace,
+    })
+    .to_string()
 }
 
 fn permission_overlay_choice(selected: usize) -> PermissionOverlayChoice {
@@ -18251,6 +19837,225 @@ fn permission_rule_draft_label(draft: &PermissionRuleDraft) -> String {
     }
 }
 
+fn permission_rule_subject_kind_name(kind: PermissionRuleSubjectKind) -> &'static str {
+    match kind {
+        PermissionRuleSubjectKind::Tool => "tool",
+        PermissionRuleSubjectKind::PathAccess => "path_access",
+        PermissionRuleSubjectKind::NetworkAccess => "network_access",
+    }
+}
+
+fn permission_rule_mode_label(mode: PermissionMode) -> &'static str {
+    permission_mode_name(mode)
+}
+
+fn permission_rule_studio_items(
+    draft: &PermissionRuleDraft,
+    rule_id: Option<i64>,
+) -> Vec<PermissionRuleStudioItem> {
+    let mut items = vec![
+        PermissionRuleStudioItem {
+            label: "Subject Kind".to_string(),
+            value: permission_rule_subject_kind_name(draft.subject_kind).to_string(),
+            detail: "Choose whether this rule applies to a tool, a path, or a network target."
+                .to_string(),
+            action: PermissionRuleStudioAction::SubjectKind,
+        },
+        PermissionRuleStudioItem {
+            label: "Mode".to_string(),
+            value: permission_rule_mode_label(draft.mode).to_string(),
+            detail: "Choose whether matching actions are allowed, asked, or denied.".to_string(),
+            action: PermissionRuleStudioAction::Mode,
+        },
+        PermissionRuleStudioItem {
+            label: "Scope".to_string(),
+            value: draft.scope.clone(),
+            detail: "Persist this rule for the session, workspace, or globally.".to_string(),
+            action: PermissionRuleStudioAction::Scope,
+        },
+    ];
+
+    if draft.scope == "session" {
+        items.push(PermissionRuleStudioItem {
+            label: "Session ID".to_string(),
+            value: if draft.session_id.trim().is_empty() {
+                "unset".to_string()
+            } else {
+                draft.session_id.clone()
+            },
+            detail: "Target session id used when scope=session.".to_string(),
+            action: PermissionRuleStudioAction::SessionId,
+        });
+    }
+
+    match draft.subject_kind {
+        PermissionRuleSubjectKind::Tool => {
+            items.push(PermissionRuleStudioItem {
+                label: "Tool Name".to_string(),
+                value: if draft.tool_name.trim().is_empty() {
+                    "unset".to_string()
+                } else {
+                    draft.tool_name.clone()
+                },
+                detail: "Exact tool/runtime entry name to match.".to_string(),
+                action: PermissionRuleStudioAction::ToolName,
+            });
+            items.push(PermissionRuleStudioItem {
+                label: "Qualifier".to_string(),
+                value: if draft.qualifier.trim().is_empty() {
+                    "none".to_string()
+                } else {
+                    draft.qualifier.clone()
+                },
+                detail: "Optional qualifier for more specific tool rules.".to_string(),
+                action: PermissionRuleStudioAction::Qualifier,
+            });
+        }
+        PermissionRuleSubjectKind::PathAccess => {
+            items.push(PermissionRuleStudioItem {
+                label: "Access Kind".to_string(),
+                value: draft.path_access_kind.clone(),
+                detail: "Choose read, write, or read_write.".to_string(),
+                action: PermissionRuleStudioAction::PathAccessKind,
+            });
+            items.push(PermissionRuleStudioItem {
+                label: "Target Path".to_string(),
+                value: if draft.target_path.trim().is_empty() {
+                    "unset".to_string()
+                } else {
+                    draft.target_path.clone()
+                },
+                detail: "Path pattern or exact path to protect.".to_string(),
+                action: PermissionRuleStudioAction::TargetPath,
+            });
+            items.push(PermissionRuleStudioItem {
+                label: "Browse Target Path".to_string(),
+                value: "open browser".to_string(),
+                detail: "Choose a file or folder from the workspace or filesystem.".to_string(),
+                action: PermissionRuleStudioAction::BrowseTargetPath,
+            });
+            items.push(PermissionRuleStudioItem {
+                label: "Workspace Root".to_string(),
+                value: if draft.workspace_root.trim().is_empty() {
+                    "runtime default".to_string()
+                } else {
+                    draft.workspace_root.clone()
+                },
+                detail: "Optional base directory used to interpret relative target paths."
+                    .to_string(),
+                action: PermissionRuleStudioAction::WorkspaceRoot,
+            });
+            items.push(PermissionRuleStudioItem {
+                label: "Browse Workspace Root".to_string(),
+                value: "open browser".to_string(),
+                detail: "Choose a directory for workspace_root.".to_string(),
+                action: PermissionRuleStudioAction::BrowseWorkspaceRoot,
+            });
+        }
+        PermissionRuleSubjectKind::NetworkAccess => {
+            items.push(PermissionRuleStudioItem {
+                label: "Network Target".to_string(),
+                value: if draft.network_target.trim().is_empty() {
+                    "unset".to_string()
+                } else {
+                    draft.network_target.clone()
+                },
+                detail: "Host, host:port, or URL target to match.".to_string(),
+                action: PermissionRuleStudioAction::NetworkTarget,
+            });
+        }
+    }
+
+    items.push(PermissionRuleStudioItem {
+        label: "Save Rule".to_string(),
+        value: permission_rule_draft_label(draft),
+        detail: "Validate and persist the current draft.".to_string(),
+        action: PermissionRuleStudioAction::Save,
+    });
+
+    if rule_id.is_some() {
+        items.push(PermissionRuleStudioItem {
+            label: "Revoke Rule".to_string(),
+            value: "inactive".to_string(),
+            detail: "Revoke the existing persisted rule.".to_string(),
+            action: PermissionRuleStudioAction::Revoke,
+        });
+    }
+
+    items
+}
+
+fn refresh_permission_rule_studio_dialog(dialog: &mut PermissionRuleStudioOverlay) {
+    let preferred_item = dialog
+        .items
+        .get(dialog.selected)
+        .map(|item| item.label.as_str());
+    let mut items = permission_rule_studio_items(&dialog.draft, dialog.rule_id);
+    let selected = preferred_item
+        .and_then(|label| items.iter().position(|item| item.label == label))
+        .unwrap_or(0);
+    dialog.selected = min(selected, items.len().saturating_sub(1));
+    dialog.items = std::mem::take(&mut items);
+}
+
+fn permission_rule_studio_detail_text(
+    draft: &PermissionRuleDraft,
+    item: &PermissionRuleStudioItem,
+) -> String {
+    match item.action {
+        PermissionRuleStudioAction::SubjectKind => {
+            "Tool rules match by tool name and optional qualifier. Path rules match filesystem access. Network rules match host/url access.".to_string()
+        }
+        PermissionRuleStudioAction::ToolName => {
+            "Tool rules require an exact tool name, for example `shell`, `read`, or `web_search`.".to_string()
+        }
+        PermissionRuleStudioAction::Qualifier => {
+            "Qualifier is optional. Leave it empty unless the tool/action needs a narrower match.".to_string()
+        }
+        PermissionRuleStudioAction::PathAccessKind => {
+            "Use `read`, `write`, or `read_write` depending on the filesystem access you want to match.".to_string()
+        }
+        PermissionRuleStudioAction::WorkspaceRoot => {
+            "Leave workspace_root empty to inherit the runtime workspace root. Set it explicitly when the protected path lives elsewhere.".to_string()
+        }
+        PermissionRuleStudioAction::BrowseWorkspaceRoot => {
+            "Open the directory browser and choose a folder for workspace_root.".to_string()
+        }
+        PermissionRuleStudioAction::TargetPath => {
+            "Enter a path or pattern. Relative paths are interpreted against workspace_root when it is set.".to_string()
+        }
+        PermissionRuleStudioAction::BrowseTargetPath => {
+            "Open the filesystem browser and choose a file or folder to prefill target_path.".to_string()
+        }
+        PermissionRuleStudioAction::NetworkTarget => {
+            "Enter a host, `host:port`, or full URL, depending on how specific the rule should be.".to_string()
+        }
+        PermissionRuleStudioAction::Scope => {
+            "Session scope is best for temporary overrides. Workspace and global scopes persist longer.".to_string()
+        }
+        PermissionRuleStudioAction::SessionId => {
+            "Session-scoped rules require a concrete session id.".to_string()
+        }
+        PermissionRuleStudioAction::Mode => {
+            "Allow lets the action through, ask prompts for approval, and deny blocks it.".to_string()
+        }
+        PermissionRuleStudioAction::Save => format!(
+            "Preview\n\n{}\n\nmode: {}\nscope: {}{}",
+            permission_rule_draft_label(draft),
+            permission_rule_mode_label(draft.mode),
+            draft.scope,
+            if draft.scope == "session" && !draft.session_id.trim().is_empty() {
+                format!("\nsession_id: {}", draft.session_id.trim())
+            } else {
+                String::new()
+            }
+        ),
+        PermissionRuleStudioAction::Revoke => {
+            "Revoke marks the persisted rule inactive without deleting its history.".to_string()
+        }
+    }
+}
+
 fn render_permission_rule_draft(draft: &PermissionRuleDraft) -> String {
     match draft.subject_kind {
         PermissionRuleSubjectKind::Tool => {
@@ -18662,9 +20467,12 @@ fn slash_command_suggestion_context_for_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena::message::{ExecutionStatus, MessagePart, PartContent};
+    use agena::message::{
+        ExecutionStatus, MessagePart, OperationBlock, OperationPart, PartContent,
+    };
     use agena::plugin::status::{PluginRunState, PluginStatus};
     use chrono::Utc;
+    use serde_json::json;
 
     fn permission_request(request_id: &str) -> PermissionRequest {
         PermissionRequest {
@@ -18731,6 +20539,190 @@ mod tests {
         }
     }
 
+    fn transcript_tool_message(id: i64, command: &str, stdout: &str) -> MessageResource {
+        let created_at = Utc::now();
+        let invocation = ToolInvocation::new(
+            "bash",
+            serde_json::from_value(json!({ "command": command }))
+                .expect("valid structured tool input"),
+        );
+        let tool = OperationPart::completed(
+            id.saturating_mul(10),
+            invocation,
+            stdout.to_string(),
+            vec![OperationBlock::Command {
+                command: command.to_string(),
+                cwd: None,
+                exit_code: Some(0),
+                stdout: Some(stdout.to_string()),
+                stderr: None,
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            id.saturating_mul(100),
+            id,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool),
+        );
+        MessageResource {
+            id,
+            session_id: 1,
+            role: MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at,
+            updated_at: created_at,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![part]),
+        }
+    }
+
+    fn session_resource(
+        id: i64,
+        parent_id: Option<i64>,
+        root_id: i64,
+        is_subagent: bool,
+    ) -> SessionResource {
+        let now = Utc::now();
+        SessionResource {
+            id,
+            parent_id,
+            depth: match parent_id {
+                Some(_) => 1,
+                None => 0,
+            },
+            root_id,
+            workspace_id: 1,
+            title: format!("session-{id}"),
+            version: 1,
+            is_subagent,
+            created_at: now,
+            updated_at: now,
+            message_count: 0,
+            child_session_count: 0,
+            last_message_at: None,
+            goal: None,
+        }
+    }
+
+    fn search_list_config(
+        search_enabled: bool,
+        custom_value_enabled: bool,
+    ) -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 96,
+            search_enabled,
+            custom_value_enabled,
+            fill_selected_into_input: true,
+            min_list_body_height: 3,
+            max_list_body_height: 12,
+        }
+    }
+
+    #[test]
+    fn search_list_overlay_can_disable_custom_rows_per_instance() {
+        let all_items = vec![choice_item("allow", "always allow matching actions")];
+        let mut without_custom = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("typed".to_string()),
+            search_list_config(false, false),
+            Some(SearchListClearAction {
+                label: "Clear value".to_string(),
+                detail: "reset field".to_string(),
+            }),
+            ChoiceOverlayMeta {
+                all_items: all_items.clone(),
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut without_custom);
+
+        let mut with_custom = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("typed".to_string()),
+            search_list_config(false, true),
+            Some(SearchListClearAction {
+                label: "Clear value".to_string(),
+                detail: "reset field".to_string(),
+            }),
+            ChoiceOverlayMeta {
+                all_items,
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut with_custom);
+
+        assert_eq!(without_custom.row_count(), 2);
+        assert_eq!(with_custom.row_count(), 3);
+        assert!(matches!(
+            with_custom.selected_row(),
+            Some(SearchListRow::Clear(_))
+        ));
+        assert!(matches!(
+            with_custom.rows().get(1),
+            Some(SearchListRow::Custom(_))
+        ));
+    }
+
+    #[test]
+    fn search_list_overlay_respects_search_enabled_config() {
+        let all_items = vec![
+            choice_item("allow", "always allow matching actions"),
+            choice_item("deny", "always deny matching actions"),
+        ];
+        let mut local_search = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("deny".to_string()),
+            search_list_config(true, false),
+            None,
+            ChoiceOverlayMeta {
+                all_items: all_items.clone(),
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut local_search);
+
+        let mut remote_query = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("deny".to_string()),
+            search_list_config(false, false),
+            None,
+            ChoiceOverlayMeta {
+                all_items,
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut remote_query);
+
+        assert_eq!(local_search.items.len(), 1);
+        assert_eq!(remote_query.items.len(), 2);
+    }
+
     #[test]
     fn first_unseen_pending_interactive_request_preserves_runtime_order() {
         let requests = vec![
@@ -18787,6 +20779,38 @@ mod tests {
     }
 
     #[test]
+    fn preferred_visible_session_selection_falls_back_to_parent_for_hidden_subagent() {
+        let subagent = session_resource(42, Some(7), 3, true);
+        let visible = vec![
+            session_resource(3, None, 3, false),
+            session_resource(7, Some(3), 3, false),
+        ];
+
+        assert_eq!(
+            preferred_visible_session_selection(&subagent, visible.as_slice()),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn permission_request_fingerprint_ignores_runtime_request_identity() {
+        let mut first = permission_request("perm-1");
+        let mut second = permission_request("perm-2");
+        second.created_at = second.created_at + chrono::Duration::milliseconds(250);
+
+        assert_eq!(
+            permission_request_fingerprint(&first),
+            permission_request_fingerprint(&second)
+        );
+
+        first.reason = "different".to_string();
+        assert_ne!(
+            permission_request_fingerprint(&first),
+            permission_request_fingerprint(&second)
+        );
+    }
+
+    #[test]
     fn transcript_render_does_not_insert_blank_lines_between_messages() {
         let first = transcript_message(1, MessageRole::User, "first");
         let second = transcript_message(2, MessageRole::Assistant, "second");
@@ -18806,6 +20830,132 @@ mod tests {
         assert!(
             !rendered.lines.iter().any(|line| line.text.is_empty()),
             "expected transcript rendering to avoid inserting blank separator lines"
+        );
+    }
+
+    #[test]
+    fn transcript_line_motion_selects_next_block_before_entering_it() {
+        let first = transcript_message(1, MessageRole::User, "first");
+        let second = transcript_message(2, MessageRole::Assistant, "alpha\nbeta");
+        let width = 80;
+        let height = 10;
+        let mut transcript = TranscriptState {
+            session_id: Some(1),
+            messages: vec![first, second],
+            ..TranscriptState::default()
+        };
+        let nodes = transcript.rendered(width).nodes.clone();
+        let first_node = nodes[0].clone();
+        let second_node = nodes[1].clone();
+
+        transcript.set_cursor_line(width, height, first_node.end_line.saturating_sub(1));
+        transcript.scroll_by_lines_with_blocks(width, height, TranscriptMoveDirection::Down, 1);
+
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(second_node.key.clone())
+        );
+        assert_eq!(transcript.cursor_line, second_node.start_line);
+        assert_eq!(
+            transcript.highlighted_block_range(width),
+            Some(second_node.start_line..second_node.end_line)
+        );
+
+        transcript.scroll_by_lines_with_blocks(width, height, TranscriptMoveDirection::Down, 1);
+        assert_eq!(transcript.highlighted_block_key(), None);
+        assert_eq!(transcript.cursor_line, second_node.start_line);
+
+        transcript.scroll_by_lines_with_blocks(width, height, TranscriptMoveDirection::Down, 1);
+        assert_eq!(transcript.highlighted_block_key(), None);
+        assert_eq!(
+            transcript.cursor_line,
+            second_node.start_line.saturating_add(1)
+        );
+    }
+
+    #[test]
+    fn transcript_block_motion_jumps_by_node() {
+        let width = 80;
+        let height = 10;
+        let mut transcript = TranscriptState {
+            session_id: Some(1),
+            messages: vec![
+                transcript_message(1, MessageRole::User, "first"),
+                transcript_message(2, MessageRole::Assistant, "second"),
+                transcript_message(3, MessageRole::User, "third"),
+            ],
+            ..TranscriptState::default()
+        };
+        let nodes = transcript.rendered(width).nodes.clone();
+
+        transcript.move_by_blocks(width, height, TranscriptMoveDirection::Down, 2);
+
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(nodes[2].key.clone())
+        );
+        assert_eq!(transcript.cursor_line, nodes[2].start_line);
+        assert_eq!(
+            transcript.highlighted_block_range(width),
+            Some(nodes[2].start_line..nodes[2].end_line)
+        );
+
+        transcript.move_by_blocks(width, height, TranscriptMoveDirection::Up, 1);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(nodes[1].key.clone())
+        );
+        assert_eq!(transcript.cursor_line, nodes[1].end_line.saturating_sub(1));
+    }
+
+    #[test]
+    fn collapsed_tool_output_is_a_single_block_and_expansion_round_trips() {
+        let width = 120;
+        let height = 10;
+        let mut transcript = TranscriptState {
+            session_id: Some(1),
+            messages: vec![transcript_tool_message(
+                1,
+                "ls -la src",
+                "file-a\nfile-b\nfile-c",
+            )],
+            ..TranscriptState::default()
+        };
+
+        let collapsed = transcript.rendered(width).nodes[0].clone();
+        assert_eq!(collapsed.kind, TranscriptNodeKind::Tool);
+        assert!(collapsed.toggleable);
+        assert!(!collapsed.expanded);
+        let collapsed_line_count = collapsed.end_line.saturating_sub(collapsed.start_line);
+        assert!(collapsed_line_count >= 1);
+
+        transcript.set_block_cursor(width, height, 0, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_range(width),
+            Some(collapsed.start_line..collapsed.end_line)
+        );
+
+        transcript
+            .node_expansions
+            .insert(collapsed.key.clone(), true);
+        transcript.invalidate_render();
+
+        let expanded = transcript.rendered(width).nodes[0].clone();
+        assert!(expanded.expanded);
+        assert!(expanded.end_line.saturating_sub(expanded.start_line) > collapsed_line_count);
+
+        transcript
+            .node_expansions
+            .insert(collapsed.key.clone(), false);
+        transcript.invalidate_render();
+
+        let collapsed_again = transcript.rendered(width).nodes[0].clone();
+        assert!(!collapsed_again.expanded);
+        assert_eq!(
+            collapsed_again
+                .end_line
+                .saturating_sub(collapsed_again.start_line),
+            collapsed_line_count
         );
     }
 

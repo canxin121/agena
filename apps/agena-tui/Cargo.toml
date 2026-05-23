@@ -10,6 +10,7 @@ agena-api = { workspace = true }
 agena-api-server = { workspace = true }
 agena-otel = { workspace = true }
 agena-skills = { workspace = true }
+agena-tui-components = { workspace = true }
 arboard = { workspace = true }
 anyhow = { workspace = true }
 base64 = { workspace = true }

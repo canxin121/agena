@@ -465,11 +465,6 @@ enum AppMessage {
         mode: MessageLoadMode,
         result: UiResult<PaginatedResponse<MessageResource>>,
     },
-    MessageDetailLoaded {
-        session_id: i64,
-        message_id: i64,
-        result: UiResult<Option<MessageResource>>,
-    },
     SessionRefreshed {
         session_id: i64,
         result: UiResult<SessionRefresh>,
@@ -1610,13 +1605,11 @@ impl TranscriptNodeKind {
 struct RenderedTranscriptNode {
     key: TranscriptNodeKey,
     kind: TranscriptNodeKind,
-    message_id: i64,
     start_line: usize,
     end_line: usize,
     copy_text: String,
     toggleable: bool,
     expanded: bool,
-    requires_full_message: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -4691,12 +4684,6 @@ impl App {
         let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
             return;
         };
-        let Some(session_id) = self.transcript.session_id else {
-            return;
-        };
-        if node.requires_full_message {
-            self.request_message_detail(session_id, node.message_id);
-        }
         if !node.toggleable {
             return;
         }
@@ -4723,17 +4710,6 @@ impl App {
         let Some(node) = self.transcript.current_cursor_node_cloned(width) else {
             return;
         };
-        let Some(session_id) = self.transcript.session_id else {
-            return;
-        };
-        if node.requires_full_message {
-            self.request_message_detail(session_id, node.message_id);
-            self.flash_info(format!(
-                "loading full {} detail; press y again to copy",
-                node.kind.label()
-            ));
-            return;
-        }
         match set_clipboard_text(node.copy_text.as_str()) {
             Ok(()) => self.flash_success(format!("copied current {}", node.kind.label())),
             Err(error) => self.flash_error(format!("clipboard copy failed: {error}")),
@@ -5483,11 +5459,6 @@ impl App {
                 mode,
                 result,
             } => self.handle_messages_loaded(session_id, mode, result),
-            AppMessage::MessageDetailLoaded {
-                session_id,
-                message_id,
-                result,
-            } => self.handle_message_detail_loaded(session_id, message_id, result),
             AppMessage::SessionRefreshed { session_id, result } => {
                 self.handle_session_refreshed(session_id, result)
             }
@@ -5722,29 +5693,6 @@ impl App {
                     );
                 }
             },
-            Err(error) => self.flash_error(error),
-        }
-    }
-
-    fn handle_message_detail_loaded(
-        &mut self,
-        session_id: i64,
-        message_id: i64,
-        result: UiResult<Option<MessageResource>>,
-    ) {
-        if self.transcript.session_id != Some(session_id) {
-            return;
-        }
-        match result {
-            Ok(Some(message)) => {
-                self.transcript.upsert_message(message);
-                self.transcript.invalidate_render();
-                self.transcript.clamp_scroll(
-                    self.layout.transcript_body.width,
-                    self.layout.transcript_body.height,
-                );
-            }
-            Ok(None) => self.flash_warning(format!("message not found: {message_id}")),
             Err(error) => self.flash_error(error),
         }
     }
@@ -6741,22 +6689,6 @@ impl App {
             let _ = tx.send(AppMessage::MessagesLoaded {
                 session_id,
                 mode,
-                result,
-            });
-        });
-    }
-
-    fn request_message_detail(&mut self, session_id: i64, message_id: i64) {
-        let backend = self.backend.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = backend
-                .get_message(message_id, agena_api::resource::PartLoadMode::Full)
-                .await
-                .map_err(|error| error.to_string());
-            let _ = tx.send(AppMessage::MessageDetailLoaded {
-                session_id,
-                message_id,
                 result,
             });
         });

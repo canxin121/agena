@@ -2768,7 +2768,9 @@ impl Backend {
         cursor: Option<String>,
         limit: u64,
     ) -> Result<PaginatedResponse<MessageResource>> {
-        self.list_messages_with_parts(session_id, cursor, limit, PartLoadMode::Summary)
+        // The transcript view should render history with the same shape and
+        // styling as live events, so it always loads full parts here.
+        self.list_messages_with_parts(session_id, cursor, limit, PartLoadMode::Full)
             .await
     }
 
@@ -2795,24 +2797,6 @@ impl Backend {
             other => Err(anyhow!("unexpected query result: {:?}", other)),
         }
         .context("failed to list session messages")
-    }
-
-    pub async fn get_message(
-        &self,
-        message_id: i64,
-        parts: PartLoadMode,
-    ) -> Result<Option<MessageResource>> {
-        match dispatch::dispatch_query(
-            &self.app_state,
-            Query::GetMessage(agena_api::queries::GetMessageParams { message_id, parts }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            QueryResult::Message(message) => Ok(Some(message)),
-            other => Err(anyhow!("unexpected query result: {:?}", other)),
-        }
-        .context("failed to fetch message")
     }
 
     pub async fn refresh_session(
@@ -2855,12 +2839,7 @@ impl Backend {
 
         let execution = self.get_session_state(session_id).await?;
         let latest_messages = self
-            .list_messages_with_parts(
-                session_id,
-                None,
-                latest_message_limit,
-                PartLoadMode::Summary,
-            )
+            .list_messages_with_parts(session_id, None, latest_message_limit, PartLoadMode::Full)
             .await
             .context("failed to refresh latest message window")?;
 

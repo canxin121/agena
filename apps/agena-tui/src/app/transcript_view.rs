@@ -13,23 +13,15 @@ pub(super) fn render_message(
     let mut lines = Vec::new();
     push_message_header(&mut lines, message, width, i18n);
 
-    match message.parts.as_ref() {
-        Some(parts) if parts.is_empty() => {
-            lines.push(RenderedLine::dim(format!(
-                "  {}",
-                ui_text::t(i18n, "message-empty")
-            )));
-        }
-        Some(parts) => {
-            for part in parts {
-                render_part(part, width, &mut lines, i18n);
-            }
-        }
-        None => {
-            lines.push(RenderedLine::dim(format!(
-                "  {}",
-                ui_text::message_parts_not_loaded(i18n, message.part_count as usize),
-            )));
+    let parts = transcript_message_parts(message);
+    if parts.is_empty() {
+        lines.push(RenderedLine::dim(format!(
+            "  {}",
+            ui_text::t(i18n, "message-empty")
+        )));
+    } else {
+        for part in parts {
+            render_part(part, width, &mut lines, i18n);
         }
     }
 
@@ -48,70 +40,46 @@ pub(super) fn render_message_detailed(
     let header_start = lines.len();
     push_message_header(&mut lines, message, width, i18n);
 
-    match message.parts.as_ref() {
-        Some(parts) if parts.is_empty() => {
-            lines.push(RenderedLine::dim(format!(
-                "  {}",
-                ui_text::t(i18n, "message-empty")
-            )));
-            nodes.push(RenderedTranscriptNode {
-                key: TranscriptNodeKey::MessagePart {
-                    message_id: message.id,
-                    part_id: None,
-                },
-                kind: TranscriptNodeKind::Message,
+    let parts = transcript_message_parts(message);
+    if parts.is_empty() {
+        lines.push(RenderedLine::dim(format!(
+            "  {}",
+            ui_text::t(i18n, "message-empty")
+        )));
+        nodes.push(RenderedTranscriptNode {
+            key: TranscriptNodeKey::MessagePart {
                 message_id: message.id,
-                start_line: header_start,
-                end_line: lines.len(),
-                copy_text: String::new(),
-                toggleable: false,
-                expanded: true,
-                requires_full_message: false,
-            });
-        }
-        Some(parts) => {
-            let mut attached_header = false;
-            for part in parts {
-                let start_line = if attached_header {
-                    lines.len()
-                } else {
-                    header_start
-                };
-                let node =
-                    render_part_node(message, part, width, &mut lines, i18n, defaults, expansions);
-                if lines.len() > start_line {
-                    nodes.push(RenderedTranscriptNode {
-                        key: node.key,
-                        kind: node.kind,
-                        message_id: message.id,
-                        start_line,
-                        end_line: lines.len(),
-                        copy_text: node.copy_text,
-                        toggleable: node.toggleable,
-                        expanded: node.expanded,
-                        requires_full_message: node.requires_full_message,
-                    });
-                    attached_header = true;
-                }
+                part_id: None,
+            },
+            kind: TranscriptNodeKind::Message,
+            start_line: header_start,
+            end_line: lines.len(),
+            copy_text: String::new(),
+            toggleable: false,
+            expanded: true,
+        });
+    } else {
+        let mut attached_header = false;
+        for part in parts {
+            let start_line = if attached_header {
+                lines.len()
+            } else {
+                header_start
+            };
+            let node =
+                render_part_node(message, part, width, &mut lines, i18n, defaults, expansions);
+            if lines.len() > start_line {
+                nodes.push(RenderedTranscriptNode {
+                    key: node.key,
+                    kind: node.kind,
+                    start_line,
+                    end_line: lines.len(),
+                    copy_text: node.copy_text,
+                    toggleable: node.toggleable,
+                    expanded: node.expanded,
+                });
+                attached_header = true;
             }
-        }
-        None => {
-            let text = ui_text::message_parts_not_loaded(i18n, message.part_count as usize);
-            lines.push(RenderedLine::dim(format!("  {text}")));
-            nodes.push(RenderedTranscriptNode {
-                key: TranscriptNodeKey::MessagePart {
-                    message_id: message.id,
-                    part_id: None,
-                },
-                kind: TranscriptNodeKind::Message,
-                message_id: message.id,
-                start_line: header_start,
-                end_line: lines.len(),
-                copy_text: text,
-                toggleable: false,
-                expanded: true,
-                requires_full_message: true,
-            });
         }
     }
 
@@ -131,20 +99,12 @@ struct RenderedNodeDraft {
     copy_text: String,
     toggleable: bool,
     expanded: bool,
-    requires_full_message: bool,
 }
 
 pub(super) fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String {
-    let preview = message
-        .parts
-        .as_ref()
-        .and_then(|parts| parts.iter().find_map(|part| preview_for_part(part, i18n)))
-        .or_else(|| {
-            message
-                .parts
-                .is_none()
-                .then(|| ui_text::message_parts_not_loaded(i18n, message.part_count as usize))
-        })
+    let preview = transcript_message_parts(message)
+        .iter()
+        .find_map(|part| preview_for_part(part, i18n))
         .unwrap_or_else(|| ui_text::t(i18n, "message-empty"));
     truncate_display_width(preview.as_str(), 64)
 }
@@ -324,15 +284,13 @@ fn push_message_header(
 }
 
 fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n: &I18n) {
-    match part.content.as_ref() {
-        Some(PartContent::Text(text)) => push_markdown(out, "  ", text.text.as_str(), width),
-        Some(PartContent::Reasoning(reasoning)) => {
+    match transcript_part_content(part) {
+        PartContent::Text(text) => push_markdown(out, "  ", text.text.as_str(), width),
+        PartContent::Reasoning(reasoning) => {
             render_reasoning_summary(reasoning.preferred_text().as_str(), out, width, i18n, true);
         }
-        Some(PartContent::Operation(tool)) => {
-            render_tool_execution(part, tool, out, width, i18n, false)
-        }
-        Some(PartContent::Error(error)) => {
+        PartContent::Operation(tool) => render_tool_execution(part, tool, out, width, i18n, false),
+        PartContent::Error(error) => {
             push_multiline(
                 out,
                 "  ",
@@ -347,7 +305,7 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
                 width,
             );
         }
-        Some(PartContent::Attachment(attachment)) => {
+        PartContent::Attachment(attachment) => {
             push_section_heading(
                 out,
                 &format!("  {}", ui_text::t(i18n, "message-attachments")),
@@ -366,32 +324,11 @@ fn render_part(part: &MessagePart, width: u16, out: &mut Vec<RenderedLine>, i18n
                 push_label_value(out, "    - ", label.as_str(), Style::default(), width);
             }
         }
-        Some(PartContent::Request(RequestPart::Permission(permission))) => {
+        PartContent::Request(RequestPart::Permission(permission)) => {
             render_permission_request(permission, out, width, i18n)
         }
-        Some(PartContent::Request(RequestPart::UserInput(request))) => {
+        PartContent::Request(RequestPart::UserInput(request)) => {
             render_user_input_request(request, out, width, i18n)
-        }
-        None => {
-            let fallback = part
-                .summary
-                .clone()
-                .unwrap_or_else(|| ui_text::t(i18n, "message-part-detail-unavailable"));
-            match part.kind {
-                agena::message::PartKind::Reasoning => {
-                    render_reasoning_summary(fallback.as_str(), out, width, i18n, false);
-                }
-                agena::message::PartKind::Operation => {
-                    render_summary_tool_execution(part, fallback.as_str(), out, width, i18n, false);
-                }
-                _ => push_multiline(
-                    out,
-                    "  ",
-                    fallback.as_str(),
-                    Style::default().fg(Color::DarkGray),
-                    width,
-                ),
-            }
         }
     }
 }
@@ -405,8 +342,8 @@ fn render_part_node(
     defaults: TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) -> RenderedNodeDraft {
-    match part.content.as_ref() {
-        Some(PartContent::Text(text)) => {
+    match transcript_part_content(part) {
+        PartContent::Text(text) => {
             push_markdown(out, "  ", text.text.as_str(), width);
             RenderedNodeDraft {
                 key: TranscriptNodeKey::MessagePart {
@@ -417,10 +354,9 @@ fn render_part_node(
                 copy_text: text.text.clone(),
                 toggleable: false,
                 expanded: true,
-                requires_full_message: false,
             }
         }
-        Some(PartContent::Reasoning(reasoning)) => {
+        PartContent::Reasoning(reasoning) => {
             let key = TranscriptNodeKey::Reasoning {
                 message_id: message.id,
                 part_id: part.id,
@@ -462,10 +398,9 @@ fn render_part_node(
                 copy_text: summary,
                 toggleable: true,
                 expanded,
-                requires_full_message: false,
             }
         }
-        Some(PartContent::Operation(tool)) => {
+        PartContent::Operation(tool) => {
             let key = TranscriptNodeKey::Tool {
                 message_id: message.id,
                 part_id: part.id,
@@ -481,10 +416,9 @@ fn render_part_node(
                 copy_text: tool_output_copy_text(part, tool),
                 toggleable: true,
                 expanded,
-                requires_full_message: false,
             }
         }
-        Some(PartContent::Error(error)) => {
+        PartContent::Error(error) => {
             let text = i18n.text_args(
                 "message-error",
                 &crate::fl_args!(
@@ -502,10 +436,9 @@ fn render_part_node(
                 copy_text: text,
                 toggleable: false,
                 expanded: true,
-                requires_full_message: false,
             }
         }
-        Some(PartContent::Attachment(attachment)) => {
+        PartContent::Attachment(attachment) => {
             push_section_heading(
                 out,
                 &format!("  {}", ui_text::t(i18n, "message-attachments")),
@@ -534,10 +467,9 @@ fn render_part_node(
                 copy_text: labels.join("\n"),
                 toggleable: false,
                 expanded: true,
-                requires_full_message: false,
             }
         }
-        Some(PartContent::Request(RequestPart::Permission(permission))) => {
+        PartContent::Request(RequestPart::Permission(permission)) => {
             render_permission_request(permission, out, width, i18n);
             RenderedNodeDraft {
                 key: TranscriptNodeKey::MessagePart {
@@ -548,10 +480,9 @@ fn render_part_node(
                 copy_text: ui_text::permission_summary(i18n, permission),
                 toggleable: false,
                 expanded: true,
-                requires_full_message: false,
             }
         }
-        Some(PartContent::Request(RequestPart::UserInput(request))) => {
+        PartContent::Request(RequestPart::UserInput(request)) => {
             render_user_input_request(request, out, width, i18n);
             RenderedNodeDraft {
                 key: TranscriptNodeKey::MessagePart {
@@ -568,76 +499,6 @@ fn render_part_node(
                     .join("\n"),
                 toggleable: false,
                 expanded: true,
-                requires_full_message: false,
-            }
-        }
-        None => {
-            let fallback = part
-                .summary
-                .clone()
-                .unwrap_or_else(|| ui_text::t(i18n, "message-part-detail-unavailable"));
-            let (key, kind, toggleable, expanded) = match part.kind {
-                agena::message::PartKind::Reasoning => {
-                    let key = TranscriptNodeKey::Reasoning {
-                        message_id: message.id,
-                        part_id: part.id,
-                    };
-                    let expanded = expansions
-                        .get(&key)
-                        .copied()
-                        .unwrap_or(defaults.thinking_expanded);
-                    (key, TranscriptNodeKind::Reasoning, true, expanded)
-                }
-                agena::message::PartKind::Operation => {
-                    let key = TranscriptNodeKey::Tool {
-                        message_id: message.id,
-                        part_id: part.id,
-                    };
-                    let expanded = expansions
-                        .get(&key)
-                        .copied()
-                        .unwrap_or(defaults.tool_output_expanded);
-                    (key, TranscriptNodeKind::Tool, true, expanded)
-                }
-                _ => (
-                    TranscriptNodeKey::MessagePart {
-                        message_id: message.id,
-                        part_id: Some(part.id),
-                    },
-                    TranscriptNodeKind::Message,
-                    false,
-                    true,
-                ),
-            };
-            match kind {
-                TranscriptNodeKind::Reasoning => {
-                    render_reasoning_summary(fallback.as_str(), out, width, i18n, expanded);
-                }
-                TranscriptNodeKind::Tool => {
-                    render_summary_tool_execution(
-                        part,
-                        fallback.as_str(),
-                        out,
-                        width,
-                        i18n,
-                        expanded,
-                    );
-                }
-                TranscriptNodeKind::Message => push_multiline(
-                    out,
-                    "  ",
-                    fallback.as_str(),
-                    Style::default().fg(Color::DarkGray),
-                    width,
-                ),
-            }
-            RenderedNodeDraft {
-                key,
-                kind,
-                copy_text: fallback,
-                toggleable,
-                expanded,
-                requires_full_message: true,
             }
         }
     }
@@ -675,44 +536,6 @@ fn render_reasoning_summary(
             width,
             i18n,
         );
-    }
-}
-
-fn render_summary_tool_execution(
-    part: &MessagePart,
-    summary: &str,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-    expanded: bool,
-) {
-    let (message_key, color) = tool_status_key_and_color(part.status);
-    if !expanded {
-        push_single_line(
-            out,
-            "  ",
-            summary_only_tool_collapsed_summary(part, i18n).as_str(),
-            Style::default().fg(color),
-            width,
-        );
-        return;
-    }
-
-    let label = summary_only_tool_label(part);
-    push_multiline(
-        out,
-        "  ",
-        &i18n.text_args(message_key, &crate::fl_args!("label" => label)),
-        Style::default().fg(color),
-        width,
-    );
-    if !summary.trim().is_empty() {
-        let detail_style = if matches!(part.status, ExecutionStatus::Failed) {
-            Style::default().fg(Color::Red)
-        } else {
-            Style::default()
-        };
-        push_multiline(out, "    ", summary, detail_style, width);
     }
 }
 
@@ -1152,30 +975,29 @@ fn render_user_input_request(
 }
 
 fn preview_for_part(part: &MessagePart, i18n: &I18n) -> Option<String> {
-    match part.content.as_ref() {
-        Some(PartContent::Text(text)) => first_non_empty_preview_line(text.text.as_str()),
-        Some(PartContent::Reasoning(reasoning)) => {
+    match transcript_part_content(part) {
+        PartContent::Text(text) => first_non_empty_preview_line(text.text.as_str()),
+        PartContent::Reasoning(reasoning) => {
             let summary = reasoning.preferred_text();
             first_non_empty_preview_line(summary.as_str())
         }
-        Some(PartContent::Operation(tool)) => Some(tool_execution_preview(part, tool)),
-        Some(PartContent::Error(error)) => Some(format!("{}: {}", error.code, error.message)),
-        Some(PartContent::Attachment(attachment)) => attachment.attachments.first().map(|item| {
+        PartContent::Operation(tool) => Some(tool_execution_preview(part, tool)),
+        PartContent::Error(error) => Some(format!("{}: {}", error.code, error.message)),
+        PartContent::Attachment(attachment) => attachment.attachments.first().map(|item| {
             item.title
                 .as_ref()
                 .or(item.filename.as_ref())
                 .cloned()
                 .unwrap_or_else(|| item.mime.clone())
         }),
-        Some(PartContent::Request(RequestPart::Permission(permission))) => {
+        PartContent::Request(RequestPart::Permission(permission)) => {
             Some(ui_text::permission_summary(i18n, permission))
         }
-        Some(PartContent::Request(RequestPart::UserInput(request))) => request
+        PartContent::Request(RequestPart::UserInput(request)) => request
             .request
             .questions
             .first()
             .map(|question| question.question.clone()),
-        None => part.summary.clone(),
     }
 }
 
@@ -1316,11 +1138,6 @@ fn tool_execution_collapsed_summary(
     )
 }
 
-fn summary_only_tool_collapsed_summary(part: &MessagePart, i18n: &I18n) -> String {
-    let label = summary_only_tool_label(part);
-    format_collapsed_tool_summary(part.status, label.as_str(), i18n)
-}
-
 fn format_collapsed_tool_summary(status: ExecutionStatus, label: &str, i18n: &I18n) -> String {
     format!(
         "[tool] {} | {}",
@@ -1329,13 +1146,17 @@ fn format_collapsed_tool_summary(status: ExecutionStatus, label: &str, i18n: &I1
     )
 }
 
-fn summary_only_tool_label(part: &MessagePart) -> String {
-    part.name
+fn transcript_message_parts(message: &MessageResource) -> &[MessagePart] {
+    message
+        .parts
         .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| "tool".to_string())
+        .expect("transcript messages must include full parts")
+}
+
+fn transcript_part_content(part: &MessagePart) -> &PartContent {
+    part.content
+        .as_ref()
+        .expect("transcript message parts must include full content")
 }
 
 fn operation_block_copy_text(block: &OperationBlock) -> String {
@@ -2383,127 +2204,6 @@ mod tests {
         assert!(rendered[0].contains("[tool]"));
         assert!(rendered[0].contains("completed"));
         assert!(rendered[0].contains("bash"));
-    }
-
-    #[test]
-    fn summary_only_tool_parts_keep_their_single_line_tool_format_after_reload() {
-        let invocation = ToolInvocation::new(
-            "settings",
-            serde_json::from_value(json!({ "action": "list" })).expect("valid structured input"),
-        );
-        let tool = OperationPart::completed(
-            9,
-            invocation,
-            "Listed 9 settings entries.",
-            Vec::new(),
-            Vec::new(),
-            agena::message::ToolOutput::default(),
-            agena::message::TimeRange::default(),
-        );
-        let part = MessagePart::with_content(
-            2,
-            1,
-            Utc::now(),
-            ExecutionStatus::Completed,
-            PartContent::Operation(tool),
-        )
-        .without_detail();
-        let message = transcript_message(vec![part]);
-
-        let rendered = render_message_detailed(
-            &message,
-            120,
-            &I18n::english(),
-            TranscriptDetailDefaults {
-                tool_output_expanded: false,
-                thinking_expanded: false,
-            },
-            &std::collections::BTreeMap::new(),
-        );
-
-        assert_eq!(rendered.nodes.len(), 1);
-        assert_eq!(rendered.nodes[0].kind, TranscriptNodeKind::Tool);
-        assert!(rendered.nodes[0].toggleable);
-        assert!(!rendered.nodes[0].expanded);
-        assert!(rendered.nodes[0].requires_full_message);
-        assert!(
-            rendered
-                .lines
-                .iter()
-                .any(|line| line.text.contains("[tool] completed | settings"))
-        );
-        assert!(
-            rendered
-                .lines
-                .iter()
-                .all(|line| !line.text.contains("Listed 9 settings entries.")),
-            "collapsed summary-only tool output should not render raw tool output"
-        );
-    }
-
-    #[test]
-    fn summary_only_reasoning_parts_stay_collapsed_after_reload() {
-        let part = MessagePart::with_content(
-            3,
-            1,
-            Utc::now(),
-            ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
-                summary: vec![
-                    "line-1\n".to_string(),
-                    "line-2\n".to_string(),
-                    "line-3\n".to_string(),
-                    "line-4\n".to_string(),
-                    "line-5\n".to_string(),
-                    "line-6\n".to_string(),
-                    "line-7\n".to_string(),
-                    "line-8\n".to_string(),
-                    "line-9\n".to_string(),
-                    "line-10".to_string(),
-                ],
-                raw_content: Vec::new(),
-                encrypted_content: None,
-            }),
-        )
-        .without_detail();
-        let message = transcript_message(vec![part]);
-
-        let rendered = render_message_detailed(
-            &message,
-            120,
-            &I18n::english(),
-            TranscriptDetailDefaults {
-                tool_output_expanded: false,
-                thinking_expanded: false,
-            },
-            &std::collections::BTreeMap::new(),
-        );
-
-        assert_eq!(rendered.nodes.len(), 1);
-        assert_eq!(rendered.nodes[0].kind, TranscriptNodeKind::Reasoning);
-        assert!(rendered.nodes[0].toggleable);
-        assert!(!rendered.nodes[0].expanded);
-        assert!(rendered.nodes[0].requires_full_message);
-        assert!(
-            rendered
-                .lines
-                .iter()
-                .any(|line| line.text.contains("thinking"))
-        );
-        assert!(
-            rendered
-                .lines
-                .iter()
-                .any(|line| line.text.contains("line-8")),
-            "collapsed preview should still show early reasoning lines"
-        );
-        assert!(
-            rendered
-                .lines
-                .iter()
-                .all(|line| !line.text.contains("line-10")),
-            "collapsed summary-only reasoning should not fully expand after reload"
-        );
     }
 
     #[test]

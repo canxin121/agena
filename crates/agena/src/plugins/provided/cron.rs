@@ -32,8 +32,7 @@ pub(crate) struct CronPlugin {
     help = "Use action `list` to inspect registered cron jobs and one-shot wakeups, `create` for cron jobs, `delete` to remove a scheduled job, and `wakeup` for a one-shot wakeup.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Scheduler),
     host_capabilities(HostCapability::Scheduler),
-    concurrency_safe = false,
-    load = "always"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ScheduleToolInput {

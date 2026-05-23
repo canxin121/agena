@@ -286,7 +286,6 @@ pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionMa
         cache_max_sessions: resolution.config.runtime.session_cache.max_sessions,
         cache_ttl: Duration::from_secs(resolution.config.runtime.session_cache.ttl_secs),
         cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
-        max_run_loops: defaults.max_run_loops,
         doom_loop: defaults.doom_loop,
         default_selection: resolution.config.default.clone(),
         default_agent: resolution.config.default.agent.clone(),

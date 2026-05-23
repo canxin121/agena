@@ -138,8 +138,6 @@ pub struct SessionRunOptionsRequest {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
-    #[serde(default)]
-    pub max_run_loops: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

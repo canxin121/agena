@@ -177,10 +177,7 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tools = scoped_executor.available_tools_for_messages_and_loaded(
-            active_messages.as_slice(),
-            session.runtime.loaded_deferred_tools(),
-        );
+        let tools = scoped_executor.available_tools();
         let request = options.completion_request(
             options.system.clone(),
             active_messages,
@@ -208,7 +205,6 @@ impl SessionManager {
         control: Arc<RunControl>,
     ) -> Result<Session, AppError> {
         options.agent_profile = Some(COMPACTION_AGENT.to_string());
-        options.max_run_loops = Some(2);
         session = self
             .apply_requested_agent_profile(session, &mut options, state.clone())
             .await?;

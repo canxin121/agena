@@ -7,7 +7,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 
-use super::builder::AgenaRuntime;
+use super::{RuntimeBackgroundTaskOrigin, builder::AgenaRuntime};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeReloadCause {
@@ -45,11 +45,12 @@ pub(crate) async fn run(runtime: AgenaRuntime) {
 
         if snapshot.reload_enabled()
             && !changed_paths.is_empty()
-            && let Err(err) = runtime
-                .reload_with_cause(RuntimeReloadCause::WatchedPathsChanged {
+            && let Err(err) = runtime.start_runtime_reload_task(
+                RuntimeReloadCause::WatchedPathsChanged {
                     paths: changed_paths.clone(),
-                })
-                .await
+                },
+                RuntimeBackgroundTaskOrigin::System,
+            )
         {
             tracing::warn!(error = %err, changed_paths = changed_paths.len(), "runtime reload failed");
         }

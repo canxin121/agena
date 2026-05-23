@@ -115,10 +115,7 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
-        let tools = scoped_executor.available_tools_for_messages_and_loaded(
-            active_messages.as_slice(),
-            session.runtime.loaded_deferred_tools(),
-        );
+        let tools = scoped_executor.available_tools();
         let metadata = options
             .as_ref()
             .and_then(|options| state.processor.model_metadata(&options.model).ok())
@@ -296,7 +293,6 @@ impl SessionManager {
                 temperature: None,
                 max_output_tokens: None,
                 agent_profile: None,
-                max_run_loops: None,
             },
         )
     }

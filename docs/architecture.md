@@ -490,7 +490,7 @@ Use these extension points depending on what you need:
 - External plugin tool/plugin: use `agena-plugin-sdk` and configure `[plugins.list.<id>]`.
 - New API operation: add type to `crates/agena-api`, map it in `crates/agena-api-server/src/dispatch.rs`, and expose REST route if Studio/Web needs direct HTTP.
 - New Studio UI feature: add API wrapper in `packages/agena-studio-web/src/agena/lib/agenaApi.ts`, then page/state/component code.
-- New config field: add raw type, merge behavior, env/override if needed, resolved type, validation, example config, and `config_examples` test coverage.
+- New config field: add raw type, merge behavior, env/override if needed, resolved type, validation, and example config coverage across the integration/e2e suite.
 
 ## Implementation index
 

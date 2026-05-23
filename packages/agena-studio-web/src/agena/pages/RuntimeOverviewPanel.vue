@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import type {
   ModelCatalogEntry,
@@ -7,9 +7,10 @@ import type {
   ProviderModel,
   ProviderModelPricing,
   ProviderSummary,
+  RuntimeBackgroundTask,
   RuntimeStatus,
 } from '@/agena/lib/agenaApi'
-import { listModelCatalogEntries } from '@/agena/lib/agenaApi'
+import { cancelRuntimeBackgroundTask, listModelCatalogEntries } from '@/agena/lib/agenaApi'
 
 import { useRuntimeModelCatalogActions } from './useRuntimeModelCatalogActions'
 
@@ -27,6 +28,7 @@ const props = defineProps<{
 
 function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSummary {
   return {
+    refreshing: false,
     entry_count: entries.length,
   }
 }
@@ -44,14 +46,16 @@ const catalogTotal = ref(props.catalogEntries.length)
 const catalogOffset = ref(0)
 const catalogLimit = ref(50)
 const submitting = ref(false)
+const cancellingTaskIds = reactive<Record<string, boolean>>({})
+const toasts = ref<Array<{ id: number; kind: 'info' | 'success' | 'error'; message: string }>>([])
+const toastTimers = new Map<number, ReturnType<typeof setTimeout>>()
+const taskStatuses = new Map<string, RuntimeBackgroundTask['status']>()
+let nextToastId = 0
 
 const { refreshCatalogAction } = useRuntimeModelCatalogActions({
   actionError,
   actionMessage,
   load: props.load,
-  reloadCatalogEntries: async () => {
-    await loadCatalogPage(catalogOffset.value)
-  },
 })
 
 const sortedCatalogEntries = computed(() => catalogEntriesState.value)
@@ -59,6 +63,28 @@ const sortedCatalogEntries = computed(() => catalogEntriesState.value)
 const hasCatalogFilters = computed(() => Boolean(catalogQuery.value.trim()) || catalogOriginFilter.value !== 'all')
 
 const filteredCatalogEntries = computed(() => sortedCatalogEntries.value)
+const backgroundTasks = computed(() => props.runtime?.background_tasks ?? [])
+const catalogRefreshing = computed(() =>
+  backgroundTasks.value.some((task) => task.kind === 'model_catalog_refresh' && task.status === 'running'),
+)
+const catalogRefreshButtonLabel = computed(() => (catalogRefreshing.value ? 'Refreshing…' : 'Refresh Catalog'))
+
+function removeToast(id: number) {
+  const timer = toastTimers.get(id)
+  if (timer) {
+    clearTimeout(timer)
+    toastTimers.delete(id)
+  }
+  toasts.value = toasts.value.filter((toast) => toast.id !== id)
+}
+
+function pushToast(kind: 'info' | 'success' | 'error', message: string, ttlMs = 4000) {
+  const id = nextToastId
+  nextToastId += 1
+  toasts.value = [...toasts.value, { id, kind, message }]
+  const timer = setTimeout(() => removeToast(id), ttlMs)
+  toastTimers.set(id, timer)
+}
 
 function clearCatalogFilters() {
   catalogQuery.value = ''
@@ -120,6 +146,26 @@ function formatSamplingSummary(
   return parts.join(' · ')
 }
 
+function taskStatusLabel(status: RuntimeBackgroundTask['status']) {
+  return status.charAt(0).toUpperCase() + status.slice(1)
+}
+
+function taskStatusClass(status: RuntimeBackgroundTask['status']) {
+  return `task-status-${status}`
+}
+
+function taskOriginLabel(origin: RuntimeBackgroundTask['origin']) {
+  return origin === 'user' ? 'User' : 'System'
+}
+
+function taskMessage(task: RuntimeBackgroundTask) {
+  return task.error_message || task.message || ''
+}
+
+function taskCanCancel(task: RuntimeBackgroundTask) {
+  return task.cancellable && task.status === 'running' && !cancellingTaskIds[task.id]
+}
+
 async function loadCatalogPage(offset = 0) {
   const response = await listModelCatalogEntries({
     q: catalogQuery.value,
@@ -152,14 +198,115 @@ async function runCatalogSearch() {
 async function refreshCatalog() {
   submitting.value = true
   try {
-    await refreshCatalogAction()
+    const result = await refreshCatalogAction()
+    const message = result.started
+      ? `Started ${result.task.title.toLowerCase()}.`
+      : `${result.task.title} is already running.`
+    actionError.value = ''
+    actionMessage.value = message
+    pushToast('info', message)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    pushToast('error', message, 7000)
   } finally {
     submitting.value = false
   }
 }
 
+async function cancelTask(task: RuntimeBackgroundTask) {
+  if (!taskCanCancel(task)) return
+  cancellingTaskIds[task.id] = true
+  try {
+    const updated = await cancelRuntimeBackgroundTask(task.id)
+    const message = updated.message || `Cancellation requested for ${updated.title.toLowerCase()}.`
+    actionError.value = ''
+    actionMessage.value = message
+    pushToast('info', message)
+    await props.load()
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    actionMessage.value = ''
+    actionError.value = message
+    pushToast('error', message, 7000)
+  } finally {
+    delete cancellingTaskIds[task.id]
+  }
+}
+
+function handleTaskCompletion(task: RuntimeBackgroundTask) {
+  if (task.kind === 'model_catalog_refresh' && task.status === 'succeeded') {
+    void loadCatalogPage(catalogOffset.value)
+  }
+
+  if (task.origin !== 'user') {
+    return
+  }
+
+  if (task.status === 'succeeded') {
+    const message = task.message || `${task.title} completed.`
+    actionError.value = ''
+    actionMessage.value = message
+    pushToast('success', message)
+    return
+  }
+
+  if (task.status === 'failed') {
+    const message = task.error_message || `${task.title} failed.`
+    actionMessage.value = ''
+    actionError.value = message
+    pushToast('error', message, 7000)
+    return
+  }
+
+  if (task.status === 'cancelled') {
+    const message = task.message || `${task.title} was cancelled.`
+    actionError.value = ''
+    actionMessage.value = message
+    pushToast('info', message)
+  }
+}
+
+function syncTaskStatuses(tasks: RuntimeBackgroundTask[]) {
+  const currentIds = new Set(tasks.map((task) => task.id))
+
+  for (const task of tasks) {
+    const previousStatus = taskStatuses.get(task.id)
+    if (!previousStatus) {
+      taskStatuses.set(task.id, task.status)
+      continue
+    }
+    if (previousStatus !== task.status) {
+      taskStatuses.set(task.id, task.status)
+      if (previousStatus === 'running') {
+        handleTaskCompletion(task)
+      }
+    }
+  }
+
+  for (const taskId of Array.from(taskStatuses.keys())) {
+    if (!currentIds.has(taskId)) {
+      taskStatuses.delete(taskId)
+    }
+  }
+}
+
+watch(
+  () => props.runtime?.background_tasks ?? [],
+  (tasks) => {
+    syncTaskStatuses(tasks)
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   void loadCatalogPage(0)
+})
+
+onBeforeUnmount(() => {
+  for (const timer of toastTimers.values()) {
+    clearTimeout(timer)
+  }
+  toastTimers.clear()
 })
 </script>
 
@@ -234,6 +381,42 @@ onMounted(() => {
       <section class="card">
         <div class="page-header" style="align-items: flex-start">
           <div>
+            <h3>Background Tasks</h3>
+            <p class="muted">In-process runtime tasks are tracked here and can be cancelled while active.</p>
+          </div>
+          <span class="badge">{{ backgroundTasks.length }}</span>
+        </div>
+        <div v-if="backgroundTasks.length" class="list" style="margin-top: 12px">
+          <div v-for="task in backgroundTasks" :key="task.id" class="list-item">
+            <div class="page-header" style="align-items: flex-start">
+              <div>
+                <div>
+                  <strong>{{ task.title }}</strong> <span class="muted mono">{{ task.id }}</span>
+                </div>
+                <div class="muted">{{ taskOriginLabel(task.origin) }} · started {{ task.started_at }}</div>
+                <div v-if="task.finished_at" class="muted">finished {{ task.finished_at }}</div>
+                <div v-if="taskMessage(task)" class="muted">{{ taskMessage(task) }}</div>
+              </div>
+              <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
+                <span class="badge" :class="taskStatusClass(task.status)">{{ taskStatusLabel(task.status) }}</span>
+                <button
+                  v-if="task.cancellable && task.status === 'running'"
+                  class="button"
+                  :disabled="!taskCanCancel(task)"
+                  @click="cancelTask(task)"
+                >
+                  {{ cancellingTaskIds[task.id] ? 'Cancelling…' : 'Cancel' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p v-else class="muted" style="margin-top: 12px">No runtime background tasks yet.</p>
+      </section>
+
+      <section class="card">
+        <div class="page-header" style="align-items: flex-start">
+          <div>
             <h3>Provider Defaults</h3>
             <p class="muted">Provider defaults keep adapter and model as separate runtime fields.</p>
           </div>
@@ -273,7 +456,10 @@ onMounted(() => {
             <p class="muted">The catalog is read-only and exposes official entries only.</p>
           </div>
           <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
-            <button class="button primary" :disabled="submitting" @click="refreshCatalog">Refresh Catalog</button>
+            <span v-if="catalogRefreshing" class="badge">Refreshing</span>
+            <button class="button primary" :disabled="submitting || catalogRefreshing" @click="refreshCatalog">
+              {{ catalogRefreshButtonLabel }}
+            </button>
           </div>
         </div>
 
@@ -432,4 +618,80 @@ onMounted(() => {
       </section>
     </div>
   </div>
+
+  <teleport to="body">
+    <div v-if="toasts.length" class="toast-stack">
+      <div v-for="toast in toasts" :key="toast.id" class="toast" :class="`toast-${toast.kind}`">
+        <div class="toast-message">{{ toast.message }}</div>
+        <button class="toast-close" @click="removeToast(toast.id)">Close</button>
+      </div>
+    </div>
+  </teleport>
 </template>
+
+<style scoped>
+.toast-stack {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1000;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+}
+
+.toast {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+  backdrop-filter: blur(12px);
+}
+
+.toast-info {
+  border-color: rgba(14, 116, 144, 0.2);
+}
+
+.toast-success {
+  border-color: rgba(22, 163, 74, 0.24);
+}
+
+.toast-error {
+  border-color: rgba(220, 38, 38, 0.24);
+}
+
+.task-status-running {
+  background: rgba(14, 116, 144, 0.12);
+}
+
+.task-status-succeeded {
+  background: rgba(22, 163, 74, 0.12);
+}
+
+.task-status-failed {
+  background: rgba(220, 38, 38, 0.12);
+}
+
+.task-status-cancelled {
+  background: rgba(100, 116, 139, 0.12);
+}
+
+.toast-message {
+  line-height: 1.4;
+  color: #0f172a;
+}
+
+.toast-close {
+  border: 0;
+  background: transparent;
+  color: #475569;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+</style>

@@ -12,7 +12,6 @@
     "check:imports": "bun ./scripts/check-import-rules.mjs",
     "fmt": "bun ./node_modules/prettier/bin/prettier.cjs -w .",
     "fmt:check": "bun ./node_modules/prettier/bin/prettier.cjs -c .",
-    "test": "bun test",
     "preview": "bun run vite preview",
     "vite": "bun ./node_modules/vite/bin/vite.js"
   },

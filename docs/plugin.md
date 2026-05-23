@@ -67,7 +67,6 @@ RuntimeConfigRegistry        PluginHostBuilder
 - `path_access`: tool 固定会访问的本地路径，带 `read/write` 语义。
 - `network_access`: tool 固定访问的网络目标。
 - `tags`: tool 的规范化语义标签。权限 fallback、catalog/profile 过滤、tool search，以及运行时的一些判断都基于 tags、name 和 description。
-- `load_priority`: tool 是否总是加载、标准加载或延迟加载。
 - `concurrency_safe`: 是否允许并发执行。现在是显式字段，不再从 tags 自动推导。
 - `strict`: 是否启用更严格的 schema/调用约束。
 - `streaming`: 是否支持流式 tool 输出。
@@ -117,7 +116,7 @@ fs = "detailed"
 "agena.workflow/tools" = "detailed"
 ```
 
-`tools` 的 `search` action 用于发现和加载 deferred tools；`help` action 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `summary` 和 `help`，也可以通过 `tool.definition` hook 改写 `description`、`summary`、`help`、`description_mode` 和 `input_schema`。
+`tools` 的 `search` action 用于发现已注册 tools；`help` action 用于拿到任意已注册 tool 的详细说明。Plugin 作者可以在 manifest 中设置 `summary` 和 `help`，也可以通过 `tool.definition` hook 改写 `description`、`summary`、`help`、`description_mode` 和 `input_schema`。
 
 ## Provided Static Plugins
 

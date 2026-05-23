@@ -187,8 +187,7 @@ impl McpEntryTarget {
     summary = "Read MCP resources or prompt templates, or call discovered MCP tools.",
     help = "Use action `list_resources`, `read_resource`, `list_prompts`, `get_prompt`, or `call`. MCP prompts here are server-provided prompt templates/messages, not Agena chat prompts or permission prompts.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp),
-    concurrency_safe = false,
-    load = "deferred"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum McpToolInput {

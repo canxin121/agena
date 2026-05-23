@@ -78,8 +78,8 @@ use agena_api::{
 use agena_api_server::{
     dispatch,
     local_api::{
-        ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse as LocalModelCatalogResponse,
-        ModelCatalogSourceKind, normalize_limit,
+        ModelCatalogEntryResource, ModelCatalogListResponse,
+        ModelCatalogResponse as LocalModelCatalogResponse, ModelCatalogSourceKind, normalize_limit,
     },
     state::AppState,
 };
@@ -4097,6 +4097,7 @@ fn local_model_catalog_summary(
     catalog: &agena::model_catalog::ModelCatalogResponse,
 ) -> LocalModelCatalogResponse {
     LocalModelCatalogResponse {
+        refreshing: false,
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error.clone(),

@@ -25,8 +25,7 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
     summary = "Search the web or fetch web pages.",
     help = "Use action `search` for web search and `fetch` to retrieve a URL. Fetch upgrades HTTP URLs to HTTPS where possible and caches successful fetches for 15 minutes.",
     tags(ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet),
-    concurrency_safe = true,
-    load = "deferred"
+    concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WebToolInput {

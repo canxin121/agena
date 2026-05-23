@@ -454,8 +454,6 @@ pub struct SessionRuntimeState {
     pub prompt_tokens: PromptTokenRuntime,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub provider_anchors: BTreeMap<String, ProviderPromptAnchor>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub loaded_deferred_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "SessionExecutionContext::is_empty")]
     pub execution: SessionExecutionContext,
     #[serde(default, skip_serializing_if = "GoalRuntimeState::is_empty")]
@@ -634,31 +632,6 @@ impl SessionRuntimeState {
 
     pub fn clear_prompt_tokens(&mut self) {
         self.prompt_tokens.clear();
-    }
-
-    pub fn loaded_deferred_tools(&self) -> &[String] {
-        self.loaded_deferred_tools.as_slice()
-    }
-
-    pub fn record_loaded_deferred_tools(&mut self, loaded_tools: &[String]) {
-        let mut merged = self
-            .loaded_deferred_tools
-            .iter()
-            .map(String::as_str)
-            .filter(|name| !name.trim().is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<BTreeSet<_>>();
-
-        merged.extend(
-            loaded_tools
-                .iter()
-                .map(String::as_str)
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(ToOwned::to_owned),
-        );
-
-        self.loaded_deferred_tools = merged.into_iter().collect();
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -999,13 +972,6 @@ impl Session {
             }
         }
         bytes = bytes
-            .saturating_add(
-                self.runtime
-                    .loaded_deferred_tools
-                    .iter()
-                    .map(String::len)
-                    .sum::<usize>(),
-            )
             .saturating_add(
                 self.runtime
                     .execution

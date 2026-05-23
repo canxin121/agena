@@ -277,7 +277,10 @@ impl ModelCatalogSnapshot {
         entries
     }
 
-    pub(super) fn entry_record(model_id: &str, definition: &CatalogModelDefinition) -> ModelCatalogEntryRecord {
+    pub(super) fn entry_record(
+        model_id: &str,
+        definition: &CatalogModelDefinition,
+    ) -> ModelCatalogEntryRecord {
         ModelCatalogEntryRecord {
             model_id: model_id.to_owned(),
             display_name: definition.display_name.clone(),

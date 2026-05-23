@@ -9220,6 +9220,7 @@ impl App {
             query: String::new(),
             items: Vec::new(),
             summary: ModelCatalogResponse {
+                refreshing: false,
                 last_refresh_at: None,
                 last_successful_source: None,
                 last_error: None,
@@ -16445,7 +16446,6 @@ fn format_plugin_entry_summary_lines(entry: &agena::plugin::PluginToolDecl) -> V
         };
         facts.push(format!("mode={mode_label}"));
     }
-    facts.push(format!("priority={:?}", entry.load_priority));
     if entry.strict {
         facts.push("strict".to_string());
     }
@@ -17945,7 +17945,6 @@ impl RunOptionsState {
             system: self.system.clone(),
             temperature: self.temperature,
             max_output_tokens: self.max_output_tokens,
-            max_run_loops: None,
         }
     }
 
@@ -18647,7 +18646,7 @@ fn slash_command_suggestion_context_for_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena::message::{MessagePart, PartContent};
+    use agena::message::{ExecutionStatus, MessagePart, PartContent};
     use agena::plugin::status::{PluginRunState, PluginStatus};
     use chrono::Utc;
 

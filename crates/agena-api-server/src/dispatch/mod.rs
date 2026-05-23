@@ -44,13 +44,13 @@ use agena_api::{
     },
     resource::{
         ModelCatalogResponse, RunOptions, RuntimeAgentResource, RuntimeAgentsResource,
-        RuntimeAutomationResource, RuntimeLspResource, RuntimeLspServerResource,
-        RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
-        RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
-        RuntimeStatusResponse, RuntimeTaskResource, SessionAutomationResource,
-        SessionExecutionContextResource, SessionExecutionResource, SessionGoalResource,
-        SessionResource, SessionRunState, SessionUsageLimitBasis, SessionUsageResource,
-        WorkspaceResource,
+        RuntimeAutomationResource, RuntimeBackgroundTaskResource, RuntimeLspResource,
+        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+        RuntimeOperatorResource, RuntimeSessionCacheResource, RuntimeSkillResource,
+        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
+        SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
+        SessionGoalResource, SessionResource, SessionRunState, SessionUsageLimitBasis,
+        SessionUsageResource, WorkspaceResource,
     },
 };
 
@@ -81,7 +81,6 @@ async fn run_options_to_core(
                 system: options.system.clone(),
                 temperature: options.temperature,
                 max_output_tokens: options.max_output_tokens,
-                max_run_loops: options.max_run_loops,
             },
         )
         .await
@@ -217,10 +216,29 @@ impl From<crate::local_api::ScheduledJobResource> for agena_api::resource::Sched
 impl From<HttpModelCatalogResponse> for ModelCatalogResponse {
     fn from(value: HttpModelCatalogResponse) -> Self {
         Self {
+            refreshing: value.refreshing,
             last_refresh_at: value.last_refresh_at,
             last_successful_source: value.last_successful_source,
             last_error: value.last_error,
             entry_count: value.entry_count,
+        }
+    }
+}
+
+impl From<crate::local_api::RuntimeBackgroundTaskResource> for RuntimeBackgroundTaskResource {
+    fn from(value: crate::local_api::RuntimeBackgroundTaskResource) -> Self {
+        Self {
+            id: value.id,
+            kind: value.kind,
+            origin: value.origin,
+            title: value.title,
+            status: value.status,
+            message: value.message,
+            error_message: value.error_message,
+            created_at: value.created_at,
+            started_at: value.started_at,
+            finished_at: value.finished_at,
+            cancellable: value.cancellable,
         }
     }
 }
@@ -353,12 +371,20 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     provider_ids.sort();
     let catalog = snapshot.model_catalog_response();
     let model_catalog: ModelCatalogResponse = crate::local_api::ModelCatalogResponse {
+        refreshing: state.runtime().model_catalog_refresh_active(),
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error,
         entry_count: catalog.entries.len(),
     }
     .into();
+    let background_tasks = state
+        .runtime()
+        .background_tasks()
+        .into_iter()
+        .map(crate::local_api::RuntimeBackgroundTaskResource::from)
+        .map(Into::into)
+        .collect();
     let session_cache = snapshot.session_manager().map(|manager| {
         let stats = manager.cache_stats();
         RuntimeSessionCacheResource {
@@ -601,6 +627,7 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         },
         session_cache,
         model_catalog: Some(model_catalog),
+        background_tasks,
         automation,
         operator: RuntimeOperatorResource {
             mcp,

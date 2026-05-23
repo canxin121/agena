@@ -31,7 +31,6 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
     tags(ToolTag::Mutating, ToolTag::Shell),
     host_capabilities(HostCapability::MonitorRegistry),
     concurrency_safe = false,
-    load = "deferred",
     streaming = "streaming"
 )]
 #[serde(tag = "action", rename_all = "snake_case")]

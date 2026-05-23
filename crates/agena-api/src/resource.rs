@@ -11,6 +11,10 @@ use agena::{
     message::{Message, MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
     model_catalog::ModelCatalogEntrySourceKind,
+    runtime::{
+        RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
+        RuntimeBackgroundTaskStatus,
+    },
     session::{GoalStatus, SessionStatus, SessionSummary},
 };
 
@@ -215,12 +219,68 @@ pub struct RuntimeStatusResponse {
     pub session_cache: Option<RuntimeSessionCacheResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_catalog: Option<ModelCatalogResponse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_tasks: Vec<RuntimeBackgroundTaskResource>,
     pub automation: RuntimeAutomationResource,
     pub operator: RuntimeOperatorResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeBackgroundTaskResource {
+    pub id: String,
+    pub kind: RuntimeBackgroundTaskKind,
+    pub origin: RuntimeBackgroundTaskOrigin,
+    pub title: String,
+    pub status: RuntimeBackgroundTaskStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+    pub cancellable: bool,
+}
+
+impl From<RuntimeBackgroundTask> for RuntimeBackgroundTaskResource {
+    fn from(value: RuntimeBackgroundTask) -> Self {
+        Self {
+            id: value.id,
+            kind: value.kind,
+            origin: value.origin,
+            title: value.title,
+            status: value.status,
+            message: value.message,
+            error_message: value.error_message,
+            created_at: value.created_at,
+            started_at: value.started_at,
+            finished_at: value.finished_at,
+            cancellable: value.cancellable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeBackgroundTaskListResponse {
+    pub items: Vec<RuntimeBackgroundTaskResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeBackgroundTaskStartResponse {
+    pub started: bool,
+    pub task: RuntimeBackgroundTaskResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeBackgroundTaskCancelResponse {
+    pub task: RuntimeBackgroundTaskResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogResponse {
+    #[serde(default)]
+    pub refreshing: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -502,8 +562,6 @@ pub struct RunOptions {
     pub temperature: Option<f32>,
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
-    #[serde(default)]
-    pub max_run_loops: Option<usize>,
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────

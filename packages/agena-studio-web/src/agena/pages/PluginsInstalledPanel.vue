@@ -139,7 +139,6 @@ const manifestEntries = computed<ManifestEntrySummary[]>(() => {
         entry.strict === true ? 'strict' : null,
         entry.streaming === true ? 'streaming' : null,
         entry.concurrency_safe === true ? 'concurrency-safe' : null,
-        readString(entry.load_priority) ? `priority=${readString(entry.load_priority)}` : null,
         readString(entry.description_mode) ? `mode=${readString(entry.description_mode)}` : null,
       ].filter(Boolean) as string[]
       return {

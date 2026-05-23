@@ -1,4 +1,4 @@
-import type { Ref } from 'vue'
+import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 
 import type {
   AuthProvider,
@@ -71,6 +71,26 @@ export function useRuntimeSectionLoadActions(
   input: RuntimeSectionLoadActionsInput,
   deps: RuntimeSectionLoadActionsDeps = defaultDeps,
 ) {
+  const backgroundPollingTimer = ref<ReturnType<typeof setInterval> | null>(null)
+  const backgroundLoading = ref(false)
+
+  function stopBackgroundPolling() {
+    if (!backgroundPollingTimer.value) return
+    clearInterval(backgroundPollingTimer.value)
+    backgroundPollingTimer.value = null
+  }
+
+  function startBackgroundPolling() {
+    if (backgroundPollingTimer.value) return
+    backgroundPollingTimer.value = setInterval(() => {
+      if (input.loading.value || backgroundLoading.value) return
+      backgroundLoading.value = true
+      void load({ background: true }).finally(() => {
+        backgroundLoading.value = false
+      })
+    }, 2000)
+  }
+
   async function loadRuntimeSection() {
     const data = await deps.loadRuntimeSectionData({
       selectedWorkspaceId: input.selectedWorkspaceId.value,
@@ -114,6 +134,7 @@ export function useRuntimeSectionLoadActions(
       selectedWorkspaceId: input.selectedWorkspaceId.value,
     })
     input.plugins.value = data.plugins
+    input.runtime.value = data.runtime
     input.workspaces.value = data.workspaces
     input.selectedWorkspaceId.value = data.selectedWorkspaceId
     input.selectedPluginId.value = data.selectedPluginId
@@ -131,9 +152,12 @@ export function useRuntimeSectionLoadActions(
     }
   }
 
-  async function load() {
-    input.loading.value = true
-    input.actionError.value = ''
+  async function load(options?: { background?: boolean }) {
+    const background = options?.background === true
+    if (!background) {
+      input.loading.value = true
+      input.actionError.value = ''
+    }
     try {
       if (input.routeSection.value === 'runtime') {
         await loadRuntimeSection()
@@ -145,9 +169,27 @@ export function useRuntimeSectionLoadActions(
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     } finally {
-      input.loading.value = false
+      if (!background) {
+        input.loading.value = false
+      }
     }
   }
+
+  watch(
+    () => Boolean(input.runtime.value?.background_tasks?.some((task) => task.status === 'running')),
+    (running) => {
+      if (running) {
+        startBackgroundPolling()
+      } else {
+        stopBackgroundPolling()
+      }
+    },
+    { immediate: true },
+  )
+
+  onBeforeUnmount(() => {
+    stopBackgroundPolling()
+  })
 
   return {
     load,

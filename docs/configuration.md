@@ -33,7 +33,7 @@ agena config validate
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
 - provider model metadata，以及拆分后的 model thinking/speed modes。
 
-这两个示例文件有解析测试，测试位置为 `crates/agena/tests/config_examples.rs`。
+这两个示例文件由仓库的 integration / e2e 配置测试套件覆盖。
 
 ## 加载路径与优先级
 

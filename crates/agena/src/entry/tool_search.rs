@@ -12,12 +12,10 @@ pub(crate) struct SearchableTool {
     pub name: String,
     pub description: String,
     pub tags: Vec<ToolTag>,
-    pub deferred: bool,
 }
 
 impl SearchableTool {
     pub(crate) fn from_entry(entry: RegistryPluginEntry) -> Self {
-        let deferred = entry.is_deferred();
         let description = entry
             .summary_text()
             .unwrap_or_else(|| entry.description_text())
@@ -27,7 +25,6 @@ impl SearchableTool {
             name: entry.exposed_name,
             description,
             tags,
-            deferred,
         }
     }
 }
@@ -48,14 +45,13 @@ pub(crate) fn execute_with_tools(
     catalog: &[SearchableTool],
     input: &ToolSearchToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    if input.query.trim().is_empty() && input.load.is_empty() {
+    if input.query.trim().is_empty() {
         return Err(ToolError::InvalidInput(
-            "tool_search requires a non-empty query or at least one tool to load".to_string(),
+            "tool_search requires a non-empty query".to_string(),
         ));
     }
 
     let results = search_catalog(catalog, input.query.as_str(), input.limit);
-    let loaded_tools = resolve_requested_loads(catalog, input.load.as_slice())?;
 
     let mut lines = Vec::new();
     if !input.query.trim().is_empty() {
@@ -66,14 +62,9 @@ pub(crate) fn execute_with_tools(
         ));
         for definition in &results {
             lines.push(format!(
-                "- {} [{}{}]: {}",
+                "- {} [{}]: {}",
                 definition.name,
                 tags_summary(definition),
-                if definition.deferred {
-                    ", deferred"
-                } else {
-                    ""
-                },
                 definition.description
             ));
         }
@@ -85,21 +76,8 @@ pub(crate) fn execute_with_tools(
         }
     }
 
-    if !loaded_tools.is_empty() {
-        lines.push(format!(
-            "Loaded deferred tools for later runs: {}.",
-            loaded_tools.join(", ")
-        ));
-    } else if !results.is_empty() && results.iter().any(|tool| tool.deferred) {
-        lines.push(
-            "Call tool_search again with the exact tool names in `load` to expose deferred tools."
-                .to_string(),
-        );
-    }
-
     let output = ToolPayloadOutput::ToolSearch {
         results: results.iter().map(|tool| tool.name.clone()).collect(),
-        loaded_tools,
     };
 
     let output_text = lines.join("\n");
@@ -150,29 +128,6 @@ fn search_catalog(
         .collect()
 }
 
-fn resolve_requested_loads(
-    catalog: &[SearchableTool],
-    requested: &[String],
-) -> Result<Vec<String>, ToolError> {
-    let mut loaded = Vec::new();
-    for requested_name in requested {
-        let Some(definition) = catalog
-            .iter()
-            .find(|tool| tool.name.eq_ignore_ascii_case(requested_name.trim()))
-        else {
-            return Err(ToolError::InvalidInput(format!(
-                "tool_search cannot load unknown tool '{}'",
-                requested_name.trim()
-            )));
-        };
-
-        if !loaded.iter().any(|name| name == &definition.name) {
-            loaded.push(definition.name.clone());
-        }
-    }
-    Ok(loaded)
-}
-
 fn score_tool(definition: &SearchableTool, normalized_query: &str, tokens: &[String]) -> i32 {
     let normalized_name = normalize(definition.name.as_str());
     let normalized_description = normalize(definition.description.as_str());
@@ -212,10 +167,6 @@ fn score_tool(definition: &SearchableTool, normalized_query: &str, tokens: &[Str
         if normalized_description.contains(token) {
             score += 5;
         }
-    }
-
-    if definition.deferred {
-        score += 1;
     }
 
     score

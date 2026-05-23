@@ -36,8 +36,8 @@ use thiserror::Error;
 
 use crate::agent::Agent;
 use crate::message::{
-    AskUserToolInput, FilesystemEffect, Message, NetworkEffect, PartContent, PluginInvocation,
-    StructuredObject, ToolInvocation, ToolOutput,
+    AskUserToolInput, FilesystemEffect, Message, NetworkEffect, PluginInvocation, StructuredObject,
+    ToolInvocation, ToolOutput,
 };
 use crate::permission::{AccessKind, NetworkTarget, PermissionAction, PermissionDecision};
 use crate::plugin::{
@@ -60,7 +60,6 @@ use crate::plugins::provided::{
     web as provided_web, workflow as provided_workflow,
 };
 
-pub use crate::plugin::sdk::ToolLoadPriority;
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
 pub use catalog::{ModelToolProfile, ToolAvailability, ToolCatalog};
 pub use monitor::{
@@ -618,9 +617,6 @@ impl ToolExecutor {
 
     pub fn available_tools(&self) -> Vec<RegistryPluginEntry> {
         self.catalogued_tools()
-            .into_iter()
-            .filter(RegistryPluginEntry::should_load_by_default)
-            .collect()
     }
 
     pub fn is_concurrency_safe_invocation(&self, invocation: &ToolInvocation) -> bool {
@@ -634,21 +630,8 @@ impl ToolExecutor {
     }
 
     pub fn available_tools_for_messages(&self, messages: &[Message]) -> Vec<RegistryPluginEntry> {
-        self.available_tools_for_messages_and_loaded(messages, &[])
-    }
-
-    pub fn available_tools_for_messages_and_loaded(
-        &self,
-        messages: &[Message],
-        loaded_tools: &[String],
-    ) -> Vec<RegistryPluginEntry> {
-        let loaded_tools = collect_loaded_tool_names(messages, loaded_tools);
-        self.catalogued_tools()
-            .into_iter()
-            .filter(|entry| {
-                entry.should_load_by_default() || loaded_tools.contains(entry.exposed_name.as_str())
-            })
-            .collect()
+        let _ = messages;
+        self.available_tools()
     }
 
     fn invocation_definition(&self, invocation: &ToolInvocation) -> Option<RegistryPluginEntry> {
@@ -1953,41 +1936,6 @@ fn parse_invocation_from_json(
     })
 }
 
-fn collect_loaded_tool_names(
-    messages: &[Message],
-    runtime_loaded_tools: &[String],
-) -> std::collections::HashSet<String> {
-    let mut loaded = messages
-        .iter()
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| match part.content.as_ref() {
-            Some(PartContent::Operation(operation))
-                if part.status == crate::message::ExecutionStatus::Completed =>
-            {
-                loaded_tools_from_tool_output(&operation.details)
-            }
-            _ => None,
-        })
-        .flatten()
-        .collect::<std::collections::HashSet<_>>();
-
-    loaded.extend(
-        runtime_loaded_tools
-            .iter()
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(ToOwned::to_owned),
-    );
-
-    loaded
-}
-
-fn loaded_tools_from_tool_output(details: &ToolOutput) -> Option<Vec<String>> {
-    let payload = details.to_json_payload()?;
-    serde_json::from_value(payload.get("loaded_tools")?.clone()).ok()
-}
-
 fn sdk_path_kind_to_access_kind(kind: SdkPathKind) -> AccessKind {
     match kind {
         SdkPathKind::Read => AccessKind::Read,
@@ -2152,10 +2100,9 @@ mod tests {
     use crate::message::{
         ApplyPatchToolInput, BashToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
         FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput,
-        LspDefinitionToolInput, Message, MonitorToolInput, NetworkEffect, OperationPart,
-        PartContent, ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TimeRange,
-        TodoItem, TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation,
-        ToolSearchToolInput, WebFetchToolInput,
+        LspDefinitionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent,
+        ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem, TodoPriority,
+        TodoStatus, TodoWriteToolInput, ToolInvocation, ToolSearchToolInput, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -2254,7 +2201,6 @@ mod tests {
                     crate::plugin::sdk::ToolTag::Mutating,
                     crate::plugin::sdk::ToolTag::FilesystemWrite,
                 ],
-                deferred: true,
                 plugin_id: None,
             }])
         }
@@ -2590,42 +2536,6 @@ mod tests {
         })
     }
 
-    fn loaded_tool_search_message(loaded_tools: &[&str]) -> Message {
-        Message {
-            id: 99,
-            role: Role::Assistant,
-            state: crate::message::MessageStatus::Completed,
-            parts: vec![crate::message::MessagePart::with_content(
-                1,
-                99,
-                Utc::now(),
-                crate::message::ExecutionStatus::Completed,
-                PartContent::Operation(OperationPart::completed(
-                    1,
-                    ToolPayloadInput::ToolSearch(ToolSearchToolInput {
-                        query: "load mutating tools".to_string(),
-                        load: loaded_tools.iter().map(|name| name.to_string()).collect(),
-                        limit: None,
-                    })
-                    .into_invocation(),
-                    "loaded deferred tools",
-                    Vec::new(),
-                    Vec::new(),
-                    (ToolPayloadOutput::ToolSearch {
-                        results: Vec::new(),
-                        loaded_tools: loaded_tools.iter().map(|name| name.to_string()).collect(),
-                    })
-                    .into_tool_output(),
-                    TimeRange::default(),
-                )),
-            )],
-            created_at: Utc::now(),
-            metadata: crate::message::MessageMetadata::default(),
-            provider_state: None,
-            usage: None,
-        }
-    }
-
     fn sample_png_bytes() -> Vec<u8> {
         STANDARD
             .decode(
@@ -2947,44 +2857,52 @@ mod tests {
     }
 
     #[test]
-    fn tool_search_provided_discovers_and_loads_deferred_tools() {
+    fn tool_search_provided_discovers_tools() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
         let result = executor
             .execute_tool_payload_detailed(&ToolPayloadInput::ToolSearch(ToolSearchToolInput {
                 query: "patch files".to_string(),
-                load: vec!["fs".to_string()],
                 limit: None,
             }))
             .expect("tool_search should succeed");
 
         match result.output {
-            ToolPayloadOutput::ToolSearch {
-                results,
-                loaded_tools,
-            } => {
+            ToolPayloadOutput::ToolSearch { results } => {
                 assert!(results.iter().any(|name| name == "fs"));
-                assert_eq!(loaded_tools, vec!["fs".to_string()]);
             }
             other => panic!("expected tool_search output, got {other:?}"),
         }
-
-        assert!(result.view.output_text.contains("Loaded deferred tools"));
     }
 
     #[test]
-    fn tool_search_messages_expose_deferred_tools_in_later_turns() {
+    fn tool_search_messages_do_not_gate_tool_availability() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
         let initial = executor.available_tools();
         assert!(initial.iter().any(|tool| tool.exposed_name == "tools"));
         assert!(initial.iter().any(|tool| tool.exposed_name == "todo"));
-        assert!(!initial.iter().any(|tool| tool.exposed_name == "shell"));
-        assert!(!initial.iter().any(|tool| tool.exposed_name == "task"));
+        assert!(initial.iter().any(|tool| tool.exposed_name == "shell"));
+        assert!(initial.iter().any(|tool| tool.exposed_name == "task"));
 
-        let messages = vec![loaded_tool_search_message(&["shell", "task"])];
+        let messages = vec![Message {
+            id: 99,
+            role: Role::Assistant,
+            state: crate::message::MessageStatus::Completed,
+            parts: vec![crate::message::MessagePart::with_content(
+                1,
+                99,
+                Utc::now(),
+                crate::message::ExecutionStatus::Completed,
+                PartContent::text("tool search does not gate availability"),
+            )],
+            created_at: Utc::now(),
+            metadata: crate::message::MessageMetadata::default(),
+            provider_state: None,
+            usage: None,
+        }];
         let available = executor.available_tools_for_messages(messages.as_slice());
 
         assert!(available.iter().any(|tool| tool.exposed_name == "shell"));

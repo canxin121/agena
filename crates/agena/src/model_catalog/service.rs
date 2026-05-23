@@ -67,6 +67,11 @@ impl ModelCatalogService {
         }
     }
 
+    pub fn needs_startup_refresh(&self) -> bool {
+        let snapshot = self.snapshot();
+        self.snapshot_needs_startup_refresh(&snapshot)
+    }
+
     pub async fn refresh_from_registry(
         &self,
         providers: &ProviderRegistry,
@@ -89,6 +94,12 @@ impl ModelCatalogService {
         snapshot.last_error = warnings;
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
+    }
+
+    pub fn record_refresh_failure(&self, error: impl Into<String>) {
+        let mut snapshot = self.snapshot();
+        snapshot.last_error = Some(error.into());
+        self.replace_snapshot(snapshot);
     }
 
     async fn build_catalog_document(

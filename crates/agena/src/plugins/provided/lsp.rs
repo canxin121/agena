@@ -49,8 +49,7 @@ impl LspPlugin {
     help = "Use action `servers` to list configured LSP servers, `definition` and `references` for symbol navigation, `hover` for hover text, and `diagnostics` for diagnostics.",
     tags(ToolTag::ReadOnly, ToolTag::FilesystemRead, ToolTag::Lsp),
     host_capabilities(HostCapability::LspRegistry),
-    concurrency_safe = true,
-    load = "always"
+    concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum LspToolInput {

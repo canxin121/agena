@@ -619,8 +619,6 @@ pub struct ToolDescriptor {
     pub description_mode: Option<ToolDescriptionMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,
-    #[serde(default)]
-    pub deferred: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
 }

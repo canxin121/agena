@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelCatalogResponse {
+    #[serde(default)]
+    pub refreshing: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -9,6 +11,13 @@ pub struct ModelCatalogResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     pub entry_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelCatalogRefreshResponse {
+    pub started: bool,
+    pub task: RuntimeBackgroundTaskResource,
+    pub summary: ModelCatalogResponse,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -104,7 +113,8 @@ impl ModelCatalogEntryResource {
         value: ModelCatalogEntryRecord,
         last_successful_source: Option<ModelCatalogEntrySourceKind>,
     ) -> Self {
-        let source = match last_successful_source.unwrap_or(ModelCatalogEntrySourceKind::Generated) {
+        let source = match last_successful_source.unwrap_or(ModelCatalogEntrySourceKind::Generated)
+        {
             ModelCatalogEntrySourceKind::Generated => ModelCatalogSourceKind::Generated,
             ModelCatalogEntrySourceKind::Cache => ModelCatalogSourceKind::Cache,
         };

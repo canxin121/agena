@@ -195,8 +195,6 @@ pub enum ToolPayloadOutput {
     ToolSearch {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         results: Vec<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        loaded_tools: Vec<String>,
     },
     TodoWrite {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

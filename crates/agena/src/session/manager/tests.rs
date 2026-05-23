@@ -16,8 +16,7 @@ use crate::db::init_schema;
 use crate::event::EventKind;
 use crate::message::{
     ApplyPatchToolInput, AskUserToolInput, ExecutionStatus, MessageMetadata, MessagePart, TodoItem,
-    TodoPriority, TodoStatus, TodoWriteToolInput, ToolSearchToolInput, UserInputOption,
-    UserInputQuestion,
+    TodoPriority, TodoStatus, TodoWriteToolInput, UserInputOption, UserInputQuestion,
 };
 use crate::model::{ModelId, ModelRef, ProviderId};
 use crate::permission::{
@@ -379,21 +378,25 @@ impl ModelRuntime for ScriptedProvider {
                 }
             })
         });
-        let apply_patch_tool_loaded = request.messages.iter().any(|message| {
-            message.parts.iter().any(|part| {
+        let web_tool_result = request.messages.iter().find_map(|message| {
+            message.parts.iter().find_map(|part| {
+                if part.operation_id.as_deref() != Some("call_web_1") {
+                    return None;
+                }
                 let operation = match part.content.as_ref() {
-                    Some(PartContent::Operation(operation))
-                        if part.status == ExecutionStatus::Completed =>
-                    {
-                        operation
-                    }
-                    _ => return false,
+                    Some(PartContent::Operation(operation)) => operation,
+                    _ => return None,
                 };
-                loaded_tools_from_tool_output(&operation.details)
-                    .is_some_and(|loaded_tools| loaded_tools.iter().any(|name| name == "fs"))
+                match part.status {
+                    ExecutionStatus::Completed => Some(Ok(operation.model_output.text.clone())),
+                    ExecutionStatus::Failed => Some(Err(operation
+                        .error_message()
+                        .unwrap_or(operation.model_output.text.as_str())
+                        .to_string())),
+                    _ => None,
+                }
             })
         });
-
         let events = if last_user_text.contains("permission todo") && todo_result.is_none() {
             vec![
                 Ok(CompletionStreamEvent::ToolCallDelta {
@@ -426,6 +429,43 @@ impl ModelRuntime for ScriptedProvider {
             let delta = match todo_result {
                 Ok(()) => "permission todo done".to_string(),
                 Err(_) => "permission todo failed".to_string(),
+            };
+            vec![
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    delta,
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                }),
+            ]
+        } else if last_user_text.contains("unsupported tool") && web_tool_result.is_none() {
+            vec![
+                Ok(CompletionStreamEvent::ToolCallDelta {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    stream_key: "call_web_1".to_string(),
+                    id: Some("call_web_1".to_string()),
+                    name: Some("web".to_string()),
+                    arguments_delta: serde_json::json!({}).to_string(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id: scripted_provider_id(),
+                    model: scripted_model_id(),
+                    finish_reason: Some(CompletionFinishReason::ToolCalls),
+                    usage: None,
+                    provider_metadata: None,
+                }),
+            ]
+        } else if let Some(web_tool_result) = web_tool_result {
+            let delta = match web_tool_result {
+                Ok(output) => format!("unsupported tool handled: {output}"),
+                Err(error) => format!("unsupported tool handled: {error}"),
             };
             vec![
                 Ok(CompletionStreamEvent::TextDelta {
@@ -478,25 +518,20 @@ impl ModelRuntime for ScriptedProvider {
                     provider_metadata: None,
                 }),
             ]
-        } else if last_user_text.contains("patch")
-            && tool_result.is_none()
-            && !apply_patch_tool_loaded
-        {
+        } else if last_user_text.contains("patch") && tool_result.is_none() {
             vec![
                 Ok(CompletionStreamEvent::ToolCallDelta {
                     provider_id: scripted_provider_id(),
                     model: scripted_model_id(),
-                    stream_key: "call_tool_search_1".to_string(),
-                    id: Some("call_tool_search_1".to_string()),
-                    name: Some("tools".to_string()),
+                    stream_key: "call_apply_patch_1".to_string(),
+                    id: Some("call_apply_patch_1".to_string()),
+                    name: Some("fs".to_string()),
                     arguments_delta: serde_json::json!({
-                        "action": "search",
-                        "query": ToolSearchToolInput {
-                            query: "patch file".to_string(),
-                            load: vec!["fs".to_string()],
-                            limit: None,
-                        }.query,
-                        "load": ["fs"],
+                        "action": "apply_patch",
+                        "patch": ApplyPatchToolInput {
+                            patch: "*** Begin Patch\n*** Add File: result.txt\n+approved\n*** End Patch"
+                                .to_string(),
+                        }.patch,
                     })
                     .to_string(),
                 }),
@@ -929,7 +964,6 @@ impl crate::plugin::sdk::host_api::HostClient for SessionTestHostClient {
             .searchable_tools()
             .into_iter()
             .map(|tool| {
-                let deferred = tool.is_deferred();
                 let description = tool.description_text().to_string();
                 let summary = tool.summary_text().map(ToString::to_string);
                 let help = tool.help_text().map(ToString::to_string);
@@ -944,7 +978,6 @@ impl crate::plugin::sdk::host_api::HostClient for SessionTestHostClient {
                     input_schema,
                     description_mode,
                     tags,
-                    deferred,
                     plugin_id: (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name),
                 }
             })
@@ -1129,7 +1162,6 @@ fn run_options() -> SessionRunOptions {
         temperature: None,
         max_output_tokens: Some(128),
         agent_profile: None,
-        max_run_loops: None,
     }
 }
 
@@ -1145,7 +1177,6 @@ fn recording_run_options() -> SessionRunOptions {
         temperature: Some(0.2),
         max_output_tokens: Some(256),
         agent_profile: None,
-        max_run_loops: None,
     }
 }
 
@@ -1427,6 +1458,59 @@ async fn streaming_tool_execution_persists_in_progress_output_impl() {
         })
         .expect("completed streamed tool output should exist");
     assert_eq!(final_output, "partial done");
+}
+
+#[test]
+fn unsupported_tool_call_is_returned_to_model() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "unsupported_tool_call.db").await;
+        let manager = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "Unsupported tool fixture".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("session creation should succeed");
+
+        let completed = manager
+            .submit_user_message(SessionUserMessageRequest {
+                session_id: created.id,
+                options: run_options(),
+                parts: vec![crate::message::PartContent::text("unsupported tool")],
+            })
+            .await
+            .expect("run should continue after unsupported tool call");
+
+        let (status, error, output) = operation_snapshot(&completed, "call_web_1");
+        assert_eq!(status, ExecutionStatus::Failed);
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|value| value.contains("invalid tool input"))
+        );
+        assert!(output.contains("missing field `action`"));
+        assert!(
+            completed.messages.iter().any(|message| {
+                message.role == Role::Assistant
+                    && message
+                        .as_text_lossy()
+                        .contains("unsupported tool handled:")
+            }),
+            "final assistant reply should reflect the tool failure: messages={:?}",
+            completed.messages
+        );
+    });
 }
 
 fn operation_snapshot(
@@ -1836,7 +1920,6 @@ async fn restart_after_interrupted_turn_can_continue_session() {
             temperature: None,
             max_output_tokens: Some(128),
             agent_profile: None,
-            max_run_loops: None,
         }
     }
 
@@ -3173,7 +3256,6 @@ async fn cancel_active_run_aborts_a_running_run() {
             temperature: None,
             max_output_tokens: Some(64),
             agent_profile: None,
-            max_run_loops: None,
         }
     }
 
@@ -3537,7 +3619,6 @@ mod runtime_builtin_tool_tests {
                     let input_schema = Some(tool.sanitized_input_schema());
                     let description_mode = tool.decl.description_mode;
                     let tags = tool.effective_tags();
-                    let deferred = tool.is_deferred();
                     let plugin_id =
                         (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name.clone());
                     ToolDescriptor {
@@ -3548,7 +3629,6 @@ mod runtime_builtin_tool_tests {
                         input_schema,
                         description_mode,
                         tags,
-                        deferred,
                         plugin_id,
                     }
                 })
@@ -4612,7 +4692,6 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_run_loops: Some(32),
                     },
                     parts: vec![PartContent::text("exercise fs plan and worktree tools")],
                 })
@@ -4689,17 +4768,6 @@ while True:
             let notebook_payload = session_operation_payload(&session, "call_nb_edit_1");
             assert_eq!(notebook_payload["edit_mode"].as_str(), Some("replace"));
             assert_eq!(notebook_payload["cell_index"].as_u64(), Some(1));
-
-            let tools_payload = session_operation_payload(&session, "call_tools_1");
-            let loaded_tools = tools_payload["loaded_tools"]
-                .as_array()
-                .expect("tools payload should include loaded_tools");
-            assert!(
-                loaded_tools
-                    .iter()
-                    .any(|tool| tool.as_str() == Some("worktree")),
-                "tools search should have loaded the deferred worktree tool"
-            );
 
             let root_notes = std::fs::read_to_string(workspace.root.join("notes.txt"))
                 .expect("original workspace notes should remain readable");
@@ -4915,7 +4983,6 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_run_loops: Some(24),
                     },
                     parts: vec![PartContent::text("exercise shell runtime tools")],
                 })
@@ -5000,17 +5067,6 @@ while True:
             assert!(
                 shell_output.contains("base line"),
                 "shell exec output should read notes.txt: {shell_output}"
-            );
-
-            let tools_payload = session_operation_payload(&session, "call_tools_shell_1");
-            let loaded_tools = tools_payload["loaded_tools"]
-                .as_array()
-                .expect("tools payload should include loaded_tools");
-            assert!(
-                loaded_tools
-                    .iter()
-                    .any(|tool| tool.as_str() == Some("shell")),
-                "tools search should have loaded the deferred shell tool"
             );
 
             let monitor_start_payload = session_operation_payload(&session, "call_monitor_start_1");
@@ -5195,7 +5251,6 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_run_loops: Some(24),
                     },
                     parts: vec![PartContent::text("exercise web runtime tools")],
                 })
@@ -5240,15 +5295,6 @@ while True:
                 );
                 assert!(error.is_none(), "{operation_id} failed: {error:?}");
             }
-
-            let tools_payload = session_operation_payload(&session, "call_tools_web_1");
-            let loaded_tools = tools_payload["loaded_tools"]
-                .as_array()
-                .expect("tools payload should include loaded_tools");
-            assert!(
-                loaded_tools.iter().any(|tool| tool.as_str() == Some("web")),
-                "tools search should have loaded the deferred web tool"
-            );
 
             let fetch_payload = session_operation_payload(&session, "call_web_fetch_1");
             assert_eq!(fetch_payload["status"].as_u64(), Some(200));
@@ -5441,7 +5487,6 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_run_loops: Some(24),
                     },
                     parts: vec![PartContent::text("exercise task runtime tool")],
                 })
@@ -5469,17 +5514,6 @@ while True:
                 );
                 assert!(error.is_none(), "{operation_id} failed: {error:?}");
             }
-
-            let tools_payload = session_operation_payload(&session, "call_tools_task_1");
-            let loaded_tools = tools_payload["loaded_tools"]
-                .as_array()
-                .expect("tools payload should include loaded_tools");
-            assert!(
-                loaded_tools
-                    .iter()
-                    .any(|tool| tool.as_str() == Some("task")),
-                "tools search should have loaded the deferred task tool"
-            );
 
             let task_payload = session_operation_payload(&session, "call_task_run_1");
             assert_eq!(
@@ -5706,7 +5740,6 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_run_loops: Some(24),
                     },
                     parts: vec![PartContent::text("exercise lsp runtime tool")],
                 })
@@ -6000,7 +6033,6 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_run_loops: Some(32),
                     },
                     parts: vec![PartContent::text(
                         "exercise workflow mutation runtime tools",
@@ -6482,7 +6514,6 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_run_loops: Some(64),
                     },
                     parts: vec![PartContent::text(
                         "exercise workflow settings schedule and host tools",

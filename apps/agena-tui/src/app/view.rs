@@ -3745,11 +3745,9 @@ impl App {
                     ListItem::new(vec![
                         Line::from(sanitize_display_text(entry.model_id.as_str())),
                         Line::from(Span::styled(
-                            sanitize_display_text(
-                                entry.display_name.clone().unwrap_or_else(|| {
-                                    entry.origin.clone().unwrap_or_else(|| "unknown".to_owned())
-                                }),
-                            ),
+                            sanitize_display_text(entry.display_name.clone().unwrap_or_else(
+                                || entry.origin.clone().unwrap_or_else(|| "unknown".to_owned()),
+                            )),
                             Style::default().fg(Color::DarkGray),
                         )),
                     ])

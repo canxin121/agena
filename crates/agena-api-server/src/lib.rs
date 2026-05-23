@@ -81,6 +81,14 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/usage", get(rest::get_usage_stats))
             .route("/api/v1/runtime/reload", post(rest::reload_runtime))
             .route(
+                "/api/v1/runtime/tasks",
+                get(rest::list_runtime_background_tasks),
+            )
+            .route(
+                "/api/v1/runtime/tasks/{task_id}/cancel",
+                post(rest::cancel_runtime_background_task),
+            )
+            .route(
                 "/api/v1/settings",
                 get(rest::get_settings)
                     .put(rest::set_settings)

@@ -30,6 +30,7 @@ export function useRuntimeSectionPageState(input: { route: RouteLocationNormaliz
 
   const workflow = createRuntimeWorkflowPanelState({
     approvePermission: state.approvePermission,
+    isInteractiveRequestBusy: state.isInteractiveRequestBusy,
     editPermissionRequest: state.editPermissionRequest,
     executionFacts: state.executionFacts,
     openSelectedSessionInChat: state.openSelectedSessionInChat,

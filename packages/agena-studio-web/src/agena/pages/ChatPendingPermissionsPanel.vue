@@ -15,6 +15,7 @@ const props = defineProps<{
     details: string[]
   }
   permissionReplyPreview: (scope?: 'session' | 'workspace' | 'global') => string
+  isInteractiveRequestBusy: (requestId: string) => boolean
   approvePermission: (
     requestId: string,
     kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
@@ -42,46 +43,94 @@ const props = defineProps<{
           invocation={{ request.related_actions.map((action) => props.permissionActionView(action).title).join(' · ') }}
         </div>
         <div
-          v-if="props.permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).summary"
+          v-if="
+            props.permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator })
+              .summary
+          "
           class="muted"
         >
-          {{ props.permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).summary }}
+          {{
+            props.permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator })
+              .summary
+          }}
         </div>
         <div
-          v-if="props.permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).details.length"
+          v-if="
+            props.permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator })
+              .details.length
+          "
           class="muted mono"
         >
-          {{ props.permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).details.join(' · ') }}
+          {{
+            props
+              .permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator })
+              .details.join(' · ')
+          }}
         </div>
         <div class="muted mono">{{ props.permissionActionView(request.action).details.join(' · ') }}</div>
         <div class="button-row">
-          <button class="button primary" @click="props.approvePermission(request.request_id, 'allow_once')">
+          <button
+            class="button primary"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.approvePermission(request.request_id, 'allow_once')"
+          >
             Allow Once
           </button>
-          <button class="button" @click="props.approvePermission(request.request_id, 'allow_always', 'session')">
+          <button
+            class="button"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.approvePermission(request.request_id, 'allow_always', 'session')"
+          >
             Allow Always (Session)
           </button>
-          <button class="button" @click="props.approvePermission(request.request_id, 'allow_always', 'workspace')">
+          <button
+            class="button"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.approvePermission(request.request_id, 'allow_always', 'workspace')"
+          >
             Allow Always (Workspace)
           </button>
-          <button class="button" @click="props.approvePermission(request.request_id, 'allow_always', 'global')">
+          <button
+            class="button"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.approvePermission(request.request_id, 'allow_always', 'global')"
+          >
             Allow Always (Global)
           </button>
-          <button class="button danger" @click="props.approvePermission(request.request_id, 'deny_once')">
+          <button
+            class="button danger"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.approvePermission(request.request_id, 'deny_once')"
+          >
             Deny Once
           </button>
-          <button class="button danger" @click="props.approvePermission(request.request_id, 'deny_always', 'session')">
+          <button
+            class="button danger"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.approvePermission(request.request_id, 'deny_always', 'session')"
+          >
             Deny Always (Session)
           </button>
-          <button class="button danger" @click="props.approvePermission(request.request_id, 'deny_always', 'workspace')">
+          <button
+            class="button danger"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.approvePermission(request.request_id, 'deny_always', 'workspace')"
+          >
             Deny Always (Workspace)
           </button>
-          <button class="button danger" @click="props.approvePermission(request.request_id, 'deny_always', 'global')">
+          <button
+            class="button danger"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.approvePermission(request.request_id, 'deny_always', 'global')"
+          >
             Deny Always (Global)
           </button>
         </div>
         <div class="muted">
-          once={{ props.permissionReplyPreview() }} · session={{ props.permissionReplyPreview('session') }} · workspace={{ props.permissionReplyPreview('workspace') }} · global={{ props.permissionReplyPreview('global') }}
+          once={{ props.permissionReplyPreview() }} · session={{ props.permissionReplyPreview('session') }} ·
+          workspace={{ props.permissionReplyPreview('workspace') }} · global={{
+            props.permissionReplyPreview('global')
+          }}
         </div>
       </div>
     </div>

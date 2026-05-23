@@ -39,6 +39,7 @@ export function useRuntimePageState(input: {
     drafts,
     editingPermissionRuleId,
     globalEvents,
+    interactiveRequestInFlight,
     loading,
     lspQuery,
     marketplaceAllowUnverified,
@@ -174,6 +175,7 @@ export function useRuntimePageState(input: {
     drafts,
     editingPermissionRuleId,
     globalEvents,
+    interactiveRequestInFlight,
     loading,
     lspQuery,
     marketplaceAllowUnverified,
@@ -221,11 +223,7 @@ export function useRuntimePageState(input: {
     workspaces,
   })
 
-  const {
-    selectSession,
-    selectWorkspace,
-    triggerReload,
-  } = sessionWorkflowActions
+  const { selectSession, selectWorkspace, triggerReload } = sessionWorkflowActions
 
   const {
     loadDesktopPanel,
@@ -246,17 +244,14 @@ export function useRuntimePageState(input: {
     upgradeMarketplacePluginAction,
   } = marketplaceActions
 
-  const {
-    canTogglePluginConfig,
-    loadPluginDetails,
-    setSelectedPluginDisabled,
-  } = pluginDetails
+  const { canTogglePluginConfig, loadPluginDetails, setSelectedPluginDisabled } = pluginDetails
 
   const {
     approvePermission,
     editPermissionRequest,
     deletePermissionRuleAction,
     editPermissionRule,
+    isInteractiveRequestBusy,
     permissionRuleFacts,
     permissionRuleLabel,
     permissionRulePreview,
@@ -295,6 +290,7 @@ export function useRuntimePageState(input: {
     actionMessage,
     approvePermission,
     editPermissionRequest,
+    isInteractiveRequestBusy,
     authProviders,
     browserAuthCodeDrafts,
     browserAuthInstanceDrafts,

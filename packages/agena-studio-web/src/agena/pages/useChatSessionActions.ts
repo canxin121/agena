@@ -34,6 +34,7 @@ export type ChatSessionActionsInput = {
   composer: Ref<string>
   continuing: Ref<boolean>
   errorMessage: Ref<string>
+  interactiveRequestInFlight: Record<string, boolean>
   loading: Ref<boolean>
   localCommandNotice: Ref<string>
   inspectedMessage: Ref<MessageResource | null>
@@ -127,6 +128,27 @@ function formatGoalNotice(goal: SessionGoalResource): string {
 }
 
 export function useChatSessionActions(input: ChatSessionActionsInput, deps: ChatSessionActionsDeps = defaultDeps) {
+  function interactiveRequestKey(sessionId: number, requestId: string): string {
+    return `${sessionId}:${requestId}`
+  }
+
+  function beginInteractiveRequest(sessionId: number, requestId: string): boolean {
+    const key = interactiveRequestKey(sessionId, requestId)
+    if (input.interactiveRequestInFlight[key]) return false
+    input.interactiveRequestInFlight[key] = true
+    return true
+  }
+
+  function finishInteractiveRequest(sessionId: number, requestId: string) {
+    delete input.interactiveRequestInFlight[interactiveRequestKey(sessionId, requestId)]
+  }
+
+  function isInteractiveRequestBusy(requestId: string): boolean {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return false
+    return !!input.interactiveRequestInFlight[interactiveRequestKey(sessionId, requestId)]
+  }
+
   function patchCurrentGoal(goal: SessionGoalResource | null) {
     if (!input.sessionState.value) return
     input.sessionState.value = {
@@ -503,6 +525,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   ) {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
+    if (!beginInteractiveRequest(sessionId, requestId)) return
     input.errorMessage.value = ''
     try {
       input.sessionState.value = await deps.replyPermission({
@@ -515,6 +538,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.refreshConversation(false)
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      finishInteractiveRequest(sessionId, requestId)
     }
   }
 
@@ -524,6 +549,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
 
     const request = input.sessionState.value?.pending_user_input_requests.find((item) => item.request_id === requestId)
     if (!request) return
+    if (!beginInteractiveRequest(sessionId, requestId)) return
 
     const answers: Record<string, string[]> = {}
     const draft = input.userInputDrafts[requestId] || {}
@@ -548,12 +574,15 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.refreshConversation(false)
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      finishInteractiveRequest(sessionId, requestId)
     }
   }
 
   async function cancelUserAnswers(requestId: string) {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
+    if (!beginInteractiveRequest(sessionId, requestId)) return
 
     try {
       input.sessionState.value = await deps.cancelUserInput({
@@ -565,6 +594,8 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.refreshConversation(false)
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      finishInteractiveRequest(sessionId, requestId)
     }
   }
 
@@ -637,6 +668,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     forkCurrentSession,
     importSessionFromJsonl: importSessionFromJsonlAction,
     inspectMessage,
+    isInteractiveRequestBusy,
     renameCurrentSession,
     resolveWorkspaceAction,
     rewindToMessage,

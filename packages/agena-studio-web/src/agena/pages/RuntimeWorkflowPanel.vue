@@ -5,7 +5,12 @@ import {
   permissionReplyPreview,
   permissionRiskLabel,
 } from '@/agena/lib/permissionFormatting'
-import type { PermissionRequest, SessionExecutionResource, SessionResource, WorkspaceResource } from '@/agena/lib/agenaApi'
+import type {
+  PermissionRequest,
+  SessionExecutionResource,
+  SessionResource,
+  WorkspaceResource,
+} from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
   selectedWorkspaceId: number | null
@@ -26,6 +31,7 @@ const props = defineProps<{
     kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
     scope?: 'session' | 'workspace' | 'global',
   ) => void | Promise<void>
+  isInteractiveRequestBusy: (requestId: string) => boolean
 }>()
 </script>
 
@@ -90,7 +96,11 @@ const props = defineProps<{
         <span class="badge">{{ props.sessionExecution?.pending_permission_requests.length || 0 }}</span>
       </div>
       <div v-if="props.sessionExecution?.pending_permission_requests?.length" class="list">
-        <div v-for="request in props.sessionExecution.pending_permission_requests" :key="request.request_id" class="list-item">
+        <div
+          v-for="request in props.sessionExecution.pending_permission_requests"
+          :key="request.request_id"
+          class="list-item"
+        >
           <div>
             <strong>{{ permissionActionView(request.action).title }}</strong>
           </div>
@@ -104,26 +114,98 @@ const props = defineProps<{
           <div v-if="request.related_actions?.length" class="muted mono">
             invocation={{ request.related_actions.map((action) => permissionActionView(action).title).join(' · ') }}
           </div>
-          <div v-if="permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).summary" class="muted">
-            {{ permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).summary }}
+          <div
+            v-if="
+              permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator })
+                .summary
+            "
+            class="muted"
+          >
+            {{
+              permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator })
+                .summary
+            }}
           </div>
-          <div v-if="permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).details.length" class="muted mono">
-            {{ permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator }).details.join(' · ') }}
+          <div
+            v-if="
+              permissionExplainability({ source: request.source, scope: request.scope, operator: request.operator })
+                .details.length
+            "
+            class="muted mono"
+          >
+            {{
+              permissionExplainability({
+                source: request.source,
+                scope: request.scope,
+                operator: request.operator,
+              }).details.join(' · ')
+            }}
           </div>
           <div class="muted mono">{{ permissionActionView(request.action).details.join(' · ') }}</div>
           <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
             <button class="button" @click="props.editPermissionRequest(request)">Edit Rule</button>
-            <button class="button primary" @click="props.approvePermission(request.request_id, 'allow_once')">Allow Once</button>
-            <button class="button" @click="props.approvePermission(request.request_id, 'allow_always', 'session')">Allow Always (Session)</button>
-            <button class="button" @click="props.approvePermission(request.request_id, 'allow_always', 'workspace')">Allow Always (Workspace)</button>
-            <button class="button" @click="props.approvePermission(request.request_id, 'allow_always', 'global')">Allow Always (Global)</button>
-            <button class="button danger" @click="props.approvePermission(request.request_id, 'deny_once')">Deny Once</button>
-            <button class="button danger" @click="props.approvePermission(request.request_id, 'deny_always', 'session')">Deny Always (Session)</button>
-            <button class="button danger" @click="props.approvePermission(request.request_id, 'deny_always', 'workspace')">Deny Always (Workspace)</button>
-            <button class="button danger" @click="props.approvePermission(request.request_id, 'deny_always', 'global')">Deny Always (Global)</button>
+            <button
+              class="button primary"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
+              @click="props.approvePermission(request.request_id, 'allow_once')"
+            >
+              Allow Once
+            </button>
+            <button
+              class="button"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
+              @click="props.approvePermission(request.request_id, 'allow_always', 'session')"
+            >
+              Allow Always (Session)
+            </button>
+            <button
+              class="button"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
+              @click="props.approvePermission(request.request_id, 'allow_always', 'workspace')"
+            >
+              Allow Always (Workspace)
+            </button>
+            <button
+              class="button"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
+              @click="props.approvePermission(request.request_id, 'allow_always', 'global')"
+            >
+              Allow Always (Global)
+            </button>
+            <button
+              class="button danger"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
+              @click="props.approvePermission(request.request_id, 'deny_once')"
+            >
+              Deny Once
+            </button>
+            <button
+              class="button danger"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
+              @click="props.approvePermission(request.request_id, 'deny_always', 'session')"
+            >
+              Deny Always (Session)
+            </button>
+            <button
+              class="button danger"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
+              @click="props.approvePermission(request.request_id, 'deny_always', 'workspace')"
+            >
+              Deny Always (Workspace)
+            </button>
+            <button
+              class="button danger"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
+              @click="props.approvePermission(request.request_id, 'deny_always', 'global')"
+            >
+              Deny Always (Global)
+            </button>
           </div>
           <div class="muted">
-            once={{ permissionReplyPreview() }} · session={{ permissionReplyPreview('session') }} · workspace={{ permissionReplyPreview('workspace') }} · global={{ permissionReplyPreview('global') }}
+            once={{ permissionReplyPreview() }} · session={{ permissionReplyPreview('session') }} · workspace={{
+              permissionReplyPreview('workspace')
+            }}
+            · global={{ permissionReplyPreview('global') }}
           </div>
         </div>
       </div>
@@ -137,7 +219,9 @@ const props = defineProps<{
         <div v-for="event in props.timelineSummaries" :key="event.key" class="list-item">
           <div class="page-header" style="align-items: flex-start">
             <div>
-              <div><strong>{{ event.kind }}</strong></div>
+              <div>
+                <strong>{{ event.kind }}</strong>
+              </div>
               <div class="muted">{{ event.summary }}</div>
               <div class="muted">{{ event.sessionId }}</div>
             </div>
@@ -155,7 +239,9 @@ const props = defineProps<{
         <div v-for="event in props.globalEventSummaries" :key="`global-${event.key}`" class="list-item">
           <div class="page-header" style="align-items: flex-start">
             <div>
-              <div><strong>{{ event.kind }}</strong></div>
+              <div>
+                <strong>{{ event.kind }}</strong>
+              </div>
               <div class="muted">{{ event.summary }}</div>
               <div class="muted">{{ event.sessionId }}</div>
             </div>

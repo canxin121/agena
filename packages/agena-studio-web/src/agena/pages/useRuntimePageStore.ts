@@ -60,6 +60,7 @@ export function useRuntimePageStore() {
   const desktopSaving = ref(false)
   const actionError = ref('')
   const actionMessage = ref('')
+  const interactiveRequestInFlight = reactive<Record<string, boolean>>({})
   const desktopNotice = ref('')
   const drafts = reactive<Record<string, string>>({})
   const browserAuthCodeDrafts = reactive<Record<string, string>>({})
@@ -161,6 +162,7 @@ export function useRuntimePageStore() {
     drafts,
     editingPermissionRuleId,
     globalEvents,
+    interactiveRequestInFlight,
     loading,
     lspQuery,
     marketplaceAllowUnverified,

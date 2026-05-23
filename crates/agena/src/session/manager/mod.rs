@@ -361,6 +361,7 @@ pub struct SessionManager {
     bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>>,
     execution: ArcSwap<SessionManagerState>,
     turn_registry: Arc<TurnRegistry>,
+    reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
 }
 
@@ -372,6 +373,7 @@ impl SessionManager {
             bus: Arc::clone(&self.bus),
             execution: ArcSwap::from(self.execution.load_full()),
             turn_registry: Arc::clone(&self.turn_registry),
+            reply_session_locks: Arc::clone(&self.reply_session_locks),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
         }
     }
@@ -409,6 +411,7 @@ impl SessionManager {
             bus,
             execution: ArcSwap::from_pointee(state),
             turn_registry: Arc::new(TurnRegistry::new()),
+            reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -418,6 +421,15 @@ impl SessionManager {
     /// transports (REST/WS/SSE/IPC).
     pub fn event_publisher(&self) -> Arc<crate::event::EventPublisher> {
         Arc::clone(&self.publisher)
+    }
+
+    async fn reply_session_lock(&self, session_id: i64) -> Arc<Mutex<()>> {
+        let mut guard = self.reply_session_locks.lock().await;
+        Arc::clone(
+            guard
+                .entry(session_id)
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
     }
 
     /// Returns the in-process bus subscribers can attach to.

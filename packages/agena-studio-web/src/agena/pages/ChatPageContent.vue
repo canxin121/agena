@@ -157,11 +157,13 @@ const props = defineProps<{
         :permission-risk-label="props.state.permissionRiskLabel"
         :permission-explainability="props.state.permissionExplainability"
         :permission-reply-preview="props.state.permissionReplyPreview"
+        :is-interactive-request-busy="props.state.isInteractiveRequestBusy"
         :approve-permission="props.state.approvePermission"
       />
 
       <ChatPendingUserInputPanel
         :requests="props.state.sessionState.value?.pending_user_input_requests ?? []"
+        :is-interactive-request-busy="props.state.isInteractiveRequestBusy"
         :read-user-answer="props.state.readUserAnswer"
         :update-user-answer="props.state.updateUserAnswer"
         :submit-user-answers="props.state.submitUserAnswers"

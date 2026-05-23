@@ -32,6 +32,7 @@ export type RuntimePermissionActionsInput = {
   actionMessage: Ref<string>
   activeSettingsTab: Ref<'providers' | 'agents' | 'plugins' | 'permissions' | 'desktop'>
   editingPermissionRuleId: Ref<number | null>
+  interactiveRequestInFlight: Record<string, boolean>
   load: () => Promise<void>
   loadSessionExecution: (sessionId: number) => Promise<void>
   permissionDraft: RuntimePermissionDraft
@@ -81,6 +82,27 @@ export function useRuntimePermissionActions(
   input: RuntimePermissionActionsInput,
   deps: RuntimePermissionActionsDeps = defaultDeps,
 ) {
+  function interactiveRequestKey(sessionId: number, requestId: string): string {
+    return `${sessionId}:${requestId}`
+  }
+
+  function beginInteractiveRequest(sessionId: number, requestId: string): boolean {
+    const key = interactiveRequestKey(sessionId, requestId)
+    if (input.interactiveRequestInFlight[key]) return false
+    input.interactiveRequestInFlight[key] = true
+    return true
+  }
+
+  function finishInteractiveRequest(sessionId: number, requestId: string) {
+    delete input.interactiveRequestInFlight[interactiveRequestKey(sessionId, requestId)]
+  }
+
+  function isInteractiveRequestBusy(requestId: string): boolean {
+    const sessionId = input.selectedSessionId.value
+    if (!sessionId) return false
+    return !!input.interactiveRequestInFlight[interactiveRequestKey(sessionId, requestId)]
+  }
+
   function resetPermissionDraft() {
     input.permissionDraft.subjectKind = 'tool'
     input.permissionDraft.toolName = ''
@@ -194,8 +216,7 @@ export function useRuntimePermissionActions(
         : typeof action.path_access_kind === 'string'
           ? action.path_access_kind
           : 'read'
-    input.permissionDraft.workspaceRoot =
-      typeof action.workspace_root === 'string' ? action.workspace_root : ''
+    input.permissionDraft.workspaceRoot = typeof action.workspace_root === 'string' ? action.workspace_root : ''
     input.permissionDraft.targetPath = typeof action.target_path === 'string' ? action.target_path : ''
     input.permissionDraft.networkTarget =
       typeof action.target === 'string'
@@ -206,11 +227,7 @@ export function useRuntimePermissionActions(
             ? action.host
             : ''
     const networkPort =
-      typeof action.port === 'number'
-        ? action.port
-        : typeof action.port === 'string'
-          ? Number(action.port)
-          : undefined
+      typeof action.port === 'number' ? action.port : typeof action.port === 'string' ? Number(action.port) : undefined
     input.permissionDraft.networkPort =
       networkPort === undefined || !Number.isFinite(networkPort) ? '' : String(networkPort)
     input.permissionDraft.scope =
@@ -316,6 +333,7 @@ export function useRuntimePermissionActions(
   ) {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
+    if (!beginInteractiveRequest(sessionId, requestId)) return
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
@@ -329,6 +347,8 @@ export function useRuntimePermissionActions(
       await input.loadSessionExecution(sessionId)
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      finishInteractiveRequest(sessionId, requestId)
     }
   }
 
@@ -337,6 +357,7 @@ export function useRuntimePermissionActions(
     editPermissionRequest,
     editPermissionRule,
     deletePermissionRuleAction,
+    isInteractiveRequestBusy,
     permissionRuleFacts,
     permissionRuleLabel,
     permissionRulePreview,

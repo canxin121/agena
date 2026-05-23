@@ -47,6 +47,7 @@ export function useChatPageState() {
   const continuing = ref(false)
   const errorMessage = ref('')
 
+  const interactiveRequestInFlight = reactive<Record<string, boolean>>({})
   const userInputDrafts = reactive<Record<string, Record<string, string>>>({})
   const localCommandNotice = ref('')
   const sessionImportJsonl = ref('')
@@ -55,6 +56,7 @@ export function useChatPageState() {
     composer,
     continuing,
     errorMessage,
+    interactiveRequestInFlight,
     loading,
     localCommandNotice,
     messages,

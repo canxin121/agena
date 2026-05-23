@@ -2663,29 +2663,10 @@ impl SessionManager {
         &self,
         state: &SessionManagerState,
     ) -> Result<Option<ModelRef>, AppError> {
-        let selection = &state.config.default_selection;
-        if let Some(provider_id) = selection.provider.as_deref() {
-            return state
-                .processor
-                .provider_registry()
-                .resolve_model_selection(
-                    provider_id,
-                    selection.adapter.as_deref(),
-                    selection.model.as_deref(),
-                )
-                .map(Some);
-        }
-
-        let mut provider_ids = state.processor.provider_registry().provider_ids();
-        if provider_ids.len() != 1 {
-            return Ok(None);
-        }
-
         state
             .processor
             .provider_registry()
-            .resolve_model_selection(provider_ids.remove(0).as_str(), None, None)
-            .map(Some)
+            .resolve_default_model_selection(&state.config.default_selection)
     }
 
     pub(super) fn model_from_session_or_default(

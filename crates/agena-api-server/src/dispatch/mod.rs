@@ -7,13 +7,9 @@ use std::collections::HashMap;
 use crate::local_api::{
     MessageListQuery, ModelCatalogResponse as HttpModelCatalogResponse, PermissionRuleListQuery,
     PermissionRuleResource as HttpPermissionRuleResource, PermissionRuleWriteRequest,
-    SessionAutomationResource as HttpSessionAutomationResource,
-    SessionCreateRequest as HttpSessionCreateRequest,
-    SessionExecutionContextResource as HttpSessionExecutionContextResource,
-    SessionExecutionResource as HttpSessionExecutionResource,
-    SessionGoalResource as HttpSessionGoalResource, SessionListQuery, SessionReplaceRequest,
-    SessionResource as HttpSessionResource, SessionRunOptionsRequest, WorkspaceListQuery,
-    WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource, WorkspaceWriteRequest,
+    SessionCreateRequest as HttpSessionCreateRequest, SessionListQuery, SessionReplaceRequest,
+    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource,
+    WorkspaceWriteRequest,
 };
 use agena::event::{EventStore, StoreRange};
 use agena::{
@@ -47,10 +43,7 @@ use agena_api::{
         RuntimeAutomationResource, RuntimeBackgroundTaskResource, RuntimeLspResource,
         RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
         RuntimeOperatorResource, RuntimeSessionCacheResource, RuntimeSkillResource,
-        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
-        SessionAutomationResource, SessionExecutionContextResource, SessionExecutionResource,
-        SessionGoalResource, SessionResource, SessionRunState, SessionUsageLimitBasis,
-        SessionUsageResource, WorkspaceResource,
+        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource, WorkspaceResource,
     },
 };
 
@@ -62,7 +55,9 @@ async fn run_options_to_core(
     options: &RunOptions,
 ) -> Result<agena::session::SessionRunOptions, ServerError> {
     let snapshot = state.runtime().current_snapshot();
-    let default_model = configured_default_model(&snapshot)?;
+    let default_model = snapshot
+        .resolve_default_model()
+        .map_err(ServerError::Core)?;
     let manager = state.session_manager()?;
     state
         .service()
@@ -71,38 +66,10 @@ async fn run_options_to_core(
             default_model,
             manager.as_ref(),
             session_id,
-            SessionRunOptionsRequest {
-                model: options.model.clone(),
-                thinking_mode: options.thinking_mode.clone(),
-                speed_mode: options.speed_mode.clone(),
-                verbosity: options.verbosity.clone(),
-                parallel_tool_calls: options.parallel_tool_calls,
-                agent_profile: options.agent_profile.clone(),
-                system: options.system.clone(),
-                temperature: options.temperature,
-                max_output_tokens: options.max_output_tokens,
-            },
+            options.clone(),
         )
         .await
         .server()
-}
-
-fn configured_default_model(
-    snapshot: &agena::runtime::RuntimeSnapshot,
-) -> Result<Option<agena::model::ModelRef>, ServerError> {
-    let default = &snapshot.config_resolution().config.default;
-    let Some(provider_id) = default.provider.as_deref() else {
-        return Ok(None);
-    };
-    let registry = snapshot.provider_registry();
-    registry
-        .resolve_model_selection(
-            provider_id,
-            default.adapter.as_deref(),
-            default.model.as_deref(),
-        )
-        .map(Some)
-        .map_err(ServerError::Core)
 }
 
 fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
@@ -139,80 +106,6 @@ impl From<HttpWorkspaceResource> for WorkspaceResource {
     }
 }
 
-impl From<HttpSessionGoalResource> for SessionGoalResource {
-    fn from(value: HttpSessionGoalResource) -> Self {
-        Self {
-            id: value.id,
-            session_id: value.session_id,
-            objective: value.objective,
-            status: value.status,
-            created_at: value.created_at,
-            updated_at: value.updated_at,
-            completed_at: value.completed_at,
-        }
-    }
-}
-
-impl From<HttpSessionResource> for SessionResource {
-    fn from(value: HttpSessionResource) -> Self {
-        Self {
-            id: value.id,
-            parent_id: value.parent_id,
-            depth: value.depth,
-            root_id: value.root_id,
-            workspace_id: value.workspace_id,
-            title: value.title,
-            version: value.version,
-            is_subagent: value.is_subagent,
-            created_at: value.created_at,
-            updated_at: value.updated_at,
-            message_count: value.message_count,
-            child_session_count: value.child_session_count,
-            last_message_at: value.last_message_at,
-            goal: value.goal.map(Into::into),
-        }
-    }
-}
-
-impl From<HttpSessionAutomationResource> for SessionAutomationResource {
-    fn from(value: HttpSessionAutomationResource) -> Self {
-        Self {
-            job_count: value.job_count,
-            latest_job: value.latest_job.map(Into::into),
-        }
-    }
-}
-
-impl From<crate::local_api::ScheduledJobRunResource>
-    for agena_api::resource::ScheduledJobRunResource
-{
-    fn from(value: crate::local_api::ScheduledJobRunResource) -> Self {
-        Self {
-            triggered_at: value.triggered_at,
-            finished_at: value.finished_at,
-            status: value.status,
-            session_id: value.session_id,
-            error_message: value.error_message,
-        }
-    }
-}
-
-impl From<crate::local_api::ScheduledJobResource> for agena_api::resource::ScheduledJobResource {
-    fn from(value: crate::local_api::ScheduledJobResource) -> Self {
-        Self {
-            id: value.id,
-            kind: value.kind,
-            expression: value.expression,
-            at: value.at,
-            prompt: value.prompt,
-            owner_session_id: value.owner_session_id,
-            next_fire_at: value.next_fire_at,
-            last_fired_at: value.last_fired_at,
-            last_run: value.last_run.map(Into::into),
-        }
-    }
-}
-
 impl From<HttpModelCatalogResponse> for ModelCatalogResponse {
     fn from(value: HttpModelCatalogResponse) -> Self {
         Self {
@@ -239,83 +132,6 @@ impl From<crate::local_api::RuntimeBackgroundTaskResource> for RuntimeBackground
             started_at: value.started_at,
             finished_at: value.finished_at,
             cancellable: value.cancellable,
-        }
-    }
-}
-
-impl From<HttpSessionExecutionContextResource> for SessionExecutionContextResource {
-    fn from(value: HttpSessionExecutionContextResource) -> Self {
-        Self {
-            agent_profile: value.agent_profile,
-            agent_mode: value.agent_mode,
-            agent_hidden: value.agent_hidden,
-            agent_color: value.agent_color,
-            active_skill_name: value.active_skill_name,
-            system_prompt_override: value.system_prompt_override,
-            allowed_tools: value.allowed_tools,
-            agent_permission: value.agent_permission,
-            model_provider_id: value.model_provider_id,
-            model_adapter_id: value.model_adapter_id,
-            model_id: value.model_id,
-            model_thinking_mode: value.model_thinking_mode,
-            model_speed_mode: value.model_speed_mode,
-            model_verbosity: value.model_verbosity,
-            model_parallel_tool_calls: value.model_parallel_tool_calls,
-            agent_run: value.agent_run,
-            effective_workspace_root: value.effective_workspace_root,
-            task_id: value.task_id,
-        }
-    }
-}
-
-impl From<crate::local_api::SessionRunState> for SessionRunState {
-    fn from(value: crate::local_api::SessionRunState) -> Self {
-        match value {
-            crate::local_api::SessionRunState::Idle => Self::Idle,
-            crate::local_api::SessionRunState::AwaitingModel => Self::AwaitingModel,
-        }
-    }
-}
-
-impl From<crate::local_api::SessionUsageLimitBasis> for SessionUsageLimitBasis {
-    fn from(value: crate::local_api::SessionUsageLimitBasis) -> Self {
-        match value {
-            crate::local_api::SessionUsageLimitBasis::ContextWindow => Self::ContextWindow,
-            crate::local_api::SessionUsageLimitBasis::PromptThreshold => Self::PromptThreshold,
-        }
-    }
-}
-
-impl From<crate::local_api::SessionUsageResource> for SessionUsageResource {
-    fn from(value: crate::local_api::SessionUsageResource) -> Self {
-        Self {
-            measured_prompt_tokens: value.measured_prompt_tokens,
-            current_tokens: value.current_tokens,
-            projected_tokens: value.projected_tokens,
-            limit_tokens: value.limit_tokens,
-            limit_basis: value.limit_basis.map(Into::into),
-            reserved_tokens: value.reserved_tokens,
-            model_context_window_tokens: value.model_context_window_tokens,
-            model_max_input_tokens: value.model_max_input_tokens,
-            model_max_output_tokens: value.model_max_output_tokens,
-        }
-    }
-}
-
-impl From<HttpSessionExecutionResource> for SessionExecutionResource {
-    fn from(value: HttpSessionExecutionResource) -> Self {
-        Self {
-            session: value.session.into(),
-            blocked: value.blocked,
-            run_state: value.run_state.into(),
-            latest_event_seq: value.latest_event_seq,
-            automation: value.automation.map(Into::into),
-            execution: value.execution.into(),
-            pending_interactive_requests: value.pending_interactive_requests,
-            pending_permission_requests: value.pending_permission_requests,
-            pending_user_input_requests: value.pending_user_input_requests,
-            goal: value.goal.map(Into::into),
-            usage: value.usage.into(),
         }
     }
 }

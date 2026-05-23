@@ -407,6 +407,12 @@ impl RuntimeSnapshot {
         self.services.providers.resolve_model_target(target, model)
     }
 
+    pub fn resolve_default_model(&self) -> Result<Option<ModelRef>, AppError> {
+        self.services
+            .providers
+            .resolve_default_model_selection(&self.resolution.config.default)
+    }
+
     pub async fn resolve_model(
         &self,
         model: &ModelRef,

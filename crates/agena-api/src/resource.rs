@@ -502,6 +502,15 @@ pub enum SessionUsageLimitBasis {
     PromptThreshold,
 }
 
+impl From<agena::session::SessionUsageLimitBasis> for SessionUsageLimitBasis {
+    fn from(value: agena::session::SessionUsageLimitBasis) -> Self {
+        match value {
+            agena::session::SessionUsageLimitBasis::ContextWindow => Self::ContextWindow,
+            agena::session::SessionUsageLimitBasis::PromptThreshold => Self::PromptThreshold,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionUsageResource {
     #[serde(skip_serializing_if = "Option::is_none")]

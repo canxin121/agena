@@ -527,7 +527,9 @@ async fn resolve_run_options(
     request: SessionRunOptionsRequest,
 ) -> Result<agena::session::SessionRunOptions, ServerError> {
     let snapshot = state.runtime().current_snapshot();
-    let default_model = configured_default_model(&snapshot)?;
+    let default_model = snapshot
+        .resolve_default_model()
+        .map_err(ServerError::Core)?;
     let manager = state.session_manager()?;
     state
         .service()
@@ -540,24 +542,6 @@ async fn resolve_run_options(
         )
         .await
         .map_err(server_error_from_http)
-}
-
-fn configured_default_model(
-    snapshot: &agena::runtime::RuntimeSnapshot,
-) -> Result<Option<agena::model::ModelRef>, ServerError> {
-    let default = &snapshot.config_resolution().config.default;
-    let Some(provider_id) = default.provider.as_deref() else {
-        return Ok(None);
-    };
-    let registry = snapshot.provider_registry();
-    registry
-        .resolve_model_selection(
-            provider_id,
-            default.adapter.as_deref(),
-            default.model.as_deref(),
-        )
-        .map(Some)
-        .map_err(ServerError::Core)
 }
 
 fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {

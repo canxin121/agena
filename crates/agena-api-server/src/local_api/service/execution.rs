@@ -68,9 +68,9 @@ impl ApiService {
                     .get_session(session_id)
                     .await
                     .map_err(api_error_from_app)?;
-                let selection = session.runtime().execution.selection.model_ref().map_err(|error| {
+                let selection = session.runtime().effective_model_ref().map_err(|error| {
                     ApiError::internal(format!(
-                        "session {session_id} contains invalid execution model selection: {error}"
+                        "session {session_id} contains invalid persisted model reference: {error}"
                     ))
                 })?;
                 match selection {
@@ -293,25 +293,12 @@ fn session_usage_resource(
         current_tokens: usage.current_tokens,
         projected_tokens: usage.projected_tokens,
         limit_tokens: usage.limit_tokens,
-        limit_basis: usage.limit_basis.map(session_usage_limit_basis_resource),
+        limit_basis: usage.limit_basis.map(Into::into),
         reserved_tokens: usage.reserved_tokens,
         model_context_window_tokens: usage.model_context_window_tokens,
         model_max_input_tokens: usage.model_max_input_tokens,
         model_max_output_tokens: usage.model_max_output_tokens,
     })
-}
-
-fn session_usage_limit_basis_resource(
-    basis: agena::session::SessionUsageLimitBasis,
-) -> SessionUsageLimitBasis {
-    match basis {
-        agena::session::SessionUsageLimitBasis::ContextWindow => {
-            SessionUsageLimitBasis::ContextWindow
-        }
-        agena::session::SessionUsageLimitBasis::PromptThreshold => {
-            SessionUsageLimitBasis::PromptThreshold
-        }
-    }
 }
 fn resolve_mode_request_override(
     request_override: &ModelSpeedModeRequestOverride,

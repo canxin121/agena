@@ -2157,26 +2157,17 @@ impl AgenaCli {
             .ok_or_else(session_storage_error)?;
         let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
         let session = if args.agent.is_some() {
+            let mut options = SessionRunOptions::new(default_model(&runtime)?);
+            options.agent_profile = args
+                .agent
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
             manager
                 .continue_session(SessionContinueRequest {
                     session_id,
-                    options: SessionRunOptions {
-                        model: default_model(&runtime)?,
-                        thinking_mode: None,
-                        speed_mode: None,
-                        verbosity: None,
-                        thinking: None,
-                        request_override: Default::default(),
-                        system: None,
-                        temperature: None,
-                        max_output_tokens: None,
-                        agent_profile: args
-                            .agent
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|value| !value.is_empty())
-                            .map(ToOwned::to_owned),
-                    },
+                    options,
                 })
                 .await?
         } else {
@@ -3892,36 +3883,26 @@ fn resolve_continue_options(
     let snapshot = runtime.current_snapshot();
     let model = if let Some(model) = args.model.as_deref() {
         snapshot.resolve_model_target(model, None)?
-    } else if let (Some(provider_id), Some(model_id)) = (
-        session.runtime.run.model_provider_id.as_deref(),
-        session.runtime.run.model_id.as_deref(),
-    ) {
-        match session.runtime.run.model_adapter_id.as_deref() {
-            Some(adapter_id) => ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id),
-            None => ModelRef::try_new(provider_id, model_id),
-        }
+    } else if let Some(model) = session
+        .runtime
+        .effective_model_ref()
         .map_err(|err| AppError::Config(format!("invalid persisted model reference: {err}")))?
+    {
+        model
     } else {
         default_model(runtime)?
     };
 
-    Ok(SessionRunOptions {
-        model,
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature: args.temperature,
-        max_output_tokens: args.max_output_tokens,
-        agent_profile: args
-            .agent
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-    })
+    let mut options = SessionRunOptions::new(model);
+    options.temperature = args.temperature;
+    options.max_output_tokens = args.max_output_tokens;
+    options.agent_profile = args
+        .agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    Ok(options)
 }
 
 fn resolve_run_options(
@@ -3939,41 +3920,21 @@ fn resolve_run_options(
         default_model(runtime)?
     };
 
-    Ok(SessionRunOptions {
-        model,
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature,
-        max_output_tokens,
-        agent_profile: agent_profile
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-    })
+    let mut options = SessionRunOptions::new(model);
+    options.temperature = temperature;
+    options.max_output_tokens = max_output_tokens;
+    options.agent_profile = agent_profile
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    Ok(options)
 }
 
 fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
-    let snapshot = runtime.current_snapshot();
-    let registry = snapshot.provider_registry();
-    let default_config = &snapshot.config_resolution().config.default;
-    if let Some(provider_id) = default_config.provider.as_deref() {
-        return registry.resolve_model_selection(
-            provider_id,
-            default_config.adapter.as_deref(),
-            default_config.model.as_deref(),
-        );
-    }
-
-    let mut providers = registry.provider_ids();
-    providers.sort();
-    let provider_id = providers
-        .first()
-        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))?;
-    registry.resolve_model_target(provider_id, None)
+    runtime
+        .current_snapshot()
+        .resolve_default_model()?
+        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))
 }
 
 fn last_assistant_text(session: &Session) -> Option<String> {

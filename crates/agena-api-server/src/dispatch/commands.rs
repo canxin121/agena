@@ -1,4 +1,5 @@
 use super::*;
+use agena_api::resource::SessionResource;
 
 // ─── Command dispatch ───────────────────────────────────────────────────
 

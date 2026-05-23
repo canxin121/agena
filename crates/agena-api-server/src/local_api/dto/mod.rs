@@ -2,19 +2,18 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use agena::{
-    agent::{AgentMode, AgentPermissionConfig, AgentRunConfig, PermissionConfig},
+    agent::{AgentMode, AgentPermissionConfig},
     agents::AgentScope,
-    message::{PartContent, PendingInteractiveRequest, UserInputReply, UserInputRequest},
-    model::ModelRef,
+    message::{PartContent, UserInputReply},
     model_catalog::{ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},
     permission::PermissionMode,
-    permission::{PermissionReply, PermissionRequest},
+    permission::PermissionReply,
     provider::ProviderModel,
     runtime::{
         RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
         RuntimeBackgroundTaskStatus,
     },
-    session::{GoalStatus, SessionStatus, SessionSummary},
+    session::GoalStatus,
 };
 
 mod access;
@@ -29,6 +28,9 @@ mod sessions;
 mod workspaces;
 
 pub use access::*;
+pub use agena_api::resource::{
+    ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
+};
 pub use auth::*;
 pub use marketplace::*;
 pub use messages::*;
@@ -64,43 +66,6 @@ pub struct RuntimeSessionCacheResource {
     pub misses: u64,
     pub inserts: u64,
     pub evictions: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ScheduledJobRunResource {
-    pub triggered_at: DateTime<Utc>,
-    pub finished_at: DateTime<Utc>,
-    pub status: agena_scheduler::JobRunStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ScheduledJobResource {
-    pub id: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expression: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub at: Option<DateTime<Utc>>,
-    pub prompt: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_fire_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_fired_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_run: Option<ScheduledJobRunResource>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SessionAutomationResource {
-    pub job_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_job: Option<ScheduledJobResource>,
 }
 
 #[derive(Debug, Clone, Serialize)]

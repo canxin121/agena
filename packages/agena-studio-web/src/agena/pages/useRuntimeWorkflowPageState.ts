@@ -5,6 +5,7 @@ import { useRuntimeWorkflowState } from './useRuntimeWorkflowState'
 
 export type RuntimeWorkflowPageStateSource = {
   approvePermission: Parameters<typeof useRuntimeWorkflowState>[0]['approvePermission']
+  isInteractiveRequestBusy: Parameters<typeof useRuntimeWorkflowState>[0]['isInteractiveRequestBusy']
   editPermissionRequest: Parameters<typeof useRuntimeWorkflowState>[0]['editPermissionRequest']
   executionFacts: Parameters<typeof useRuntimeWorkflowState>[0]['executionFacts']
   openSelectedSessionInChat: Parameters<typeof useRuntimeWorkflowState>[0]['openSelectedSessionInChat']
@@ -21,11 +22,7 @@ export type RuntimeWorkflowPageStateSource = {
 }
 
 export type RuntimeWorkflowPageStateDeps = {
-  useRuntimeSectionState: (input: {
-    route: RouteLocationNormalizedLoaded
-    router: Router
-    section: 'runtime'
-  }) => {
+  useRuntimeSectionState: (input: { route: RouteLocationNormalizedLoaded; router: Router; section: 'runtime' }) => {
     shared: RuntimeSectionSharedState
     state: RuntimeWorkflowPageStateSource
   }
@@ -33,7 +30,9 @@ export type RuntimeWorkflowPageStateDeps = {
 
 const defaultDeps: RuntimeWorkflowPageStateDeps = {
   useRuntimeSectionState: (input) =>
-    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & RuntimeWorkflowPageStateSource>(input) as {
+    useRuntimeSectionState<{ [key: string]: unknown } & RuntimeSectionSharedState & RuntimeWorkflowPageStateSource>(
+      input,
+    ) as {
       shared: RuntimeSectionSharedState
       state: RuntimeWorkflowPageStateSource
     },
@@ -42,6 +41,7 @@ const defaultDeps: RuntimeWorkflowPageStateDeps = {
 export function createRuntimeWorkflowPanelState(state: RuntimeWorkflowPageStateSource) {
   return useRuntimeWorkflowState({
     approvePermission: state.approvePermission,
+    isInteractiveRequestBusy: state.isInteractiveRequestBusy,
     editPermissionRequest: state.editPermissionRequest,
     executionFacts: state.executionFacts,
     openSelectedSessionInChat: state.openSelectedSessionInChat,

@@ -3,6 +3,7 @@ import type { UserInputRequest } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
   requests: UserInputRequest[]
+  isInteractiveRequestBusy: (requestId: string) => boolean
   readUserAnswer: (requestId: string, questionId: string) => string
   updateUserAnswer: (requestId: string, questionId: string, value: string) => void
   submitUserAnswers: (requestId: string) => void | Promise<void>
@@ -26,15 +27,34 @@ const props = defineProps<{
             <textarea
               :id="`${request.request_id}-${question.id}`"
               class="textarea"
+              :disabled="props.isInteractiveRequestBusy(request.request_id)"
               :value="props.readUserAnswer(request.request_id, question.id)"
               :placeholder="question.multiple ? 'comma,separated,values' : question.question"
-              @input="props.updateUserAnswer(request.request_id, question.id, ($event.target as HTMLTextAreaElement | null)?.value || '')"
+              @input="
+                props.updateUserAnswer(
+                  request.request_id,
+                  question.id,
+                  ($event.target as HTMLTextAreaElement | null)?.value || '',
+                )
+              "
             />
           </div>
         </div>
         <div class="button-row" style="margin-top: 12px">
-          <button class="button primary" @click="props.submitUserAnswers(request.request_id)">Submit Answers</button>
-          <button class="button danger" @click="props.cancelUserAnswers(request.request_id)">Cancel</button>
+          <button
+            class="button primary"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.submitUserAnswers(request.request_id)"
+          >
+            Submit Answers
+          </button>
+          <button
+            class="button danger"
+            :disabled="props.isInteractiveRequestBusy(request.request_id)"
+            @click="props.cancelUserAnswers(request.request_id)"
+          >
+            Cancel
+          </button>
         </div>
       </div>
     </div>

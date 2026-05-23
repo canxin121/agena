@@ -45,6 +45,8 @@ impl SessionManager {
         &self,
         mut request: SessionPermissionReplyRequest,
     ) -> Result<Session, AppError> {
+        let reply_lock = self.reply_session_lock(request.session_id).await;
+        let _reply_guard = reply_lock.lock().await;
         let state = self.execution_state();
         let mut session = self
             .store
@@ -53,14 +55,28 @@ impl SessionManager {
         session = self
             .apply_requested_agent_profile(session, &mut request.options, state.clone())
             .await?;
-        let pending = session
+        let pending = match session
             .find_pending_permission_by_request_id(request.reply.request_id.as_str())
-            .ok_or_else(|| {
-                AppError::Internal(format!(
+        {
+            Some(pending) => pending,
+            None if session.has_replied_permission_request(request.reply.request_id.as_str())
+                || session.has_finished_operation(request.reply.request_id.as_str()) =>
+            {
+                tracing::debug!(
+                    target: "agena::session::reply",
+                    session_id = request.session_id,
+                    request_id = %request.reply.request_id,
+                    "ignoring duplicate permission reply for completed request"
+                );
+                return Ok(session);
+            }
+            None => {
+                return Err(AppError::Internal(format!(
                     "pending permission request not found: {}",
                     request.reply.request_id
-                ))
-            })?;
+                )));
+            }
+        };
 
         let permission_request = session
             .pending_permission_request(&pending)
@@ -185,6 +201,8 @@ impl SessionManager {
         &self,
         mut request: SessionUserInputReplyRequest,
     ) -> Result<Session, AppError> {
+        let reply_lock = self.reply_session_lock(request.session_id).await;
+        let _reply_guard = reply_lock.lock().await;
         let state = self.execution_state();
         let mut session = self
             .store
@@ -193,14 +211,28 @@ impl SessionManager {
         session = self
             .apply_requested_agent_profile(session, &mut request.options, state.clone())
             .await?;
-        let pending = session
+        let pending = match session
             .find_pending_user_input_by_request_id(request.reply.request_id.as_str())
-            .ok_or_else(|| {
-                AppError::Internal(format!(
+        {
+            Some(pending) => pending,
+            None if session.has_replied_user_input_request(request.reply.request_id.as_str())
+                || session.has_finished_operation(request.reply.request_id.as_str()) =>
+            {
+                tracing::debug!(
+                    target: "agena::session::reply",
+                    session_id = request.session_id,
+                    request_id = %request.reply.request_id,
+                    "ignoring duplicate user input reply for completed request"
+                );
+                return Ok(session);
+            }
+            None => {
+                return Err(AppError::Internal(format!(
                     "pending user input request not found: {}",
                     request.reply.request_id
-                ))
-            })?;
+                )));
+            }
+        };
 
         let user_input_request = session
             .pending_user_input_request(&pending)
@@ -1729,7 +1761,7 @@ impl SessionManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn apply_permission_request(
+    pub(super) async fn apply_permission_request(
         &self,
         mut session: Session,
         pending_tool: &SessionPendingTool,

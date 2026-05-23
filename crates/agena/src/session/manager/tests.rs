@@ -1072,11 +1072,18 @@ async fn persist_goal_without_auto_run(
 }
 
 fn pending_permission_request_id(session: &Session) -> String {
+    pending_permission_request_ids(session)
+        .into_iter()
+        .next()
+        .expect("session should contain a pending permission request")
+}
+
+fn pending_permission_request_ids(session: &Session) -> Vec<String> {
     session
         .messages
         .iter()
         .flat_map(|message| message.parts.iter())
-        .find_map(|part| match part.content.as_ref() {
+        .filter_map(|part| match part.content.as_ref() {
             Some(PartContent::Request(crate::message::RequestPart::Permission(request)))
                 if request.reply.is_none() =>
             {
@@ -1084,7 +1091,30 @@ fn pending_permission_request_id(session: &Session) -> String {
             }
             _ => None,
         })
-        .expect("session should contain a pending permission request")
+        .collect()
+}
+
+fn pending_user_input_request_id(session: &Session) -> String {
+    pending_user_input_request_ids(session)
+        .into_iter()
+        .next()
+        .expect("session should contain a pending user input request")
+}
+
+fn pending_user_input_request_ids(session: &Session) -> Vec<String> {
+    session
+        .messages
+        .iter()
+        .flat_map(|message| message.parts.iter())
+        .filter_map(|part| match part.content.as_ref() {
+            Some(PartContent::Request(crate::message::RequestPart::UserInput(request)))
+                if request.reply.is_none() =>
+            {
+                Some(request.request.request_id.clone())
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn run_options() -> SessionRunOptions {
@@ -2004,6 +2034,448 @@ fn blocked_permission_survives_restart_and_reply_continues() {
             completed.messages,
             completed.runtime()
         );
+    });
+}
+
+#[test]
+fn duplicate_permission_reply_is_idempotent() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "permission-idempotent.db").await;
+        let manager = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all().with_tool_mode("todo", PermissionMode::Ask),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "permission-idempotent".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let blocked = manager
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: run_options(),
+                parts: vec![PartContent::text("permission todo")],
+            })
+            .await
+            .expect("turn should block on permission");
+        let request = SessionPermissionReplyRequest {
+            session_id: created.id,
+            options: run_options(),
+            reply: PermissionReply {
+                request_id: pending_permission_request_id(&blocked),
+                kind: PermissionReplyKind::AllowOnce,
+                reason: None,
+                scope: None,
+            },
+            operator: Some("test".to_string()),
+        };
+
+        let (first, second) = tokio::join!(
+            manager.reply_permission(request.clone()),
+            manager.reply_permission(request),
+        );
+        first.expect("first permission reply should succeed");
+        second.expect("duplicate permission reply should be ignored");
+
+        let session = manager
+            .get_session(created.id)
+            .await
+            .expect("session should reload after duplicate permission reply");
+        assert!(
+            !session.blocked(),
+            "session should no longer be blocked: runtime={:?}",
+            session.runtime()
+        );
+        assert!(
+            session
+                .messages
+                .iter()
+                .any(|message| message.as_text_lossy().contains("permission todo done")),
+            "final assistant reply should survive duplicate permission reply: messages={:?}",
+            session.messages
+        );
+    });
+}
+
+#[test]
+fn duplicate_user_input_reply_is_idempotent() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "user-input-idempotent.db").await;
+        let manager = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "user-input-idempotent".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let state = manager.execution_state();
+        let session = manager
+            .get_session(created.id)
+            .await
+            .expect("session should load");
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("message ids should reserve");
+        let invocation = ToolInvocation::new(
+            "user",
+            crate::message::StructuredObject::try_from(serde_json::json!({
+                "action": "request_input",
+                "questions": [],
+            }))
+            .expect("tool input should serialize"),
+        );
+        let mut assistant_message = build_message(
+            ids,
+            Role::Assistant,
+            MessageStatus::Pending,
+            vec![PartContent::Operation(OperationPart::pending(
+                1,
+                invocation,
+                "Ask user",
+                TimeRange::default(),
+            ))],
+            MessageMetadata::default(),
+        );
+        assistant_message.parts[0].operation_id = Some("call_manual_user_input_1".to_string());
+        let session = manager
+            .store
+            .append_history_items(
+                session,
+                vec![EventKind::AssistantMessageCompleted(
+                    crate::session::history::AssistantMessageCompleted {
+                        message_id: HistoryMessageId(assistant_message.id),
+                        turn_id: HistoryTurnId::new(),
+                        created_at: assistant_message.created_at,
+                        content: TranscriptContent::from_message_lossy(&assistant_message),
+                        parts: assistant_message.parts.clone(),
+                        usage: None,
+                        finish_reason: FinishReason::Stop,
+                        metadata: assistant_message.metadata.clone(),
+                    },
+                )],
+                state.cache_policy(),
+            )
+            .await
+            .expect("pending tool should persist through history");
+        let pending_tool = session
+            .pending_tools()
+            .into_iter()
+            .next()
+            .expect("session should expose the pending tool");
+        let blocked = manager
+            .apply_user_input_request_with_id(
+                session,
+                &pending_tool,
+                AskUserToolInput {
+                    questions: vec![UserInputQuestion {
+                        id: "model_choice".to_string(),
+                        header: "Model".to_string(),
+                        question: "Which model should we use?".to_string(),
+                        options: vec![
+                            UserInputOption {
+                                label: "gpt-5".to_string(),
+                                description: "Use the flagship reasoning model.".to_string(),
+                            },
+                            UserInputOption {
+                                label: "gpt-4.1".to_string(),
+                                description: "Use the faster general-purpose model.".to_string(),
+                            },
+                        ],
+                        multiple: false,
+                        allow_custom: false,
+                    }],
+                },
+                "call_manual_user_input_1".to_string(),
+                state.clone(),
+            )
+            .await
+            .expect("user input request should persist");
+        let request = SessionUserInputReplyRequest {
+            session_id: created.id,
+            options: run_options(),
+            reply: UserInputReply {
+                request_id: pending_user_input_request_id(&blocked),
+                kind: UserInputReplyKind::Submit,
+                reason: None,
+                answers: BTreeMap::from([("model_choice".to_string(), vec!["gpt-5".to_string()])]),
+            },
+        };
+
+        let (first, second) = tokio::join!(
+            manager.reply_user_input(request.clone()),
+            manager.reply_user_input(request),
+        );
+        first.expect("first user input reply should succeed");
+        second.expect("duplicate user input reply should be ignored");
+
+        let session = manager
+            .get_session(created.id)
+            .await
+            .expect("session should reload after duplicate user input reply");
+        assert!(
+            !session.blocked(),
+            "session should no longer be blocked: runtime={:?}",
+            session.runtime()
+        );
+        assert!(
+            session
+                .messages
+                .iter()
+                .flat_map(|message| message.parts.iter())
+                .any(|part| {
+                    part.operation_id.as_deref() == Some("call_manual_user_input_1")
+                        && part.status == ExecutionStatus::Completed
+                }),
+            "user input operation should complete after duplicate reply: messages={:?}",
+            session.messages,
+        );
+    });
+}
+
+#[test]
+fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "distinct-permission-replies.db").await;
+        let manager = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all().with_tool_mode("todo", PermissionMode::Ask),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = manager
+            .create_session(SessionCreateRequest {
+                title: "distinct-permission-replies".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let state = manager.execution_state();
+        let session = manager
+            .get_session(created.id)
+            .await
+            .expect("session should load");
+        let ids = manager
+            .store
+            .reserve_message_ids(2)
+            .await
+            .expect("message ids should reserve");
+        let todo_input_one = crate::message::StructuredObject::try_from(serde_json::json!({
+            "action": "write",
+            "items": [{
+                "content": "approve permission one",
+                "status": "completed",
+                "priority": "low",
+            }],
+        }))
+        .expect("todo tool input one should serialize");
+        let todo_input_two = crate::message::StructuredObject::try_from(serde_json::json!({
+            "action": "write",
+            "items": [{
+                "content": "approve permission two",
+                "status": "completed",
+                "priority": "low",
+            }],
+        }))
+        .expect("todo tool input two should serialize");
+        let mut assistant_message = build_message(
+            ids,
+            Role::Assistant,
+            MessageStatus::Pending,
+            vec![
+                PartContent::Operation(OperationPart::pending(
+                    1,
+                    ToolInvocation::new("todo", todo_input_one),
+                    "todo",
+                    TimeRange::default(),
+                )),
+                PartContent::Operation(OperationPart::pending(
+                    2,
+                    ToolInvocation::new("todo", todo_input_two),
+                    "todo",
+                    TimeRange::default(),
+                )),
+            ],
+            MessageMetadata::default(),
+        );
+        assistant_message.parts[0].operation_id = Some("call_manual_permission_1".to_string());
+        assistant_message.parts[1].operation_id = Some("call_manual_permission_2".to_string());
+        let session = manager
+            .store
+            .append_history_items(
+                session,
+                vec![EventKind::AssistantMessageCompleted(
+                    crate::session::history::AssistantMessageCompleted {
+                        message_id: HistoryMessageId(assistant_message.id),
+                        turn_id: HistoryTurnId::new(),
+                        created_at: assistant_message.created_at,
+                        content: TranscriptContent::from_message_lossy(&assistant_message),
+                        parts: assistant_message.parts.clone(),
+                        usage: None,
+                        finish_reason: FinishReason::ToolCalls,
+                        metadata: assistant_message.metadata.clone(),
+                    },
+                )],
+                state.cache_policy(),
+            )
+            .await
+            .expect("manual pending tools should persist through history");
+        let pending_action = PermissionAction::Tool {
+            tool_name: "todo".to_string(),
+            qualifier: None,
+        };
+        let pending_reason = "tool 'todo' requires confirmation by policy".to_string();
+        let pending_trace = vec![crate::permission::DecisionTraceStep {
+            source_kind: crate::permission::PolicySourceKind::StaticPolicy,
+            summary: pending_reason.clone(),
+            source: Some("static_policy".to_string()),
+            scope: None,
+            operator: None,
+        }];
+        let pending_tool_one = session
+            .pending_tools()
+            .into_iter()
+            .find(|tool| {
+                session
+                    .part(&tool.part)
+                    .and_then(|part| part.operation_id.as_deref())
+                    == Some("call_manual_permission_1")
+            })
+            .expect("first manual pending tool should exist");
+        let session = manager
+            .apply_permission_request(
+                session,
+                &pending_tool_one,
+                pending_action.clone(),
+                vec![pending_action.clone()],
+                vec![pending_action.clone()],
+                pending_reason.clone(),
+                pending_reason.clone(),
+                Some("static_policy".to_string()),
+                None,
+                None,
+                crate::permission::PermissionRiskLevel::Medium,
+                pending_trace.clone(),
+                state.clone(),
+            )
+            .await
+            .expect("first manual permission request should persist");
+        let pending_tool_two = session
+            .pending_tools()
+            .into_iter()
+            .find(|tool| {
+                session
+                    .part(&tool.part)
+                    .and_then(|part| part.operation_id.as_deref())
+                    == Some("call_manual_permission_2")
+            })
+            .expect("second manual pending tool should exist");
+        let blocked = manager
+            .apply_permission_request(
+                session,
+                &pending_tool_two,
+                pending_action.clone(),
+                vec![pending_action.clone()],
+                vec![pending_action.clone()],
+                pending_reason.clone(),
+                pending_reason.clone(),
+                Some("static_policy".to_string()),
+                None,
+                None,
+                crate::permission::PermissionRiskLevel::Medium,
+                pending_trace,
+                state.clone(),
+            )
+            .await
+            .expect("second manual permission request should persist");
+        let mut request_ids = pending_permission_request_ids(&blocked);
+        request_ids.sort();
+        assert_eq!(
+            request_ids.len(),
+            2,
+            "session should surface both pending permission requests: messages={:?}",
+            blocked.messages
+        );
+
+        let first_request = SessionPermissionReplyRequest {
+            session_id: created.id,
+            options: run_options(),
+            reply: PermissionReply {
+                request_id: request_ids[0].clone(),
+                kind: PermissionReplyKind::AllowOnce,
+                reason: None,
+                scope: None,
+            },
+            operator: Some("test".to_string()),
+        };
+        let second_request = SessionPermissionReplyRequest {
+            session_id: created.id,
+            options: run_options(),
+            reply: PermissionReply {
+                request_id: request_ids[1].clone(),
+                kind: PermissionReplyKind::AllowOnce,
+                reason: None,
+                scope: None,
+            },
+            operator: Some("test".to_string()),
+        };
+
+        let (first, second) = tokio::join!(
+            manager.reply_permission(first_request),
+            manager.reply_permission(second_request),
+        );
+        first.expect("first distinct permission reply should succeed");
+        second.expect("second distinct permission reply should wait and succeed");
+
+        let session = manager
+            .get_session(created.id)
+            .await
+            .expect("session should reload after concurrent permission replies");
+        assert!(
+            !session.blocked(),
+            "session should finish after both permission replies: runtime={:?}",
+            session.runtime()
+        );
+        for operation_id in ["call_manual_permission_1", "call_manual_permission_2"] {
+            let (status, error, _) = operation_snapshot(&session, operation_id);
+            assert_eq!(
+                status,
+                ExecutionStatus::Completed,
+                "{operation_id} was not completed: error={error:?}\nmessages={:?}\nruntime={:?}",
+                session.messages,
+                session.runtime()
+            );
+            assert!(error.is_none(), "{operation_id} failed: {error:?}");
+        }
     });
 }
 

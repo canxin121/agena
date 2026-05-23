@@ -15,6 +15,7 @@ export type RuntimeWorkflowStateInput = {
     kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always',
     scope?: 'session' | 'workspace' | 'global',
   ) => void | Promise<void>
+  isInteractiveRequestBusy: (requestId: string) => boolean
   editPermissionRequest: (request: PermissionRequest) => void
   executionFacts: ComputedRef<SessionExecutionFact[]>
   openSelectedSessionInChat: () => void
@@ -36,6 +37,7 @@ export function useRuntimeWorkflowState(input: RuntimeWorkflowStateInput) {
     approvePermission: input.approvePermission,
     editPermissionRequest: input.editPermissionRequest,
     executionFacts: input.executionFacts,
+    isInteractiveRequestBusy: input.isInteractiveRequestBusy,
     openSelectedSessionInChat: input.openSelectedSessionInChat,
     selectSession: input.selectSession,
     selectWorkspace: input.selectWorkspace,

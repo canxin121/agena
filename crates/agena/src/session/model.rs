@@ -905,6 +905,34 @@ impl Session {
         })
     }
 
+    pub(crate) fn has_replied_user_input_request(&self, request_id: &str) -> bool {
+        self.messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .any(|part| match part.content.as_ref() {
+                Some(PartContent::Request(RequestPart::UserInput(request))) => {
+                    request.request.request_id == request_id && request.reply.is_some()
+                }
+                _ => false,
+            })
+    }
+
+    pub(crate) fn has_finished_operation(&self, operation_id: &str) -> bool {
+        self.messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .any(|part| {
+                part.operation_id.as_deref() == Some(operation_id)
+                    && matches!(part.content.as_ref(), Some(PartContent::Operation(_)))
+                    && matches!(
+                        part.status,
+                        ExecutionStatus::Completed
+                            | ExecutionStatus::Failed
+                            | ExecutionStatus::Cancelled
+                    )
+            })
+    }
+
     fn compute_approx_bytes(&self) -> usize {
         let mut bytes = 160 + self.title.len();
         bytes = bytes.saturating_add(self.messages.len().saturating_mul(96));
@@ -981,6 +1009,18 @@ impl Session {
                 .filter(|request| request.request_id == request_id)
                 .map(|_| pending.clone())
         })
+    }
+
+    pub(crate) fn has_replied_permission_request(&self, request_id: &str) -> bool {
+        self.messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .any(|part| match part.content.as_ref() {
+                Some(PartContent::Request(RequestPart::Permission(request))) => {
+                    request.request.request_id == request_id && request.reply.is_some()
+                }
+                _ => false,
+            })
     }
 
     fn derive_pending_operations(&self) -> Vec<SessionPendingOperation> {

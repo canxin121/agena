@@ -26,7 +26,10 @@ export type RuntimePageAssemblyInput = {
   selectedPluginManifest: Ref<Record<string, unknown> | null>
 } & ReturnTypeOfUseRuntimePageStore
 
-export function replaceProviderModelsRecord(providerModels: Record<string, ProviderModel[]>, nextProviderModels: Record<string, ProviderModel[]>) {
+export function replaceProviderModelsRecord(
+  providerModels: Record<string, ProviderModel[]>,
+  nextProviderModels: Record<string, ProviderModel[]>,
+) {
   for (const key of Object.keys(providerModels)) {
     delete providerModels[key]
   }
@@ -101,25 +104,25 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
   })
 
   const providerActions = useRuntimeProviderActions({
-      actionError: input.actionError,
-      actionMessage: input.actionMessage,
-      browserAuthCodeDrafts: input.browserAuthCodeDrafts,
-      browserAuthInstanceDrafts: input.browserAuthInstanceDrafts,
-      browserAuthStartState: input.browserAuthStartState,
-      deviceAuthEnterpriseDrafts: input.deviceAuthEnterpriseDrafts,
-      deviceAuthStartState: input.deviceAuthStartState,
-      drafts: input.drafts,
-      load: loadPageState,
-      openUrl: (url) => {
-        if (typeof window !== 'undefined') {
-          window.open(url, '_blank', 'noopener,noreferrer')
-        }
-      },
-      readRedirectUri: () => {
-        if (typeof window === 'undefined') return ''
-        return `${window.location.origin}/auth/callback`
-      },
-    })
+    actionError: input.actionError,
+    actionMessage: input.actionMessage,
+    browserAuthCodeDrafts: input.browserAuthCodeDrafts,
+    browserAuthInstanceDrafts: input.browserAuthInstanceDrafts,
+    browserAuthStartState: input.browserAuthStartState,
+    deviceAuthEnterpriseDrafts: input.deviceAuthEnterpriseDrafts,
+    deviceAuthStartState: input.deviceAuthStartState,
+    drafts: input.drafts,
+    load: loadPageState,
+    openUrl: (url) => {
+      if (typeof window !== 'undefined') {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
+    },
+    readRedirectUri: () => {
+      if (typeof window === 'undefined') return ''
+      return `${window.location.origin}/auth/callback`
+    },
+  })
 
   const modelCatalogActions = useRuntimeModelCatalogActions({
     actionError: input.actionError,
@@ -147,6 +150,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     actionMessage: input.actionMessage,
     activeSettingsTab: input.activeSettingsTab,
     editingPermissionRuleId: input.editingPermissionRuleId,
+    interactiveRequestInFlight: input.interactiveRequestInFlight,
     load: loadPageState,
     loadSessionExecution,
     permissionDraft: input.permissionDraft,
@@ -194,7 +198,8 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     plugins: input.plugins,
     settingsPlugins: input.settingsPlugins,
     providers: input.providers,
-    replaceProviderModels: (nextProviderModels) => replaceProviderModelsRecord(input.providerModels, nextProviderModels),
+    replaceProviderModels: (nextProviderModels) =>
+      replaceProviderModelsRecord(input.providerModels, nextProviderModels),
     routeSection: input.routeSection,
     runtime: input.runtime,
     selectedPlugin: input.selectedPlugin,

@@ -9,9 +9,7 @@ use agena::{
     agents::AgentScope,
     config::ProviderProtocolPathsConfig,
     event::MessagePartUpdatedEvent,
-    message::{
-        InteractiveRequest, Message, MessageMetadata, MessagePart, MessageStatus, MessageUsage,
-    },
+    message::{Message, MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
     model_catalog::{CatalogModelDefinition, ModelCatalogEntrySourceKind},
     session::{GoalStatus, SessionStatus, SessionSummary},
@@ -497,7 +495,7 @@ pub struct SessionExecutionResource {
     pub automation: Option<SessionAutomationResource>,
     pub execution: SessionExecutionContextResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pending_interactive_requests: Vec<InteractiveRequest>,
+    pub pending_interactive_requests: Vec<PendingInteractiveRequest>,
     pub pending_permission_requests: Vec<PermissionRequest>,
     pub pending_user_input_requests: Vec<UserInputRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -802,9 +800,7 @@ pub struct ProviderAdapterModelsResponse {
 // Re-export the common payload types so clients don't need an explicit
 // `agena = …` dep just to construct them.
 pub use agena::message::PartContent as MessagePartContent;
-pub use agena::message::{
-    InteractiveRequest as PendingInteractiveRequest, UserInputReply, UserInputRequest,
-};
+pub use agena::message::{PendingInteractiveRequest, UserInputReply, UserInputRequest};
 pub use agena::permission::{PermissionMode, PermissionReply, PermissionRequest};
 pub use agena::provider::ProviderModel;
 pub use agena::role::Role;

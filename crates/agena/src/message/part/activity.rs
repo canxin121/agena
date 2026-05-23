@@ -177,10 +177,10 @@ pub enum RequestPart {
 }
 
 impl RequestPart {
-    pub const fn kind(&self) -> InteractiveRequestKind {
+    pub const fn kind(&self) -> PendingInteractiveRequestKind {
         match self {
-            Self::Permission(_) => InteractiveRequestKind::Permission,
-            Self::UserInput(_) => InteractiveRequestKind::UserInput,
+            Self::Permission(_) => PendingInteractiveRequestKind::Permission,
+            Self::UserInput(_) => PendingInteractiveRequestKind::UserInput,
         }
     }
 
@@ -205,24 +205,24 @@ impl RequestPart {
         }
     }
 
-    pub fn pending_interactive_request(&self) -> Option<InteractiveRequest> {
+    pub fn pending_interactive_request(&self) -> Option<PendingInteractiveRequest> {
         match self {
-            Self::Permission(part) => part.pending_request().map(InteractiveRequest::from),
-            Self::UserInput(part) => part.pending_request().map(InteractiveRequest::from),
+            Self::Permission(part) => part.pending_request().map(PendingInteractiveRequest::from),
+            Self::UserInput(part) => part.pending_request().map(PendingInteractiveRequest::from),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum InteractiveRequestKind {
+pub enum PendingInteractiveRequestKind {
     Permission,
     UserInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum InteractiveRequest {
+pub enum PendingInteractiveRequest {
     Permission {
         #[serde(flatten)]
         request: PermissionRequest,
@@ -233,11 +233,11 @@ pub enum InteractiveRequest {
     },
 }
 
-impl InteractiveRequest {
-    pub const fn kind(&self) -> InteractiveRequestKind {
+impl PendingInteractiveRequest {
+    pub const fn kind(&self) -> PendingInteractiveRequestKind {
         match self {
-            Self::Permission { .. } => InteractiveRequestKind::Permission,
-            Self::UserInput { .. } => InteractiveRequestKind::UserInput,
+            Self::Permission { .. } => PendingInteractiveRequestKind::Permission,
+            Self::UserInput { .. } => PendingInteractiveRequestKind::UserInput,
         }
     }
 
@@ -277,13 +277,13 @@ impl InteractiveRequest {
     }
 }
 
-impl From<PermissionRequest> for InteractiveRequest {
+impl From<PermissionRequest> for PendingInteractiveRequest {
     fn from(request: PermissionRequest) -> Self {
         Self::Permission { request }
     }
 }
 
-impl From<UserInputRequest> for InteractiveRequest {
+impl From<UserInputRequest> for PendingInteractiveRequest {
     fn from(request: UserInputRequest) -> Self {
         Self::UserInput { request }
     }

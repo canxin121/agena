@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     execution_prefs::ExecutionSelection,
     message::{
-        ExecutionStatus, InteractiveRequest, Message, MessagePart, MessageStatus, PartContent,
-        PermissionRequestPart, RequestPart, TimeRange, ToolInvocation, UserInputRequest,
-        UserInputRequestPart,
+        ExecutionStatus, Message, MessagePart, MessageStatus, PartContent,
+        PendingInteractiveRequest, PermissionRequestPart, RequestPart, TimeRange, ToolInvocation,
+        UserInputRequest, UserInputRequestPart,
     },
     role::Role,
 };
@@ -934,7 +934,7 @@ impl Session {
             })
     }
 
-    pub fn pending_interactive_requests(&self) -> Vec<InteractiveRequest> {
+    pub fn pending_interactive_requests(&self) -> Vec<PendingInteractiveRequest> {
         self.messages
             .iter()
             .flat_map(|message| message.parts.iter())

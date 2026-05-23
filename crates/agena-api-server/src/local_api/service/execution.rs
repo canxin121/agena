@@ -414,12 +414,14 @@ fn scheduled_job_run_resource(run: agena_scheduler::JobRunRecord) -> ScheduledJo
     }
 }
 
-fn pending_interactive_requests(session: &Session) -> Vec<agena::message::InteractiveRequest> {
+fn pending_interactive_requests(
+    session: &Session,
+) -> Vec<agena::message::PendingInteractiveRequest> {
     session.pending_interactive_requests()
 }
 
 fn pending_permission_requests(
-    requests: &[agena::message::InteractiveRequest],
+    requests: &[agena::message::PendingInteractiveRequest],
 ) -> Vec<agena::permission::PermissionRequest> {
     requests
         .iter()
@@ -428,7 +430,7 @@ fn pending_permission_requests(
 }
 
 fn pending_user_input_requests(
-    requests: &[agena::message::InteractiveRequest],
+    requests: &[agena::message::PendingInteractiveRequest],
 ) -> Vec<UserInputRequest> {
     requests
         .iter()

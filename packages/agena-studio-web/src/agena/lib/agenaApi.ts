@@ -844,7 +844,7 @@ export type UserInputRequest = {
   created_at: string
 }
 
-export type InteractiveRequest =
+export type PendingInteractiveRequest =
   | ({ kind: 'permission' } & PermissionRequest)
   | ({ kind: 'user_input' } & UserInputRequest)
 
@@ -894,7 +894,7 @@ export type SessionExecutionResource = {
   latest_event_seq?: number | null
   automation?: SessionAutomationResource | null
   execution: SessionExecutionContextResource
-  pending_interactive_requests: InteractiveRequest[]
+  pending_interactive_requests: PendingInteractiveRequest[]
   pending_permission_requests: PermissionRequest[]
   pending_user_input_requests: UserInputRequest[]
   goal?: SessionGoalResource | null

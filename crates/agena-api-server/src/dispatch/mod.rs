@@ -295,6 +295,7 @@ impl From<HttpSessionExecutionResource> for SessionExecutionResource {
             latest_event_seq: value.latest_event_seq,
             automation: value.automation.map(Into::into),
             execution: value.execution.into(),
+            pending_interactive_requests: value.pending_interactive_requests,
             pending_permission_requests: value.pending_permission_requests,
             pending_user_input_requests: value.pending_user_input_requests,
             goal: value.goal.map(Into::into),

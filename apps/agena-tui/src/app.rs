@@ -27,9 +27,10 @@ use agena_api::{
     commands::UpsertPermissionRuleParams,
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, MessageRole, PermissionRuleResource, ProviderAdapterModelsResource,
-        ProviderAdapterModelsResponse, ProviderSummaryResource, RunOptions,
-        SessionExecutionResource, SessionResource, SessionRunState, SessionUsageResource,
+        MessageResource, MessageRole, PendingInteractiveRequest, PermissionRuleResource,
+        ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderSummaryResource,
+        RunOptions, SessionExecutionResource, SessionResource, SessionRunState,
+        SessionUsageResource,
     },
 };
 use anyhow::Result;
@@ -6992,15 +6993,25 @@ impl App {
         };
         self.seen_permission_request_ids.retain(|request_id| {
             execution
-                .pending_permission_requests
+                .pending_interactive_requests
                 .iter()
-                .any(|request| request.request_id == *request_id)
+                .any(|request| {
+                    pending_interactive_request_matches_kind(
+                        request,
+                        PendingInteractiveKind::Permission,
+                    ) && pending_interactive_request_id(request) == request_id
+                })
         });
         self.seen_user_input_request_ids.retain(|request_id| {
             execution
-                .pending_user_input_requests
+                .pending_interactive_requests
                 .iter()
-                .any(|request| request.request_id == *request_id)
+                .any(|request| {
+                    pending_interactive_request_matches_kind(
+                        request,
+                        PendingInteractiveKind::UserInput,
+                    ) && pending_interactive_request_id(request) == request_id
+                })
         });
     }
 
@@ -7248,21 +7259,13 @@ impl App {
     }
 
     fn reply_permission(&mut self, kind: PermissionReplyKind) {
-        let Some(execution) = self.transcript.execution.as_ref() else {
+        let Some((session_id, request)) = self.pending_permission_overlay_target() else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
-            return;
-        };
-        let Some(request) = execution.pending_permission_requests.first() else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
-            return;
-        };
-        let Some(session_id) = self.transcript.session_id else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
         self.request_permission_reply(
             session_id,
-            request.request_id.clone(),
+            request.request_id,
             kind,
             None,
             ui_text::permission_reply_label(&self.i18n, kind),
@@ -7283,14 +7286,24 @@ impl App {
 
     fn pending_user_input_overlay_target(&self) -> Option<(i64, UserInputRequest)> {
         let execution = self.transcript.execution.as_ref()?;
-        let request = execution.pending_user_input_requests.first()?.clone();
+        let request = first_pending_interactive_request_by_kind(
+            execution.pending_interactive_requests.as_slice(),
+            PendingInteractiveKind::UserInput,
+        )?
+        .as_user_input()?
+        .clone();
         let session_id = self.transcript.session_id?;
         Some((session_id, request))
     }
 
     fn pending_permission_overlay_target(&self) -> Option<(i64, PermissionRequest)> {
         let execution = self.transcript.execution.as_ref()?;
-        let request = execution.pending_permission_requests.first()?.clone();
+        let request = first_pending_interactive_request_by_kind(
+            execution.pending_interactive_requests.as_slice(),
+            PendingInteractiveKind::Permission,
+        )?
+        .as_permission()?
+        .clone();
         let session_id = self.transcript.session_id?;
         Some((session_id, request))
     }
@@ -7320,29 +7333,23 @@ impl App {
 
     fn next_pending_interactive_overlay_target(&self) -> Option<PendingInteractiveOverlayTarget> {
         let execution = self.transcript.execution.as_ref()?;
-        match first_unseen_pending_interactive_kind(
-            execution.pending_permission_requests.as_slice(),
+        let session_id = self.transcript.session_id?;
+        match first_unseen_pending_interactive_request(
+            execution.pending_interactive_requests.as_slice(),
             &self.seen_permission_request_ids,
-            execution.pending_user_input_requests.as_slice(),
             &self.seen_user_input_request_ids,
         )? {
-            PendingInteractiveKind::Permission => {
-                self.pending_permission_overlay_target()
-                    .map(
-                        |(session_id, request)| PendingInteractiveOverlayTarget::Permission {
-                            session_id,
-                            request: Box::new(request),
-                        },
-                    )
+            PendingInteractiveRequest::Permission { request } => {
+                Some(PendingInteractiveOverlayTarget::Permission {
+                    session_id,
+                    request: Box::new(request.clone()),
+                })
             }
-            PendingInteractiveKind::UserInput => {
-                self.pending_user_input_overlay_target()
-                    .map(
-                        |(session_id, request)| PendingInteractiveOverlayTarget::UserInput {
-                            session_id,
-                            request,
-                        },
-                    )
+            PendingInteractiveRequest::UserInput { request } => {
+                Some(PendingInteractiveOverlayTarget::UserInput {
+                    session_id,
+                    request: request.clone(),
+                })
             }
         }
     }
@@ -7401,10 +7408,9 @@ impl App {
         let Some(execution) = self.transcript.execution.as_ref() else {
             return false;
         };
-        first_unseen_pending_interactive_kind(
-            execution.pending_permission_requests.as_slice(),
+        first_unseen_pending_interactive_request(
+            execution.pending_interactive_requests.as_slice(),
             &self.seen_permission_request_ids,
-            execution.pending_user_input_requests.as_slice(),
             &self.seen_user_input_request_ids,
         )
         .is_some()
@@ -11259,17 +11265,13 @@ impl App {
         if !execution.execution.allowed_tools.is_empty() {
             parts.push(format!("tools={}", execution.execution.allowed_tools.len()));
         }
-        if !execution.pending_permission_requests.is_empty() {
-            parts.push(format!(
-                "perm={}",
-                execution.pending_permission_requests.len()
-            ));
+        let (permission_count, user_input_count) =
+            pending_interactive_counts_for_execution(execution);
+        if permission_count > 0 {
+            parts.push(format!("perm={permission_count}"));
         }
-        if !execution.pending_user_input_requests.is_empty() {
-            parts.push(format!(
-                "input={}",
-                execution.pending_user_input_requests.len()
-            ));
+        if user_input_count > 0 {
+            parts.push(format!("input={user_input_count}"));
         }
         parts
     }
@@ -11311,6 +11313,8 @@ impl App {
             let mut parts = Vec::new();
             if let Some(wait_state) = self.current_session_wait_state_text() {
                 parts.push(wait_state);
+            } else if self.transcript.submitting {
+                parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
             } else if execution.run_state != SessionRunState::Idle {
                 parts.push(ui_text::t(&self.i18n, "session-running"));
             }
@@ -11339,6 +11343,9 @@ impl App {
             fallback_agent(),
             None,
         );
+        if self.transcript.submitting {
+            parts.insert(0, ui_text::t(&self.i18n, "transcript-header-busy"));
+        }
         if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
         {
@@ -16231,46 +16238,84 @@ fn assistant_message_text(message: &MessageResource) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-fn first_unseen_pending_interactive_kind(
-    pending_permission_requests: &[PermissionRequest],
+fn pending_interactive_kind_from_request(
+    request: &PendingInteractiveRequest,
+) -> PendingInteractiveKind {
+    match request {
+        PendingInteractiveRequest::Permission { .. } => PendingInteractiveKind::Permission,
+        PendingInteractiveRequest::UserInput { .. } => PendingInteractiveKind::UserInput,
+    }
+}
+
+fn pending_interactive_request_id(request: &PendingInteractiveRequest) -> &str {
+    request.request_id()
+}
+
+fn pending_interactive_request_matches_kind(
+    request: &PendingInteractiveRequest,
+    kind: PendingInteractiveKind,
+) -> bool {
+    pending_interactive_kind_from_request(request) == kind
+}
+
+fn pending_interactive_request_is_seen(
+    request: &PendingInteractiveRequest,
     seen_permission_request_ids: &BTreeSet<String>,
-    pending_user_input_requests: &[UserInputRequest],
     seen_user_input_request_ids: &BTreeSet<String>,
-) -> Option<PendingInteractiveKind> {
-    if pending_permission_requests
-        .first()
-        .is_some_and(|request| !seen_permission_request_ids.contains(&request.request_id))
-    {
-        return Some(PendingInteractiveKind::Permission);
+) -> bool {
+    let request_id = pending_interactive_request_id(request);
+    match pending_interactive_kind_from_request(request) {
+        PendingInteractiveKind::Permission => seen_permission_request_ids.contains(request_id),
+        PendingInteractiveKind::UserInput => seen_user_input_request_ids.contains(request_id),
     }
-    if pending_user_input_requests
-        .first()
-        .is_some_and(|request| !seen_user_input_request_ids.contains(&request.request_id))
-    {
-        return Some(PendingInteractiveKind::UserInput);
-    }
-    None
+}
+
+fn first_unseen_pending_interactive_request<'a>(
+    requests: &'a [PendingInteractiveRequest],
+    seen_permission_request_ids: &BTreeSet<String>,
+    seen_user_input_request_ids: &BTreeSet<String>,
+) -> Option<&'a PendingInteractiveRequest> {
+    requests.iter().find(|request| {
+        !pending_interactive_request_is_seen(
+            request,
+            seen_permission_request_ids,
+            seen_user_input_request_ids,
+        )
+    })
+}
+
+fn first_pending_interactive_request_by_kind<'a>(
+    requests: &'a [PendingInteractiveRequest],
+    kind: PendingInteractiveKind,
+) -> Option<&'a PendingInteractiveRequest> {
+    requests
+        .iter()
+        .find(|request| pending_interactive_request_matches_kind(request, kind))
 }
 
 fn pending_interactive_kind(
-    pending_permission_requests: &[PermissionRequest],
-    pending_user_input_requests: &[UserInputRequest],
+    requests: &[PendingInteractiveRequest],
 ) -> Option<PendingInteractiveKind> {
-    if !pending_permission_requests.is_empty() {
-        return Some(PendingInteractiveKind::Permission);
-    }
-    if !pending_user_input_requests.is_empty() {
-        return Some(PendingInteractiveKind::UserInput);
-    }
-    None
+    requests.first().map(pending_interactive_kind_from_request)
 }
 
 fn pending_interactive_kind_for_execution(
     execution: &SessionExecutionResource,
 ) -> Option<PendingInteractiveKind> {
-    pending_interactive_kind(
-        execution.pending_permission_requests.as_slice(),
-        execution.pending_user_input_requests.as_slice(),
+    pending_interactive_kind(execution.pending_interactive_requests.as_slice())
+}
+
+fn pending_interactive_counts_for_execution(
+    execution: &SessionExecutionResource,
+) -> (usize, usize) {
+    execution.pending_interactive_requests.iter().fold(
+        (0, 0),
+        |(permission_count, user_input_count), request| match request {
+            PendingInteractiveRequest::Permission { .. } => {
+                (permission_count + 1, user_input_count)
+            }
+            PendingInteractiveRequest::UserInput { .. } => (permission_count, user_input_count + 1),
+        },
     )
 }
 
@@ -16727,11 +16772,10 @@ fn timeline_event_type_name(record: &DomainEvent) -> &'static str {
 }
 
 fn session_workflow_state_label(execution: &SessionExecutionResource) -> &'static str {
-    if !execution.pending_permission_requests.is_empty() {
-        return "awaiting_permission";
-    }
-    if !execution.pending_user_input_requests.is_empty() {
-        return "awaiting_user_input";
+    match pending_interactive_kind_for_execution(execution) {
+        Some(PendingInteractiveKind::Permission) => return "awaiting_permission",
+        Some(PendingInteractiveKind::UserInput) => return "awaiting_user_input",
+        None => {}
     }
     if execution.blocked {
         return "blocked";
@@ -18818,6 +18862,18 @@ mod tests {
         }
     }
 
+    fn pending_permission_request(request_id: &str) -> PendingInteractiveRequest {
+        PendingInteractiveRequest::Permission {
+            request: permission_request(request_id),
+        }
+    }
+
+    fn pending_user_input_request(request_id: &str) -> PendingInteractiveRequest {
+        PendingInteractiveRequest::UserInput {
+            request: user_input_request(request_id),
+        }
+    }
+
     fn transcript_message(id: i64, role: MessageRole, text: &str) -> MessageResource {
         let created_at = Utc::now();
         let part = MessagePart::with_content(
@@ -18843,44 +18899,48 @@ mod tests {
     }
 
     #[test]
-    fn pending_interactive_requests_prioritize_permissions() {
-        let permission_requests = vec![permission_request("perm-1")];
-        let user_input_requests = vec![user_input_request("input-1")];
+    fn first_unseen_pending_interactive_request_preserves_runtime_order() {
+        let requests = vec![
+            pending_user_input_request("input-1"),
+            pending_permission_request("perm-1"),
+        ];
 
         assert_eq!(
-            first_unseen_pending_interactive_kind(
-                permission_requests.as_slice(),
+            first_unseen_pending_interactive_request(
+                requests.as_slice(),
                 &BTreeSet::new(),
-                user_input_requests.as_slice(),
                 &BTreeSet::new(),
-            ),
-            Some(PendingInteractiveKind::Permission)
+            )
+            .map(pending_interactive_request_id),
+            Some("input-1")
         );
     }
 
     #[test]
-    fn seen_permission_request_falls_back_to_user_input() {
-        let permission_requests = vec![permission_request("perm-1")];
-        let user_input_requests = vec![user_input_request("input-1")];
+    fn seen_first_request_falls_back_to_next_pending_request() {
+        let requests = vec![
+            pending_permission_request("perm-1"),
+            pending_user_input_request("input-1"),
+        ];
         let seen_permissions = BTreeSet::from(["perm-1".to_string()]);
 
         assert_eq!(
-            first_unseen_pending_interactive_kind(
-                permission_requests.as_slice(),
+            first_unseen_pending_interactive_request(
+                requests.as_slice(),
                 &seen_permissions,
-                user_input_requests.as_slice(),
                 &BTreeSet::new(),
-            ),
-            Some(PendingInteractiveKind::UserInput)
+            )
+            .map(pending_interactive_request_id),
+            Some("input-1")
         );
     }
 
     #[test]
-    fn pending_interactive_kind_reports_user_input_when_no_permission_is_pending() {
-        let user_input_requests = vec![user_input_request("input-1")];
+    fn pending_interactive_kind_reports_first_pending_request_kind() {
+        let requests = vec![pending_user_input_request("input-1")];
 
         assert_eq!(
-            pending_interactive_kind(&[], user_input_requests.as_slice()),
+            pending_interactive_kind(requests.as_slice()),
             Some(PendingInteractiveKind::UserInput)
         );
     }

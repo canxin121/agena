@@ -34,6 +34,7 @@ function sessionState(runState: SessionExecutionResource['run_state']): SessionE
     execution: {
       allowed_tools: [],
     },
+    pending_interactive_requests: [],
     pending_permission_requests: [],
     pending_user_input_requests: [],
     usage: {

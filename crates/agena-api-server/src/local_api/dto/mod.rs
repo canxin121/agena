@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use agena::{
     agent::{AgentMode, AgentPermissionConfig, AgentRunConfig, PermissionConfig},
     agents::AgentScope,
-    message::{PartContent, UserInputReply, UserInputRequest},
+    message::{InteractiveRequest, PartContent, UserInputReply, UserInputRequest},
     model::ModelRef,
     model_catalog::{CatalogModelDefinition, ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},
     permission::PermissionMode,

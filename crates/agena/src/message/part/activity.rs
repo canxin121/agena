@@ -177,6 +177,13 @@ pub enum RequestPart {
 }
 
 impl RequestPart {
+    pub const fn kind(&self) -> InteractiveRequestKind {
+        match self {
+            Self::Permission(_) => InteractiveRequestKind::Permission,
+            Self::UserInput(_) => InteractiveRequestKind::UserInput,
+        }
+    }
+
     pub const fn status(&self) -> ExecutionStatus {
         match self {
             Self::Permission(part) => part.status(),
@@ -189,6 +196,96 @@ impl RequestPart {
             Self::Permission(part) => part.summary_text(),
             Self::UserInput(part) => part.summary_text(),
         }
+    }
+
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::Permission(part) => part.request_id(),
+            Self::UserInput(part) => part.request_id(),
+        }
+    }
+
+    pub fn pending_interactive_request(&self) -> Option<InteractiveRequest> {
+        match self {
+            Self::Permission(part) => part.pending_request().map(InteractiveRequest::from),
+            Self::UserInput(part) => part.pending_request().map(InteractiveRequest::from),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractiveRequestKind {
+    Permission,
+    UserInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InteractiveRequest {
+    Permission {
+        #[serde(flatten)]
+        request: PermissionRequest,
+    },
+    UserInput {
+        #[serde(flatten)]
+        request: UserInputRequest,
+    },
+}
+
+impl InteractiveRequest {
+    pub const fn kind(&self) -> InteractiveRequestKind {
+        match self {
+            Self::Permission { .. } => InteractiveRequestKind::Permission,
+            Self::UserInput { .. } => InteractiveRequestKind::UserInput,
+        }
+    }
+
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::Permission { request } => request.request_id.as_str(),
+            Self::UserInput { request } => request.request_id.as_str(),
+        }
+    }
+
+    pub const fn session_id(&self) -> Option<i64> {
+        match self {
+            Self::Permission { request } => request.session_id,
+            Self::UserInput { request } => request.session_id,
+        }
+    }
+
+    pub fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+        match self {
+            Self::Permission { request } => request.created_at,
+            Self::UserInput { request } => request.created_at,
+        }
+    }
+
+    pub fn as_permission(&self) -> Option<&PermissionRequest> {
+        match self {
+            Self::Permission { request } => Some(request),
+            Self::UserInput { .. } => None,
+        }
+    }
+
+    pub fn as_user_input(&self) -> Option<&UserInputRequest> {
+        match self {
+            Self::Permission { .. } => None,
+            Self::UserInput { request } => Some(request),
+        }
+    }
+}
+
+impl From<PermissionRequest> for InteractiveRequest {
+    fn from(request: PermissionRequest) -> Self {
+        Self::Permission { request }
+    }
+}
+
+impl From<UserInputRequest> for InteractiveRequest {
+    fn from(request: UserInputRequest) -> Self {
+        Self::UserInput { request }
     }
 }
 
@@ -212,12 +309,20 @@ impl PermissionRequestPart {
         self
     }
 
+    pub fn request_id(&self) -> &str {
+        self.request.request_id.as_str()
+    }
+
     pub const fn status(&self) -> ExecutionStatus {
         if self.reply.is_some() {
             ExecutionStatus::Completed
         } else {
             ExecutionStatus::Pending
         }
+    }
+
+    pub fn pending_request(&self) -> Option<PermissionRequest> {
+        self.reply.is_none().then_some(self.request.clone())
     }
 
     pub fn summary_text(&self) -> String {
@@ -311,12 +416,20 @@ impl UserInputRequestPart {
         self
     }
 
+    pub fn request_id(&self) -> &str {
+        self.request.request_id.as_str()
+    }
+
     pub const fn status(&self) -> ExecutionStatus {
         if self.reply.is_some() {
             ExecutionStatus::Completed
         } else {
             ExecutionStatus::Pending
         }
+    }
+
+    pub fn pending_request(&self) -> Option<UserInputRequest> {
+        self.reply.is_none().then_some(self.request.clone())
     }
 
     pub fn summary_text(&self) -> String {

@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     execution_prefs::ExecutionSelection,
     message::{
-        ExecutionStatus, Message, MessagePart, MessageStatus, PartContent, PermissionRequestPart,
-        RequestPart, TimeRange, ToolInvocation, UserInputRequest, UserInputRequestPart,
+        ExecutionStatus, InteractiveRequest, Message, MessagePart, MessageStatus, PartContent,
+        PermissionRequestPart, RequestPart, TimeRange, ToolInvocation, UserInputRequest,
+        UserInputRequestPart,
     },
     role::Role,
 };
@@ -931,6 +932,41 @@ impl Session {
                             | ExecutionStatus::Cancelled
                     )
             })
+    }
+
+    pub fn pending_interactive_requests(&self) -> Vec<InteractiveRequest> {
+        self.messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .filter_map(|part| {
+                if part.status != ExecutionStatus::Pending {
+                    return None;
+                }
+
+                match part.content.as_ref()? {
+                    PartContent::Request(request) => request.pending_interactive_request(),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn user_input_request_for_operation(
+        &self,
+        operation_id: &str,
+        sequence_index: usize,
+    ) -> Option<UserInputRequestPart> {
+        self.messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .filter(|part| part.operation_id.as_deref() == Some(operation_id))
+            .filter_map(|part| match part.content.as_ref() {
+                Some(PartContent::Request(RequestPart::UserInput(request))) => {
+                    Some(request.clone())
+                }
+                _ => None,
+            })
+            .nth(sequence_index)
     }
 
     fn compute_approx_bytes(&self) -> usize {

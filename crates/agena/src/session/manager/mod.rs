@@ -164,6 +164,21 @@ pub struct SessionAgentRestoreOutcome {
 }
 
 impl SessionRunOptions {
+    pub fn new(model: ModelRef) -> Self {
+        Self {
+            model,
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+            agent_profile: None,
+        }
+    }
+
     fn completion_request(
         &self,
         system: Option<String>,

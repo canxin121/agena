@@ -7,6 +7,7 @@ import type {
   RuntimeStatus,
   SessionExecutionResource,
 } from '@/agena/lib/agenaApi'
+import { formatSessionExecutionModelLabel } from '@/agena/lib/agenaApi'
 
 export type OperatorCard = {
   label: string
@@ -118,7 +119,7 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
     { label: 'Task', value: context.task_id || 'n/a' },
     {
       label: 'Model',
-      value: context.model_provider_id && context.model_id ? `${context.model_provider_id}/${context.model_id}` : 'n/a',
+      value: formatSessionExecutionModelLabel(context) || 'n/a',
     },
     {
       label: 'Workspace Root',

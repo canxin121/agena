@@ -911,6 +911,20 @@ export type SessionExecutionResource = {
   usage: SessionUsageResource
 }
 
+export function formatSessionExecutionModelLabel(
+  context: Pick<SessionExecutionContextResource, 'model_provider_id' | 'model_adapter_id' | 'model_id'> | null | undefined,
+): string | null {
+  const providerId = String(context?.model_provider_id || '').trim()
+  const adapterId = String(context?.model_adapter_id || '').trim()
+  const modelId = String(context?.model_id || '').trim()
+  if (!providerId && !modelId) return null
+  const resolvedProviderId = providerId || 'auto'
+  const resolvedModelId = modelId || 'default'
+  return adapterId
+    ? `${resolvedProviderId}/${adapterId}/${resolvedModelId}`
+    : `${resolvedProviderId}/${resolvedModelId}`
+}
+
 export type DomainEventRecord = {
   id?: string | null
   seq_global: number
@@ -1966,6 +1980,50 @@ export async function forkSession(input: {
   })
 }
 
+type SessionRunOptionsInput = {
+  providerId?: string
+  adapterId?: string
+  modelId?: string
+  thinkingMode?: string
+  speedMode?: string
+  verbosity?: string
+  parallelToolCalls?: boolean
+  agentProfile?: string
+}
+
+function buildSessionRunOptionsBody(input: SessionRunOptionsInput): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  const providerId = input.providerId?.trim() || ''
+  const adapterId = input.adapterId?.trim() || ''
+  const modelId = input.modelId?.trim() || ''
+  const agentProfile = input.agentProfile?.trim() || ''
+
+  if (providerId && modelId) {
+    body.model = {
+      provider_id: providerId,
+      ...(adapterId ? { adapter_id: adapterId } : {}),
+      model_id: modelId,
+    }
+  }
+  if (agentProfile) {
+    body.agent_profile = agentProfile
+  }
+  if (providerId && modelId && input.thinkingMode?.trim()) {
+    body.thinking_mode = input.thinkingMode.trim()
+  }
+  if (providerId && modelId && input.speedMode?.trim()) {
+    body.speed_mode = input.speedMode.trim()
+  }
+  if (providerId && modelId && input.verbosity?.trim()) {
+    body.verbosity = input.verbosity.trim().toLowerCase()
+  }
+  if (providerId && modelId && input.parallelToolCalls !== undefined) {
+    body.parallel_tool_calls = input.parallelToolCalls
+  }
+
+  return body
+}
+
 export async function continueSession(input: {
   sessionId: number
   providerId?: string
@@ -1977,35 +2035,10 @@ export async function continueSession(input: {
   parallelToolCalls?: boolean
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
-  const body: Record<string, unknown> = {}
-
-  if (input.providerId && input.modelId) {
-    body.model = {
-      provider_id: input.providerId,
-      ...(input.adapterId?.trim() ? { adapter_id: input.adapterId.trim() } : {}),
-      model_id: input.modelId,
-    }
-  }
-  if (input.agentProfile?.trim()) {
-    body.agent_profile = input.agentProfile.trim()
-  }
-  if (input.providerId && input.modelId && input.thinkingMode?.trim()) {
-    body.thinking_mode = input.thinkingMode.trim()
-  }
-  if (input.providerId && input.modelId && input.speedMode?.trim()) {
-    body.speed_mode = input.speedMode.trim()
-  }
-  if (input.providerId && input.modelId && input.verbosity?.trim()) {
-    body.verbosity = input.verbosity.trim().toLowerCase()
-  }
-  if (input.providerId && input.modelId && input.parallelToolCalls !== undefined) {
-    body.parallel_tool_calls = input.parallelToolCalls
-  }
-
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/continue`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify(buildSessionRunOptionsBody(input)),
   })
 }
 
@@ -2036,35 +2069,13 @@ export async function submitTurn(input: {
   agentProfile?: string
 }): Promise<SessionExecutionResource> {
   const body: Record<string, unknown> = {
+    ...buildSessionRunOptionsBody(input),
     parts: [
       {
         type: 'text',
         text: input.text,
       },
     ],
-  }
-
-  if (input.providerId && input.modelId) {
-    body.model = {
-      provider_id: input.providerId,
-      ...(input.adapterId?.trim() ? { adapter_id: input.adapterId.trim() } : {}),
-      model_id: input.modelId,
-    }
-  }
-  if (input.agentProfile?.trim()) {
-    body.agent_profile = input.agentProfile.trim()
-  }
-  if (input.providerId && input.modelId && input.thinkingMode?.trim()) {
-    body.thinking_mode = input.thinkingMode.trim()
-  }
-  if (input.providerId && input.modelId && input.speedMode?.trim()) {
-    body.speed_mode = input.speedMode.trim()
-  }
-  if (input.providerId && input.modelId && input.verbosity?.trim()) {
-    body.verbosity = input.verbosity.trim().toLowerCase()
-  }
-  if (input.providerId && input.modelId && input.parallelToolCalls !== undefined) {
-    body.parallel_tool_calls = input.parallelToolCalls
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/messages`, {
@@ -2086,7 +2097,7 @@ export async function replyPermission(input: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      ...(input.agentProfile?.trim() ? { agent_profile: input.agentProfile.trim() } : {}),
+      ...buildSessionRunOptionsBody(input),
       reply: {
         request_id: input.requestId,
         kind: input.kind,
@@ -2107,7 +2118,7 @@ export async function replyUserInput(input: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      ...(input.agentProfile?.trim() ? { agent_profile: input.agentProfile.trim() } : {}),
+      ...buildSessionRunOptionsBody(input),
       reply: {
         request_id: input.requestId,
         kind: 'submit',
@@ -2127,7 +2138,7 @@ export async function cancelUserInput(input: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      ...(input.agentProfile?.trim() ? { agent_profile: input.agentProfile.trim() } : {}),
+      ...buildSessionRunOptionsBody(input),
       reply: {
         request_id: input.requestId,
         kind: 'cancel',

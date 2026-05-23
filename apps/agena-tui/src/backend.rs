@@ -2075,27 +2075,11 @@ impl Backend {
             return Ok(model.clone());
         }
 
-        let snapshot = self.runtime.current_snapshot();
-        let registry = snapshot.provider_registry();
-        let default_config = &snapshot.config_resolution().config.default;
-        if let Some(provider_id) = default_config.provider.as_deref() {
-            return registry
-                .resolve_model_selection(
-                    provider_id,
-                    default_config.adapter.as_deref(),
-                    default_config.model.as_deref(),
-                )
-                .context("failed to resolve default model selection");
-        }
-
-        let mut providers = registry.provider_ids();
-        providers.sort();
-        let provider_id = providers
-            .first()
-            .ok_or_else(|| anyhow!("no providers configured"))?;
-        registry
-            .resolve_model_target(provider_id, None)
-            .context("failed to resolve default provider model")
+        self.runtime
+            .current_snapshot()
+            .resolve_default_model()
+            .context("failed to resolve default model selection")?
+            .ok_or_else(|| anyhow!("no providers configured"))
     }
 
     pub fn runtime_thinking_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {

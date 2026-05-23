@@ -7,13 +7,8 @@ import type {
   SessionTreeResource,
   WorkspaceResource,
 } from '../lib/agenaApi'
-import {
-  chatUsageBreakdownFacts,
-  chatUsageFacts,
-  formatUsageCount,
-  formatUsageUsd,
-  summarizeChatUsage,
-} from './chatUsageModel'
+import { formatSessionExecutionModelLabel } from '../lib/agenaApi'
+import { chatUsageBreakdownFacts, chatUsageFacts, formatUsageCount, formatUsageUsd, summarizeChatUsage } from './chatUsageModel'
 
 const CONTEXT_USAGE_BASELINE_TOKENS = 12_000
 const EFFECTIVE_CONTEXT_WINDOW_PERCENT = 95
@@ -159,8 +154,9 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
     if (execution.agent_profile) facts.push(`agent=${execution.agent_profile}`)
     if (execution.active_skill_name) facts.push(`skill=${execution.active_skill_name}`)
     if (execution.task_id) facts.push(`task=${execution.task_id}`)
-    if (execution.model_provider_id || execution.model_id) {
-      facts.push(`model=${[execution.model_provider_id, execution.model_id].filter(Boolean).join('/')}`)
+    const modelLabel = formatSessionExecutionModelLabel(execution)
+    if (modelLabel) {
+      facts.push(`model=${modelLabel}`)
     }
     if (execution.model_thinking_mode) facts.push(`thinking=${execution.model_thinking_mode}`)
     if (execution.model_speed_mode) facts.push(`speed=${execution.model_speed_mode}`)

@@ -12,6 +12,7 @@ use crate::{
         PendingInteractiveRequest, PermissionRequestPart, RequestPart, TimeRange, ToolInvocation,
         UserInputRequest, UserInputRequestPart,
     },
+    model::ModelRef,
     role::Role,
     session::history::RunSource,
 };
@@ -561,6 +562,26 @@ impl SessionRuntimeState {
             self.execution.selection.adapter.as_deref(),
             self.execution.selection.model.as_deref()?,
         ))
+    }
+
+    pub fn effective_model_ref(&self) -> Result<Option<ModelRef>, crate::model::IdentifierError> {
+        if let Some(model) = self.execution.selection.model_ref()? {
+            return Ok(Some(model));
+        }
+
+        let Some(provider_id) = self.run.model_provider_id.as_deref() else {
+            return Ok(None);
+        };
+        let Some(model_id) = self.run.model_id.as_deref() else {
+            return Ok(None);
+        };
+
+        match self.run.model_adapter_id.as_deref() {
+            Some(adapter_id) => {
+                ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id).map(Some)
+            }
+            None => ModelRef::try_new(provider_id, model_id).map(Some),
+        }
     }
 
     pub fn model_thinking_mode_override(&self) -> Option<&str> {

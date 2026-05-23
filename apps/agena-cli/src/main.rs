@@ -295,28 +295,17 @@ fn resolve_permission_continue_options(
     runtime: &AgenaRuntime,
     session: &Session,
 ) -> Result<SessionRunOptions, AppError> {
-    let model = if let (Some(provider_id), Some(model_id)) = (
-        session.runtime().run.model_provider_id.as_deref(),
-        session.runtime().run.model_id.as_deref(),
-    ) {
-        ModelRef::try_new(provider_id, model_id)
-            .map_err(|err| AppError::Config(format!("invalid persisted model reference: {err}")))?
+    let model = if let Some(model) = session
+        .runtime()
+        .effective_model_ref()
+        .map_err(|err| AppError::Config(format!("invalid persisted model reference: {err}")))?
+    {
+        model
     } else {
         default_model(runtime)?
     };
 
-    Ok(SessionRunOptions {
-        model,
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        agent_profile: None,
-        system: None,
-        temperature: None,
-        max_output_tokens: None,
-    })
+    Ok(SessionRunOptions::new(model))
 }
 
 fn resolve_run_options(
@@ -333,29 +322,17 @@ fn resolve_run_options(
         default_model(runtime)?
     };
 
-    Ok(SessionRunOptions {
-        model,
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        agent_profile: None,
-        system: None,
-        temperature,
-        max_output_tokens,
-    })
+    let mut options = SessionRunOptions::new(model);
+    options.temperature = temperature;
+    options.max_output_tokens = max_output_tokens;
+    Ok(options)
 }
 
 fn default_model(runtime: &AgenaRuntime) -> Result<ModelRef, AppError> {
-    let snapshot = runtime.current_snapshot();
-    let registry = snapshot.provider_registry();
-    let mut providers = registry.provider_ids();
-    providers.sort();
-    let provider_id = providers
-        .first()
-        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))?;
-    registry.resolve_model_target(provider_id, None)
+    runtime
+        .current_snapshot()
+        .resolve_default_model()?
+        .ok_or_else(|| AppError::Config("no providers configured".to_owned()))
 }
 
 fn last_assistant_text(session: &Session) -> Option<String> {

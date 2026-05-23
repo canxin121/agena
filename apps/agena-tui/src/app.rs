@@ -29,8 +29,8 @@ use agena_api::{
     resource::{
         MessageResource, MessageRole, PendingInteractiveRequest, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderSummaryResource,
-        RunOptions, SessionExecutionResource, SessionResource, SessionRunState,
-        SessionUsageResource,
+        RunOptions, SessionExecutionContextResource, SessionExecutionResource, SessionResource,
+        SessionRunState, SessionUsageResource,
     },
 };
 use anyhow::Result;
@@ -11152,15 +11152,8 @@ impl App {
         {
             parts.push(format!("task={task_id}"));
         }
-        if execution.execution.model_provider_id.is_some() || execution.execution.model_id.is_some()
-        {
-            let provider = execution
-                .execution
-                .model_provider_id
-                .as_deref()
-                .unwrap_or("auto");
-            let model = execution.execution.model_id.as_deref().unwrap_or("default");
-            parts.push(format!("model={provider}/{model}"));
+        if let Some(model_label) = execution_model_status_label(&execution.execution) {
+            parts.push(format!("model={model_label}"));
         }
         if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
@@ -11212,21 +11205,8 @@ impl App {
         let fallback_agent = || self.backend.default_agent_name();
 
         if let Some(execution) = self.transcript.execution.as_ref() {
-            let model_part = if let (Some(provider_id), Some(model_id)) = (
-                execution.execution.model_provider_id.as_deref(),
-                execution.execution.model_id.as_deref(),
-            ) {
-                Some(
-                    execution
-                        .execution
-                        .model_adapter_id
-                        .as_deref()
-                        .map(|adapter_id| format!("{provider_id}/{adapter_id}/{model_id}"))
-                        .unwrap_or_else(|| format!("{provider_id}/{model_id}")),
-                )
-            } else {
-                fallback_model()
-            };
+            let model_part =
+                execution_model_status_label(&execution.execution).or_else(fallback_model);
             let agent = execution
                 .execution
                 .agent_profile
@@ -17130,6 +17110,42 @@ fn model_status_label(model: &ModelRef) -> String {
         .as_ref()
         .map(|adapter_id| format!("{}/{}/{}", model.provider_id, adapter_id, model.model_id))
         .unwrap_or_else(|| format!("{}/{}", model.provider_id, model.model_id))
+}
+
+fn execution_model_status_label(execution: &SessionExecutionContextResource) -> Option<String> {
+    let provider_id = execution
+        .model_provider_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let adapter_id = execution
+        .model_adapter_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let model_id = execution
+        .model_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if provider_id.is_none() && model_id.is_none() {
+        return None;
+    }
+
+    Some(match adapter_id {
+        Some(adapter_id) => format!(
+            "{}/{}/{}",
+            provider_id.unwrap_or("auto"),
+            adapter_id,
+            model_id.unwrap_or("default")
+        ),
+        None => format!(
+            "{}/{}",
+            provider_id.unwrap_or("auto"),
+            model_id.unwrap_or("default")
+        ),
+    })
 }
 
 fn session_summary_status_parts(

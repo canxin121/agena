@@ -1,16 +1,16 @@
 use serde::{Deserialize, Serialize};
 
-// ── turn lifecycle ─────────────────────────────────────────────────────────
+// ── run lifecycle ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreTurnInput {
+pub struct PreRunInput {
     pub session_id: i64,
     pub model: String,
     pub message_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostTurnInput {
+pub struct PostRunInput {
     pub session_id: i64,
     pub model: String,
     pub status: String,
@@ -42,7 +42,7 @@ pub struct SessionStartPatch {
     /// Extra context injected into the system prompt for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
-    /// Synthetic user message injected as the first turn.
+    /// Synthetic user message injected before the first run starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_user_message: Option<String>,
 }

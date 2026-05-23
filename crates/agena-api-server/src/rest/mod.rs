@@ -24,8 +24,8 @@ use crate::local_api::{
     PluginStatusListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
     PluginUiRunActionRequest, RuntimeReloadResponse, SessionContinueRequestBody,
     SessionCreateRequest, SessionEventStreamQuery, SessionGoalSetRequest, SessionListQuery,
-    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
-    SessionRunOptionsRequest, SessionTurnRequest, SessionUserInputReplyRequestBody,
+    SessionMessageRequest, SessionPermissionReplyRequestBody, SessionReplaceRequest,
+    SessionRewindRequestBody, SessionRunOptionsRequest, SessionUserInputReplyRequestBody,
     WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::config::{

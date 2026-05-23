@@ -53,7 +53,7 @@ use crate::{
     session::{
         RunStatus, Session, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
         SessionListRequest, SessionManager, SessionRunOptions, SessionSummary,
-        SessionUserTurnRequest, UsagePeriod, UsageStatsQuery,
+        SessionUserMessageRequest, UsagePeriod, UsageStatsQuery,
     },
     storage::StorageConfig,
     tool::{ApplyPatchExecution, ToolExecutor, ToolPayloadInput},
@@ -81,7 +81,7 @@ use crate::{
                   agena\n\n  \
                   Start the terminal UI at a specific session:\n    \
                   agena tui --session 42\n\n  \
-                  Start a one-shot turn:\n    \
+                  Start a one-shot run:\n    \
                   agena exec \"explain crates/agena-api-server\"\n\n  \
                   Resume the most recent session:\n    \
                   agena resume\n\n  \
@@ -481,7 +481,7 @@ pub struct PluginSearchArgs {
 pub struct PluginUpgradeArgs {
     /// Plugin id to upgrade. Pass `--all` to upgrade every installed plugin.
     pub plugin_id: Option<String>,
-    /// Upgrade every installed plugin in turn.
+    /// Upgrade every installed plugin one by one.
     #[arg(long, default_value_t = false)]
     pub all: bool,
     /// Override the registry URL recorded at install time.
@@ -2740,7 +2740,7 @@ impl AgenaCli {
             })
             .await?;
         let session = manager
-            .submit_user_turn(SessionUserTurnRequest {
+            .submit_user_message(SessionUserMessageRequest {
                 session_id: created.id,
                 options,
                 parts: vec![PartContent::text(prompt)],

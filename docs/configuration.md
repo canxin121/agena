@@ -922,7 +922,7 @@ include_global = true
 - 顶层 `hooks`
 - `plugins.list."agena.hooks"`
 
-如果还需要 turn、tool、provider 或 permission 相关 hook 行为，请改成常规 plugin，在 manifest 中声明对应 `hooks` 订阅并实现 plugin SDK 的 hook 接口。
+如果还需要 run、tool、provider 或 permission 相关 hook 行为，请改成常规 plugin，在 manifest 中声明对应 `hooks` 订阅并实现 plugin SDK 的 hook 接口。
 
 ## Plugins
 

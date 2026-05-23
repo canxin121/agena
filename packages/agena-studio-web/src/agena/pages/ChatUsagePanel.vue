@@ -35,7 +35,7 @@ const props = defineProps<{
       <div class="grid two">
         <div class="field">
           <label class="label">Assistant Turns</label>
-          <div class="muted mono">{{ props.formatUsageCount(props.sessionUsageSummary.turns) }}</div>
+          <div class="muted mono">{{ props.formatUsageCount(props.sessionUsageSummary.runs) }}</div>
         </div>
         <div class="field">
           <label class="label">Total Cost</label>

@@ -20,7 +20,7 @@ use agena::{
     event::EventKind,
     session::{
         SessionCompactRequest, SessionContinueRequest, SessionPermissionReplyRequest,
-        SessionUserInputReplyRequest, SessionUserTurnRequest,
+        SessionUserInputReplyRequest, SessionUserMessageRequest,
     },
 };
 use agena_api::{
@@ -31,7 +31,7 @@ use agena_api::{
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
         ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, SetSessionGoalParams, SubmitTurnParams,
+        RevokePermissionRuleParams, RewindSessionParams, SetSessionGoalParams, SubmitMessageParams,
         UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},

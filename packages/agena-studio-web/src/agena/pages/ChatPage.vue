@@ -191,7 +191,7 @@ let slashSuggestions: ReturnType<typeof useChatCommandState>['slashSuggestions']
 
 const {
   approvePermission,
-  cancelCurrentSessionTurn,
+  cancelCurrentSessionRun,
   cancelUserAnswers,
   clearSessionGoalAction,
   completeSessionGoalAction,
@@ -304,7 +304,7 @@ const sidebar = useChatSidebarState({
 const pageContent = createChatPageContentState({
   ancestorSessions,
   approvePermission,
-  cancelCurrentSessionTurn,
+  cancelCurrentSessionRun,
   cancelUserAnswers,
   childSessions,
   contextUsageLabel,

@@ -43,7 +43,7 @@ pub use sdk::{
     PermissionAskInput, PermissionDecision, PluginError, PluginManifest, PluginStudioCommand,
     PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
     PluginToolDecl, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions,
-    PluginUiAction, PluginUiContributions, PluginUiThemePalette, PostTurnInput, PreTurnInput,
+    PluginUiAction, PluginUiContributions, PluginUiThemePalette, PostRunInput, PreRunInput,
     ProviderDescriptor, ProviderKind, ProviderListInput, ProviderListPatch, SessionEndInput,
     SessionEndReason, SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput,
     ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,

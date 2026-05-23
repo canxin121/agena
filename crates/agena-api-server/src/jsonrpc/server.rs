@@ -19,7 +19,7 @@ use super::protocol::{
     self, AppServerNotification, CancelRunParams, CancelRunResult, CreateSessionParams,
     CreateSessionResult, InboundMessage, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
     ListSessionsParams, ListSessionsResult, PermissionReplyParams, PermissionReplyResult,
-    ReadMessagesParams, ReadMessagesResult, SubmitTurnParams, SubmitTurnResult,
+    ReadMessagesParams, ReadMessagesResult, SubmitMessageParams, SubmitMessageResult,
 };
 
 #[derive(Debug, Error)]
@@ -42,10 +42,10 @@ pub trait AppServerBackend: Send + Sync + 'static {
         &self,
         params: CreateSessionParams,
     ) -> Result<CreateSessionResult, AppServerError>;
-    async fn submit_turn(
+    async fn submit_message(
         &self,
-        params: SubmitTurnParams,
-    ) -> Result<SubmitTurnResult, AppServerError>;
+        params: SubmitMessageParams,
+    ) -> Result<SubmitMessageResult, AppServerError>;
     async fn reply_permission(
         &self,
         params: PermissionReplyParams,
@@ -144,11 +144,11 @@ where
                 )
                 .await
             }
-            protocol::method::TURN_SUBMIT => {
-                self.dispatch::<SubmitTurnParams, SubmitTurnResult, _>(
+            protocol::method::MESSAGE_SUBMIT => {
+                self.dispatch::<SubmitMessageParams, SubmitMessageResult, _>(
                     request.params,
                     |params| async move {
-                        let result = self.backend.submit_turn(params).await?;
+                        let result = self.backend.submit_message(params).await?;
                         self.events
                             .publish(AppServerNotification::SessionStateChanged {
                                 session_id: result.session_id,

@@ -272,8 +272,8 @@ pub fn router(state: AppState) -> Router {
                 get(rest::get_message_part),
             )
             .route(
-                "/api/v1/sessions/{session_id}/turns",
-                post(rest::submit_turn),
+                "/api/v1/sessions/{session_id}/messages",
+                post(rest::submit_message),
             )
             .route(
                 "/api/v1/sessions/{session_id}/continue",

@@ -348,15 +348,15 @@ pub async fn stream_session_events(
     Ok(Sse::new(stream))
 }
 
-pub async fn submit_turn(
+pub async fn submit_message(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
-    Json(request): Json<SessionTurnRequest>,
+    Json(request): Json<SessionMessageRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     if request.parts.is_empty() {
         return Err(ServerError::BadRequest(
-            "session turn requires at least one part".into(),
+            "session message requires at least one part".into(),
         ));
     }
     if let Some(expected_version) = if_match_version(&headers)? {
@@ -370,7 +370,7 @@ pub async fn submit_turn(
     let options = resolve_run_options(&state, session_id, request.options).await?;
     let manager = state.session_manager()?;
     let session = manager
-        .submit_user_turn(agena::session::SessionUserTurnRequest {
+        .submit_user_message(agena::session::SessionUserMessageRequest {
             session_id,
             options,
             parts: request.parts,
@@ -458,7 +458,7 @@ pub async fn cancel_run(
     .await?
     {
         agena_api::commands::CommandResult::Ack => Ok(Json(serde_json::json!({ "ok": true }))),
-        _ => unreachable!("cancel turn returned unexpected result"),
+        _ => unreachable!("cancel run returned unexpected result"),
     }
 }
 

@@ -1,4 +1,4 @@
-//! Doom-loop detection for session turns.
+//! Doom-loop detection for session runs.
 //!
 //! Watches the recent assistant tool invocations on a session and trips when
 //! the *same* `(tool, input)` pair has been issued more than the configured
@@ -49,7 +49,7 @@ pub struct DoomLoopHit {
 impl DoomLoopHit {
     pub fn message(&self) -> String {
         format!(
-            "doom-loop detected: tool `{}` was invoked with the same input {} times in a row; aborting turn",
+            "doom-loop detected: tool `{}` was invoked with the same input {} times in a row; aborting run",
             self.tool_label, self.repeat_count
         )
     }

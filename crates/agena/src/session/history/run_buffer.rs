@@ -1,4 +1,4 @@
-//! In-memory aggregation for a single in-flight LLM turn.
+//! In-memory aggregation for a single in-flight LLM run.
 //!
 //! `RunBuffer` is the bridge between two worlds:
 //!
@@ -9,12 +9,12 @@
 //!   `session_history_event` table.
 //!
 //! The buffer holds the live, mutable accumulator entirely in memory. When
-//! the turn closes successfully, [`RunBuffer::commit`] produces an ordered
+//! the run closes successfully, [`RunBuffer::commit`] produces an ordered
 //! `Vec<EventKind>` containing exclusively *terminal* events
 //! (`AssistantMessageCompleted`, `ToolCallIssued`, …).
 //! These events are then appended in a single transaction.
 //!
-//! If the process dies mid-turn, the buffer is lost and **nothing was ever
+//! If the process dies mid-run, the buffer is lost and **nothing was ever
 //! written** to the log — the next process start sees an unmatched
 //! `RunStarted` and emits a `RunAborted` marker. There is no partial
 //! recovery: this is an explicit design decision (see plan `Context`).
@@ -34,7 +34,7 @@ use super::{
 };
 use crate::event::EventKind;
 
-/// Errors raised when the turn buffer is driven into an inconsistent shape.
+/// Errors raised when the run buffer is driven into an inconsistent shape.
 ///
 /// All variants represent programmer bugs in the streaming integration layer
 /// — they should not happen at runtime against a well-behaved provider.
@@ -42,7 +42,7 @@ use crate::event::EventKind;
 pub enum RunBufferError {
     #[error("no active assistant message; call begin_assistant() first")]
     NoActiveAssistant,
-    #[error("tool call {0} already exists in this turn")]
+    #[error("tool call {0} already exists in this run")]
     DuplicateToolCall(ToolCallId),
     #[error("tool call {0} was not registered before being completed")]
     UnknownToolCall(ToolCallId),
@@ -105,7 +105,7 @@ struct AssistantInProgress {
     started_at: DateTime<Utc>,
 }
 
-/// One commit-bounded sub-section of a turn.
+/// One commit-bounded sub-section of a run.
 #[derive(Debug)]
 enum Section {
     Assistant {
@@ -114,7 +114,7 @@ enum Section {
     },
 }
 
-/// Live accumulator for a single LLM turn.
+/// Live accumulator for a single LLM run.
 #[derive(Debug, Default)]
 pub struct RunBuffer {
     run_id: RunId,
@@ -129,7 +129,7 @@ impl RunBuffer {
         }
     }
 
-    /// Begin a new assistant message inside this turn. Returns the freshly
+    /// Begin a new assistant message inside this run. Returns the freshly
     /// allocated `MessageId` so streaming callbacks can address it by id.
     pub fn begin_assistant<A: MessageIdAllocator>(&mut self, ids: &mut A) -> MessageId {
         let message_id = ids.next_message_id();
@@ -242,7 +242,7 @@ impl RunBuffer {
     /// Ordering inside the returned vector is the chronological order events
     /// must appear in the history log.
     ///
-    /// `ids` is kept in the signature for callers that already allocate turn
+    /// `ids` is kept in the signature for callers that already allocate run
     /// message ids before committing; tool completions now update the owning
     /// assistant message instead of allocating synthetic tool messages.
     pub fn commit<A: MessageIdAllocator>(

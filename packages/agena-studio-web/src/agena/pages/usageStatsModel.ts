@@ -41,7 +41,7 @@ export function usageHeadline(stats: UsageStats | null): string {
 
 export function usageFactLine(totals: UsageTotals): string[] {
   return [
-    `turns ${formatUsageInteger(totals.turns)}`,
+    `runs ${formatUsageInteger(totals.runs)}`,
     `sessions ${formatUsageInteger(totals.sessions)}`,
     `in ${formatUsageInteger(totals.input_tokens)}`,
     `out ${formatUsageInteger(totals.output_tokens)}`,
@@ -51,5 +51,5 @@ export function usageFactLine(totals: UsageTotals): string[] {
 }
 
 export function hasUsage(stats: UsageStats | null): boolean {
-  return Boolean(stats && stats.totals.turns > 0)
+  return Boolean(stats && stats.totals.runs > 0)
 }

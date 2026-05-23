@@ -4,10 +4,10 @@
 //!
 //! * `submit_key`   — fire the message immediately. While the AI is busy
 //!   this routes through `steer_input` (Phase 3); when
-//!   idle it submits a normal turn.
+//!   idle it submits the message directly.
 //! * `queue_key`    — append to the local pending queue. While the AI is
 //!   busy, the queued message is held until the current
-//!   turn ends. While idle, behaves like `submit_key`.
+//!   run ends. While idle, behaves like `submit_key`.
 //! * `newline_key`  — insert a literal newline.
 //! * `edit_queue_key` — pull the queue back into the editor for edit.
 //!

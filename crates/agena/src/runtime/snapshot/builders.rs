@@ -471,7 +471,7 @@ pub(super) fn build_scheduler(
 
                         match self
                             .session_manager
-                            .submit_user_turn(crate::session::SessionUserTurnRequest {
+                            .submit_user_message(crate::session::SessionUserMessageRequest {
                                 session_id,
                                 options,
                                 parts: vec![crate::message::PartContent::text(job.prompt.clone())],

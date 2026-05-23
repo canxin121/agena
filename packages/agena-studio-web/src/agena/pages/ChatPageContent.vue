@@ -62,7 +62,7 @@ const props = defineProps<{
         :delete-current-session="props.state.deleteCurrentSession"
         :export-current-session="props.state.exportCurrentSession"
         :continue-current-session="props.state.continueCurrentSession"
-        :cancel-current-session-turn="props.state.cancelCurrentSessionTurn"
+        :cancel-current-session-run="props.state.cancelCurrentSessionRun"
         :format-message-time="props.state.formatMessageTime"
       />
 

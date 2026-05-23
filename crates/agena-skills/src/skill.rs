@@ -16,7 +16,7 @@ pub struct SkillFrontmatter {
     /// won't be advertised.
     #[serde(default)]
     pub allowed_tools: Vec<String>,
-    /// Optional model preference for the skill turn.
+    /// Optional model preference for the skill run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Optional aliases used to resolve the skill (e.g. slash command

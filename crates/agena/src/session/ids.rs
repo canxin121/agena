@@ -59,10 +59,10 @@ impl PartId {
     }
 }
 
-/// Identifier of a single LLM "turn" (request/response cycle).
+/// Identifier of a single LLM run (request/response cycle).
 ///
 /// All append-only history events emitted as part of one LLM call carry the
-/// same `RunId`. A turn that is never closed by a `RunCompleted` /
+/// same `RunId`. A run that is never closed by a `RunCompleted` /
 /// `RunAborted` marker is treated as in-flight on load and discarded by
 /// projection.
 #[derive(

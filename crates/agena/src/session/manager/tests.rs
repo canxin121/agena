@@ -1365,7 +1365,7 @@ async fn streaming_tool_execution_persists_in_progress_output_impl() {
     let manager_task = Arc::clone(&manager);
     let submit = tokio::spawn(async move {
         manager_task
-            .submit_user_turn(SessionUserTurnRequest {
+            .submit_user_message(SessionUserMessageRequest {
                 session_id,
                 options: run_options(),
                 parts: vec![crate::message::PartContent::text("stream plugin")],
@@ -1496,7 +1496,7 @@ async fn load_session_rebuilds_projection_when_history_is_published_directly() {
             }),
         )
         .await
-        .expect("publish direct turn start");
+        .expect("publish direct run start");
     service
         .event_publisher()
         .publish(
@@ -1523,7 +1523,7 @@ async fn load_session_rebuilds_projection_when_history_is_published_directly() {
             }),
         )
         .await
-        .expect("publish direct turn completion");
+        .expect("publish direct run completion");
 
     let projected_before = activity_message::Entity::find()
         .filter(activity_message::Column::SessionId.eq(created.id))
@@ -1581,20 +1581,20 @@ async fn append_only_full_turn_writes_one_row_per_event_no_overwrites() {
 
     let created = service
         .create_session(SessionCreateRequest {
-            title: "append-only-turn".into(),
+            title: "append-only-run".into(),
             parent_session_id: None,
         })
         .await
         .expect("create session");
 
     service
-        .submit_user_turn(SessionUserTurnRequest {
+        .submit_user_message(SessionUserMessageRequest {
             session_id: created.id,
             options: run_options(),
             parts: vec![PartContent::text("hi")],
         })
         .await
-        .expect("submit turn");
+        .expect("submit message");
 
     let history = service
         .list_session_events(created.id)
@@ -1669,23 +1669,23 @@ async fn auto_compact_does_not_trigger_when_context_window_unknown() {
         .expect("create session");
 
     let first = service
-        .submit_user_turn(SessionUserTurnRequest {
+        .submit_user_message(SessionUserMessageRequest {
             session_id: created.id,
             options: recording_run_options(),
             parts: vec![PartContent::text("seed")],
         })
         .await
-        .expect("first turn");
+        .expect("first user message");
     assert!(first.runtime.prompt_window.compaction.is_none());
 
     let second = service
-        .submit_user_turn(SessionUserTurnRequest {
+        .submit_user_message(SessionUserMessageRequest {
             session_id: created.id,
             options: recording_run_options(),
             parts: vec![PartContent::text("trigger compaction")],
         })
         .await
-        .expect("second turn");
+        .expect("second run");
 
     assert!(
         second.runtime.prompt_window.compaction.is_none(),
@@ -1694,7 +1694,7 @@ async fn auto_compact_does_not_trigger_when_context_window_unknown() {
     assert_eq!(
         requests.lock().expect("request lock should succeed").len(),
         2,
-        "expected only the two ordinary model turns"
+        "expected only the two ordinary model runs"
     );
 }
 
@@ -1726,31 +1726,31 @@ fn auto_compact_triggers_at_known_context_limit() {
             .expect("create session");
 
         let first = service
-            .submit_user_turn(SessionUserTurnRequest {
+            .submit_user_message(SessionUserMessageRequest {
                 session_id: created.id,
                 options: recording_run_options(),
                 parts: vec![PartContent::text("seed")],
             })
             .await
-            .expect("first turn");
+            .expect("first user message");
         assert!(first.runtime.prompt_window.compaction.is_none());
 
         let second = service
-            .submit_user_turn(SessionUserTurnRequest {
+            .submit_user_message(SessionUserMessageRequest {
                 session_id: created.id,
                 options: recording_run_options(),
                 parts: vec![PartContent::text("trigger compaction")],
             })
             .await
-            .expect("second turn");
+            .expect("second run");
 
         assert!(
             second.runtime.prompt_window.compaction.is_some(),
-            "second turn should install an automatic compaction snapshot"
+            "second run should install an automatic compaction snapshot"
         );
         assert!(
             requests.lock().expect("request lock should succeed").len() >= 3,
-            "expected first turn, local compaction turn, and post-compaction turn"
+            "expected first user message, local compaction run, and post-compaction run"
         );
     });
 }
@@ -1867,7 +1867,7 @@ async fn restart_after_interrupted_turn_can_continue_session() {
         let manager = Arc::clone(&first);
         tokio::spawn(async move {
             manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id,
                     options: restartable_options(),
                     parts: vec![PartContent::text("start then restart")],
@@ -1915,7 +1915,7 @@ async fn restart_after_interrupted_turn_can_continue_session() {
             }),
         )
         .await
-        .expect("interrupted turn should be persisted");
+        .expect("interrupted run should be persisted");
     drop(first);
 
     let second = build_manager_with_provider_on_db(
@@ -1981,13 +1981,13 @@ fn blocked_permission_survives_restart_and_reply_continues() {
             .expect("create session");
         let session_id = created.id;
         let blocked = first
-            .submit_user_turn(SessionUserTurnRequest {
+            .submit_user_message(SessionUserMessageRequest {
                 session_id,
                 options: run_options(),
                 parts: vec![PartContent::text("permission todo")],
             })
             .await
-            .expect("turn should block on permission");
+            .expect("run should block on permission");
         let request_id = pending_permission_request_id(&blocked);
         assert!(blocked.blocked());
         drop(first);
@@ -2066,13 +2066,13 @@ fn duplicate_permission_reply_is_idempotent() {
             .expect("create session");
 
         let blocked = manager
-            .submit_user_turn(SessionUserTurnRequest {
+            .submit_user_message(SessionUserMessageRequest {
                 session_id: created.id,
                 options: run_options(),
                 parts: vec![PartContent::text("permission todo")],
             })
             .await
-            .expect("turn should block on permission");
+            .expect("run should block on permission");
         let request = SessionPermissionReplyRequest {
             session_id: created.id,
             options: run_options(),
@@ -3106,7 +3106,7 @@ async fn goal_runtime_external_goal_set_refreshes_cached_session() {
     assert_eq!(goal.objective, "Refresh the cached session goal");
 }
 
-/// Cancel a turn while the provider stream is still pending. The
+/// Cancel a run while the provider stream is still pending. The
 /// processor must observe the cancellation token and surface a
 /// terminal error rather than running to completion.
 ///
@@ -3200,7 +3200,7 @@ async fn cancel_active_run_aborts_a_running_run() {
 
     let mgr = Arc::clone(&manager);
     let submit = tokio::spawn(async move {
-        mgr.submit_user_turn(SessionUserTurnRequest {
+        mgr.submit_user_message(SessionUserMessageRequest {
             session_id,
             options: slow_options(),
             parts: vec![PartContent::text("ping")],
@@ -4599,7 +4599,7 @@ while True:
                 .expect("create session");
 
             let result = manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id: created.id,
                     options: SessionRunOptions {
                         model: ModelRef::new("runtime-tools", "runtime-tools-model"),
@@ -4902,7 +4902,7 @@ while True:
                 .expect("create session");
 
             let result = manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id: created.id,
                     options: SessionRunOptions {
                         model: ModelRef::new("runtime-tools", "runtime-tools-model"),
@@ -5182,7 +5182,7 @@ while True:
                 .expect("create session");
 
             let result = manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id: created.id,
                     options: SessionRunOptions {
                         model: ModelRef::new("runtime-tools", "runtime-tools-model"),
@@ -5428,7 +5428,7 @@ while True:
                 .expect("create session");
 
             let session = manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id: created.id,
                     options: SessionRunOptions {
                         model: ModelRef::new("runtime-tools", "runtime-tools-model"),
@@ -5693,7 +5693,7 @@ while True:
                 .expect("create session");
 
             let session = manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id: created.id,
                     options: SessionRunOptions {
                         model: ModelRef::new("runtime-tools", "runtime-tools-model"),
@@ -5987,7 +5987,7 @@ while True:
                 .expect("create session");
 
             let session = manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id: created.id,
                     options: SessionRunOptions {
                         model: ModelRef::new("runtime-tools", "runtime-tools-model"),
@@ -6469,7 +6469,7 @@ while True:
             .await;
 
             let result = manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id: created.id,
                     options: SessionRunOptions {
                         model: ModelRef::new("runtime-tools", "runtime-tools-model"),

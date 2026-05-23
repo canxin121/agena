@@ -12,7 +12,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RunStartedEvent {
+pub struct ExecutionStartedEvent {
     #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub ts_ms: i64,
@@ -25,7 +25,7 @@ pub struct ErrorInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RunFailedEvent {
+pub struct ExecutionFailedEvent {
     #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub error: ErrorInfo,

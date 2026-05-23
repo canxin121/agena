@@ -12,7 +12,7 @@ mod processor;
 mod prompt_window;
 mod store;
 
-pub use ids::{MessageId, PartId, ToolCallId, TurnId};
+pub use ids::{MessageId, PartId, RunId, ToolCallId};
 
 pub use context_governor::ContextGovernor;
 pub use context_policy::ContextPolicy;
@@ -32,8 +32,8 @@ pub use manager::{
 pub use model::{
     GoalStatus, MAX_SESSION_GOAL_OBJECTIVE_CHARS, PlanState, PromptCompactionRuntime,
     PromptCompactionStrategy, PromptTokenRuntime, PromptTokenUsageSnapshot, PromptWindowRuntime,
-    ProviderPromptAnchor, Session, SessionExecutionContext, SessionGoal, SessionListRequest,
-    SessionRuntimeState, SessionRuntimeStatus, SessionStatus, SessionSummary,
+    ProviderPromptAnchor, RunStatus, Session, SessionExecutionContext, SessionGoal,
+    SessionListRequest, SessionRuntimeState, SessionStatus, SessionSummary,
     validate_session_goal_objective,
 };
 pub use processor::SessionProcessor;

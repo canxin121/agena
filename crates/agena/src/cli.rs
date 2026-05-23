@@ -51,9 +51,9 @@ use crate::{
     role::Role,
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
     session::{
-        Session, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
-        SessionListRequest, SessionManager, SessionRunOptions, SessionRuntimeStatus,
-        SessionSummary, SessionUserTurnRequest, UsagePeriod, UsageStatsQuery,
+        RunStatus, Session, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
+        SessionListRequest, SessionManager, SessionRunOptions, SessionSummary,
+        SessionUserTurnRequest, UsagePeriod, UsageStatsQuery,
     },
     storage::StorageConfig,
     tool::{ApplyPatchExecution, ToolExecutor, ToolPayloadInput},
@@ -1131,7 +1131,7 @@ struct SessionDetail {
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     message_count: usize,
-    status: SessionRuntimeStatus,
+    status: RunStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     latest_event_seq: Option<i64>,
 }
@@ -2176,7 +2176,7 @@ impl AgenaCli {
                             .map(str::trim)
                             .filter(|value| !value.is_empty())
                             .map(ToOwned::to_owned),
-                        max_turn_loops: None,
+                        max_run_loops: None,
                     },
                 })
                 .await?
@@ -2746,7 +2746,7 @@ impl AgenaCli {
                 parts: vec![PartContent::text(prompt)],
             })
             .await?;
-        if session.runtime.turn.status == SessionRuntimeStatus::Blocked {
+        if session.runtime.run.status == RunStatus::Blocked {
             return Err(AppError::Config(
                 "command is blocked awaiting permission or user input".to_owned(),
             ));
@@ -3880,7 +3880,7 @@ fn session_detail(session: &Session, latest_event_seq: Option<i64>) -> SessionDe
         created_at: session.created_at,
         updated_at: session.updated_at,
         message_count: session.messages.len(),
-        status: session.runtime.turn.status,
+        status: session.runtime.run.status,
         latest_event_seq,
     }
 }
@@ -3894,10 +3894,10 @@ fn resolve_continue_options(
     let model = if let Some(model) = args.model.as_deref() {
         snapshot.resolve_model_target(model, None)?
     } else if let (Some(provider_id), Some(model_id)) = (
-        session.runtime.turn.model_provider_id.as_deref(),
-        session.runtime.turn.model_id.as_deref(),
+        session.runtime.run.model_provider_id.as_deref(),
+        session.runtime.run.model_id.as_deref(),
     ) {
-        match session.runtime.turn.model_adapter_id.as_deref() {
+        match session.runtime.run.model_adapter_id.as_deref() {
             Some(adapter_id) => ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id),
             None => ModelRef::try_new(provider_id, model_id),
         }
@@ -3922,7 +3922,7 @@ fn resolve_continue_options(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
-        max_turn_loops: None,
+        max_run_loops: None,
     })
 }
 
@@ -3955,7 +3955,7 @@ fn resolve_run_options(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
-        max_turn_loops: None,
+        max_run_loops: None,
     })
 }
 

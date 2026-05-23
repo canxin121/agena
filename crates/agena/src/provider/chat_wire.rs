@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::{
     error::AppError,
-    message::{Message, MessageUsage},
+    message::{AssistantReasoningField, Message, MessageUsage},
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionToolCall,
@@ -607,11 +607,14 @@ pub(crate) fn backfill_assistant_reasoning_field_on_request(
         if !assistant_reasoning_interleaved && assistant_reasoning_text(message).trim().is_empty() {
             continue;
         }
-        message.metadata.provider_metadata =
-            utils::provider_metadata_with_assistant_reasoning_field(
-                message.metadata.provider_metadata.take(),
-                Some(field),
-            );
+        let assistant_reasoning_field = match field {
+            "reasoning_content" => AssistantReasoningField::ReasoningContent,
+            "reasoning_details" => AssistantReasoningField::ReasoningDetails,
+            _ => continue,
+        };
+        let mut provider_state = message.provider_state.take().unwrap_or_default();
+        provider_state.assistant_reasoning_field = Some(assistant_reasoning_field);
+        message.provider_state = Some(provider_state);
     }
 }
 
@@ -722,15 +725,16 @@ fn assistant_reasoning_text(message: &Message) -> String {
     chunks.join("")
 }
 
-fn assistant_reasoning_field_from_message_metadata(message: &Message) -> Option<&str> {
-    message
-        .metadata
-        .provider_metadata
+fn assistant_reasoning_field_from_message_metadata(message: &Message) -> Option<&'static str> {
+    match message
+        .provider_state
         .as_ref()
-        .and_then(|metadata| metadata.as_object())
-        .and_then(|metadata| metadata.get("assistant_reasoning_field"))
-        .and_then(|value| value.as_str())
-        .filter(|value| matches!(*value, "reasoning_content" | "reasoning_details"))
+        .and_then(|state| state.assistant_reasoning_field)
+    {
+        Some(AssistantReasoningField::ReasoningContent) => Some("reasoning_content"),
+        Some(AssistantReasoningField::ReasoningDetails) => Some("reasoning_details"),
+        None => None,
+    }
 }
 
 fn apply_assistant_reasoning_field(

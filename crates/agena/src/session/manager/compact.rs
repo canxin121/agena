@@ -1,8 +1,6 @@
 use super::*;
 
 const COMPACTION_AGENT: &str = "compaction";
-const COMPACTION_REQUEST_TAG: &str = "compaction_request";
-const COMPACTION_SUMMARY_TAG: &str = "compaction_summary";
 const DEFAULT_TAIL_USER_TURNS: usize = 2;
 
 struct CompactionRuntimeInstall {
@@ -21,7 +19,7 @@ impl SessionManager {
         request: SessionCompactRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
-        let (control, _steer_rx) = self.turn_registry.register(session_id).await;
+        let (control, _steer_rx) = self.run_registry.register(session_id).await;
         crate::metrics::session_started();
         let manager = self.background_handle();
         let task_control = control.clone();
@@ -34,7 +32,7 @@ impl SessionManager {
         .map_err(|err| AppError::Internal(format!("compact task failed: {err}")))
         .and_then(std::convert::identity);
         crate::metrics::session_finished();
-        self.turn_registry
+        self.run_registry
             .unregister_if_matches(session_id, &control)
             .await;
         result
@@ -43,7 +41,7 @@ impl SessionManager {
     async fn compact_session_inner(
         &self,
         mut request: SessionCompactRequest,
-        control: Arc<TurnControl>,
+        control: Arc<RunControl>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self
@@ -96,7 +94,7 @@ impl SessionManager {
             }
         }
 
-        self.local_compact_with_agent(
+        Box::pin(self.local_compact_with_agent(
             session,
             original_options,
             original_execution,
@@ -104,7 +102,7 @@ impl SessionManager {
             compacted_at,
             state,
             control,
-        )
+        ))
         .await
     }
 
@@ -113,7 +111,7 @@ impl SessionManager {
         session: Session,
         options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
-        control: Arc<TurnControl>,
+        control: Arc<RunControl>,
     ) -> Result<Session, AppError> {
         if session.messages.is_empty() {
             return Ok(session);
@@ -157,7 +155,7 @@ impl SessionManager {
             }
         }
 
-        self.local_compact_with_agent(
+        Box::pin(self.local_compact_with_agent(
             session,
             original_options,
             original_execution,
@@ -165,7 +163,7 @@ impl SessionManager {
             compacted_at,
             state,
             control,
-        )
+        ))
         .await
     }
 
@@ -207,10 +205,10 @@ impl SessionManager {
         tail_start: Option<i64>,
         compacted_at: Option<i64>,
         state: Arc<SessionManagerState>,
-        control: Arc<TurnControl>,
+        control: Arc<RunControl>,
     ) -> Result<Session, AppError> {
         options.agent_profile = Some(COMPACTION_AGENT.to_string());
-        options.max_turn_loops = Some(2);
+        options.max_run_loops = Some(2);
         session = self
             .apply_requested_agent_profile(session, &mut options, state.clone())
             .await?;
@@ -233,10 +231,6 @@ impl SessionManager {
                 model_id: options.model.model_id.to_string(),
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
-                model_verbosity: options.verbosity.clone(),
-                model_parallel_tool_calls: options.request_override.parallel_tool_calls(),
-                provider_metadata: None,
-                tags: vec![COMPACTION_REQUEST_TAG.to_string()],
             },
         );
         session.messages.push(request_message.clone());
@@ -251,9 +245,14 @@ impl SessionManager {
             .await?;
 
         let session_id = session.id;
-        let run_result = self
-            .run_model_turn(session, &options, state.clone(), control)
-            .await;
+        let run_result = Box::pin(self.run_model_turn(
+            session,
+            &options,
+            RunSource::Compaction,
+            state.clone(),
+            control,
+        ))
+        .await;
         let mut session = match run_result {
             Ok(session) => session,
             Err(err) => {
@@ -287,9 +286,6 @@ impl SessionManager {
                 "local compaction returned an empty summary".to_string(),
             ));
         }
-        session.messages[assistant_index]
-            .metadata
-            .add_tag(COMPACTION_SUMMARY_TAG);
         let touched = vec![session.messages[assistant_index].clone()];
         self.install_compaction_runtime(
             session,

@@ -1,18 +1,15 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::message::metadata::MessageMetadata;
+use crate::message::metadata::{MessageMetadata, MessageProviderState};
 use crate::message::part::{
     ExecutionStatus, ExecutionStatusTransitionError, MessagePart, OperationPart, PartContent,
 };
 use crate::message::usage::MessageUsage;
 use crate::role::Role;
 
-/// Message state mirrors the lifecycle of any execution-tracked entity.
 pub type MessageStatus = ExecutionStatus;
 
-/// Alias preserved for callers that already import this name. The underlying
-/// type is the unified [`ExecutionStatusTransitionError`].
 pub type MessageStateTransitionError = ExecutionStatusTransitionError;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -26,10 +23,10 @@ pub struct Message {
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub metadata: MessageMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_state: Option<MessageProviderState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<MessageUsage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish: Option<String>,
 }
 
 impl Message {
@@ -46,8 +43,8 @@ impl Message {
             parts: Vec::new(),
             created_at,
             metadata: MessageMetadata::default(),
+            provider_state: None,
             usage: None,
-            finish: None,
         };
 
         for (idx, content) in parts.into_iter().enumerate() {

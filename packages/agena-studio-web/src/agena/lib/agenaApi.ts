@@ -792,7 +792,6 @@ export type MessageResource = {
   updated_at: string
   metadata: Record<string, unknown>
   usage?: Record<string, unknown> | null
-  finish?: string | null
   part_count: number
   parts?: MessagePart[] | null
 }
@@ -917,93 +916,6 @@ export type DomainEventRecord = {
 
 export type SessionEventStreamHandle = {
   close: () => void
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
-}
-
-function readString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value : null
-}
-
-function readFiniteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-function readMessageRole(value: unknown): MessageResource['role'] | null {
-  return value === 'user' || value === 'assistant' || value === 'system' ? value : null
-}
-
-function readMessageParts(value: unknown): MessagePart[] | null {
-  if (!Array.isArray(value)) return null
-  return value
-    .map((item) => asRecord(item) as MessagePart | null)
-    .filter((item): item is MessagePart => Boolean(item))
-}
-
-function isoFromTimestampMs(value: unknown, fallback: string): string {
-  const timestampMs = readFiniteNumber(value)
-  if (timestampMs === null) return fallback
-  const date = new Date(timestampMs)
-  return Number.isFinite(date.getTime()) ? date.toISOString() : fallback
-}
-
-export function messageResourceFromEvent(event: DomainEventRecord): MessageResource | null {
-  const payload = asRecord(event.payload)
-  if (!payload) return null
-
-  switch (event.kind) {
-    case 'message_part_updated': {
-      const sessionId = event.session_id ?? readFiniteNumber(payload.session_id)
-      const messageId = readFiniteNumber(payload.message_id)
-      const role = readMessageRole(payload.message_role)
-      const state = readString(payload.message_state)
-      const createdAt = readString(payload.message_created_at)
-      const part = asRecord(payload.part) as MessagePart | null
-      if (sessionId == null || messageId === null || !role || !state || !createdAt || !part) {
-        return null
-      }
-      return {
-        id: messageId,
-        session_id: sessionId,
-        role,
-        state,
-        created_at: createdAt,
-        updated_at: isoFromTimestampMs(payload.ts_ms, createdAt),
-        metadata: {},
-        usage: null,
-        finish: null,
-        part_count: 1,
-        parts: [part],
-      }
-    }
-    case 'user_message_appended':
-    case 'assistant_message_completed': {
-      const sessionId = event.session_id
-      const messageId = readFiniteNumber(payload.message_id)
-      const createdAt = readString(payload.created_at)
-      const parts = readMessageParts(payload.parts)
-      if (sessionId == null || messageId === null || !createdAt || !parts) {
-        return null
-      }
-      return {
-        id: messageId,
-        session_id: sessionId,
-        role: event.kind === 'user_message_appended' ? 'user' : 'assistant',
-        state: 'completed',
-        created_at: createdAt,
-        updated_at: createdAt,
-        metadata: asRecord(payload.metadata) ?? {},
-        usage: event.kind === 'assistant_message_completed' ? asRecord(payload.usage) : null,
-        finish: event.kind === 'assistant_message_completed' ? readString(payload.finish_reason) : null,
-        part_count: parts.length,
-        parts,
-      }
-    }
-    default:
-      return null
-  }
 }
 
 type PaginatedResponse<T> = {

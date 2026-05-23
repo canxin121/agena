@@ -114,12 +114,6 @@ export function chatUsageFacts(summary: ChatUsageSummary): string[] {
   if (summary.reasoningTokens > 0) {
     facts.push(`reasoning ${formatUsageCount(summary.reasoningTokens)}`)
   }
-  if (summary.cacheReadTokens > 0) {
-    facts.push(`cache read ${formatUsageCount(summary.cacheReadTokens)}`)
-  }
-  if (summary.cacheWriteTokens > 0) {
-    facts.push(`cache write ${formatUsageCount(summary.cacheWriteTokens)}`)
-  }
   if (summary.totalCostUsd > 0) {
     facts.push(`cost ${formatUsageUsd(summary.totalCostUsd)}`)
   }
@@ -136,12 +130,6 @@ export function chatUsageBreakdownFacts(item: ChatUsageBreakdown): string[] {
 
   if (item.reasoningTokens > 0) {
     facts.push(`reasoning ${formatUsageCount(item.reasoningTokens)}`)
-  }
-  if (item.cacheReadTokens > 0) {
-    facts.push(`cache read ${formatUsageCount(item.cacheReadTokens)}`)
-  }
-  if (item.cacheWriteTokens > 0) {
-    facts.push(`cache write ${formatUsageCount(item.cacheWriteTokens)}`)
   }
   if (item.totalCostUsd > 0) {
     facts.push(`cost ${formatUsageUsd(item.totalCostUsd)}`)

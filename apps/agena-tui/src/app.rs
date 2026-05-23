@@ -13,8 +13,8 @@ use agena::{
     config::get_json_path,
     event::{DomainEvent, EventKind as AgenaSessionEvent},
     message::{
-        AttachmentKind, ExecutionStatus, MessagePart, MessageStatus, OperationPart, PartContent,
-        ToolInvocation, UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputRequest,
+        AttachmentKind, MessagePart, MessageStatus, OperationPart, PartContent, ToolInvocation,
+        UserInputQuestion, UserInputReply, UserInputReplyKind, UserInputRequest,
     },
     model::ModelRef,
     permission::{
@@ -399,7 +399,7 @@ pub struct App {
     /// session changes so we don't accumulate stale subscriptions.
     active_subscription: Option<tokio::task::JoinHandle<()>>,
     /// Pending messages typed by the user while the AI was working. Drained
-    /// FIFO once the active turn finishes. See `composer_queue.rs`.
+    /// FIFO once the active run finishes. See `composer_queue.rs`.
     queue: ComposerQueue,
     status_line: Option<StatusLineState>,
     plugin_theme: Option<agena::plugin::HostThemePalette>,
@@ -562,7 +562,7 @@ enum AppMessage {
         live: LiveEvent,
     },
     /// Result of a `request_steer_input` call. `result` is `Ok` when the
-    /// backend accepted the steer; `Err` when the turn was no longer
+    /// backend accepted the steer; `Err` when the run was no longer
     /// steerable (e.g. terminal phase). On error we re-enqueue the draft
     /// so the user's intent isn't dropped.
     SteerSubmitted {
@@ -570,10 +570,10 @@ enum AppMessage {
         draft: ComposerDraft,
         result: UiResult<()>,
     },
-    /// Result of a `request_cancel_turn` call. We always treat the in-flight
-    /// turn as gone when this lands, regardless of success — the user has
+    /// Result of a `request_cancel_run` call. We always treat the in-flight
+    /// run as gone when this lands, regardless of success — the user has
     /// already signalled cancel intent.
-    TurnCancelled {
+    RunCancelled {
         session_id: i64,
         result: UiResult<()>,
     },
@@ -1934,8 +1934,8 @@ impl App {
             return;
         }
 
-        // ESC while a turn is in flight has global priority. Cancel the
-        // active turn before falling through to focus-specific Esc.
+        // ESC while a run is in flight has global priority. Cancel the
+        // active run before falling through to focus-specific Esc.
         if matches!(key.code, KeyCode::Esc)
             && key.modifiers.is_empty()
             && self.transcript.submitting
@@ -1943,7 +1943,7 @@ impl App {
         {
             self.transcript.submitting = false;
             self.submitting_session_ids.remove(&session_id);
-            self.request_cancel_turn(session_id);
+            self.request_cancel_run(session_id);
             return;
         }
 
@@ -5547,7 +5547,7 @@ impl App {
                 draft,
                 result,
             } => self.handle_steer_submitted(session_id, draft, result),
-            AppMessage::TurnCancelled { session_id, result } => {
+            AppMessage::RunCancelled { session_id, result } => {
                 self.handle_turn_cancelled(session_id, result)
             }
             AppMessage::StatusLineUpdated { output } => self.handle_status_line_updated(output),
@@ -5751,7 +5751,7 @@ impl App {
                 self.maybe_auto_open_pending_interactive_overlay();
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
-                // Pop the next pending message and submit it after the turn.
+                // Pop the next pending message and submit it after the run.
                 self.try_drain_queue_one();
             }
             Err(error) => {
@@ -5760,7 +5760,7 @@ impl App {
                     self.restore_composer_draft(draft);
                 }
                 self.flash_error(error);
-                // Pause draining: a failed turn typically means the user
+                // Pause draining: a failed run typically means the user
                 // wants to inspect the error rather than fire the next
                 // queued message blindly. They can press Up to recover
                 // the queue contents.
@@ -5769,7 +5769,7 @@ impl App {
     }
 
     /// Pop one editable message from the queue and submit it. Called
-    /// whenever an in-flight turn completes successfully so the user sees
+    /// whenever an in-flight run completes successfully so the user sees
     /// their pending messages run automatically.
     fn try_drain_queue_one(&mut self) {
         if self.transcript.submitting || self.current_session_pending_interactive_kind().is_some() {
@@ -5794,9 +5794,9 @@ impl App {
         match result {
             Ok(()) => {}
             Err(error) => {
-                // Backend rejected the steer (turn no longer steerable).
+                // Backend rejected the steer (run no longer steerable).
                 // Don't drop the user's message — push it onto the front
-                // of the queue so it goes out at the next turn boundary.
+                // of the queue so it goes out at the next run boundary.
                 self.queue.push(QueuedMessage {
                     draft,
                     priority: QueuePriority::Now,
@@ -5821,7 +5821,7 @@ impl App {
         }
         match result {
             Ok(()) => {
-                self.flash_info(ui_text::t(&self.i18n, "flash-turn-cancelled"));
+                self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
             }
             Err(error) => {
                 // Even on error we already cleared submitting locally —
@@ -6786,9 +6786,9 @@ impl App {
         });
     }
 
-    /// Steer the in-flight turn by injecting `parts` as a new user message
+    /// Steer the in-flight run by injecting `parts` as a new user message
     /// the model will see on its next step. If the backend reports the
-    /// turn is no longer steerable, fall back to enqueueing the original
+    /// run is no longer steerable, fall back to enqueueing the original
     /// draft so it isn't lost.
     fn request_steer_input(
         &mut self,
@@ -6813,18 +6813,18 @@ impl App {
         self.flash_info(ui_text::t(&self.i18n, "flash-steer-sent"));
     }
 
-    /// Ask the backend to cancel the in-flight turn for `session_id`.
+    /// Ask the backend to cancel the in-flight run for `session_id`.
     /// Best-effort: even if the backend hasn't fully wired cancellation,
     /// we clear the local `submitting` flag so the user regains control.
-    fn request_cancel_turn(&mut self, session_id: i64) {
+    fn request_cancel_run(&mut self, session_id: i64) {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
-                .cancel_turn(session_id)
+                .cancel_run(session_id)
                 .await
                 .map_err(|error| error.to_string());
-            let _ = tx.send(AppMessage::TurnCancelled { session_id, result });
+            let _ = tx.send(AppMessage::RunCancelled { session_id, result });
         });
     }
 
@@ -7033,10 +7033,10 @@ impl App {
     }
 
     /// Primary submit action (Ctrl+Enter by default). When the AI is
-    /// idle, sends a normal turn. When the AI is mid-turn, attempts to
+    /// idle, sends a normal turn. When the AI is mid-run, attempts to
     /// `steer_input` (Phase 3) — i.e. inject the message into the live
-    /// turn so the model sees it on its next step. If the backend rejects
-    /// the steer (e.g. the turn is in a non-steerable phase), we fall
+    /// run so the model sees it on its next step. If the backend rejects
+    /// the steer (e.g. the run is in a non-steerable phase), we fall
     /// back to enqueueing the message so it isn't lost.
     fn submit_or_steer(&mut self) {
         self.composer.flush_all_pending_input();
@@ -7075,8 +7075,8 @@ impl App {
     }
 
     /// Secondary submit action (bare Enter by default). When the AI is idle,
-    /// sends immediately. When the AI is mid-turn, the message is appended to
-    /// the local pending queue and drained on turn completion.
+    /// sends immediately. When the AI is mid-run, the message is appended to
+    /// the local pending queue and drained on run completion.
     fn queue_or_submit(&mut self) {
         // Preserve the legacy paste-burst behavior: if a multi-character
         // paste burst is active, an Enter inside it should be treated as
@@ -10632,7 +10632,7 @@ impl App {
     }
 
     /// `/btw <question>` forks a child session and submits the question
-    /// there without touching the parent transcript. The parent turn keeps
+    /// there without touching the parent transcript. The parent run keeps
     /// running (or stays idle) untouched; the user can switch to the new
     /// session via the sessions pane to read the answer.
     fn handle_btw_command(&mut self, args: &str) {
@@ -10663,7 +10663,7 @@ impl App {
                         .submit_parts_turn_with_options(session_id, parts, options)
                         .await
                         .map_err(|error| error.to_string());
-                    // Reuse the existing turn-submitted message — the
+                    // Reuse the existing run-submitted message — the
                     // handler will route the new session into the UI if
                     // appropriate, otherwise just refresh the list.
                     let _ = tx.send(AppMessage::SessionTurnSubmitted {
@@ -14764,27 +14764,15 @@ impl TranscriptState {
 
     fn apply_live_event(&mut self, event: &DomainEvent, width: u16, height: u16) -> bool {
         let refresh_needed = match &event.kind {
-            AgenaSessionEvent::MessagePartUpdated(update) => {
-                self.apply_message_part_updated(update);
-                false
-            }
-            AgenaSessionEvent::MessagePartDelta(delta) => {
-                self.apply_message_part_delta(delta).is_err()
-            }
-            AgenaSessionEvent::AssistantMessageCompleted(completed) => {
-                let message = MessageResource::from_completed_assistant_parts(
-                    self.session_id.unwrap_or_default(),
-                    completed.message_id.raw(),
-                    completed.created_at,
-                    completed.metadata.clone(),
-                    completed.usage.clone(),
-                    Some(completed.finish_reason.to_string()),
-                    completed.parts.clone(),
-                );
-                self.upsert_message(message);
-                self.invalidate_render();
-                false
-            }
+            // The transcript now comes from the server-side collapsed
+            // conversation projection. Raw live message events can describe
+            // intermediate assistant passes that are intentionally hidden
+            // from the user-visible transcript, so we always re-fetch the
+            // latest projection instead of mutating the local message list.
+            AgenaSessionEvent::UserMessageAppended(_)
+            | AgenaSessionEvent::MessagePartUpdated(_)
+            | AgenaSessionEvent::MessagePartDelta(_)
+            | AgenaSessionEvent::AssistantMessageCompleted(_) => true,
             _ => false,
         };
 
@@ -14799,92 +14787,6 @@ impl TranscriptState {
         }
 
         refresh_needed
-    }
-
-    fn apply_message_part_updated(&mut self, update: &agena::event::MessagePartUpdatedEvent) {
-        let shell = MessageResource::from_part_update(update);
-
-        let Some(index) = self.upsert_message(shell) else {
-            return;
-        };
-        let message = &mut self.messages[index];
-        message.state = update.message_state;
-        message.updated_at = timestamp_ms_or(update.ts_ms, message.updated_at);
-        let parts = message.parts.get_or_insert_with(Vec::new);
-        if let Some(existing) = parts.iter_mut().find(|part| part.id == update.part.id) {
-            *existing = update.part.clone();
-        } else {
-            parts.push(update.part.clone());
-        }
-        parts.sort_by_key(|part| part.part_index);
-        message.part_count = parts.len() as u64;
-        self.invalidate_render();
-    }
-
-    fn apply_message_part_delta(
-        &mut self,
-        delta: &agena::event::MessagePartDeltaEvent,
-    ) -> Result<(), ()> {
-        let Some(message) = self
-            .messages
-            .iter_mut()
-            .find(|message| message.id == delta.message_id)
-        else {
-            return Err(());
-        };
-        let Some(parts) = message.parts.as_mut() else {
-            return Err(());
-        };
-        let Some(part) = parts.iter_mut().find(|part| part.id == delta.part_id) else {
-            return Err(());
-        };
-
-        if part.status == ExecutionStatus::Pending {
-            let _ = part.transition_status(ExecutionStatus::InProgress);
-        }
-        message.state = MessageStatus::InProgress;
-        message.updated_at = timestamp_ms_or(delta.ts_ms, message.updated_at);
-
-        let updated = match &delta.field {
-            agena::event::PartDeltaField::Text => part.append_text_delta(delta.delta.as_str()),
-            agena::event::PartDeltaField::ReasoningSummary => {
-                part.append_reasoning_summary_delta(delta.delta.clone())
-            }
-            agena::event::PartDeltaField::ReasoningRawContent => {
-                part.append_reasoning_raw_delta(delta.delta.clone())
-            }
-            agena::event::PartDeltaField::CommandStdout
-            | agena::event::PartDeltaField::CommandStderr => {
-                part.append_command_output_delta(delta.delta.as_str())
-            }
-            agena::event::PartDeltaField::ToolOutputText => {
-                part.append_tool_output_delta(delta.delta.as_str())
-            }
-            agena::event::PartDeltaField::Custom { .. } => false,
-        };
-        if !updated {
-            return Err(());
-        }
-        self.invalidate_render();
-        Ok(())
-    }
-
-    fn upsert_message(&mut self, incoming: MessageResource) -> Option<usize> {
-        let message_id = incoming.id;
-        if let Some(existing) = self
-            .messages
-            .iter_mut()
-            .find(|message| message.id == message_id)
-        {
-            let merged = merge_message_resources(existing, &incoming);
-            *existing = merged;
-        } else {
-            self.messages.push(incoming);
-        }
-        self.messages.sort_by_key(message_sort_key);
-        self.messages
-            .iter()
-            .position(|message| message.id == message_id)
     }
 
     fn set_search_query(&mut self, query: String) {
@@ -16085,9 +15987,6 @@ fn merge_message_resources(
     if merged.usage.is_none() {
         merged.usage = current.usage.clone();
     }
-    if merged.finish.is_none() {
-        merged.finish = current.finish.clone();
-    }
     if let Some(parts) = merged.parts.as_mut() {
         parts.sort_by_key(|part| part.part_index);
         merged.part_count = parts.len() as u64;
@@ -16148,10 +16047,6 @@ fn message_status_rank(status: MessageStatus) -> u8 {
         MessageStatus::Failed => 3,
         MessageStatus::Cancelled => 4,
     }
-}
-
-fn timestamp_ms_or(timestamp_ms: i64, fallback: DateTime<Utc>) -> DateTime<Utc> {
-    DateTime::<Utc>::from_timestamp_millis(timestamp_ms).unwrap_or(fallback)
 }
 
 fn assistant_message_text(message: &MessageResource) -> Option<String> {
@@ -16681,8 +16576,8 @@ fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
         AgenaSessionEvent::UserMessageAppended(event) => Some(event.message_id.into()),
         AgenaSessionEvent::AssistantMessageCompleted(event) => Some(event.message_id.into()),
         AgenaSessionEvent::SystemNoticeAppended(event) => Some(event.message_id.into()),
-        AgenaSessionEvent::RunStarted(_)
-        | AgenaSessionEvent::RunFailed(_)
+        AgenaSessionEvent::ExecutionStarted(_)
+        | AgenaSessionEvent::ExecutionFailed(_)
         | AgenaSessionEvent::StreamError(_)
         | AgenaSessionEvent::PermissionRequested(_)
         | AgenaSessionEvent::PermissionReplied(_)
@@ -16690,9 +16585,9 @@ fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
         | AgenaSessionEvent::PermissionRuleUpdated(_)
         | AgenaSessionEvent::PermissionRuleRevoked(_)
         | AgenaSessionEvent::SessionGoalUpdated(_)
-        | AgenaSessionEvent::TurnStarted(_)
-        | AgenaSessionEvent::TurnCompleted(_)
-        | AgenaSessionEvent::TurnAborted(_)
+        | AgenaSessionEvent::RunStarted(_)
+        | AgenaSessionEvent::RunCompleted(_)
+        | AgenaSessionEvent::RunAborted(_)
         | AgenaSessionEvent::ToolCallIssued(_)
         | AgenaSessionEvent::ToolCallCompleted(_)
         | AgenaSessionEvent::PluginEvent(_) => None,
@@ -16720,8 +16615,8 @@ fn session_workflow_state_label(execution: &SessionExecutionResource) -> &'stati
 
 fn timeline_event_summary(record: &DomainEvent) -> String {
     match &record.kind {
-        AgenaSessionEvent::RunStarted(event) => format!("session #{}", event.session_id),
-        AgenaSessionEvent::RunFailed(event) => {
+        AgenaSessionEvent::ExecutionStarted(event) => format!("session #{}", event.session_id),
+        AgenaSessionEvent::ExecutionFailed(event) => {
             format!(
                 "{}: {}",
                 event.error.code,
@@ -16789,12 +16684,12 @@ fn timeline_event_summary(record: &DomainEvent) -> String {
             let status = event.status.as_deref().unwrap_or("unknown");
             format!("goal updated: {status} · {objective}")
         }
-        AgenaSessionEvent::TurnStarted(p) => format!("turn {}", p.turn_id),
-        AgenaSessionEvent::TurnCompleted(p) => {
-            format!("turn {} ({:?})", p.turn_id, p.finish_reason)
+        AgenaSessionEvent::RunStarted(p) => format!("run {}", p.run_id),
+        AgenaSessionEvent::RunCompleted(p) => {
+            format!("run {} ({:?})", p.run_id, p.finish_reason)
         }
-        AgenaSessionEvent::TurnAborted(p) => {
-            format!("turn {} aborted ({:?})", p.turn_id, p.reason)
+        AgenaSessionEvent::RunAborted(p) => {
+            format!("run {} aborted ({:?})", p.run_id, p.reason)
         }
         AgenaSessionEvent::UserMessageAppended(p) => {
             format!("user #{}", p.message_id)
@@ -16817,8 +16712,10 @@ fn timeline_event_summary(record: &DomainEvent) -> String {
 
 fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
     match &record.kind {
-        AgenaSessionEvent::RunStarted(event) => vec![format!("session_id: {}", event.session_id)],
-        AgenaSessionEvent::RunFailed(event) => vec![
+        AgenaSessionEvent::ExecutionStarted(event) => {
+            vec![format!("session_id: {}", event.session_id)]
+        }
+        AgenaSessionEvent::ExecutionFailed(event) => vec![
             format!("session_id: {}", event.session_id),
             format!("error_code: {}", event.error.code),
             format!("error_message: {}", event.error.message),
@@ -16942,16 +16839,16 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
                     .unwrap_or_else(|| "<none>".to_string())
             ),
         ],
-        AgenaSessionEvent::TurnStarted(p) => vec![
-            format!("turn_id: {}", p.turn_id),
+        AgenaSessionEvent::RunStarted(p) => vec![
+            format!("run_id: {}", p.run_id),
             format!("model: {} / {}", p.provider_id, p.model_id),
         ],
-        AgenaSessionEvent::TurnCompleted(p) => vec![
-            format!("turn_id: {}", p.turn_id),
+        AgenaSessionEvent::RunCompleted(p) => vec![
+            format!("run_id: {}", p.run_id),
             format!("finish: {:?}", p.finish_reason),
         ],
-        AgenaSessionEvent::TurnAborted(p) => vec![
-            format!("turn_id: {}", p.turn_id),
+        AgenaSessionEvent::RunAborted(p) => vec![
+            format!("run_id: {}", p.run_id),
             format!("reason: {:?}", p.reason),
             format!(
                 "message: {}",
@@ -16960,21 +16857,21 @@ fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
         ],
         AgenaSessionEvent::UserMessageAppended(p) => vec![
             format!("message_id: {}", p.message_id),
-            format!("turn_id: {}", p.turn_id),
+            format!("run_id: {}", p.run_id),
         ],
         AgenaSessionEvent::AssistantMessageCompleted(p) => vec![
             format!("message_id: {}", p.message_id),
-            format!("turn_id: {}", p.turn_id),
+            format!("run_id: {}", p.run_id),
             format!("finish: {:?}", p.finish_reason),
         ],
         AgenaSessionEvent::ToolCallIssued(p) => vec![
             format!("call_id: {}", p.call_id),
             format!("name: {}", p.name),
-            format!("turn_id: {}", p.turn_id),
+            format!("run_id: {}", p.run_id),
         ],
         AgenaSessionEvent::ToolCallCompleted(p) => vec![
             format!("call_id: {}", p.call_id),
-            format!("turn_id: {}", p.turn_id),
+            format!("run_id: {}", p.run_id),
         ],
         AgenaSessionEvent::SystemNoticeAppended(p) => vec![
             format!("message_id: {}", p.message_id),
@@ -18058,7 +17955,7 @@ impl RunOptionsState {
             system: self.system.clone(),
             temperature: self.temperature,
             max_output_tokens: self.max_output_tokens,
-            max_turn_loops: None,
+            max_run_loops: None,
         }
     }
 
@@ -18824,7 +18721,6 @@ mod tests {
             updated_at: created_at,
             metadata: Default::default(),
             usage: None,
-            finish: None,
             part_count: 1,
             parts: Some(vec![part]),
         }

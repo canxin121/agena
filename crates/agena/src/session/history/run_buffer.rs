@@ -1,6 +1,6 @@
 //! In-memory aggregation for a single in-flight LLM turn.
 //!
-//! `TurnBuffer` is the bridge between two worlds:
+//! `RunBuffer` is the bridge between two worlds:
 //!
 //! * **Streaming** — providers push text deltas, reasoning deltas, and
 //!   partial tool-call arguments as they happen. The UI wants this live for
@@ -9,14 +9,14 @@
 //!   `session_history_event` table.
 //!
 //! The buffer holds the live, mutable accumulator entirely in memory. When
-//! the turn closes successfully, [`TurnBuffer::commit`] produces an ordered
+//! the turn closes successfully, [`RunBuffer::commit`] produces an ordered
 //! `Vec<EventKind>` containing exclusively *terminal* events
 //! (`AssistantMessageCompleted`, `ToolCallIssued`, …).
 //! These events are then appended in a single transaction.
 //!
 //! If the process dies mid-turn, the buffer is lost and **nothing was ever
 //! written** to the log — the next process start sees an unmatched
-//! `TurnStarted` and emits a `TurnAborted` marker. There is no partial
+//! `RunStarted` and emits a `RunAborted` marker. There is no partial
 //! recovery: this is an explicit design decision (see plan `Context`).
 
 use std::collections::BTreeMap;
@@ -26,10 +26,10 @@ use serde_json::Value;
 use smol_str::SmolStr;
 use thiserror::Error;
 
-use crate::message::MessageMetadata;
+use crate::message::{MessageMetadata, MessageProviderState};
 
 use super::{
-    AssistantMessageCompleted, FinishReason, MessageId, ToolCallId, ToolCallIssued, TurnId,
+    AssistantMessageCompleted, FinishReason, MessageId, RunId, ToolCallId, ToolCallIssued,
     transcript::{TranscriptBlock, TranscriptContent},
 };
 use crate::event::EventKind;
@@ -39,7 +39,7 @@ use crate::event::EventKind;
 /// All variants represent programmer bugs in the streaming integration layer
 /// — they should not happen at runtime against a well-behaved provider.
 #[derive(Debug, Error, PartialEq, Eq)]
-pub enum TurnBufferError {
+pub enum RunBufferError {
     #[error("no active assistant message; call begin_assistant() first")]
     NoActiveAssistant,
     #[error("tool call {0} already exists in this turn")]
@@ -101,6 +101,7 @@ struct AssistantInProgress {
     finish_reason: FinishReason,
     usage: Option<crate::message::MessageUsage>,
     metadata: MessageMetadata,
+    provider_state: Option<MessageProviderState>,
     started_at: DateTime<Utc>,
 }
 
@@ -115,15 +116,15 @@ enum Section {
 
 /// Live accumulator for a single LLM turn.
 #[derive(Debug, Default)]
-pub struct TurnBuffer {
-    turn_id: TurnId,
+pub struct RunBuffer {
+    run_id: RunId,
     sections: Vec<Section>,
 }
 
-impl TurnBuffer {
-    pub fn new(turn_id: TurnId) -> Self {
+impl RunBuffer {
+    pub fn new(run_id: RunId) -> Self {
         Self {
-            turn_id,
+            run_id,
             sections: Vec::new(),
         }
     }
@@ -142,14 +143,14 @@ impl TurnBuffer {
         message_id
     }
 
-    fn current_assistant(&mut self) -> Result<&mut AssistantInProgress, TurnBufferError> {
+    fn current_assistant(&mut self) -> Result<&mut AssistantInProgress, RunBufferError> {
         match self.sections.last_mut() {
             Some(Section::Assistant { in_progress, .. }) => Ok(in_progress),
-            _ => Err(TurnBufferError::NoActiveAssistant),
+            _ => Err(RunBufferError::NoActiveAssistant),
         }
     }
 
-    pub fn push_text_delta(&mut self, delta: &str) -> Result<(), TurnBufferError> {
+    pub fn push_text_delta(&mut self, delta: &str) -> Result<(), RunBufferError> {
         let asst = self.current_assistant()?;
         match asst.content.blocks.last_mut() {
             Some(TranscriptBlock::Text { text }) => text.push_str(delta),
@@ -158,7 +159,7 @@ impl TurnBuffer {
         Ok(())
     }
 
-    pub fn push_reasoning_delta(&mut self, delta: &str) -> Result<(), TurnBufferError> {
+    pub fn push_reasoning_delta(&mut self, delta: &str) -> Result<(), RunBufferError> {
         let asst = self.current_assistant()?;
         match asst.content.blocks.last_mut() {
             Some(TranscriptBlock::Reasoning { text }) => text.push_str(delta),
@@ -169,10 +170,10 @@ impl TurnBuffer {
         Ok(())
     }
 
-    pub fn start_tool_call(&mut self, call_id: ToolCallId) -> Result<(), TurnBufferError> {
+    pub fn start_tool_call(&mut self, call_id: ToolCallId) -> Result<(), RunBufferError> {
         let asst = self.current_assistant()?;
         if asst.tool_calls.contains_key(&call_id) {
-            return Err(TurnBufferError::DuplicateToolCall(call_id));
+            return Err(RunBufferError::DuplicateToolCall(call_id));
         }
         asst.tool_call_order.push(call_id.clone());
         asst.tool_calls.insert(
@@ -189,12 +190,12 @@ impl TurnBuffer {
         &mut self,
         call_id: &ToolCallId,
         name: impl Into<SmolStr>,
-    ) -> Result<(), TurnBufferError> {
+    ) -> Result<(), RunBufferError> {
         let asst = self.current_assistant()?;
         let entry = asst
             .tool_calls
             .get_mut(call_id)
-            .ok_or_else(|| TurnBufferError::UnknownToolCall(call_id.clone()))?;
+            .ok_or_else(|| RunBufferError::UnknownToolCall(call_id.clone()))?;
         entry.name = Some(name.into());
         Ok(())
     }
@@ -203,31 +204,36 @@ impl TurnBuffer {
         &mut self,
         call_id: &ToolCallId,
         chunk: &str,
-    ) -> Result<(), TurnBufferError> {
+    ) -> Result<(), RunBufferError> {
         let asst = self.current_assistant()?;
         let entry = asst
             .tool_calls
             .get_mut(call_id)
-            .ok_or_else(|| TurnBufferError::UnknownToolCall(call_id.clone()))?;
+            .ok_or_else(|| RunBufferError::UnknownToolCall(call_id.clone()))?;
         entry.arguments_text.push_str(chunk);
         Ok(())
     }
 
-    pub fn set_finish_reason(&mut self, reason: FinishReason) -> Result<(), TurnBufferError> {
+    pub fn set_finish_reason(&mut self, reason: FinishReason) -> Result<(), RunBufferError> {
         self.current_assistant()?.finish_reason = reason;
         Ok(())
     }
 
-    pub fn set_usage(
-        &mut self,
-        usage: crate::message::MessageUsage,
-    ) -> Result<(), TurnBufferError> {
+    pub fn set_usage(&mut self, usage: crate::message::MessageUsage) -> Result<(), RunBufferError> {
         self.current_assistant()?.usage = Some(usage);
         Ok(())
     }
 
-    pub fn set_metadata(&mut self, metadata: MessageMetadata) -> Result<(), TurnBufferError> {
+    pub fn set_metadata(&mut self, metadata: MessageMetadata) -> Result<(), RunBufferError> {
         self.current_assistant()?.metadata = metadata;
+        Ok(())
+    }
+
+    pub fn set_provider_state(
+        &mut self,
+        provider_state: Option<MessageProviderState>,
+    ) -> Result<(), RunBufferError> {
+        self.current_assistant()?.provider_state = provider_state;
         Ok(())
     }
 
@@ -242,8 +248,8 @@ impl TurnBuffer {
     pub fn commit<A: MessageIdAllocator>(
         self,
         _ids: &mut A,
-    ) -> Result<Vec<EventKind>, TurnBufferError> {
-        let TurnBuffer { turn_id, sections } = self;
+    ) -> Result<Vec<EventKind>, RunBufferError> {
+        let RunBuffer { run_id, sections } = self;
         let mut items = Vec::with_capacity(sections.len() * 2);
 
         for section in sections {
@@ -259,35 +265,37 @@ impl TurnBuffer {
                         finish_reason,
                         usage,
                         metadata,
+                        provider_state,
                         started_at,
                     } = in_progress;
 
                     items.push(EventKind::AssistantMessageCompleted(
                         AssistantMessageCompleted {
                             message_id,
-                            turn_id,
+                            run_id,
                             created_at: started_at,
                             content,
                             parts: Vec::new(),
                             usage,
                             finish_reason,
                             metadata,
+                            provider_state,
                         },
                     ));
 
                     for call_id in tool_call_order {
                         let entry = tool_calls
                             .remove(&call_id)
-                            .ok_or_else(|| TurnBufferError::UnknownToolCall(call_id.clone()))?;
+                            .ok_or_else(|| RunBufferError::UnknownToolCall(call_id.clone()))?;
                         let name = entry
                             .name
                             .clone()
-                            .ok_or_else(|| TurnBufferError::ToolCallMissingName(call_id.clone()))?;
+                            .ok_or_else(|| RunBufferError::ToolCallMissingName(call_id.clone()))?;
                         let arguments = serde_json::from_str(&entry.arguments_text)
                             .unwrap_or(Value::String(entry.arguments_text.clone()));
                         items.push(EventKind::ToolCallIssued(ToolCallIssued {
                             message_id,
-                            turn_id,
+                            run_id,
                             call_id: call_id.clone(),
                             name: name.clone(),
                             arguments,

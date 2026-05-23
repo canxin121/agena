@@ -1129,7 +1129,7 @@ fn run_options() -> SessionRunOptions {
         temperature: None,
         max_output_tokens: Some(128),
         agent_profile: None,
-        max_turn_loops: None,
+        max_run_loops: None,
     }
 }
 
@@ -1145,7 +1145,7 @@ fn recording_run_options() -> SessionRunOptions {
         temperature: Some(0.2),
         max_output_tokens: Some(256),
         agent_profile: None,
-        max_turn_loops: None,
+        max_run_loops: None,
     }
 }
 
@@ -1302,7 +1302,7 @@ async fn broadcast_active_session_end_notifies_plugins() {
         .await
         .expect("session creation should succeed");
     let session_id = created.id;
-    let _ = manager.turn_registry.register(session_id).await;
+    let _ = manager.run_registry.register(session_id).await;
 
     manager
         .broadcast_active_session_end(crate::plugin::SessionEndReason::Other)
@@ -1471,7 +1471,7 @@ async fn load_session_rebuilds_projection_when_history_is_published_directly() {
         .await
         .expect("create session");
 
-    let turn_id = HistoryTurnId::new();
+    let run_id = HistoryRunId::new();
     let message_id = 90_001;
     let created_at = chrono::Utc::now();
     let mut part = MessagePart::with_content(
@@ -1487,8 +1487,9 @@ async fn load_session_rebuilds_projection_when_history_is_published_directly() {
         .event_publisher()
         .publish(
             crate::event::PublishContext::for_session(created.id),
-            EventKind::TurnStarted(TurnStarted {
-                turn_id,
+            EventKind::RunStarted(RunStarted {
+                run_id,
+                source: RunSource::User,
                 model_id: "direct-model".into(),
                 provider_id: "direct-provider".into(),
                 request_digest: None,
@@ -1502,11 +1503,12 @@ async fn load_session_rebuilds_projection_when_history_is_published_directly() {
             crate::event::PublishContext::for_session(created.id),
             EventKind::UserMessageAppended(UserMessageAppended {
                 message_id: HistoryMessageId(message_id),
-                turn_id,
+                run_id,
                 created_at,
                 content: TranscriptContent::from_text("published directly"),
                 parts: vec![part.clone()],
                 metadata: MessageMetadata::default(),
+                provider_state: None,
             }),
         )
         .await
@@ -1515,8 +1517,8 @@ async fn load_session_rebuilds_projection_when_history_is_published_directly() {
         .event_publisher()
         .publish(
             crate::event::PublishContext::for_session(created.id),
-            EventKind::TurnCompleted(TurnCompleted {
-                turn_id,
+            EventKind::RunCompleted(RunCompleted {
+                run_id,
                 finish_reason: FinishReason::Stop,
             }),
         )
@@ -1696,64 +1698,66 @@ async fn auto_compact_does_not_trigger_when_context_window_unknown() {
     );
 }
 
-#[tokio::test]
-async fn auto_compact_triggers_at_known_context_limit() {
-    let workspace = TempWorkspace::new();
-    let requests = Arc::new(Mutex::new(Vec::new()));
-    let provider = RecordingProvider::new(requests.clone())
-        .with_metadata(
-            crate::provider::ModelMetadata::default().with_context_window_tokens(272_000),
+#[test]
+fn auto_compact_triggers_at_known_context_limit() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let provider = RecordingProvider::new(requests.clone())
+            .with_metadata(
+                crate::provider::ModelMetadata::default().with_context_window_tokens(272_000),
+            )
+            .with_usage(context_limit_recording_usage());
+        let service = build_manager_with_provider(
+            &workspace.root,
+            PermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            provider,
         )
-        .with_usage(context_limit_recording_usage());
-    let service = build_manager_with_provider(
-        &workspace.root,
-        PermissionPolicy::allow_all(),
-        SessionManagerConfig::default(),
-        ContextPolicy::default(),
-        provider,
-    )
-    .await;
+        .await;
 
-    let created = service
-        .create_session(SessionCreateRequest {
-            title: "auto-compact-known-context".into(),
-            parent_session_id: None,
-        })
-        .await
-        .expect("create session");
+        let created = service
+            .create_session(SessionCreateRequest {
+                title: "auto-compact-known-context".into(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
 
-    let first = service
-        .submit_user_turn(SessionUserTurnRequest {
-            session_id: created.id,
-            options: recording_run_options(),
-            parts: vec![PartContent::text("seed")],
-        })
-        .await
-        .expect("first turn");
-    assert!(first.runtime.prompt_window.compaction.is_none());
+        let first = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text("seed")],
+            })
+            .await
+            .expect("first turn");
+        assert!(first.runtime.prompt_window.compaction.is_none());
 
-    let second = service
-        .submit_user_turn(SessionUserTurnRequest {
-            session_id: created.id,
-            options: recording_run_options(),
-            parts: vec![PartContent::text("trigger compaction")],
-        })
-        .await
-        .expect("second turn");
+        let second = service
+            .submit_user_turn(SessionUserTurnRequest {
+                session_id: created.id,
+                options: recording_run_options(),
+                parts: vec![PartContent::text("trigger compaction")],
+            })
+            .await
+            .expect("second turn");
 
-    assert!(
-        second.runtime.prompt_window.compaction.is_some(),
-        "second turn should install an automatic compaction snapshot"
-    );
-    assert!(
-        requests.lock().expect("request lock should succeed").len() >= 3,
-        "expected first turn, local compaction turn, and post-compaction turn"
-    );
+        assert!(
+            second.runtime.prompt_window.compaction.is_some(),
+            "second turn should install an automatic compaction snapshot"
+        );
+        assert!(
+            requests.lock().expect("request lock should succeed").len() >= 3,
+            "expected first turn, local compaction turn, and post-compaction turn"
+        );
+    });
 }
 
 #[tokio::test]
 async fn restart_after_interrupted_turn_can_continue_session() {
-    use crate::session::history::TurnAbortReason;
+    use crate::session::history::RunAbortReason;
 
     struct RestartableProvider {
         stall: bool,
@@ -1832,7 +1836,7 @@ async fn restart_after_interrupted_turn_can_continue_session() {
             temperature: None,
             max_output_tokens: Some(128),
             agent_profile: None,
-            max_turn_loops: None,
+            max_run_loops: None,
         }
     }
 
@@ -1881,7 +1885,7 @@ async fn restart_after_interrupted_turn_can_continue_session() {
             .any(|record| {
                 matches!(
                     &record.kind,
-                    EventKind::TurnStarted(payload)
+                    EventKind::RunStarted(payload)
                         if payload.provider_id == "restartable"
                 )
             });
@@ -1894,16 +1898,17 @@ async fn restart_after_interrupted_turn_can_continue_session() {
     assert!(
         running
             .await
-            .expect_err("turn task should be aborted")
+            .expect_err("run task should be aborted")
             .is_cancelled()
     );
-    let interrupted_turn = HistoryTurnId::new();
+    let interrupted_turn = HistoryRunId::new();
     first
         .event_publisher()
         .publish(
             crate::event::PublishContext::for_session(session_id),
-            EventKind::TurnStarted(TurnStarted {
-                turn_id: interrupted_turn,
+            EventKind::RunStarted(RunStarted {
+                run_id: interrupted_turn,
+                source: RunSource::User,
                 model_id: "restartable-model".into(),
                 provider_id: "restartable".into(),
                 request_digest: None,
@@ -1940,9 +1945,9 @@ async fn restart_after_interrupted_turn_can_continue_session() {
     assert!(history.iter().any(|record| {
         matches!(
             &record.kind,
-            EventKind::TurnAborted(payload)
-                if payload.turn_id == interrupted_turn
-                    && payload.reason == TurnAbortReason::ProcessRestart
+            EventKind::RunAborted(payload)
+                if payload.run_id == interrupted_turn
+                    && payload.reason == RunAbortReason::ProcessRestart
         )
     }));
     assert!(recovered.messages.iter().any(|message| {
@@ -2168,13 +2173,14 @@ fn duplicate_user_input_reply_is_idempotent() {
                 vec![EventKind::AssistantMessageCompleted(
                     crate::session::history::AssistantMessageCompleted {
                         message_id: HistoryMessageId(assistant_message.id),
-                        turn_id: HistoryTurnId::new(),
+                        run_id: HistoryRunId::new(),
                         created_at: assistant_message.created_at,
                         content: TranscriptContent::from_message_lossy(&assistant_message),
                         parts: assistant_message.parts.clone(),
                         usage: None,
                         finish_reason: FinishReason::Stop,
                         metadata: assistant_message.metadata.clone(),
+                        provider_state: assistant_message.provider_state.clone(),
                     },
                 )],
                 state.cache_policy(),
@@ -2318,13 +2324,14 @@ fn replied_host_user_input_survives_restart_and_restores_answer_from_history() {
                 vec![EventKind::AssistantMessageCompleted(
                     crate::session::history::AssistantMessageCompleted {
                         message_id: HistoryMessageId(assistant_message.id),
-                        turn_id: HistoryTurnId::new(),
+                        run_id: HistoryRunId::new(),
                         created_at: assistant_message.created_at,
                         content: TranscriptContent::from_message_lossy(&assistant_message),
                         parts: assistant_message.parts.clone(),
                         usage: None,
                         finish_reason: FinishReason::ToolCalls,
                         metadata: assistant_message.metadata.clone(),
+                        provider_state: assistant_message.provider_state.clone(),
                     },
                 )],
                 state.cache_policy(),
@@ -2481,13 +2488,14 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
                 vec![EventKind::AssistantMessageCompleted(
                     crate::session::history::AssistantMessageCompleted {
                         message_id: HistoryMessageId(assistant_message.id),
-                        turn_id: HistoryTurnId::new(),
+                        run_id: HistoryRunId::new(),
                         created_at: assistant_message.created_at,
                         content: TranscriptContent::from_message_lossy(&assistant_message),
                         parts: assistant_message.parts.clone(),
                         usage: None,
                         finish_reason: FinishReason::ToolCalls,
                         metadata: assistant_message.metadata.clone(),
+                        provider_state: assistant_message.provider_state.clone(),
                     },
                 )],
                 state.cache_policy(),
@@ -2816,16 +2824,19 @@ async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
         false
     }
     .await;
-    assert!(started, "idle goal creation should start one hidden turn");
+    assert!(
+        started,
+        "idle goal creation should start one goal-triggered run"
+    );
 
     let final_session = async {
         for _ in 0..500 {
             let session = manager
                 .get_session(created.id)
                 .await
-                .expect("reload session during goal turn");
+                .expect("reload session during goal run");
             if session.status() == SessionStatus::Idle
-                && !manager.is_turn_active(created.id).await
+                && !manager.is_run_active(created.id).await
                 && session
                     .messages
                     .iter()
@@ -2835,7 +2846,7 @@ async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        panic!("goal turn should settle within 10s");
+        panic!("goal run should settle within 10s");
     }
     .await;
 
@@ -2845,7 +2856,7 @@ async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
     assert_eq!(
         recorded.len(),
         1,
-        "goal creation should trigger exactly one goal turn"
+        "goal creation should trigger exactly one goal run"
     );
     let request = &recorded[0];
     assert_eq!(request.system.as_deref(), Some("system"));
@@ -2975,7 +2986,7 @@ fn goal_runtime_resumed_session_can_continue_active_goal_after_restart() {
 }
 
 #[tokio::test]
-async fn goal_runtime_external_goal_clear_stops_next_continue_turn() {
+async fn goal_runtime_external_goal_clear_stops_next_continue_run() {
     let workspace = TempWorkspace::new();
     let db = open_temp_database(&workspace.root, "goal-external-clear.db").await;
     let requests = Arc::new(Mutex::new(Vec::<CompletionRequest>::new()));
@@ -3104,7 +3115,7 @@ async fn goal_runtime_external_goal_set_refreshes_cached_session() {
 /// Tracked separately; runs reliably in isolation.
 #[ignore = "flaky under cargo test --workspace; passes with -p agena --lib"]
 #[tokio::test]
-async fn cancel_active_turn_aborts_a_running_turn() {
+async fn cancel_active_run_aborts_a_running_run() {
     struct SlowProvider;
 
     #[async_trait]
@@ -3131,7 +3142,7 @@ async fn cancel_active_turn_aborts_a_running_turn() {
             AppError,
         > {
             let s = async_stream::stream! {
-                // First chunk arrives quickly so the turn is "live".
+                // First chunk arrives quickly so the run is "live".
                 yield Ok(CompletionStreamEvent::TextDelta {
                     provider_id: ProviderId::new("slow"),
                     model: ModelId::new("slow-model"),
@@ -3162,7 +3173,7 @@ async fn cancel_active_turn_aborts_a_running_turn() {
             temperature: None,
             max_output_tokens: Some(64),
             agent_profile: None,
-            max_turn_loops: None,
+            max_run_loops: None,
         }
     }
 
@@ -3197,13 +3208,13 @@ async fn cancel_active_turn_aborts_a_running_turn() {
         .await
     });
 
-    // Poll until the turn registers with TurnRegistry rather than
+    // Poll until the run registers with RunRegistry rather than
     // sleeping a fixed duration — the original 80 ms was flaky under
     // load. Use a generous budget (10s) so concurrent cargo test runs
     // don't race even on heavily loaded CI runners.
     let registered = async {
         for _ in 0..500 {
-            if manager.is_turn_active(session_id).await {
+            if manager.is_run_active(session_id).await {
                 return true;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -3211,15 +3222,15 @@ async fn cancel_active_turn_aborts_a_running_turn() {
         false
     }
     .await;
-    assert!(registered, "turn should register within 10s");
-    // Try cancel; if it races with turn-registry teardown we retry once.
+    assert!(registered, "run should register within 10s");
+    // Try cancel; if it races with run-registry teardown we retry once.
     for attempt in 0..3 {
-        match manager.cancel_active_turn(session_id).await {
+        match manager.cancel_active_run(session_id).await {
             Ok(()) => break,
             Err(_) if attempt < 2 => {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
-            Err(err) => panic!("cancel should find active turn: {err}"),
+            Err(err) => panic!("cancel should find active run: {err}"),
         }
     }
 
@@ -3228,17 +3239,17 @@ async fn cancel_active_turn_aborts_a_running_turn() {
         .await
         .expect("submit should complete after cancel")
         .expect("join");
-    // The session run reports an error because the turn was aborted.
+    // The session run reports an error because the run was aborted.
     assert!(
         result.is_err(),
-        "expected turn to be reported as failed/cancelled"
+        "expected run to be reported as failed/cancelled"
     );
 }
 
-/// `cancel_active_turn` for a session with no in-flight turn returns
+/// `cancel_active_run` for a session with no in-flight run returns
 /// the corresponding error, never panics.
 #[tokio::test]
-async fn cancel_with_no_active_turn_is_a_clean_error() {
+async fn cancel_with_no_active_run_is_a_clean_error() {
     let workspace = TempWorkspace::new();
     let manager = build_manager(
         &workspace.root,
@@ -3246,14 +3257,14 @@ async fn cancel_with_no_active_turn_is_a_clean_error() {
         SessionManagerConfig::default(),
     )
     .await;
-    let err = manager.cancel_active_turn(1234).await.unwrap_err();
+    let err = manager.cancel_active_run(1234).await.unwrap_err();
     assert!(matches!(err, AppError::Internal(_)));
 }
 
-/// `steer_input` against a session with no active turn surfaces the
-/// "no in-flight turn" error so callers can fall back gracefully.
+/// `steer_input` against a session with no active run surfaces the
+/// "no in-flight run" error so callers can fall back gracefully.
 #[tokio::test]
-async fn steer_with_no_active_turn_is_a_clean_error() {
+async fn steer_with_no_active_run_is_a_clean_error() {
     let workspace = TempWorkspace::new();
     let manager = build_manager(
         &workspace.root,
@@ -4601,7 +4612,7 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_turn_loops: Some(32),
+                        max_run_loops: Some(32),
                     },
                     parts: vec![PartContent::text("exercise fs plan and worktree tools")],
                 })
@@ -4614,7 +4625,7 @@ while True:
                         .await
                         .expect("failed session should reload");
                     panic!(
-                        "runtime tool turn should succeed: {err:?}\noperations:\n{}",
+                        "runtime tool run should succeed: {err:?}\noperations:\n{}",
                         session_operation_summaries(&failed).join("\n")
                     );
                 }
@@ -4904,7 +4915,7 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_turn_loops: Some(24),
+                        max_run_loops: Some(24),
                     },
                     parts: vec![PartContent::text("exercise shell runtime tools")],
                 })
@@ -4917,7 +4928,7 @@ while True:
                         .await
                         .expect("failed session should reload");
                     panic!(
-                        "runtime shell turn should succeed: {err:?}\noperations:\n{}",
+                        "runtime shell run should succeed: {err:?}\noperations:\n{}",
                         session_operation_summaries(&failed).join("\n")
                     );
                 }
@@ -5184,7 +5195,7 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_turn_loops: Some(24),
+                        max_run_loops: Some(24),
                     },
                     parts: vec![PartContent::text("exercise web runtime tools")],
                 })
@@ -5197,7 +5208,7 @@ while True:
                         .await
                         .expect("failed session should reload");
                     panic!(
-                        "runtime web turn should succeed: {err:?}\noperations:\n{}",
+                        "runtime web run should succeed: {err:?}\noperations:\n{}",
                         session_operation_summaries(&failed).join("\n")
                     );
                 }
@@ -5430,12 +5441,12 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_turn_loops: Some(24),
+                        max_run_loops: Some(24),
                     },
                     parts: vec![PartContent::text("exercise task runtime tool")],
                 })
                 .await
-                .expect("runtime task turn should succeed");
+                .expect("runtime task run should succeed");
 
             assert!(
                 session
@@ -5695,12 +5706,12 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_turn_loops: Some(24),
+                        max_run_loops: Some(24),
                     },
                     parts: vec![PartContent::text("exercise lsp runtime tool")],
                 })
                 .await
-                .expect("runtime lsp turn should succeed");
+                .expect("runtime lsp run should succeed");
 
             assert!(
                 session
@@ -5953,7 +5964,7 @@ while True:
     }
 
     #[test]
-    fn runtime_workflow_mutation_flow_exercises_active_turn_host_mutations() {
+    fn runtime_workflow_mutation_flow_exercises_active_run_host_mutations() {
         run_async_with_large_stack(async move {
             let workspace = TempWorkspace::new();
             init_git_workspace(&workspace.root);
@@ -5989,7 +6000,7 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_turn_loops: Some(32),
+                        max_run_loops: Some(32),
                     },
                     parts: vec![PartContent::text(
                         "exercise workflow mutation runtime tools",
@@ -6005,7 +6016,7 @@ while True:
                         .await
                         .expect("failed session should reload");
                     panic!(
-                        "runtime workflow mutation turn should succeed: {err:?}\noperations:\n{}",
+                        "runtime workflow mutation run should succeed: {err:?}\noperations:\n{}",
                         session_operation_summaries(&failed).join("\n")
                     );
                 }
@@ -6471,7 +6482,7 @@ while True:
                         temperature: None,
                         max_output_tokens: Some(256),
                         agent_profile: None,
-                        max_turn_loops: Some(64),
+                        max_run_loops: Some(64),
                     },
                     parts: vec![PartContent::text(
                         "exercise workflow settings schedule and host tools",
@@ -6487,7 +6498,7 @@ while True:
                         .await
                         .expect("failed session should reload");
                     panic!(
-                        "runtime workflow turn should succeed: {err:?}\noperations:\n{}",
+                        "runtime workflow run should succeed: {err:?}\noperations:\n{}",
                         session_operation_summaries(&failed).join("\n")
                     );
                 }

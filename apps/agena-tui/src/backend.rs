@@ -2887,10 +2887,10 @@ impl Backend {
                 let triggers_refresh = matches!(
                     event.kind,
                     EventKind::ToolCallCompleted(_)
-                        | EventKind::TurnCompleted(_)
-                        | EventKind::TurnAborted(_)
+                        | EventKind::RunCompleted(_)
+                        | EventKind::RunAborted(_)
                         | EventKind::SystemNoticeAppended(_)
-                        | EventKind::RunFailed(_)
+                        | EventKind::ExecutionFailed(_)
                 );
                 let live = LiveEvent {
                     event: Some(event),
@@ -3104,25 +3104,25 @@ impl Backend {
         .context("failed to compact session")
     }
 
-    /// Best-effort cancel of the in-flight turn for `session_id`. Forwards
-    /// to `SessionManager::cancel_active_turn`; the manager owns the
-    /// `CancellationToken` for the spawned turn task. If no turn is
+    /// Best-effort cancel of the in-flight run for `session_id`. Forwards
+    /// to `SessionManager::cancel_active_run`; the manager owns the
+    /// `CancellationToken` for the spawned run task. If no run is
     /// active this is a no-op.
-    pub async fn cancel_turn(&self, session_id: i64) -> Result<()> {
+    pub async fn cancel_run(&self, session_id: i64) -> Result<()> {
         self.session_manager()?
-            .cancel_active_turn(session_id)
+            .cancel_active_run(session_id)
             .await
-            .context("failed to cancel active turn")
+            .context("failed to cancel active run")
     }
 
-    /// Inject `parts` as a steer message into the in-flight turn. Returns
-    /// `Err` when there is no active turn or the turn is in a phase that
+    /// Inject `parts` as a steer message into the in-flight run. Returns
+    /// `Err` when there is no active run or the run is in a phase that
     /// no longer accepts steers (the caller should re-queue).
     pub async fn steer_input(&self, session_id: i64, parts: Vec<PartContent>) -> Result<()> {
         self.session_manager()?
             .steer_input(session_id, parts)
             .await
-            .context("failed to steer turn")
+            .context("failed to steer run")
     }
 
     pub async fn reply_permission_with_options(

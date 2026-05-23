@@ -13,7 +13,7 @@
 //!   the unified API surface so existing clients can be ported
 //!   variant-for-variant.
 //! - `commands`: Side-effectful operations the client can invoke
-//!   (`Command::SubmitTurn`, `Command::CancelTurn`, …). One enum, exhaustive,
+//!   (`Command::SubmitTurn`, `Command::CancelRun`, …). One enum, exhaustive,
 //!   `#[serde(tag = "method", content = "params")]`.
 //! - `queries`: Read-only requests (list sessions, fetch message, etc.).
 //! - `notifications`: Server → client push messages — the unified

@@ -32,6 +32,39 @@ pub enum MessageSource {
     System,
 }
 
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Hash,
+    AsRefStr,
+    Display,
+    EnumString,
+    EnumIter,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum AssistantReasoningField {
+    ReasoningContent,
+    ReasoningDetails,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
+pub struct MessageProviderState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assistant_reasoning_field: Option<AssistantReasoningField>,
+}
+
+impl MessageProviderState {
+    pub const fn is_empty(&self) -> bool {
+        self.assistant_reasoning_field.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 pub struct MessageMetadata {
     pub source: MessageSource,
@@ -47,14 +80,6 @@ pub struct MessageMetadata {
     pub model_thinking_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_parallel_tool_calls: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_metadata: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
 }
 
 impl Default for MessageMetadata {
@@ -68,23 +93,6 @@ impl Default for MessageMetadata {
             model_id: String::new(),
             model_thinking_mode: None,
             model_speed_mode: None,
-            model_verbosity: None,
-            model_parallel_tool_calls: None,
-            provider_metadata: None,
-            tags: Vec::new(),
-        }
-    }
-}
-
-impl MessageMetadata {
-    pub fn has_tag(&self, tag: &str) -> bool {
-        self.tags.iter().any(|existing| existing == tag)
-    }
-
-    pub fn add_tag(&mut self, tag: impl Into<String>) {
-        let tag = tag.into();
-        if !tag.trim().is_empty() && !self.has_tag(tag.as_str()) {
-            self.tags.push(tag);
         }
     }
 }

@@ -6,7 +6,7 @@ mod part;
 mod usage;
 
 pub use message::{Message, MessageStateTransitionError, MessageStatus};
-pub use metadata::{MessageMetadata, MessageSource};
+pub use metadata::{AssistantReasoningField, MessageMetadata, MessageProviderState, MessageSource};
 pub use part::{
     AgentRestoreToolInput, AgentSwitchToolInput, ApplyPatchToolInput, ArtifactRef,
     AskUserToolInput, AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource,

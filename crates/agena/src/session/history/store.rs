@@ -15,7 +15,7 @@ use crate::event::{
 use crate::message::{Message, MessagePart, MessageSource};
 use crate::session::SessionRuntimeState;
 
-use super::{FinishReason, SystemNoticeKind, TurnAbortReason, TurnAborted, TurnId, TurnStarted};
+use super::{RunAbortReason, RunAborted, RunId, RunStarted, SystemNoticeKind};
 use crate::role::Role;
 
 #[derive(Debug, Clone, FromQueryResult)]
@@ -40,7 +40,6 @@ pub struct ProjectedMessageHeader {
     pub created_at: DateTime<Utc>,
     pub metadata: crate::message::MessageMetadata,
     pub usage: Option<crate::message::MessageUsage>,
-    pub finish: Option<String>,
     pub part_count: u64,
 }
 
@@ -433,8 +432,8 @@ impl SessionHistoryStore {
         Ok(all)
     }
 
-    /// Persist a synthetic `TurnAborted { ProcessRestart }` for any
-    /// `TurnStarted` that lacks a matching `TurnCompleted` / `TurnAborted` in
+    /// Persist a synthetic `RunAborted { ProcessRestart }` for any
+    /// `RunStarted` that lacks a matching `RunCompleted` / `RunAborted` in
     /// `events`. Returns the freshly published events so the caller can fold
     /// them into the view in one pass.
     async fn abort_hanging_turns(
@@ -443,17 +442,17 @@ impl SessionHistoryStore {
         events: &[DomainEvent],
     ) -> Result<Vec<DomainEvent>, DbErr> {
         use std::collections::HashSet;
-        let mut started: HashSet<TurnId> = HashSet::new();
+        let mut started: HashSet<RunId> = HashSet::new();
         for event in events {
             match &event.kind {
-                EventKind::TurnStarted(TurnStarted { turn_id, .. }) => {
-                    started.insert(*turn_id);
+                EventKind::RunStarted(RunStarted { run_id, .. }) => {
+                    started.insert(*run_id);
                 }
-                EventKind::TurnCompleted(payload) => {
-                    started.remove(&payload.turn_id);
+                EventKind::RunCompleted(payload) => {
+                    started.remove(&payload.run_id);
                 }
-                EventKind::TurnAborted(payload) => {
-                    started.remove(&payload.turn_id);
+                EventKind::RunAborted(payload) => {
+                    started.remove(&payload.run_id);
                 }
                 _ => {}
             }
@@ -464,10 +463,10 @@ impl SessionHistoryStore {
         let ctx = PublishContext::for_session(session_id);
         let pending: Vec<DomainEvent> = started
             .into_iter()
-            .map(|turn_id| {
-                let kind = EventKind::TurnAborted(TurnAborted {
-                    turn_id,
-                    reason: TurnAbortReason::ProcessRestart,
+            .map(|run_id| {
+                let kind = EventKind::RunAborted(RunAborted {
+                    run_id,
+                    reason: RunAbortReason::ProcessRestart,
                     message: Some("process restart detected on session load".to_string()),
                 });
                 self.publisher.build(ctx.clone(), kind)
@@ -607,8 +606,8 @@ fn projected_message_from_row(
         parts,
         created_at: timestamp_millis_to_utc(row.created_at_ms)?,
         metadata: row.metadata,
+        provider_state: row.provider_state,
         usage: row.usage,
-        finish: row.finish,
     })
 }
 
@@ -624,7 +623,6 @@ fn projected_message_header_from_row(
         created_at: timestamp_millis_to_utc(row.created_at_ms)?,
         metadata: row.metadata,
         usage: row.usage,
-        finish: row.finish,
         part_count,
     })
 }
@@ -655,20 +653,6 @@ fn projected_message_needs_part_repair(
         || (loaded_part_count == 0 && matches!(row.role, Role::Assistant | Role::User))
 }
 
-fn finish_reason_label(reason: FinishReason) -> Option<String> {
-    Some(
-        match reason {
-            FinishReason::Stop => "stop",
-            FinishReason::ToolCalls => "tool_calls",
-            FinishReason::MaxTokens => "max_tokens",
-            FinishReason::ContentFilter => "content_filter",
-            FinishReason::Error => "error",
-            FinishReason::Other => "other",
-        }
-        .to_string(),
-    )
-}
-
 fn with_source_if_missing(
     mut metadata: crate::message::MessageMetadata,
     source: MessageSource,
@@ -697,12 +681,12 @@ where
     let stmt = sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
         "INSERT INTO agena_activity_messages \
-         (message_id, session_id, role, state, created_at_ms, updated_at_ms, metadata, usage, finish, part_count, is_hidden) \
+         (message_id, session_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count, is_hidden) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(message_id) DO UPDATE SET \
          session_id = excluded.session_id, role = excluded.role, state = excluded.state, \
          created_at_ms = excluded.created_at_ms, updated_at_ms = excluded.updated_at_ms, \
-         metadata = excluded.metadata, usage = excluded.usage, finish = excluded.finish, \
+         metadata = excluded.metadata, provider_state = excluded.provider_state, usage = excluded.usage, \
          part_count = excluded.part_count, is_hidden = excluded.is_hidden",
         [
             row.message_id.into(),
@@ -712,8 +696,15 @@ where
             row.created_at_ms.into(),
             row.updated_at_ms.into(),
             metadata,
+            sea_orm::Value::Json(
+                row.provider_state
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|err| DbErr::Custom(format!("serialize provider state: {err}")))?
+                    .map(Box::new),
+            ),
             usage,
-            row.finish.into(),
             row.part_count.into(),
             row.is_hidden.into(),
         ],
@@ -1201,8 +1192,8 @@ where
                         created_at_ms: payload.created_at.timestamp_millis(),
                         updated_at_ms: payload.created_at.timestamp_millis(),
                         metadata,
+                        provider_state: payload.provider_state.clone(),
                         usage: None,
-                        finish: None,
                         part_count: payload.parts.len() as i64,
                         is_hidden: false,
                     },
@@ -1238,8 +1229,8 @@ where
                         created_at_ms: payload.created_at.timestamp_millis(),
                         updated_at_ms: payload.created_at.timestamp_millis(),
                         metadata,
+                        provider_state: payload.provider_state.clone(),
                         usage: payload.usage.clone(),
-                        finish: finish_reason_label(payload.finish_reason),
                         part_count: payload.parts.len() as i64,
                         is_hidden: false,
                     },
@@ -1296,8 +1287,8 @@ where
                         created_at_ms: payload.created_at.timestamp_millis(),
                         updated_at_ms: payload.created_at.timestamp_millis(),
                         metadata: Default::default(),
+                        provider_state: None,
                         usage: None,
-                        finish: None,
                         part_count: 1,
                         is_hidden: matches!(payload.kind, SystemNoticeKind::RewindCheckpoint),
                     },
@@ -1365,8 +1356,8 @@ where
                     crate::message::MessageMetadata::default(),
                     role_default_source(update.message_role),
                 ),
+                provider_state: None,
                 usage: None,
-                finish: None,
                 part_count: 0,
                 is_hidden: false,
             };

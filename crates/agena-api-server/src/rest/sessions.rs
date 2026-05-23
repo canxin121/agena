@@ -445,13 +445,13 @@ pub async fn fork_session(
     Ok(Json(resource))
 }
 
-pub async fn cancel_turn(
+pub async fn cancel_run(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     match dispatch::dispatch_command(
         &state,
-        agena_api::commands::Command::CancelTurn(agena_api::commands::CancelTurnParams {
+        agena_api::commands::Command::CancelRun(agena_api::commands::CancelRunParams {
             session_id,
         }),
     )

@@ -16,7 +16,7 @@ use agena::{
     storage::StorageConfig,
 };
 use agena_api_server::jsonrpc::protocol::{
-    CancelTurnParams, CancelTurnResult, CreateSessionParams, CreateSessionResult,
+    CancelRunParams, CancelRunResult, CreateSessionParams, CreateSessionResult,
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
     MessageItem, PermissionDecision as AppPermissionDecision, PermissionRememberScope,
     PermissionReplyParams, PermissionReplyResult, ReadMessagesParams, ReadMessagesResult,
@@ -182,7 +182,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .map_err(app_backend_error)?;
         Ok(SubmitTurnResult {
             session_id: session.id,
-            status: format!("{:?}", session.runtime().turn.status).to_ascii_lowercase(),
+            status: format!("{:?}", session.runtime().run.status).to_ascii_lowercase(),
             text: last_assistant_text(&session),
         })
     }
@@ -214,7 +214,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .map_err(app_backend_error)?;
         Ok(PermissionReplyResult {
             session_id: session.id,
-            status: format!("{:?}", session.runtime().turn.status).to_ascii_lowercase(),
+            status: format!("{:?}", session.runtime().run.status).to_ascii_lowercase(),
         })
     }
 
@@ -268,16 +268,13 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         })
     }
 
-    async fn cancel_turn(
-        &self,
-        params: CancelTurnParams,
-    ) -> Result<CancelTurnResult, AppServerError> {
+    async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError> {
         let manager = app_session_manager(&self.runtime)?;
         manager
-            .cancel_active_turn(params.session_id)
+            .cancel_active_run(params.session_id)
             .await
             .map_err(app_backend_error)?;
-        Ok(CancelTurnResult {
+        Ok(CancelRunResult {
             session_id: params.session_id,
             cancelled: true,
         })
@@ -299,8 +296,8 @@ fn resolve_permission_continue_options(
     session: &Session,
 ) -> Result<SessionRunOptions, AppError> {
     let model = if let (Some(provider_id), Some(model_id)) = (
-        session.runtime().turn.model_provider_id.as_deref(),
-        session.runtime().turn.model_id.as_deref(),
+        session.runtime().run.model_provider_id.as_deref(),
+        session.runtime().run.model_id.as_deref(),
     ) {
         ModelRef::try_new(provider_id, model_id)
             .map_err(|err| AppError::Config(format!("invalid persisted model reference: {err}")))?
@@ -319,7 +316,7 @@ fn resolve_permission_continue_options(
         system: None,
         temperature: None,
         max_output_tokens: None,
-        max_turn_loops: None,
+        max_run_loops: None,
     })
 }
 
@@ -348,7 +345,7 @@ fn resolve_run_options(
         system: None,
         temperature,
         max_output_tokens,
-        max_turn_loops: None,
+        max_run_loops: None,
     })
 }
 

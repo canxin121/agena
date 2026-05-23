@@ -62,8 +62,8 @@ impl PartId {
 /// Identifier of a single LLM "turn" (request/response cycle).
 ///
 /// All append-only history events emitted as part of one LLM call carry the
-/// same `TurnId`. A turn that is never closed by a `TurnCompleted` /
-/// `TurnAborted` marker is treated as in-flight on load and discarded by
+/// same `RunId`. A turn that is never closed by a `RunCompleted` /
+/// `RunAborted` marker is treated as in-flight on load and discarded by
 /// projection.
 #[derive(
     Debug,
@@ -81,15 +81,15 @@ impl PartId {
     Into,
 )]
 #[serde(transparent)]
-pub struct TurnId(pub Uuid);
+pub struct RunId(pub Uuid);
 
-impl TurnId {
+impl RunId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 }
 
-impl Default for TurnId {
+impl Default for RunId {
     fn default() -> Self {
         Self::new()
     }

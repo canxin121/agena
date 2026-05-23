@@ -160,13 +160,6 @@ export function messageBlocks(message: MessageResource): RenderBlock[] {
   return parts.flatMap((part) => partBlocks(part))
 }
 
-export function messageTags(message: MessageResource): string[] {
-  const metadata = message.metadata as { tags?: unknown } | null
-  const tags = metadata?.tags
-  if (!Array.isArray(tags)) return []
-  return tags.filter((tag): tag is string => typeof tag === 'string' && tag.trim().length > 0)
-}
-
 export function messageUsageFacts(message: MessageResource): string[] {
   const usage = message.usage as Record<string, unknown> | null | undefined
   if (!usage) return []
@@ -182,8 +175,6 @@ export function messageUsageFacts(message: MessageResource): string[] {
   pushFact('in', 'input_tokens')
   pushFact('out', 'output_tokens')
   pushFact('reasoning', 'reasoning_tokens')
-  pushFact('cache read', 'cache_read_tokens')
-  pushFact('cache write', 'cache_write_tokens')
 
   const totalCost = usage.total_cost
   if (typeof totalCost === 'number' && Number.isFinite(totalCost) && totalCost > 0) {

@@ -8,13 +8,13 @@ use crate::event::filter::{EventKindTag, KindMatcher, KindPersistence};
 use serde::{Deserialize, Serialize};
 
 use crate::event::client::{
-    CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, MessagePartDeltaEvent,
-    MessagePartUpdatedEvent, PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
-    RunFailedEvent, RunStartedEvent, SessionGoalEvent, StreamErrorEvent,
+    CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, ExecutionFailedEvent,
+    ExecutionStartedEvent, MessagePartDeltaEvent, MessagePartUpdatedEvent, PermissionRepliedEvent,
+    PermissionRequestedEvent, PermissionRuleEvent, SessionGoalEvent, StreamErrorEvent,
 };
 use crate::session::history::{
-    AssistantMessageCompleted, SystemNoticeAppended, ToolCallCompleted, ToolCallIssued,
-    TurnAborted, TurnCompleted, TurnStarted, UserMessageAppended,
+    AssistantMessageCompleted, RunAborted, RunCompleted, RunStarted, SystemNoticeAppended,
+    ToolCallCompleted, ToolCallIssued, UserMessageAppended,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -22,8 +22,8 @@ use crate::session::history::{
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
 pub enum EventKind {
     // --- runtime / UI projection ---
-    RunStarted(RunStartedEvent),
-    RunFailed(RunFailedEvent),
+    ExecutionStarted(ExecutionStartedEvent),
+    ExecutionFailed(ExecutionFailedEvent),
     StreamError(StreamErrorEvent),
     MessagePartUpdated(MessagePartUpdatedEvent),
     MessagePartDelta(MessagePartDeltaEvent),
@@ -38,9 +38,9 @@ pub enum EventKind {
     SessionGoalUpdated(SessionGoalEvent),
 
     // --- append-only history ---
-    TurnStarted(TurnStarted),
-    TurnCompleted(TurnCompleted),
-    TurnAborted(TurnAborted),
+    RunStarted(RunStarted),
+    RunCompleted(RunCompleted),
+    RunAborted(RunAborted),
     UserMessageAppended(UserMessageAppended),
     AssistantMessageCompleted(AssistantMessageCompleted),
     ToolCallIssued(ToolCallIssued),
@@ -64,8 +64,8 @@ pub struct PluginEventPayload {
 impl EventKind {
     pub fn tag_str(&self) -> &'static str {
         match self {
-            Self::RunStarted(_) => "run_started",
-            Self::RunFailed(_) => "run_failed",
+            Self::ExecutionStarted(_) => "execution_started",
+            Self::ExecutionFailed(_) => "execution_failed",
             Self::StreamError(_) => "stream_error",
             Self::MessagePartUpdated(_) => "message_part_updated",
             Self::MessagePartDelta(_) => "message_part_delta",
@@ -78,9 +78,9 @@ impl EventKind {
             Self::PermissionRuleUpdated(_) => "permission_rule_updated",
             Self::PermissionRuleRevoked(_) => "permission_rule_revoked",
             Self::SessionGoalUpdated(_) => "session_goal_updated",
-            Self::TurnStarted(_) => "turn_started",
-            Self::TurnCompleted(_) => "turn_completed",
-            Self::TurnAborted(_) => "turn_aborted",
+            Self::RunStarted(_) => "run_started",
+            Self::RunCompleted(_) => "run_completed",
+            Self::RunAborted(_) => "run_aborted",
             Self::UserMessageAppended(_) => "user_message_appended",
             Self::AssistantMessageCompleted(_) => "assistant_message_completed",
             Self::ToolCallIssued(_) => "tool_call_issued",
@@ -96,8 +96,8 @@ impl EventKind {
     pub fn is_persistent(&self) -> bool {
         !matches!(
             self,
-            Self::RunStarted(_)
-                | Self::RunFailed(_)
+            Self::ExecutionStarted(_)
+                | Self::ExecutionFailed(_)
                 | Self::StreamError(_)
                 | Self::MessagePartDelta(_)
                 | Self::CommandBegin(_)
@@ -121,8 +121,8 @@ impl KindPersistence for EventKind {
 
 /// Ephemeral UI-only kind tags (never written to the event store).
 pub const UI_KINDS: &[&str] = &[
-    "run_started",
-    "run_failed",
+    "execution_started",
+    "execution_failed",
     "stream_error",
     "message_part_delta",
     "command_begin",
@@ -139,9 +139,9 @@ pub const HISTORY_KINDS: &[&str] = &[
     "permission_rule_updated",
     "permission_rule_revoked",
     "session_goal_updated",
-    "turn_started",
-    "turn_completed",
-    "turn_aborted",
+    "run_started",
+    "run_completed",
+    "run_aborted",
     "user_message_appended",
     "assistant_message_completed",
     "tool_call_issued",
@@ -153,8 +153,8 @@ pub const HISTORY_KINDS: &[&str] = &[
 /// Stable list of every known kind tag (UI + history). Order matches the
 /// serde tag ordering in `EventKind`.
 pub const ALL_KINDS: &[&str] = &[
-    "run_started",
-    "run_failed",
+    "execution_started",
+    "execution_failed",
     "stream_error",
     "message_part_updated",
     "message_part_delta",
@@ -167,9 +167,9 @@ pub const ALL_KINDS: &[&str] = &[
     "permission_rule_updated",
     "permission_rule_revoked",
     "session_goal_updated",
-    "turn_started",
-    "turn_completed",
-    "turn_aborted",
+    "run_started",
+    "run_completed",
+    "run_aborted",
     "user_message_appended",
     "assistant_message_completed",
     "tool_call_issued",

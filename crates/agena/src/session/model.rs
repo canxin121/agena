@@ -13,6 +13,7 @@ use crate::{
         UserInputRequest, UserInputRequestPart,
     },
     role::Role,
+    session::history::RunSource,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,9 +71,9 @@ pub enum SessionStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
-pub struct TurnRuntimeState {
+pub struct RunRuntimeState {
     #[serde(default)]
-    pub status: SessionRuntimeStatus,
+    pub status: RunStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) pending_operations: Vec<SessionPendingOperation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -92,6 +93,8 @@ pub struct TurnRuntimeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<RunSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_window_generation: Option<u64>,
@@ -101,7 +104,7 @@ pub struct TurnRuntimeState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum SessionRuntimeStatus {
+pub enum RunStatus {
     #[default]
     Idle,
     AwaitingModel,
@@ -117,9 +120,9 @@ pub struct PendingToolCallRuntime {
     pub(crate) part: SessionPartRef,
 }
 
-impl TurnRuntimeState {
+impl RunRuntimeState {
     pub fn is_empty(&self) -> bool {
-        self.status == SessionRuntimeStatus::Idle
+        self.status == RunStatus::Idle
             && self.pending_operations.is_empty()
             && self.pending_tool_calls.is_empty()
             && self.model_provider_id.is_none()
@@ -129,6 +132,7 @@ impl TurnRuntimeState {
             && self.model_speed_mode.is_none()
             && self.model_verbosity.is_none()
             && self.model_parallel_tool_calls.is_none()
+            && self.source.is_none()
             && self.prompt_cache_key.is_none()
             && self.prompt_window_generation.is_none()
             && self.latest_event_seq.is_none()
@@ -142,13 +146,15 @@ impl TurnRuntimeState {
         self.model_speed_mode = None;
         self.model_verbosity = None;
         self.model_parallel_tool_calls = None;
+        self.source = None;
         self.prompt_cache_key = None;
         self.prompt_window_generation = None;
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn record_model_request(
+    pub fn record_run_request(
         &mut self,
+        source: RunSource,
         provider_id: String,
         adapter_id: Option<String>,
         model_id: String,
@@ -159,7 +165,7 @@ impl TurnRuntimeState {
         prompt_cache_key: String,
         prompt_window_generation: u64,
     ) {
-        self.status = SessionRuntimeStatus::AwaitingModel;
+        self.status = RunStatus::AwaitingModel;
         self.model_provider_id = Some(provider_id);
         self.model_adapter_id = adapter_id.filter(|value| !value.trim().is_empty());
         self.model_id = Some(model_id);
@@ -167,6 +173,7 @@ impl TurnRuntimeState {
         self.model_speed_mode = model_speed_mode.filter(|value| !value.trim().is_empty());
         self.model_verbosity = model_verbosity.filter(|value| !value.trim().is_empty());
         self.model_parallel_tool_calls = model_parallel_tool_calls;
+        self.source = Some(source);
         self.prompt_cache_key = Some(prompt_cache_key);
         self.prompt_window_generation = Some(prompt_window_generation);
     }
@@ -439,8 +446,8 @@ pub struct ProviderPromptAnchor {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
 pub struct SessionRuntimeState {
-    #[serde(default, skip_serializing_if = "TurnRuntimeState::is_empty")]
-    pub turn: TurnRuntimeState,
+    #[serde(default, skip_serializing_if = "RunRuntimeState::is_empty")]
+    pub run: RunRuntimeState,
     #[serde(default)]
     pub prompt_window: PromptWindowRuntime,
     #[serde(default, skip_serializing_if = "PromptTokenRuntime::is_empty")]
@@ -777,37 +784,40 @@ impl Session {
         self.pending_operations = self.derive_pending_operations();
     }
 
-    pub(crate) fn sync_runtime_turn_state(&mut self) {
+    pub(crate) fn sync_runtime_run_state(&mut self) {
         self.refresh_derived();
-        let previous = self.runtime.turn.clone();
-        self.runtime.turn = self.turn_runtime_snapshot(previous);
+        let previous = self.runtime.run.clone();
+        self.runtime.run = self.run_runtime_snapshot(previous);
     }
 
-    fn turn_runtime_snapshot(&self, previous: TurnRuntimeState) -> TurnRuntimeState {
+    fn run_runtime_snapshot(&self, previous: RunRuntimeState) -> RunRuntimeState {
         let status = if self.blocked() {
-            SessionRuntimeStatus::Blocked
+            RunStatus::Blocked
         } else if self.next_pending_tool().is_some() {
-            SessionRuntimeStatus::RunningTool
+            RunStatus::RunningTool
         } else if self.should_run_model() {
-            SessionRuntimeStatus::AwaitingModel
+            RunStatus::AwaitingModel
         } else {
-            SessionRuntimeStatus::Idle
+            RunStatus::Idle
         };
 
-        let mut snapshot = TurnRuntimeState {
+        let mut snapshot = RunRuntimeState {
             status,
             pending_operations: self.pending_operations.clone(),
             pending_tool_calls: self.pending_tool_runtime_snapshots(),
             latest_event_seq: previous.latest_event_seq,
-            ..TurnRuntimeState::default()
+            ..RunRuntimeState::default()
         };
 
-        if status == SessionRuntimeStatus::AwaitingModel {
+        if status == RunStatus::AwaitingModel {
             snapshot.model_provider_id = previous.model_provider_id;
             snapshot.model_adapter_id = previous.model_adapter_id;
             snapshot.model_id = previous.model_id;
             snapshot.model_thinking_mode = previous.model_thinking_mode;
             snapshot.model_speed_mode = previous.model_speed_mode;
+            snapshot.model_verbosity = previous.model_verbosity;
+            snapshot.model_parallel_tool_calls = previous.model_parallel_tool_calls;
+            snapshot.source = previous.source;
             snapshot.prompt_cache_key = previous.prompt_cache_key;
             snapshot.prompt_window_generation = previous.prompt_window_generation;
         }
@@ -1006,7 +1016,7 @@ impl Session {
             )
             .saturating_add(
                 self.runtime
-                    .turn
+                    .run
                     .prompt_cache_key
                     .as_ref()
                     .map_or(0, String::len),

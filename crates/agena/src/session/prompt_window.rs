@@ -170,7 +170,6 @@ fn compaction_summary_message(session: &Session, summary: &str) -> Message {
     message.created_at = session.created_at;
     message.metadata = MessageMetadata {
         source: MessageSource::System,
-        tags: vec!["compaction_summary".to_string()],
         ..Default::default()
     };
     for (idx, part) in message.parts.iter_mut().enumerate() {

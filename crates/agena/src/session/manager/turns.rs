@@ -7,7 +7,7 @@ impl SessionManager {
         request: SessionUserTurnRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
-        let (control, steer_rx) = self.turn_registry.register(session_id).await;
+        let (control, steer_rx) = self.run_registry.register(session_id).await;
         crate::metrics::session_started();
         let manager = self.background_handle();
         let task_control = control.clone();
@@ -17,10 +17,10 @@ impl SessionManager {
                 .await
         })
         .await
-        .map_err(|err| AppError::Internal(format!("user turn task failed: {err}")))
+        .map_err(|err| AppError::Internal(format!("user run task failed: {err}")))
         .and_then(std::convert::identity);
         crate::metrics::session_finished();
-        self.turn_registry
+        self.run_registry
             .unregister_if_matches(session_id, &control)
             .await;
         result
@@ -29,7 +29,7 @@ impl SessionManager {
     async fn submit_user_turn_inner(
         &self,
         mut request: SessionUserTurnRequest,
-        control: Arc<TurnControl>,
+        control: Arc<RunControl>,
         steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
@@ -83,6 +83,8 @@ impl SessionManager {
         session = self
             .apply_requested_agent_profile(session, &mut request.options, state.clone())
             .await?;
+        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
+        self.apply_run_selection_to_session(&mut session, &options);
         let ids = self.store.reserve_message_ids(request.parts.len()).await?;
         let user_message = build_message(
             ids,
@@ -95,20 +97,11 @@ impl SessionManager {
                     .last_conversation_message()
                     .map(|message| message.id),
                 generated_by_call_id: None,
-                model_provider_id: request.options.model.provider_id.to_string(),
-                model_adapter_id: request
-                    .options
-                    .model
-                    .adapter_id
-                    .as_ref()
-                    .map(ToString::to_string),
-                model_id: request.options.model.model_id.to_string(),
-                model_thinking_mode: request.options.thinking_mode.clone(),
-                model_speed_mode: request.options.speed_mode.clone(),
-                model_verbosity: request.options.verbosity.clone(),
-                model_parallel_tool_calls: request.options.request_override.parallel_tool_calls(),
-                provider_metadata: None,
-                tags: Vec::new(),
+                model_provider_id: options.model.provider_id.to_string(),
+                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
+                model_id: options.model.model_id.to_string(),
+                model_thinking_mode: options.thinking_mode.clone(),
+                model_speed_mode: options.speed_mode.clone(),
             },
         );
         session.messages.push(user_message.clone());
@@ -122,28 +115,28 @@ impl SessionManager {
             )
             .await?;
 
-        // Append-only model: emit a self-contained turn carrying the user
-        // message so SessionViewBuilder sees a closed turn for it. The
-        // matching TurnStarted/TurnCompleted bracket keeps the projection
-        // invariant ("turn must close to flush") intact.
-        let user_turn_id = HistoryTurnId::new();
+        // Append-only history: persist the user-authored message as its own
+        // closed run batch so it remains addressable in fork/rewind flows.
+        let user_run_id = HistoryRunId::new();
         let user_history_items = vec![
-            EventKind::TurnStarted(TurnStarted {
-                turn_id: user_turn_id,
-                model_id: request.options.model.model_id.as_str().into(),
-                provider_id: request.options.model.provider_id.as_str().into(),
+            EventKind::RunStarted(RunStarted {
+                run_id: user_run_id,
+                source: RunSource::User,
+                model_id: options.model.model_id.as_str().into(),
+                provider_id: options.model.provider_id.as_str().into(),
                 request_digest: None,
             }),
             EventKind::UserMessageAppended(UserMessageAppended {
                 message_id: HistoryMessageId(user_message.id),
-                turn_id: user_turn_id,
+                run_id: user_run_id,
                 created_at: user_message.created_at,
                 content: TranscriptContent::from_message_lossy(&user_message),
                 parts: user_message.parts.clone(),
                 metadata: user_message.metadata.clone(),
+                provider_state: user_message.provider_state.clone(),
             }),
-            EventKind::TurnCompleted(TurnCompleted {
-                turn_id: user_turn_id,
+            EventKind::RunCompleted(RunCompleted {
+                run_id: user_run_id,
                 finish_reason: FinishReason::Stop,
             }),
         ];
@@ -152,8 +145,16 @@ impl SessionManager {
             .append_history_items(session, user_history_items, state.cache_policy())
             .await?;
 
-        self.run_until_stable(session, &request.options, false, state, control, steer_rx)
-            .await
+        self.run_until_stable(
+            session,
+            &options,
+            false,
+            RunSource::User,
+            state,
+            control,
+            steer_rx,
+        )
+        .await
     }
 
     pub async fn continue_session(
@@ -161,23 +162,36 @@ impl SessionManager {
         mut request: SessionContinueRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
-        let (control, steer_rx) = self.turn_registry.register(session_id).await;
+        let (control, steer_rx) = self.run_registry.register(session_id).await;
         let state = self.execution_state();
-        let session = self
+        let mut session = self
             .store
             .load_session(request.session_id, state.cache_policy())
             .await?;
-        let session = self
+        session = self
             .apply_requested_agent_profile(session, &mut request.options, state.clone())
             .await?;
-        let session = self
+        session = self
             .resume_paused_goal_if_needed(session, state.clone())
             .await?;
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
+        if self.apply_run_selection_to_session(&mut session, &options) {
+            session = self
+                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .await?;
+        }
         let result = self
-            .run_until_stable(session, &options, true, state, control.clone(), steer_rx)
+            .run_until_stable(
+                session,
+                &options,
+                true,
+                RunSource::Continue,
+                state,
+                control.clone(),
+                steer_rx,
+            )
             .await;
-        self.turn_registry
+        self.run_registry
             .unregister_if_matches(session_id, &control)
             .await;
         result
@@ -354,7 +368,7 @@ impl SessionManager {
                 .await
         })
         .await
-        .map_err(|err| AppError::Internal(format!("subtask turn task failed: {err}")))??;
+        .map_err(|err| AppError::Internal(format!("subtask run task failed: {err}")))??;
 
         Ok(SessionSubtaskResponse {
             profile_name: Some(effective_profile_name),

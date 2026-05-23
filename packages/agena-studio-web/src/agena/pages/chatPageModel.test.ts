@@ -44,7 +44,7 @@ function sessionState(runState: SessionExecutionResource['run_state']): SessionE
 }
 
 describe('applySessionEvent', () => {
-  test('message_part_updated creates a message shell from the shared event helper', () => {
+  test('message_part_updated appends the timeline event and requests a refresh', () => {
     const event: DomainEventRecord = {
       seq_global: 17,
       session_id: 11,
@@ -77,42 +77,33 @@ describe('applySessionEvent', () => {
 
     const result = applySessionEvent(baseState(), event)
 
-    expect(result.shouldRefresh).toBe(false)
+    expect(result.shouldRefresh).toBe(true)
     expect(result.state.timelineEvents).toEqual([event])
-    expect(result.state.messages).toEqual([
-      {
-        id: 101,
-        session_id: 11,
-        role: 'assistant',
-        state: 'pending',
-        created_at: '2026-05-23T00:00:01.000Z',
-        updated_at: new Date(1_748_000_001_250).toISOString(),
-        metadata: {},
-        usage: null,
-        finish: null,
-        part_count: 1,
-        parts: [
-          {
-            id: 201,
-            message_id: 101,
-            part_index: 0,
-            status: 'pending',
-            kind: 'text',
-            name: 'text',
-            summary: 'hello',
-            has_detail: true,
-            created_at: '2026-05-23T00:00:01.000Z',
-            content: {
-              type: 'text',
-              text: 'hello',
-            },
-          },
-        ],
-      },
-    ])
+    expect(result.state.messages).toEqual([])
   })
 
-  test('assistant_message_completed reuses the same message shape and clears run state', () => {
+  test('message_part_delta appends the timeline event and requests a refresh', () => {
+    const event: DomainEventRecord = {
+      seq_global: 18,
+      session_id: 11,
+      created_at: '2026-05-23T00:00:02.000Z',
+      kind: 'message_part_delta',
+      payload: {
+        message_id: 101,
+        part_id: 201,
+        field: 'text',
+        delta: ' world',
+      },
+    }
+
+    const result = applySessionEvent(baseState(), event)
+
+    expect(result.shouldRefresh).toBe(true)
+    expect(result.state.timelineEvents).toEqual([event])
+    expect(result.state.messages).toEqual([])
+  })
+
+  test('assistant_message_completed clears run state and requests a refresh', () => {
     const existingMessage: MessageResource = {
       id: 101,
       session_id: 11,
@@ -122,7 +113,6 @@ describe('applySessionEvent', () => {
       updated_at: '2026-05-23T00:00:02.000Z',
       metadata: {},
       usage: null,
-      finish: null,
       part_count: 1,
       parts: [
         {
@@ -181,42 +171,14 @@ describe('applySessionEvent', () => {
       event,
     )
 
-    expect(result.shouldRefresh).toBe(false)
+    expect(result.shouldRefresh).toBe(true)
     expect(result.state.sessionState?.run_state).toBe('idle')
     expect(result.state.sessionState?.blocked).toBe(false)
     expect(result.state.timelineEvents).toEqual([event])
-    expect(result.state.messages[0]).toEqual({
-      id: 101,
-      session_id: 11,
-      role: 'assistant',
-      state: 'completed',
-      created_at: '2026-05-23T00:00:01.000Z',
-      updated_at: '2026-05-23T00:00:02.000Z',
-      metadata: { tags: ['final'] },
-      usage: { input_tokens: 3, output_tokens: 5 },
-      finish: 'stop',
-      part_count: 1,
-      parts: [
-        {
-          id: 201,
-          message_id: 101,
-          part_index: 0,
-          status: 'completed',
-          kind: 'text',
-          name: 'text',
-          summary: 'hello world',
-          has_detail: true,
-          created_at: '2026-05-23T00:00:01.000Z',
-          content: {
-            type: 'text',
-            text: 'hello world',
-          },
-        },
-      ],
-    })
+    expect(result.state.messages).toEqual([existingMessage])
   })
 
-  test('user_message_appended inserts a completed user message without a refresh', () => {
+  test('user_message_appended appends the timeline event and requests a refresh', () => {
     const event: DomainEventRecord = {
       seq_global: 19,
       session_id: 11,
@@ -248,13 +210,8 @@ describe('applySessionEvent', () => {
 
     const result = applySessionEvent(baseState(), event)
 
-    expect(result.shouldRefresh).toBe(false)
+    expect(result.shouldRefresh).toBe(true)
     expect(result.state.timelineEvents).toEqual([event])
-    expect(result.state.messages[0]?.role).toBe('user')
-    expect(result.state.messages[0]?.state).toBe('completed')
-    expect(result.state.messages[0]?.parts?.[0]?.content).toEqual({
-      type: 'text',
-      text: 'ping',
-    })
+    expect(result.state.messages).toEqual([])
   })
 })

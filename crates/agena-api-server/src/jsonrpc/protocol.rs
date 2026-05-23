@@ -79,7 +79,7 @@ pub mod method {
     pub const PERMISSION_REPLY: &str = "permission/reply";
     pub const SESSIONS_LIST: &str = "sessions/list";
     pub const MESSAGES_LIST: &str = "messages/list";
-    pub const TURN_CANCEL: &str = "turn/cancel";
+    pub const RUN_CANCEL: &str = "run/cancel";
     pub const EVENTS_SUBSCRIBE: &str = "events/subscribe";
 }
 
@@ -190,12 +190,12 @@ pub struct ReadMessagesResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CancelTurnParams {
+pub struct CancelRunParams {
     pub session_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct CancelTurnResult {
+pub struct CancelRunResult {
     pub session_id: i64,
     pub cancelled: bool,
 }

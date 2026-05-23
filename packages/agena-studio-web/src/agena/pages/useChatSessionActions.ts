@@ -169,15 +169,9 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       const messagePromise = existingMessage ? Promise.resolve(existingMessage) : deps.getMessage(messageId, 'summary')
       const partsPromise = deps.listMessageParts(messageId, 'summary')
       const [message, parts] = await Promise.all([messagePromise, partsPromise])
-      const summaryPart = partId != null ? parts.find((part) => part.id === partId) || null : null
       input.inspectedMessage.value = message
       input.inspectedMessageParts.value = parts
-      input.inspectedPart.value =
-        partId == null
-          ? null
-          : summaryPart && (summaryPart.has_detail === false || summaryPart.content !== undefined)
-            ? summaryPart
-            : await deps.getMessagePart(partId)
+      input.inspectedPart.value = partId == null ? null : await deps.getMessagePart(partId)
       input.localCommandNotice.value = `Loaded message #${messageId} inspector.`
     } catch (err) {
       input.errorMessage.value = err instanceof Error ? err.message : String(err)

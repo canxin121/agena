@@ -18,7 +18,6 @@ const props = defineProps<{
   inspectMessage: (messageId: number, partId?: number) => void | Promise<void>
   rewindToMessage: (messageId: number) => void | Promise<void>
   formatMessageTime: (value: string) => string
-  messageTags: (message: MessageResource) => string[]
   messageUsageFacts: (message: MessageResource) => string[]
   messageBlocks: (message: MessageResource) => ChatMessageRenderBlock[]
 }>()
@@ -51,19 +50,10 @@ const props = defineProps<{
             <div>{{ props.formatMessageTime(message.created_at) }}</div>
           </div>
         </div>
-        <div
-          v-if="props.messageTags(message).length || props.messageUsageFacts(message).length || message.finish"
-          class="stack"
-        >
-          <div v-if="props.messageTags(message).length" class="button-row">
-            <span v-for="tag in props.messageTags(message)" :key="`${message.id}-tag-${tag}`" class="badge">
-              {{ tag }}
-            </span>
-          </div>
+        <div v-if="props.messageUsageFacts(message).length" class="stack">
           <div v-if="props.messageUsageFacts(message).length" class="muted mono">
             usage={{ props.messageUsageFacts(message).join(' · ') }}
           </div>
-          <div v-if="message.finish" class="muted mono">finish={{ message.finish }}</div>
         </div>
         <div v-if="props.messageBlocks(message).length" class="stack">
           <template v-for="(block, index) in props.messageBlocks(message)" :key="`${message.id}-${index}`">

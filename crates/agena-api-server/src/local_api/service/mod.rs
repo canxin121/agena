@@ -24,7 +24,7 @@ use agena::{
         entities,
     },
     event::{EventKind, EventPublisher, PermissionRuleEvent, PublishContext},
-    message::{Message, MessagePart, UserInputRequest},
+    message::{Message, UserInputRequest},
     model::{AdapterId, ModelRef, ModelSpeedModeRequestOverride},
     permission::{PermissionAction, PermissionMode, PermissionScope, PersistedPermissionRule},
     provider::ProviderRegistry,

@@ -548,13 +548,13 @@ impl SessionStore {
                         ))
                     })?;
                 let target_seq = target_event.meta.seq_global;
-                event_turn_id_for_message(&target_event.kind, message_id)
-                    .and_then(|turn_id| {
+                event_run_id_for_message(&target_event.kind, message_id)
+                    .and_then(|run_id| {
                         events
                             .iter()
                             .filter(|e| e.meta.seq_global >= target_seq)
                             .find_map(|event| match &event.kind {
-                                EventKind::TurnCompleted(payload) if payload.turn_id == turn_id => {
+                                EventKind::RunCompleted(payload) if payload.run_id == run_id => {
                                     Some(event.meta.seq_global)
                                 }
                                 _ => None,
@@ -1121,7 +1121,7 @@ impl SessionStore {
         if items.is_empty() {
             return Ok(session);
         }
-        session.sync_runtime_turn_state();
+        session.sync_runtime_run_state();
         let session_id = session.id;
         let now = Utc::now();
         let runtime_to_persist = session.runtime.clone();
@@ -1171,7 +1171,7 @@ impl SessionStore {
             mut client_events,
             persisted_rules,
         } = commit;
-        session.sync_runtime_turn_state();
+        session.sync_runtime_run_state();
         let session_id = session.id;
         let touched_messages = ordered_unique_touched_messages(&session, touched_messages);
         let now = Utc::now();
@@ -1655,19 +1655,19 @@ fn event_targets_message(kind: &EventKind, message_id: i64) -> bool {
     }
 }
 
-fn event_turn_id_for_message(kind: &EventKind, message_id: i64) -> Option<super::ids::TurnId> {
+fn event_run_id_for_message(kind: &EventKind, message_id: i64) -> Option<super::ids::RunId> {
     match kind {
         EventKind::UserMessageAppended(payload) if payload.message_id.raw() == message_id => {
-            Some(payload.turn_id)
+            Some(payload.run_id)
         }
         EventKind::AssistantMessageCompleted(payload) if payload.message_id.raw() == message_id => {
-            Some(payload.turn_id)
+            Some(payload.run_id)
         }
         EventKind::ToolCallIssued(payload) if payload.message_id.raw() == message_id => {
-            Some(payload.turn_id)
+            Some(payload.run_id)
         }
         EventKind::ToolCallCompleted(payload) if payload.message_id.raw() == message_id => {
-            Some(payload.turn_id)
+            Some(payload.run_id)
         }
         _ => None,
     }
@@ -1709,8 +1709,8 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
             visit(p.part.message_id);
         }
         // Non-persistent / unaffected variants:
-        EventKind::RunStarted(_)
-        | EventKind::RunFailed(_)
+        EventKind::ExecutionStarted(_)
+        | EventKind::ExecutionFailed(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -1722,9 +1722,9 @@ fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
         | EventKind::SessionGoalUpdated(_)
-        | EventKind::TurnStarted(_)
-        | EventKind::TurnCompleted(_)
-        | EventKind::TurnAborted(_)
+        | EventKind::RunStarted(_)
+        | EventKind::RunCompleted(_)
+        | EventKind::RunAborted(_)
         | EventKind::PluginEvent(_) => {}
     }
 }
@@ -1768,8 +1768,8 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         EventKind::MessagePartUpdated(p) => {
             visit(p.part.id);
         }
-        EventKind::RunStarted(_)
-        | EventKind::RunFailed(_)
+        EventKind::ExecutionStarted(_)
+        | EventKind::ExecutionFailed(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -1781,9 +1781,9 @@ fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64)) {
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
         | EventKind::SessionGoalUpdated(_)
-        | EventKind::TurnStarted(_)
-        | EventKind::TurnCompleted(_)
-        | EventKind::TurnAborted(_)
+        | EventKind::RunStarted(_)
+        | EventKind::RunCompleted(_)
+        | EventKind::RunAborted(_)
         | EventKind::PluginEvent(_)
         | EventKind::ToolCallIssued(_)
         | EventKind::SystemNoticeAppended(_) => {}
@@ -1831,8 +1831,8 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
             p.message_id = f(p.message_id);
             p.part.message_id = f(p.part.message_id);
         }
-        EventKind::RunStarted(_)
-        | EventKind::RunFailed(_)
+        EventKind::ExecutionStarted(_)
+        | EventKind::ExecutionFailed(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -1844,9 +1844,9 @@ fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
         | EventKind::SessionGoalUpdated(_)
-        | EventKind::TurnStarted(_)
-        | EventKind::TurnCompleted(_)
-        | EventKind::TurnAborted(_)
+        | EventKind::RunStarted(_)
+        | EventKind::RunCompleted(_)
+        | EventKind::RunAborted(_)
         | EventKind::PluginEvent(_) => {}
     }
 }
@@ -1897,8 +1897,8 @@ fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
         EventKind::MessagePartUpdated(p) => {
             p.part.id = f(p.part.id);
         }
-        EventKind::RunStarted(_)
-        | EventKind::RunFailed(_)
+        EventKind::ExecutionStarted(_)
+        | EventKind::ExecutionFailed(_)
         | EventKind::StreamError(_)
         | EventKind::MessagePartDelta(_)
         | EventKind::CommandBegin(_)
@@ -1910,9 +1910,9 @@ fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
         | EventKind::PermissionRuleUpdated(_)
         | EventKind::PermissionRuleRevoked(_)
         | EventKind::SessionGoalUpdated(_)
-        | EventKind::TurnStarted(_)
-        | EventKind::TurnCompleted(_)
-        | EventKind::TurnAborted(_)
+        | EventKind::RunStarted(_)
+        | EventKind::RunCompleted(_)
+        | EventKind::RunAborted(_)
         | EventKind::ToolCallIssued(_)
         | EventKind::SystemNoticeAppended(_)
         | EventKind::PluginEvent(_) => {}
@@ -1926,8 +1926,8 @@ fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64) -> i64) {
 
 fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
     match kind {
-        EventKind::RunStarted(p) => p.session_id = session_id,
-        EventKind::RunFailed(p) => p.session_id = session_id,
+        EventKind::ExecutionStarted(p) => p.session_id = session_id,
+        EventKind::ExecutionFailed(p) => p.session_id = session_id,
         EventKind::StreamError(p) => p.session_id = session_id,
         EventKind::MessagePartUpdated(p) => p.session_id = session_id,
         EventKind::MessagePartDelta(p) => p.session_id = session_id,
@@ -1944,9 +1944,9 @@ fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
             }
         }
         EventKind::SessionGoalUpdated(p) => p.session_id = session_id,
-        EventKind::TurnStarted(_)
-        | EventKind::TurnCompleted(_)
-        | EventKind::TurnAborted(_)
+        EventKind::RunStarted(_)
+        | EventKind::RunCompleted(_)
+        | EventKind::RunAborted(_)
         | EventKind::UserMessageAppended(_)
         | EventKind::AssistantMessageCompleted(_)
         | EventKind::ToolCallIssued(_)

@@ -191,7 +191,7 @@ The resolved config builds:
 - `EventBus`: live broadcast。
 - `SessionProcessor`: provider 调用、tool call loop、append-only prompt window。
 - `ToolExecutor`: provided/plugin tool 执行。
-- `TurnRegistry`: active turn control/cancel。
+- `RunRegistry`: active run control/cancel。
 - session cache。
 
 常见写操作：
@@ -203,7 +203,7 @@ reply_permission
 reply_user_input
 fork_session
 rewind_session (creates a fork)
-cancel_active_turn
+cancel_active_run
 export_session_jsonl
 import_session_jsonl
 ```

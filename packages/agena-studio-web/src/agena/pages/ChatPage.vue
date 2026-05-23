@@ -13,7 +13,6 @@ import ChatPageContent from './ChatPageContent.vue'
 import { createChatPageContentState } from './chatPageContentModel'
 import {
   messageBlocks,
-  messageTags,
   messageUsageFacts,
   readPayloadMessageId,
   readPayloadPartId,
@@ -328,7 +327,6 @@ const pageContent = createChatPageContentState({
   loadSessionTree,
   loading,
   messageBlocks,
-  messageTags,
   messages,
   messageUsageFacts,
   openGlobalCommandPalette,

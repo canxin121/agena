@@ -1,4 +1,6 @@
 use super::*;
+use agena::message::{MessagePart, MessageUsage};
+use agena::role::Role;
 
 impl ApiService {
     pub async fn list_messages(
@@ -95,6 +97,7 @@ impl ApiService {
             )));
         };
         Ok(message
+            .message
             .parts
             .iter()
             .cloned()
@@ -121,7 +124,7 @@ impl ApiService {
 
 fn message_resource_from_message(
     session_id: i64,
-    message: &Message,
+    message: &VisibleMessageEntry,
     parts_mode: PartLoadMode,
     part_count: u64,
 ) -> MessageResource {
@@ -129,6 +132,7 @@ fn message_resource_from_message(
         PartLoadMode::None => None,
         PartLoadMode::Summary | PartLoadMode::Full => Some(
             message
+                .message
                 .parts
                 .iter()
                 .cloned()
@@ -136,19 +140,29 @@ fn message_resource_from_message(
                 .collect(),
         ),
     };
-    // The append-only event log carries no separate "updated_at" — every
-    // message in `Session.messages` is in its terminal projected form.
-    MessageResource::from_message(session_id, message, message.created_at, part_count, parts)
+    MessageResource::from_message(
+        session_id,
+        &message.message,
+        message.updated_at,
+        part_count,
+        parts,
+    )
+}
+
+#[derive(Debug, Clone)]
+struct VisibleMessageEntry {
+    message: Message,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
 struct VisibleMessageProjection {
-    messages: Vec<Message>,
+    messages: Vec<VisibleMessageEntry>,
     hidden_message_aliases: HashMap<i64, i64>,
 }
 
 impl VisibleMessageProjection {
-    fn find_message(&self, message_id: i64) -> Option<&Message> {
+    fn find_message(&self, message_id: i64) -> Option<&VisibleMessageEntry> {
         let visible_id = self
             .hidden_message_aliases
             .get(&message_id)
@@ -156,12 +170,13 @@ impl VisibleMessageProjection {
             .unwrap_or(message_id);
         self.messages
             .iter()
-            .find(|message| message.id == visible_id)
+            .find(|message| message.message.id == visible_id)
     }
 
     fn find_part(&self, part_id: i64) -> Option<MessagePart> {
         self.messages.iter().find_map(|message| {
             message
+                .message
                 .parts
                 .iter()
                 .find(|part| part.id == part_id)
@@ -198,8 +213,8 @@ async fn load_visible_part_counts(
 
     let mut counts = HashMap::<i64, u64>::new();
     for message in &projection.messages {
-        if let Some(part_count) = header_counts.get(&message.id).copied() {
-            counts.insert(message.id, part_count);
+        if let Some(part_count) = header_counts.get(&message.message.id).copied() {
+            counts.insert(message.message.id, part_count);
         }
     }
 
@@ -210,32 +225,63 @@ async fn load_visible_part_counts(
     }
 
     for message in &projection.messages {
-        let loaded_part_count = message.parts.len() as u64;
-        let count = counts.entry(message.id).or_default();
+        let loaded_part_count = message.message.parts.len() as u64;
+        let count = counts.entry(message.message.id).or_default();
         *count = (*count).max(loaded_part_count);
     }
 
     Ok(counts)
 }
 
-fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &Message) -> u64 {
+fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &VisibleMessageEntry) -> u64 {
     part_counts
-        .get(&message.id)
+        .get(&message.message.id)
         .copied()
-        .unwrap_or(message.parts.len() as u64)
+        .unwrap_or(message.message.parts.len() as u64)
 }
 
 fn project_visible_messages(messages: Vec<Message>) -> VisibleMessageProjection {
     let mut visible = Vec::with_capacity(messages.len());
+    let mut hidden_message_aliases = HashMap::new();
+    let mut cursor = 0usize;
 
-    for mut message in messages {
+    while cursor < messages.len() {
+        let mut message = messages[cursor].clone();
         normalize_message_parts(&mut message);
-        visible.push(message);
+
+        if message.role != Role::Assistant {
+            let updated_at = message.created_at;
+            visible.push(VisibleMessageEntry {
+                message,
+                updated_at,
+            });
+            cursor += 1;
+            continue;
+        }
+
+        let visible_message_id = message.id;
+        let mut group = vec![message];
+        let mut updated_at = group[0].created_at;
+        cursor += 1;
+
+        while cursor < messages.len() {
+            let mut next = messages[cursor].clone();
+            normalize_message_parts(&mut next);
+            if next.role != Role::Assistant {
+                break;
+            }
+            updated_at = next.created_at;
+            hidden_message_aliases.insert(next.id, visible_message_id);
+            group.push(next);
+            cursor += 1;
+        }
+
+        visible.push(collapse_assistant_group(group, updated_at));
     }
 
     VisibleMessageProjection {
         messages: visible,
-        hidden_message_aliases: HashMap::new(),
+        hidden_message_aliases,
     }
 }
 
@@ -247,10 +293,10 @@ fn normalize_message_parts(message: &mut Message) {
 }
 
 fn paginate_visible_messages(
-    messages: &[Message],
+    messages: &[VisibleMessageEntry],
     cursor: Option<MessageCursor>,
     limit: u64,
-) -> (Vec<Message>, bool, Option<(i64, i64)>) {
+) -> (Vec<VisibleMessageEntry>, bool, Option<(i64, i64)>) {
     let mut filtered = messages
         .iter()
         .filter(|message| match cursor {
@@ -276,8 +322,85 @@ fn paginate_visible_messages(
     (filtered, has_more, next_cursor)
 }
 
-fn message_cursor_key(message: &Message) -> (i64, i64) {
-    (message.created_at.timestamp_millis(), message.id)
+fn message_cursor_key(message: &VisibleMessageEntry) -> (i64, i64) {
+    (
+        message.message.created_at.timestamp_millis(),
+        message.message.id,
+    )
+}
+
+fn collapse_assistant_group(
+    mut group: Vec<Message>,
+    updated_at: DateTime<Utc>,
+) -> VisibleMessageEntry {
+    let mut visible = group
+        .first()
+        .cloned()
+        .expect("assistant group should contain at least one message");
+    let usage = aggregate_usage(group.iter().filter_map(|message| message.usage.as_ref()));
+    visible.usage = usage.clone();
+    visible.metadata = collapse_assistant_metadata(group.as_slice());
+    visible.state = collapse_assistant_state(group.as_slice());
+
+    let mut parts = Vec::new();
+    for message in group.drain(..) {
+        for mut part in message.parts {
+            part.message_id = visible.id;
+            part.part_index = parts.len() as i32;
+            parts.push(part);
+        }
+    }
+
+    visible.parts = parts;
+    normalize_message_parts(&mut visible);
+
+    VisibleMessageEntry {
+        message: visible,
+        updated_at,
+    }
+}
+
+fn aggregate_usage<'a>(usages: impl Iterator<Item = &'a MessageUsage>) -> Option<MessageUsage> {
+    let mut total = MessageUsage::default();
+    let mut seen = false;
+    for usage in usages {
+        seen = true;
+        total.input_tokens = total.input_tokens.saturating_add(usage.input_tokens);
+        total.output_tokens = total.output_tokens.saturating_add(usage.output_tokens);
+        total.reasoning_tokens = total
+            .reasoning_tokens
+            .saturating_add(usage.reasoning_tokens);
+        total.cache_write_tokens = total
+            .cache_write_tokens
+            .saturating_add(usage.cache_write_tokens);
+        total.cache_read_tokens = total
+            .cache_read_tokens
+            .saturating_add(usage.cache_read_tokens);
+        total.total_cost += usage.total_cost;
+    }
+    seen.then_some(total)
+}
+
+fn collapse_assistant_metadata(group: &[Message]) -> agena::message::MessageMetadata {
+    let mut metadata = group
+        .first()
+        .map(|message| message.metadata.clone())
+        .unwrap_or_default();
+    for message in group.iter().skip(1) {
+        metadata.model_provider_id = message.metadata.model_provider_id.clone();
+        metadata.model_adapter_id = message.metadata.model_adapter_id.clone();
+        metadata.model_id = message.metadata.model_id.clone();
+        metadata.model_thinking_mode = message.metadata.model_thinking_mode.clone();
+        metadata.model_speed_mode = message.metadata.model_speed_mode.clone();
+    }
+    metadata
+}
+
+fn collapse_assistant_state(group: &[Message]) -> agena::message::MessageStatus {
+    group
+        .last()
+        .map(|message| message.state)
+        .unwrap_or(agena::message::MessageStatus::Completed)
 }
 
 fn project_part(mut part: MessagePart, mode: PartLoadMode) -> MessagePart {
@@ -287,4 +410,122 @@ fn project_part(mut part: MessagePart, mode: PartLoadMode) -> MessagePart {
         part.content = None;
     }
     part
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena::message::{ExecutionStatus, Message, MessageMetadata, MessageStatus, PartContent};
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn project_visible_messages_collapses_consecutive_assistant_runs() {
+        let user = message_with_parts(
+            10,
+            Role::User,
+            1_000,
+            MessageStatus::Completed,
+            vec![part_with_text(100, 10, 1_000, "continue")],
+            None,
+        );
+        let first_assistant = message_with_parts(
+            11,
+            Role::Assistant,
+            2_000,
+            MessageStatus::Completed,
+            vec![part_with_text(110, 11, 2_000, "step one")],
+            Some(MessageUsage {
+                input_tokens: 11,
+                output_tokens: 7,
+                reasoning_tokens: 3,
+                cache_write_tokens: 0,
+                cache_read_tokens: 0,
+                total_cost: 0.12,
+            }),
+        );
+        let second_assistant = message_with_parts(
+            12,
+            Role::Assistant,
+            3_000,
+            MessageStatus::Completed,
+            vec![part_with_text(120, 12, 3_000, "step two")],
+            Some(MessageUsage {
+                input_tokens: 5,
+                output_tokens: 13,
+                reasoning_tokens: 2,
+                cache_write_tokens: 1,
+                cache_read_tokens: 4,
+                total_cost: 0.08,
+            }),
+        );
+
+        let projection = project_visible_messages(vec![user, first_assistant, second_assistant]);
+
+        assert_eq!(projection.messages.len(), 2);
+        assert_eq!(projection.hidden_message_aliases.get(&12), Some(&11));
+
+        let visible = &projection.messages[1];
+        assert_eq!(visible.message.id, 11);
+        assert_eq!(visible.message.role, Role::Assistant);
+        assert_eq!(visible.updated_at.timestamp_millis(), 3_000);
+        assert_eq!(
+            visible.message.usage,
+            Some(MessageUsage {
+                input_tokens: 16,
+                output_tokens: 20,
+                reasoning_tokens: 5,
+                cache_write_tokens: 1,
+                cache_read_tokens: 4,
+                total_cost: 0.20,
+            })
+        );
+        assert_eq!(visible.message.parts.len(), 2);
+        assert_eq!(visible.message.parts[0].id, 110);
+        assert_eq!(visible.message.parts[0].message_id, 11);
+        assert_eq!(visible.message.parts[1].id, 120);
+        assert_eq!(visible.message.parts[1].message_id, 11);
+    }
+
+    #[test]
+    fn project_part_drops_content_in_summary_mode() {
+        let text = part_with_text(121, 11, 4_000, "final");
+        let projected_text = project_part(text, PartLoadMode::Summary);
+        assert!(projected_text.content.is_none());
+    }
+
+    fn message_with_parts(
+        id: i64,
+        role: Role,
+        created_at_ms: i64,
+        state: MessageStatus,
+        parts: Vec<MessagePart>,
+        usage: Option<MessageUsage>,
+    ) -> Message {
+        Message {
+            id,
+            role,
+            state,
+            parts,
+            created_at: ts(created_at_ms),
+            metadata: MessageMetadata::default(),
+            provider_state: None,
+            usage,
+        }
+    }
+
+    fn part_with_text(id: i64, message_id: i64, created_at_ms: i64, text: &str) -> MessagePart {
+        MessagePart::with_content(
+            id,
+            message_id,
+            ts(created_at_ms),
+            ExecutionStatus::Completed,
+            PartContent::text(text),
+        )
+    }
+
+    fn ts(timestamp_millis: i64) -> chrono::DateTime<Utc> {
+        Utc.timestamp_millis_opt(timestamp_millis)
+            .single()
+            .expect("valid timestamp")
+    }
 }

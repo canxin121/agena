@@ -53,10 +53,6 @@ impl SessionManager {
                     model_id: String::new(),
                     model_thinking_mode: None,
                     model_speed_mode: None,
-                    model_verbosity: None,
-                    model_parallel_tool_calls: None,
-                    provider_metadata: None,
-                    tags: Vec::new(),
                 },
             );
             session.messages.push(system_message.clone());
@@ -80,10 +76,6 @@ impl SessionManager {
                     model_id: String::new(),
                     model_thinking_mode: None,
                     model_speed_mode: None,
-                    model_verbosity: None,
-                    model_parallel_tool_calls: None,
-                    provider_metadata: None,
-                    tags: Vec::new(),
                 },
             );
             session.messages.push(user_message.clone());
@@ -280,8 +272,8 @@ impl SessionManager {
         })
     }
 
-    pub async fn is_turn_active(&self, session_id: i64) -> bool {
-        self.turn_registry.is_active(session_id).await
+    pub async fn is_run_active(&self, session_id: i64) -> bool {
+        self.run_registry.is_active(session_id).await
     }
 
     pub async fn resolve_scheduled_run_options(
@@ -304,7 +296,7 @@ impl SessionManager {
                 temperature: None,
                 max_output_tokens: None,
                 agent_profile: None,
-                max_turn_loops: None,
+                max_run_loops: None,
             },
         )
     }
@@ -408,7 +400,7 @@ impl SessionManager {
     }
 
     pub async fn broadcast_active_session_end(&self, reason: crate::plugin::SessionEndReason) {
-        let session_ids = self.turn_registry.active_session_ids().await;
+        let session_ids = self.run_registry.active_session_ids().await;
         for session_id in session_ids {
             self.broadcast_session_end(session_id, reason).await;
         }

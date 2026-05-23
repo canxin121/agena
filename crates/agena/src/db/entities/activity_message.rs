@@ -1,6 +1,9 @@
 use sea_orm::entity::prelude::*;
 
-use crate::{message::MessageMetadata, role::Role};
+use crate::{
+    message::{MessageMetadata, MessageProviderState},
+    role::Role,
+};
 
 use super::session;
 
@@ -17,8 +20,9 @@ pub struct Model {
     #[sea_orm(column_type = "JsonBinary")]
     pub metadata: MessageMetadata,
     #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub provider_state: Option<MessageProviderState>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
     pub usage: Option<crate::message::MessageUsage>,
-    pub finish: Option<String>,
     pub part_count: i64,
     #[sea_orm(default_value = false)]
     pub is_hidden: bool,

@@ -25,7 +25,7 @@ use agena::{
 };
 use agena_api::{
     commands::{
-        CancelTurnParams, ClearSessionGoalParams, Command, CommandResult, CompactSessionParams,
+        CancelRunParams, ClearSessionGoalParams, Command, CommandResult, CompactSessionParams,
         CompleteSessionGoalParams, ContinueRunParams, CreateSessionGoalParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
@@ -81,7 +81,7 @@ async fn run_options_to_core(
                 system: options.system.clone(),
                 temperature: options.temperature,
                 max_output_tokens: options.max_output_tokens,
-                max_turn_loops: options.max_turn_loops,
+                max_run_loops: options.max_run_loops,
             },
         )
         .await

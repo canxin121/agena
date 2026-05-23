@@ -847,7 +847,7 @@ limit=<1..2000>
 | POST   | `/api/v1/sessions/{session_id}/turns`              | submit user turn                 |
 | POST   | `/api/v1/sessions/{session_id}/continue`           | continue blocked/incomplete run  |
 | POST   | `/api/v1/sessions/{session_id}/fork`               | fork session                     |
-| POST   | `/api/v1/sessions/{session_id}/cancel`             | cancel active turn               |
+| POST   | `/api/v1/sessions/{session_id}/cancel`             | cancel active run               |
 | POST   | `/api/v1/sessions/{session_id}/permission-replies` | reply to permission request      |
 | POST   | `/api/v1/sessions/{session_id}/user-input-replies` | reply to host/user input request |
 | POST   | `/api/v1/sessions/{session_id}/rewind`             | fork session at message          |
@@ -899,7 +899,7 @@ Run options shared by turn/continue/replies:
   "system": "optional system prompt override",
   "temperature": 0.2,
   "max_output_tokens": 4096,
-  "max_turn_loops": 16
+  "max_run_loops": 16
 }
 ```
 
@@ -1253,7 +1253,7 @@ Client message types:
 {
   "type": "command",
   "id": "cmd-1",
-  "method": "cancel_turn",
+  "method": "cancel_run",
   "params": {
     "session_id": 1
   }
@@ -1378,7 +1378,7 @@ turn/submit
 permission/reply
 sessions/list
 messages/list
-turn/cancel
+run/cancel
 events/subscribe
 ```
 
@@ -1465,7 +1465,7 @@ Params:
 }
 ```
 
-### `turn/cancel`
+### `run/cancel`
 
 Params:
 
@@ -1516,7 +1516,7 @@ High-level methods include:
 - `create_session`
 - `submit_turn`
 - `continue_run`
-- `cancel_turn`
+- `cancel_run`
 - `reply_permission`
 - `reply_user_input`
 - `list_events`

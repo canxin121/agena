@@ -2061,7 +2061,6 @@ mod tests {
             updated_at: Utc::now(),
             metadata: Default::default(),
             usage: None,
-            finish: None,
             part_count: parts.len() as u64,
             parts: Some(parts),
         }

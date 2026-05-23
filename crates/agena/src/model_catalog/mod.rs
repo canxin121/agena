@@ -1,7 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    path::{Path, PathBuf},
     sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -22,8 +20,8 @@ mod store;
 mod types;
 
 pub(crate) use decorate::{
-    apply_catalog_definition_as_baseline, merge_catalog_baseline_speed_modes,
-    merge_catalog_baseline_thinking_modes,
+    apply_catalog_definition_as_baseline, apply_catalog_display_name_as_fallback,
+    merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
 };
 pub use decorate::{catalog_definition_to_provider_definition, decorate_provider_models};
 pub use merge::catalog_definition_from_model;
@@ -55,7 +53,6 @@ use crate::{
 pub const DEFAULT_CACHE_MAX_AGE_SECS: u64 = 60 * 60 * 24 * 7;
 
 const CATALOG_KIND_OFFICIAL: &str = "official";
-const CATALOG_KIND_CUSTOM: &str = "custom";
 const CATALOG_STATE_ID: i32 = 1;
 
 fn now_unix_ms() -> i64 {

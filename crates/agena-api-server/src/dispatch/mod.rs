@@ -221,8 +221,6 @@ impl From<HttpModelCatalogResponse> for ModelCatalogResponse {
             last_successful_source: value.last_successful_source,
             last_error: value.last_error,
             entry_count: value.entry_count,
-            official_entry_count: value.official_entry_count,
-            custom_entry_count: value.custom_entry_count,
         }
     }
 }
@@ -359,16 +357,6 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error,
         entry_count: catalog.entries.len(),
-        official_entry_count: catalog
-            .entries
-            .iter()
-            .filter(|entry| !entry.has_local_override)
-            .count(),
-        custom_entry_count: catalog
-            .entries
-            .iter()
-            .filter(|entry| entry.has_local_override)
-            .count(),
     }
     .into();
     let session_cache = snapshot.session_manager().map(|manager| {

@@ -887,6 +887,7 @@ fn merge_definitions(
     merge_json(&mut primary_value, &fallback_value);
     let mut merged: CatalogModelDefinition = serde_json::from_value(primary_value)
         .map_err(|err| AppError::Config(format!("merge model catalog definitions: {err}")))?;
+    apply_priority_limit_overrides(&mut merged, primary, fallback);
     merged.source_priority = CatalogDefinitionSourcePriority {
         sort_priority: primary
             .source_priority
@@ -918,6 +919,29 @@ fn merge_definitions(
             .max(fallback.source_priority.mode_priority),
     };
     Ok(merged)
+}
+
+fn apply_priority_limit_overrides(
+    merged: &mut CatalogModelDefinition,
+    primary: &CatalogModelDefinition,
+    fallback: &CatalogModelDefinition,
+) {
+    if fallback.source_priority.limits_priority <= primary.source_priority.limits_priority {
+        return;
+    }
+
+    override_option_field(
+        &mut merged.context_window_tokens,
+        fallback.context_window_tokens,
+    );
+    override_option_field(&mut merged.max_input_tokens, fallback.max_input_tokens);
+    override_option_field(&mut merged.max_output_tokens, fallback.max_output_tokens);
+}
+
+fn override_option_field<T: Copy>(current: &mut Option<T>, preferred: Option<T>) {
+    if preferred.is_some() {
+        *current = preferred;
+    }
 }
 
 fn merge_json(primary: &mut Value, fallback: &Value) {
@@ -952,6 +976,63 @@ fn merge_json(primary: &mut Value, fallback: &Value) {
         }
         _ if primary.is_null() => *primary = fallback.clone(),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_definitions_prefers_higher_priority_limit_fields() {
+        let primary = CatalogModelDefinition {
+            context_window_tokens: Some(262_144),
+            display_name: Some("Nemotron".to_owned()),
+            source_priority: CatalogDefinitionSourcePriority {
+                sort_priority: 950,
+                limits_priority: 950,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let fallback = CatalogModelDefinition {
+            context_window_tokens: Some(1_000_000),
+            source_priority: CatalogDefinitionSourcePriority {
+                sort_priority: 400,
+                limits_priority: 975,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let merged = merge_definitions(&primary, &fallback).expect("merge definitions");
+        assert_eq!(merged.context_window_tokens, Some(1_000_000));
+        assert_eq!(merged.display_name.as_deref(), Some("Nemotron"));
+    }
+
+    #[test]
+    fn merge_definitions_keeps_primary_limit_fields_when_priority_is_higher() {
+        let primary = CatalogModelDefinition {
+            context_window_tokens: Some(1_000_000),
+            source_priority: CatalogDefinitionSourcePriority {
+                sort_priority: 950,
+                limits_priority: 975,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let fallback = CatalogModelDefinition {
+            context_window_tokens: Some(262_144),
+            source_priority: CatalogDefinitionSourcePriority {
+                sort_priority: 400,
+                limits_priority: 950,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let merged = merge_definitions(&primary, &fallback).expect("merge definitions");
+        assert_eq!(merged.context_window_tokens, Some(1_000_000));
     }
 }
 

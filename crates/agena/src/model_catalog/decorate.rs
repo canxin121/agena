@@ -7,6 +7,15 @@ pub fn catalog_definition_to_provider_definition(
     definition.clone().into_configured_definition()
 }
 
+pub(crate) fn apply_catalog_display_name_as_fallback(
+    model: &mut Model,
+    definition: &CatalogModelDefinition,
+) {
+    if model.display_name.is_none() {
+        model.display_name = definition.display_name.clone();
+    }
+}
+
 pub(crate) fn apply_catalog_definition_as_baseline(
     definition: &CatalogModelDefinition,
     capability_fallback: &ModelCapabilities,
@@ -110,13 +119,8 @@ fn decorate_provider_model(
         model.catalog_model_id = Some(ModelId::new(catalog_model_id));
     }
 
-    if let Some(display_name) = catalog_definition_for_model_id(provider_record, model_id.as_str())
-        .and_then(|definition| definition.display_name.clone())
-    {
-        model.display_name = Some(display_name);
-    }
-
     if let Some(definition) = catalog_definition_for_model_id(provider_record, model_id.as_str()) {
+        apply_catalog_display_name_as_fallback(&mut model, definition);
         let adapter_id = model.adapter_id.clone();
         apply_catalog_definition_as_baseline(
             definition,
@@ -295,4 +299,28 @@ fn catalog_match_model_id_for_raw(raw_model_id: &str) -> Option<String> {
     let canonical = canonical_model_catalog_id(raw_model_id);
     let trimmed = canonical.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_display_name_only_fills_missing_value() {
+        let definition = CatalogModelDefinition {
+            display_name: Some("Catalog".to_owned()),
+            ..CatalogModelDefinition::default()
+        };
+
+        let mut live_model = Model::new("test", "model").with_display_name("Live");
+        apply_catalog_display_name_as_fallback(&mut live_model, &definition);
+        assert_eq!(live_model.display_name.as_deref(), Some("Live"));
+
+        let mut missing_display_name = Model::new("test", "model");
+        apply_catalog_display_name_as_fallback(&mut missing_display_name, &definition);
+        assert_eq!(
+            missing_display_name.display_name.as_deref(),
+            Some("Catalog")
+        );
+    }
 }

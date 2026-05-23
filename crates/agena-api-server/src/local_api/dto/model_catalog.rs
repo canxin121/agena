@@ -9,8 +9,6 @@ pub struct ModelCatalogResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     pub entry_count: usize,
-    pub official_entry_count: usize,
-    pub custom_entry_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,28 +29,17 @@ pub struct ModelCatalogLookupResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum ModelCatalogEntryKind {
-    Official,
-    Custom,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
 pub enum ModelCatalogSourceKind {
     Generated,
     Cache,
-    Custom,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelCatalogEntryResource {
     pub model_id: String,
-    pub kind: ModelCatalogEntryKind,
     pub source: ModelCatalogSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub has_local_override: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -117,31 +104,19 @@ impl ModelCatalogEntryResource {
         value: ModelCatalogEntryRecord,
         last_successful_source: Option<ModelCatalogEntrySourceKind>,
     ) -> Self {
-        let kind = if value.has_local_override {
-            ModelCatalogEntryKind::Custom
-        } else {
-            ModelCatalogEntryKind::Official
-        };
-        let source = if value.has_local_override {
-            ModelCatalogSourceKind::Custom
-        } else {
-            match last_successful_source.unwrap_or(ModelCatalogEntrySourceKind::Generated) {
-                ModelCatalogEntrySourceKind::Generated => ModelCatalogSourceKind::Generated,
-                ModelCatalogEntrySourceKind::Cache => ModelCatalogSourceKind::Cache,
-            }
+        let source = match last_successful_source.unwrap_or(ModelCatalogEntrySourceKind::Generated) {
+            ModelCatalogEntrySourceKind::Generated => ModelCatalogSourceKind::Generated,
+            ModelCatalogEntrySourceKind::Cache => ModelCatalogSourceKind::Cache,
         };
         let source_label = Some(str::to_owned(match source {
             ModelCatalogSourceKind::Generated => "generated catalog",
             ModelCatalogSourceKind::Cache => "cached catalog",
-            ModelCatalogSourceKind::Custom => "workspace override",
         }));
 
         Self {
             model_id: value.model_id,
-            kind,
             source,
             source_label,
-            has_local_override: value.has_local_override,
             display_name: value.display_name,
             origin: value.origin,
             lifecycle: value.lifecycle,
@@ -169,13 +144,6 @@ impl ModelCatalogEntryResource {
             capabilities: value.capabilities,
         }
     }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ModelCatalogEntryWriteRequest {
-    pub model_id: String,
-    #[serde(flatten)]
-    pub definition: CatalogModelDefinition,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -12,12 +12,14 @@ use crate::{
         ModelCapabilityFeature, ModelCapabilityPatch, ReasoningEffort, ThinkingRequest,
     },
 };
-use futures_util::future::join_all;
+use futures_util::{StreamExt, future::join_all, stream};
+use regex::Regex;
 use serde::Deserialize;
+use std::sync::OnceLock;
 
 use super::{
     CatalogDefinitionSourcePriority, CatalogModelDefinition, ModelCatalogDocument,
-    merge_catalog_definition,
+    canonical_model_catalog_id, merge_catalog_definition,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -466,10 +468,45 @@ async fn fetch_and_parse_source_document(
             parse_hugging_face_official_document(body.as_str())
         }
         ModelCatalogRemoteSourceKind::OfficialHtmlSignals => {
-            parse_official_html_signals_document(body.as_str())
+            parse_official_html_source_document(client, url, body.as_str()).await
         }
         ModelCatalogRemoteSourceKind::RouterForMe => parse_router_document(body.as_str()),
     }
+}
+
+async fn parse_official_html_source_document(
+    client: &reqwest::Client,
+    url: &str,
+    body: &str,
+) -> Result<ModelCatalogDocument, AppError> {
+    let mut document = parse_official_html_signals_document(body)?;
+
+    if !is_nvidia_reference_index_url(url) {
+        return Ok(document);
+    }
+
+    let pages = parse_official_html_reference_index_document(body)?;
+    if pages.is_empty() {
+        return Ok(document);
+    }
+
+    let results = stream::iter(pages.into_iter().map(|page| async move {
+        fetch_official_html_reference_page_document(client, page).await
+    }))
+    .buffer_unordered(24)
+    .collect::<Vec<_>>()
+    .await;
+
+    for result in results {
+        let Ok(Some((aliases, definition))) = result else {
+            continue;
+        };
+        for alias in aliases {
+            merge_document_entry(&mut document, alias, definition.clone());
+        }
+    }
+
+    Ok(document)
 }
 
 fn parse_models_dev_document(body: &str) -> Result<ModelCatalogDocument, AppError> {
@@ -667,7 +704,10 @@ fn parse_openai_codex_models_document(body: &str) -> Result<ModelCatalogDocument
         );
         let definition = CatalogModelDefinition {
             lifecycle: None,
-            context_window_tokens: model.context_window.map(clamp_u64_to_u32),
+            context_window_tokens: model
+                .context_window
+                .max(model.max_context_window)
+                .map(clamp_u64_to_u32),
             max_input_tokens: None,
             max_output_tokens: None,
             description,
@@ -968,6 +1008,349 @@ fn parse_official_html_signals_document(body: &str) -> Result<ModelCatalogDocume
     Ok(document)
 }
 
+fn is_nvidia_reference_index_url(url: &str) -> bool {
+    url.trim()
+        .to_ascii_lowercase()
+        .contains("docs.api.nvidia.com/nim/reference/models-1")
+}
+
+fn parse_official_html_reference_index_document(
+    body: &str,
+) -> Result<Vec<OfficialHtmlReferencePage>, AppError> {
+    let Some(json) = extract_official_html_ssr_props_json(body) else {
+        return Ok(Vec::new());
+    };
+
+    let props: OfficialHtmlSsrProps = serde_json::from_str(json)?;
+    let mut pages = Vec::new();
+    for reference in props.sidebars.refs {
+        collect_official_html_reference_pages(&reference.pages, &mut pages);
+    }
+    Ok(pages)
+}
+
+fn collect_official_html_reference_pages(
+    candidates: &[OfficialHtmlSsrPage],
+    pages: &mut Vec<OfficialHtmlReferencePage>,
+) {
+    for page in candidates {
+        if let Some(reference_page) = page.as_reference_page() {
+            if !pages
+                .iter()
+                .any(|existing| existing.slug == reference_page.slug)
+            {
+                pages.push(reference_page);
+            }
+        }
+        collect_official_html_reference_pages(&page.children, pages);
+    }
+}
+
+async fn fetch_official_html_reference_page_document(
+    client: &reqwest::Client,
+    page: OfficialHtmlReferencePage,
+) -> Result<Option<(Vec<String>, CatalogModelDefinition)>, AppError> {
+    let url = format!("https://docs.api.nvidia.com/nim/reference/{}", page.slug);
+    let mut last_error = None;
+
+    for _ in 0..2 {
+        match client.get(&url).send().await {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => {
+                    let body = response.text().await?;
+                    return Ok(parse_official_html_reference_page_document(
+                        page.title.as_str(),
+                        page.slug.as_str(),
+                        body.as_str(),
+                    ));
+                }
+                Err(error) => last_error = Some(error),
+            },
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(last_error
+        .map(AppError::from)
+        .unwrap_or_else(|| AppError::Config(format!("fetch official html page failed: {url}"))))
+}
+
+fn parse_official_html_reference_page_document(
+    title: &str,
+    slug: &str,
+    body: &str,
+) -> Option<(Vec<String>, CatalogModelDefinition)> {
+    let limits = parse_official_html_token_limits(body)?;
+    let aliases = official_html_reference_page_aliases(title, slug);
+    if aliases.is_empty() {
+        return None;
+    }
+
+    let (display_name, origin) = official_html_display_name_and_origin(title);
+    Some((
+        aliases,
+        CatalogModelDefinition {
+            lifecycle: None,
+            context_window_tokens: Some(limits.context_window_tokens),
+            max_input_tokens: Some(
+                limits
+                    .max_input_tokens
+                    .unwrap_or(limits.context_window_tokens),
+            ),
+            max_output_tokens: None,
+            description: None,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            default_thinking_mode: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
+            display_name,
+            origin,
+            thinking_modes: BTreeMap::new(),
+            speed_modes: BTreeMap::new(),
+            capabilities: ModelCapabilityPatch::default(),
+            source_priority: CatalogDefinitionSourcePriority::default(),
+        },
+    ))
+}
+
+fn official_html_reference_page_aliases(title: &str, slug: &str) -> Vec<String> {
+    let mut aliases = Vec::new();
+
+    if let Some((owner, model_name)) = split_official_html_reference_title(title) {
+        push_official_html_alias(&mut aliases, model_name);
+        push_official_html_alias(&mut aliases, format!("{owner}/{model_name}"));
+        push_official_html_alias(&mut aliases, format!("{owner}-{model_name}"));
+    }
+
+    push_official_html_alias(&mut aliases, slug);
+    aliases
+}
+
+fn push_official_html_alias(aliases: &mut Vec<String>, value: impl AsRef<str>) {
+    let canonical = canonical_model_catalog_id(value.as_ref());
+    if !canonical.is_empty() && !aliases.contains(&canonical) {
+        aliases.push(canonical);
+    }
+}
+
+fn official_html_display_name_and_origin(title: &str) -> (Option<String>, Option<String>) {
+    let Some((owner, model_name)) = split_official_html_reference_title(title) else {
+        return (None, None);
+    };
+    let origin = official_html_owner_origin(owner)
+        .map(str::to_owned)
+        .or_else(|| Some(title_case_tokenized(owner)));
+    (Some(model_name.to_owned()), origin)
+}
+
+fn split_official_html_reference_title(title: &str) -> Option<(&str, &str)> {
+    let (owner, model_name) = title.split_once('/')?;
+    let owner = owner.trim();
+    let model_name = model_name.trim();
+    (!owner.is_empty() && !model_name.is_empty()).then_some((owner, model_name))
+}
+
+fn official_html_owner_origin(owner: &str) -> Option<&'static str> {
+    match owner.trim().to_ascii_lowercase().as_str() {
+        "abacusai" => Some("Abacus.AI"),
+        "bytedance" => Some("ByteDance"),
+        "meta" => Some("Meta"),
+        "minimaxai" => Some("MiniMax"),
+        "moonshotai" => Some("Moonshot AI"),
+        "openai" => Some("OpenAI"),
+        "z-ai" | "zai" => Some("Z.AI"),
+        other => hugging_face_owner_origin(other),
+    }
+}
+
+fn parse_official_html_token_limits(body: &str) -> Option<OfficialHtmlTokenLimits> {
+    let plain_text = official_html_plain_text(body);
+
+    let mut context_values =
+        capture_token_values(plain_text.as_str(), official_html_input_context_length_re());
+    context_values.extend(capture_token_values(
+        plain_text.as_str(),
+        official_html_context_length_re(),
+    ));
+    context_values.extend(capture_token_values(
+        plain_text.as_str(),
+        official_html_context_window_re(),
+    ));
+    context_values.extend(capture_token_values(
+        plain_text.as_str(),
+        official_html_leading_context_size_re(),
+    ));
+    context_values.extend(capture_token_values(
+        plain_text.as_str(),
+        official_html_supports_context_size_re(),
+    ));
+
+    let context_window_tokens = context_values.into_iter().max()?;
+    let max_input_tokens =
+        capture_token_values(plain_text.as_str(), official_html_input_context_length_re())
+            .into_iter()
+            .max()
+            .or(Some(context_window_tokens));
+
+    Some(OfficialHtmlTokenLimits {
+        context_window_tokens,
+        max_input_tokens,
+    })
+}
+
+fn capture_token_values(text: &str, pattern: &Regex) -> Vec<u32> {
+    pattern
+        .captures_iter(text)
+        .filter_map(|capture| capture.name("value"))
+        .filter_map(|value| parse_token_quantity(value.as_str()))
+        .collect()
+}
+
+fn parse_token_quantity(raw: &str) -> Option<u32> {
+    let normalized = raw.trim().to_ascii_lowercase().replace(',', "");
+    let (numeric, multiplier) = if let Some(value) = normalized.strip_suffix("thousand") {
+        (value.trim(), 1_000.0)
+    } else if let Some(value) = normalized.strip_suffix("million") {
+        (value.trim(), 1_000_000.0)
+    } else if let Some(value) = normalized.strip_suffix("billion") {
+        (value.trim(), 1_000_000_000.0)
+    } else if let Some(value) = normalized.strip_suffix('k') {
+        (value.trim(), 1_000.0)
+    } else if let Some(value) = normalized.strip_suffix('m') {
+        (value.trim(), 1_000_000.0)
+    } else if let Some(value) = normalized.strip_suffix('b') {
+        (value.trim(), 1_000_000_000.0)
+    } else {
+        (normalized.trim(), 1.0)
+    };
+
+    let value = numeric.parse::<f64>().ok()?;
+    (value.is_finite() && value > 0.0)
+        .then(|| clamp_u64_to_u32((value * multiplier).round() as u64))
+}
+
+fn official_html_plain_text(body: &str) -> String {
+    let meta_content = official_html_meta_content_re()
+        .captures_iter(body)
+        .filter_map(|capture| capture.name("content"))
+        .map(|content| content.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let without_scripts = official_html_script_re().replace_all(body, " ");
+    let without_styles = official_html_style_re().replace_all(without_scripts.as_ref(), " ");
+    let without_tags = official_html_tag_re().replace_all(without_styles.as_ref(), " ");
+    let combined = format!("{meta_content} {}", without_tags.as_ref());
+    let decoded = html_escape::decode_html_entities(combined.as_str());
+    official_html_whitespace_re()
+        .replace_all(decoded.as_ref(), " ")
+        .trim()
+        .to_owned()
+}
+
+fn extract_official_html_ssr_props_json(body: &str) -> Option<&str> {
+    official_html_ssr_props_re()
+        .captures(body)
+        .and_then(|capture| capture.name("json"))
+        .map(|json| json.as_str())
+}
+
+fn official_html_ssr_props_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?s)<script id="ssr-props" type="application/json">(?P<json>.*?)</script>"#)
+            .expect("valid ssr props regex")
+    })
+}
+
+fn official_html_script_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?is)<script\b.*?</script>").expect("valid script regex"))
+}
+
+fn official_html_meta_content_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?is)<meta\b[^>]*\bcontent="(?P<content>[^"]*)"[^>]*>"#)
+            .expect("valid meta content regex")
+    })
+}
+
+fn official_html_style_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?is)<style\b.*?</style>").expect("valid style regex"))
+}
+
+fn official_html_tag_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?is)<[^>]+>").expect("valid tag regex"))
+}
+
+fn official_html_whitespace_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\s+").expect("valid whitespace regex"))
+}
+
+fn official_html_input_context_length_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)\binput\s+context\s+length\s*\(isl\)[^0-9]{0,24}(?P<value>\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:k|m|b|thousand|million|billion))?)\b",
+        )
+        .expect("valid input context regex")
+    })
+}
+
+fn official_html_context_length_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(?:maximum\s+context\s+length|context\s+length)\b[^0-9]{0,24}(?:of\s+|up\s+to\s+|is\s+)?(?P<value>\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:k|m|b|thousand|million|billion))?)(?:\s*tokens?)?\b",
+        )
+        .expect("valid context length regex")
+    })
+}
+
+fn official_html_context_window_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)\bcontext\s+window\b[^0-9]{0,32}(?:of\s+up\s+to\s+|up\s+to\s+|of\s+|is\s+)?(?P<value>\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:k|m|b|thousand|million|billion))?)(?:\s*tokens?)?\b",
+        )
+        .expect("valid context window regex")
+    })
+}
+
+fn official_html_leading_context_size_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)\b(?P<value>\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:k|m|b|thousand|million|billion))?)\s*(?:-|\s)?tokens?\s+context\s+(?:window|length|size)\b",
+        )
+        .expect("valid leading context regex")
+    })
+}
+
+fn official_html_supports_context_size_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"(?i)\bsupports\s+up\s+to\s+(?:a|an)?\s*(?P<value>\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:k|m|b|thousand|million|billion))?)\s+context\s+(?:window|length|size)\b",
+        )
+        .expect("valid supports context regex")
+    })
+}
+
 fn default_source_grade(
     source_name: &str,
     kind: ModelCatalogRemoteSourceKind,
@@ -1020,7 +1403,7 @@ fn default_source_grade(
             tier: ModelCatalogRemoteSourceTier::OfficialHtmlSignal,
             sort_priority: 400,
             descriptive_priority: 300,
-            limits_priority: 0,
+            limits_priority: 975,
             capability_priority: 250,
             semantics_priority: 0,
             pricing_priority: 0,
@@ -2288,6 +2671,8 @@ struct OpenAiCodexModel {
     #[serde(default)]
     context_window: Option<u64>,
     #[serde(default)]
+    max_context_window: Option<u64>,
+    #[serde(default)]
     supported_reasoning_levels: Option<Vec<OpenAiCodexReasoningLevel>>,
     #[serde(default)]
     service_tiers: Option<Vec<OpenAiCodexServiceTier>>,
@@ -2310,6 +2695,166 @@ struct OpenAiCodexServiceTier {
     name: Option<String>,
     #[serde(default)]
     description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OfficialHtmlReferencePage {
+    title: String,
+    slug: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OfficialHtmlSsrProps {
+    #[serde(default)]
+    sidebars: OfficialHtmlSsrSidebars,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OfficialHtmlSsrSidebars {
+    #[serde(default)]
+    refs: Vec<OfficialHtmlSsrSection>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OfficialHtmlSsrSection {
+    #[serde(default)]
+    pages: Vec<OfficialHtmlSsrPage>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OfficialHtmlSsrPage {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    slug: Option<String>,
+    #[serde(default)]
+    hidden: bool,
+    #[serde(default)]
+    children: Vec<OfficialHtmlSsrPage>,
+}
+
+impl OfficialHtmlSsrPage {
+    fn as_reference_page(&self) -> Option<OfficialHtmlReferencePage> {
+        if self.hidden {
+            return None;
+        }
+
+        let title = normalize_optional_string(self.title.clone())?;
+        let slug = normalize_optional_string(self.slug.clone())?;
+        if !title.contains(" / ") || slug.ends_with("-infer") {
+            return None;
+        }
+
+        Some(OfficialHtmlReferencePage { title, slug })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct OfficialHtmlTokenLimits {
+    context_window_tokens: u32,
+    max_input_tokens: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_codex_prefers_max_context_window() {
+        let body = r#"
+        {
+          "models": [
+            {
+              "slug": "gpt-5.4",
+              "display_name": "GPT-5.4",
+              "context_window": 272000,
+              "max_context_window": 1000000
+            }
+          ]
+        }
+        "#;
+
+        let document = parse_openai_codex_models_document(body).expect("parse codex models");
+        let definition = document.models.get("gpt-5.4").expect("model definition");
+        assert_eq!(definition.context_window_tokens, Some(1_000_000));
+    }
+
+    #[test]
+    fn official_html_reference_index_collects_model_pages() {
+        let body = r#"
+        <html>
+          <body>
+            <script id="ssr-props" type="application/json">
+              {
+                "sidebars": {
+                  "refs": [
+                    {
+                      "pages": [
+                        { "title": "Models", "slug": "models-1" },
+                        {
+                          "title": "deepseek-ai / deepseek-v4-flash",
+                          "slug": "deepseek-ai-deepseek-v4-flash",
+                          "children": [
+                            {
+                              "title": "Creates a model response for the given chat conversation.",
+                              "slug": "deepseek-ai-deepseek-v4-flash-infer"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            </script>
+          </body>
+        </html>
+        "#;
+
+        let pages =
+            parse_official_html_reference_index_document(body).expect("parse reference index");
+        assert_eq!(
+            pages,
+            vec![OfficialHtmlReferencePage {
+                title: "deepseek-ai / deepseek-v4-flash".to_owned(),
+                slug: "deepseek-ai-deepseek-v4-flash".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn official_html_reference_page_extracts_context_limits() {
+        let body = r#"
+        <html>
+          <head>
+            <meta
+              name="description"
+              content="NVIDIA-Nemotron-3-Super-120B-A12B Context Length Up to 1M tokens"
+            />
+          </head>
+          <body>
+            <strong>Input Context Length (ISL):</strong> 256K<br/>
+            <p>Other Input Properties: supports up to a 128K context size.</p>
+          </body>
+        </html>
+        "#;
+
+        let (aliases, definition) = parse_official_html_reference_page_document(
+            "nvidia / nemotron-3-super-120b-a12b",
+            "nvidia-nemotron-3-super-120b-a12b",
+            body,
+        )
+        .expect("parse reference page");
+
+        assert!(aliases.contains(&"nemotron-3-super-120b-a12b".to_owned()));
+        assert_eq!(definition.context_window_tokens, Some(1_000_000));
+        assert_eq!(definition.max_input_tokens, Some(256_000));
+        assert_eq!(
+            definition.display_name.as_deref(),
+            Some("nemotron-3-super-120b-a12b")
+        );
+        assert_eq!(definition.origin.as_deref(), Some("NVIDIA"));
+    }
 }
 
 #[derive(Debug, Deserialize)]

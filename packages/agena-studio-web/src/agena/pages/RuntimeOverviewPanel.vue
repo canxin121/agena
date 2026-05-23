@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from 'vue'
 
 import type {
   ModelCatalogEntry,
-  ModelCatalogEntryKind,
   ModelCatalogSummary,
   ProviderModel,
   ProviderModelPricing,
@@ -12,15 +11,7 @@ import type {
 } from '@/agena/lib/agenaApi'
 import { listModelCatalogEntries } from '@/agena/lib/agenaApi'
 
-import {
-  MODEL_LIFECYCLE_OPTIONS,
-  createEmptyModelCatalogDraft,
-  createEmptyModelCatalogThinkingModeDraft,
-  createEmptyModelCatalogSpeedModeDraft,
-  createModelCatalogDraftFromEntry,
-  useRuntimeModelCatalogActions,
-  type ModelCatalogEditableDraft,
-} from './useRuntimeModelCatalogActions'
+import { useRuntimeModelCatalogActions } from './useRuntimeModelCatalogActions'
 
 const props = defineProps<{
   catalogEntries: ModelCatalogEntry[]
@@ -37,8 +28,6 @@ const props = defineProps<{
 function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSummary {
   return {
     entry_count: entries.length,
-    official_entry_count: entries.filter((entry) => entry.kind !== 'custom').length,
-    custom_entry_count: entries.filter((entry) => entry.kind === 'custom').length,
   }
 }
 
@@ -48,18 +37,15 @@ const catalogEntriesState = ref<ModelCatalogEntry[]>(props.catalogEntries.map((e
 const catalogSummaryState = ref<ModelCatalogSummary | null>(
   props.catalogEntries.length ? summarizeCatalogEntries(props.catalogEntries) : null,
 )
-const catalogKindFilter = ref<'all' | ModelCatalogEntryKind>('all')
 const catalogOriginFilter = ref('all')
 const catalogQuery = ref('')
 const catalogOriginOptions = ref<string[]>([])
 const catalogTotal = ref(props.catalogEntries.length)
 const catalogOffset = ref(0)
 const catalogLimit = ref(50)
-const draft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft())
-const editingEntryKey = ref('')
 const submitting = ref(false)
 
-const { deleteCatalogEntryAction, refreshCatalogAction, saveCatalogEntryAction } = useRuntimeModelCatalogActions({
+const { refreshCatalogAction } = useRuntimeModelCatalogActions({
   actionError,
   actionMessage,
   load: props.load,
@@ -70,82 +56,12 @@ const { deleteCatalogEntryAction, refreshCatalogAction, saveCatalogEntryAction }
 
 const sortedCatalogEntries = computed(() => catalogEntriesState.value)
 
-const customCatalogEntriesCount = computed(() => catalogSummaryState.value?.custom_entry_count ?? 0)
-
-const officialCatalogEntriesCount = computed(() => catalogSummaryState.value?.official_entry_count ?? 0)
-
-const hasCatalogFilters = computed(
-  () => Boolean(catalogQuery.value.trim()) || catalogKindFilter.value !== 'all' || catalogOriginFilter.value !== 'all',
-)
-
-function catalogEntrySearchText(entry: ModelCatalogEntry) {
-  const thinkingModeText = Object.entries(entry.thinking_modes || {})
-    .flatMap(([name, mode]) => [
-      name,
-      mode.display_name,
-      mode.description,
-      mode.thinking ? JSON.stringify(mode.thinking) : '',
-    ])
-    .filter(Boolean)
-    .join('\n')
-  const speedModeText = Object.entries(entry.speed_modes || {})
-    .flatMap(([name, mode]) => [
-      name,
-      mode.display_name,
-      mode.description,
-      mode.request_override ? JSON.stringify(mode.request_override) : '',
-      mode.adapter_overrides ? JSON.stringify(mode.adapter_overrides) : '',
-    ])
-    .filter(Boolean)
-    .join('\n')
-
-  return [
-    entry.model_id,
-    entry.display_name,
-    entry.origin,
-    entry.description,
-    entry.default_temperature,
-    entry.default_top_p,
-    entry.default_top_k == null ? '' : String(entry.default_top_k),
-    Array.isArray(entry.output_modalities) ? entry.output_modalities.join(',') : '',
-    entry.pricing ? JSON.stringify(entry.pricing) : '',
-    entry.kind,
-    entry.source,
-    entry.source_label,
-    entry.lifecycle,
-    thinkingModeText,
-    speedModeText,
-  ]
-    .filter(Boolean)
-    .join('\n')
-    .toLowerCase()
-}
+const hasCatalogFilters = computed(() => Boolean(catalogQuery.value.trim()) || catalogOriginFilter.value !== 'all')
 
 const filteredCatalogEntries = computed(() => sortedCatalogEntries.value)
 
-function makeEntryKey(modelId: string, kind: ModelCatalogEntry['kind']) {
-  return `${modelId}/${kind}`
-}
-
-function resetEditor(adapterId = '', modelId = '') {
-  draft.value = createEmptyModelCatalogDraft(adapterId, modelId)
-  editingEntryKey.value = ''
-}
-
-function firstProviderAdapterId(provider: ProviderSummary) {
-  return provider.default_adapter || provider.adapters?.find((adapter) => adapter.enabled)?.adapter_id || ''
-}
-
-function editEntry(entry: ModelCatalogEntry) {
-  draft.value = createModelCatalogDraftFromEntry(entry)
-  editingEntryKey.value = makeEntryKey(entry.model_id, entry.kind)
-  actionError.value = ''
-  actionMessage.value = `Loaded ${entry.model_id} into the draft editor.`
-}
-
 function clearCatalogFilters() {
   catalogQuery.value = ''
-  catalogKindFilter.value = 'all'
   catalogOriginFilter.value = 'all'
   void loadCatalogPage(0)
 }
@@ -156,22 +72,6 @@ type ProviderModelThinkingModeWithDisabled = NonNullable<ModelCatalogEntry['thin
 
 type ProviderModelSpeedModeWithDisabled = NonNullable<ModelCatalogEntry['speed_modes']>[string] & {
   disabled?: boolean
-}
-
-function addThinkingModeDraft() {
-  draft.value.thinking_modes.push(createEmptyModelCatalogThinkingModeDraft())
-}
-
-function removeThinkingModeDraft(index: number) {
-  draft.value.thinking_modes.splice(index, 1)
-}
-
-function addSpeedModeDraft() {
-  draft.value.speed_modes.push(createEmptyModelCatalogSpeedModeDraft())
-}
-
-function removeSpeedModeDraft(index: number) {
-  draft.value.speed_modes.splice(index, 1)
 }
 
 function entryThinkingModeItems(entry: ModelCatalogEntry): Array<[string, ProviderModelThinkingModeWithDisabled]> {
@@ -223,7 +123,6 @@ function formatSamplingSummary(
 async function loadCatalogPage(offset = 0) {
   const response = await listModelCatalogEntries({
     q: catalogQuery.value,
-    kind: catalogKindFilter.value,
     origin: catalogOriginFilter.value,
     offset,
     limit: catalogLimit.value,
@@ -250,20 +149,6 @@ async function runCatalogSearch() {
   await loadCatalogPage(0)
 }
 
-async function saveDraft() {
-  submitting.value = true
-  try {
-    await saveCatalogEntryAction(draft.value)
-    catalogQuery.value = draft.value.model_id.trim()
-    catalogKindFilter.value = 'all'
-    catalogOriginFilter.value = 'all'
-    await loadCatalogPage(0)
-    editingEntryKey.value = makeEntryKey(draft.value.model_id.trim(), 'custom')
-  } finally {
-    submitting.value = false
-  }
-}
-
 async function refreshCatalog() {
   submitting.value = true
   try {
@@ -271,23 +156,6 @@ async function refreshCatalog() {
   } finally {
     submitting.value = false
   }
-}
-
-async function deleteEntry(entry: ModelCatalogEntry) {
-  submitting.value = true
-  try {
-    await deleteCatalogEntryAction(entry.model_id)
-    await loadCatalogPage(catalogOffset.value)
-    if (editingEntryKey.value === makeEntryKey(entry.model_id, entry.kind)) {
-      resetEditor()
-    }
-  } finally {
-    submitting.value = false
-  }
-}
-
-function isEntrySelected(entry: ModelCatalogEntry) {
-  return editingEntryKey.value === makeEntryKey(entry.model_id, entry.kind)
 }
 
 onMounted(() => {
@@ -380,11 +248,6 @@ onMounted(() => {
                 <div class="muted">Default adapter: {{ provider.default_adapter || 'auto' }}</div>
                 <div class="muted">Default model: {{ provider.default_model || 'unset' }}</div>
               </div>
-              <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
-                <button class="button" :disabled="submitting" @click="resetEditor(firstProviderAdapterId(provider))">
-                  Blank Draft
-                </button>
-              </div>
             </div>
           </div>
         </div>
@@ -407,13 +270,9 @@ onMounted(() => {
         <div class="page-header" style="align-items: flex-start">
           <div>
             <h3>Model Catalog</h3>
-            <p class="muted">
-              Refresh the runtime catalog, pull a live provider model into the draft editor, save custom entries from
-              official or live metadata, and delete custom entries.
-            </p>
+            <p class="muted">The catalog is read-only and exposes official entries only.</p>
           </div>
           <div class="button-row" style="flex-wrap: wrap; justify-content: flex-end">
-            <button class="button" :disabled="submitting" @click="resetEditor()">Blank Custom Entry</button>
             <button class="button primary" :disabled="submitting" @click="refreshCatalog">Refresh Catalog</button>
           </div>
         </div>
@@ -430,405 +289,20 @@ onMounted(() => {
         <p v-if="actionMessage" class="muted" style="margin-top: 12px">{{ actionMessage }}</p>
         <p v-if="actionError" class="muted" style="margin-top: 8px">{{ actionError }}</p>
         <p class="muted" style="margin-top: 12px">
-          Search the paged catalog list above or start from a blank draft, then adjust fields before saving.
+          Refresh rebuilds the official catalog from the current provider registry and replaces the cached snapshot.
         </p>
-
-        <div class="grid two" style="margin-top: 16px">
-          <div class="field">
-            <label class="label" for="catalog-model-id">Model ID</label>
-            <input id="catalog-model-id" v-model="draft.model_id" class="input mono" placeholder="gpt-4.1-mini" />
-          </div>
-
-          <div class="field">
-            <label class="label" for="catalog-display-name">Display Name</label>
-            <input id="catalog-display-name" v-model="draft.display_name" class="input" placeholder="Acme Reasoner" />
-          </div>
-          <div class="field">
-            <label class="label" for="catalog-origin">Origin</label>
-            <input id="catalog-origin" v-model="draft.origin" class="input" placeholder="OpenAI" />
-          </div>
-          <div class="field">
-            <label class="label" for="catalog-lifecycle">Lifecycle</label>
-            <select id="catalog-lifecycle" v-model="draft.lifecycle" class="select">
-              <option value="">Unset</option>
-              <option v-for="lifecycle in MODEL_LIFECYCLE_OPTIONS" :key="lifecycle" :value="lifecycle">
-                {{ lifecycle }}
-              </option>
-            </select>
-          </div>
-          <div class="field">
-            <label class="label" for="catalog-context-window">Context Window Tokens</label>
-            <input
-              id="catalog-context-window"
-              v-model="draft.context_window_tokens"
-              class="input mono"
-              inputmode="numeric"
-              placeholder="128000"
-            />
-          </div>
-
-          <div class="field">
-            <label class="label" for="catalog-max-input">Max Input Tokens</label>
-            <input
-              id="catalog-max-input"
-              v-model="draft.max_input_tokens"
-              class="input mono"
-              inputmode="numeric"
-              placeholder="200000"
-            />
-          </div>
-
-          <div class="field">
-            <label class="label" for="catalog-max-output">Max Output Tokens</label>
-            <input
-              id="catalog-max-output"
-              v-model="draft.max_output_tokens"
-              class="input mono"
-              inputmode="numeric"
-              placeholder="8192"
-            />
-          </div>
-        </div>
-
-        <div class="grid two" style="margin-top: 12px">
-          <div class="field">
-            <label class="label" for="catalog-default-temperature">Default Temperature</label>
-            <input
-              id="catalog-default-temperature"
-              v-model="draft.default_temperature"
-              class="input mono"
-              inputmode="decimal"
-              placeholder="0.55"
-            />
-          </div>
-
-          <div class="field">
-            <label class="label" for="catalog-default-top-p">Default Top P</label>
-            <input
-              id="catalog-default-top-p"
-              v-model="draft.default_top_p"
-              class="input mono"
-              inputmode="decimal"
-              placeholder="0.95"
-            />
-          </div>
-
-          <div class="field">
-            <label class="label" for="catalog-default-top-k">Default Top K</label>
-            <input
-              id="catalog-default-top-k"
-              v-model="draft.default_top_k"
-              class="input mono"
-              inputmode="numeric"
-              placeholder="64"
-            />
-          </div>
-        </div>
-
-        <div class="field" style="margin-top: 12px">
-          <label class="label" for="catalog-description">Description</label>
-          <textarea
-            id="catalog-description"
-            v-model="draft.description"
-            class="input"
-            rows="3"
-            placeholder="Optional model notes or behavior summary."
-          />
-        </div>
-
-        <div class="grid two" style="margin-top: 12px">
-          <label
-            class="muted"
-            for="catalog-assistant-reasoning-interleaved"
-            style="display: flex; gap: 8px; align-items: center"
-          >
-            <input
-              id="catalog-assistant-reasoning-interleaved"
-              v-model="draft.assistant_reasoning_interleaved"
-              type="checkbox"
-            />
-            Assistant reasoning interleaved
-          </label>
-          <div class="field">
-            <label class="label" for="catalog-assistant-reasoning-field">Assistant Reasoning Field</label>
-            <input
-              id="catalog-assistant-reasoning-field"
-              v-model="draft.assistant_reasoning_field"
-              class="input mono"
-              placeholder="reasoning_content"
-            />
-          </div>
-        </div>
-
-        <div class="grid two" style="margin-top: 12px">
-          <div class="field">
-            <label class="label" for="catalog-output-modalities">Output Modalities JSON</label>
-            <textarea
-              id="catalog-output-modalities"
-              v-model="draft.output_modalities_json"
-              class="input mono"
-              rows="3"
-              placeholder='["text","image"]'
-            />
-          </div>
-          <div class="field">
-            <label class="label" for="catalog-pricing">Pricing JSON</label>
-            <textarea
-              id="catalog-pricing"
-              v-model="draft.pricing_json"
-              class="input mono"
-              rows="3"
-              placeholder='{"input_usd_per_million_tokens":"1.25","output_usd_per_million_tokens":"10"}'
-            />
-          </div>
-        </div>
-
-        <div class="grid two" style="margin-top: 12px">
-          <label class="muted" for="catalog-capability-tool" style="display: flex; gap: 8px; align-items: center">
-            <input id="catalog-capability-tool" v-model="draft.tool_calling" type="checkbox" />
-            Tool calling
-          </label>
-          <label class="muted" for="catalog-capability-streaming" style="display: flex; gap: 8px; align-items: center">
-            <input id="catalog-capability-streaming" v-model="draft.streaming" type="checkbox" />
-            Streaming
-          </label>
-          <label class="muted" for="catalog-capability-reasoning" style="display: flex; gap: 8px; align-items: center">
-            <input id="catalog-capability-reasoning" v-model="draft.reasoning" type="checkbox" />
-            Reasoning
-          </label>
-          <label class="muted" for="catalog-capability-structured" style="display: flex; gap: 8px; align-items: center">
-            <input id="catalog-capability-structured" v-model="draft.structured_output" type="checkbox" />
-            Structured output
-          </label>
-          <label
-            class="muted"
-            for="catalog-capability-temperature"
-            style="display: flex; gap: 8px; align-items: center"
-          >
-            <input id="catalog-capability-temperature" v-model="draft.temperature_supported" type="checkbox" />
-            Temperature supported
-          </label>
-        </div>
-
-        <div class="page-header" style="margin-top: 16px; align-items: flex-start">
-          <div>
-            <h4 style="margin: 0">Thinking Modes</h4>
-            <p class="muted" style="margin: 4px 0 0">
-              Add per-model thinking presets with optional labels, descriptions, disabled state, and raw thinking
-              payloads.
-            </p>
-          </div>
-          <button class="button" :disabled="submitting" @click="addThinkingModeDraft">Add Thinking Mode</button>
-        </div>
-
-        <div v-if="draft.thinking_modes.length" class="stack" style="margin-top: 12px">
-          <div
-            v-for="(mode, index) in draft.thinking_modes"
-            :key="`${mode.name || 'thinking-mode'}-${index}`"
-            class="list-item"
-            style="padding: 12px"
-          >
-            <div class="page-header" style="align-items: flex-start">
-              <strong>{{ mode.name.trim() || `Thinking Mode ${index + 1}` }}</strong>
-              <button class="button danger" :disabled="submitting" @click="removeThinkingModeDraft(index)">
-                Remove
-              </button>
-            </div>
-
-            <div class="grid two" style="margin-top: 12px">
-              <div class="field">
-                <label class="label" :for="`catalog-thinking-mode-name-${index}`">Mode Name</label>
-                <input
-                  :id="`catalog-thinking-mode-name-${index}`"
-                  v-model="mode.name"
-                  class="input mono"
-                  placeholder="deep"
-                />
-              </div>
-              <div class="field">
-                <label class="label" :for="`catalog-thinking-mode-display-name-${index}`">Display Name</label>
-                <input
-                  :id="`catalog-thinking-mode-display-name-${index}`"
-                  v-model="mode.display_name"
-                  class="input"
-                  placeholder="Deep Thinking"
-                />
-              </div>
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-thinking-mode-description-${index}`">Description</label>
-              <textarea
-                :id="`catalog-thinking-mode-description-${index}`"
-                v-model="mode.description"
-                class="input"
-                rows="2"
-                placeholder="Optional behavior notes for this thinking mode."
-              />
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-thinking-mode-thinking-${index}`">Thinking JSON</label>
-              <textarea
-                :id="`catalog-thinking-mode-thinking-${index}`"
-                v-model="mode.thinking_json"
-                class="input mono"
-                rows="4"
-                placeholder='{"type":"budget","budget_tokens":20000}'
-              />
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-thinking-mode-request-override-${index}`">Request Override JSON</label>
-              <textarea
-                :id="`catalog-thinking-mode-request-override-${index}`"
-                v-model="mode.request_override_json"
-                class="input mono"
-                rows="4"
-                placeholder='{"reasoning":{"summary":"auto"},"include":["reasoning.encrypted_content"]}'
-              />
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-thinking-mode-adapter-overrides-${index}`">Adapter Overrides JSON</label>
-              <textarea
-                :id="`catalog-thinking-mode-adapter-overrides-${index}`"
-                v-model="mode.adapter_overrides_json"
-                class="input mono"
-                rows="4"
-                placeholder='{"openai":{"headers":{"x-example":"1"}}}'
-              />
-            </div>
-
-            <label
-              class="muted"
-              :for="`catalog-thinking-mode-disabled-${index}`"
-              style="display: flex; gap: 8px; align-items: center; margin-top: 12px"
-            >
-              <input :id="`catalog-thinking-mode-disabled-${index}`" v-model="mode.disabled" type="checkbox" />
-              Disable this thinking mode
-            </label>
-          </div>
-        </div>
-        <p v-else class="muted" style="margin-top: 12px">No thinking modes configured for this draft.</p>
-
-        <div class="page-header" style="margin-top: 16px; align-items: flex-start">
-          <div>
-            <h4 style="margin: 0">Speed Modes</h4>
-            <p class="muted" style="margin: 4px 0 0">
-              Add request overrides for low-latency or priority routes without multiplying model ids.
-            </p>
-          </div>
-          <button class="button" :disabled="submitting" @click="addSpeedModeDraft">Add Speed Mode</button>
-        </div>
-
-        <div v-if="draft.speed_modes.length" class="stack" style="margin-top: 12px">
-          <div
-            v-for="(mode, index) in draft.speed_modes"
-            :key="`${mode.name || 'speed-mode'}-${index}`"
-            class="list-item"
-            style="padding: 12px"
-          >
-            <div class="page-header" style="align-items: flex-start">
-              <strong>{{ mode.name.trim() || `Speed Mode ${index + 1}` }}</strong>
-              <button class="button danger" :disabled="submitting" @click="removeSpeedModeDraft(index)">Remove</button>
-            </div>
-
-            <div class="grid two" style="margin-top: 12px">
-              <div class="field">
-                <label class="label" :for="`catalog-speed-mode-name-${index}`">Mode Name</label>
-                <input
-                  :id="`catalog-speed-mode-name-${index}`"
-                  v-model="mode.name"
-                  class="input mono"
-                  placeholder="fast"
-                />
-              </div>
-              <div class="field">
-                <label class="label" :for="`catalog-speed-mode-display-name-${index}`">Display Name</label>
-                <input
-                  :id="`catalog-speed-mode-display-name-${index}`"
-                  v-model="mode.display_name"
-                  class="input"
-                  placeholder="Fast"
-                />
-              </div>
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-speed-mode-description-${index}`">Description</label>
-              <textarea
-                :id="`catalog-speed-mode-description-${index}`"
-                v-model="mode.description"
-                class="input"
-                rows="2"
-                placeholder="Optional behavior notes for this speed mode."
-              />
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-speed-mode-request-override-${index}`">Request Override JSON</label>
-              <textarea
-                :id="`catalog-speed-mode-request-override-${index}`"
-                v-model="mode.request_override_json"
-                class="input mono"
-                rows="5"
-                placeholder='{"headers":{"anthropic-beta":"fast-mode-2026-02-01"},"body_patch":{"service_tier":"priority"}}'
-              />
-            </div>
-
-            <div class="field" style="margin-top: 12px">
-              <label class="label" :for="`catalog-speed-mode-adapter-overrides-${index}`">Adapter Overrides JSON</label>
-              <textarea
-                :id="`catalog-speed-mode-adapter-overrides-${index}`"
-                v-model="mode.adapter_overrides_json"
-                class="input mono"
-                rows="5"
-                placeholder='{"openai":{"body_patch":{"service_tier":"priority"}}}'
-              />
-            </div>
-
-            <label
-              class="muted"
-              :for="`catalog-speed-mode-disabled-${index}`"
-              style="display: flex; gap: 8px; align-items: center; margin-top: 12px"
-            >
-              <input :id="`catalog-speed-mode-disabled-${index}`" v-model="mode.disabled" type="checkbox" />
-              Disable this speed mode
-            </label>
-          </div>
-        </div>
-        <p v-else class="muted" style="margin-top: 12px">No speed modes configured for this draft.</p>
-
-        <div class="button-row" style="margin-top: 16px; flex-wrap: wrap">
-          <button class="button primary" :disabled="submitting" @click="saveDraft">
-            {{ editingEntryKey ? 'Save Custom Entry' : 'Create Custom Entry' }}
-          </button>
-          <button class="button" :disabled="submitting" @click="resetEditor()">Reset Form</button>
-        </div>
       </section>
 
       <section class="card">
         <div class="page-header" style="align-items: flex-start">
           <div>
             <h3>Catalog Entries</h3>
-            <p class="muted">
-              Official entries are runtime catalog metadata. Custom entries are local overrides layered on top and are
-              the only entries you can delete.
-            </p>
+            <p class="muted">Browse the official catalog snapshot currently loaded into the runtime.</p>
           </div>
           <span class="badge">{{ catalogEntriesState.length }}/{{ catalogTotal }}</span>
         </div>
 
         <div class="settings-summary" style="margin-top: 12px">
-          <div class="summary-item">
-            <div class="summary-label">Official</div>
-            <div class="summary-value">{{ officialCatalogEntriesCount }}</div>
-          </div>
-          <div class="summary-item">
-            <div class="summary-label">Custom</div>
-            <div class="summary-value">{{ customCatalogEntriesCount }}</div>
-          </div>
           <div class="summary-item">
             <div class="summary-label">Models</div>
             <div class="summary-value">{{ catalogTotal }}</div>
@@ -839,7 +313,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div class="grid three" style="margin-top: 12px">
+        <div class="grid two" style="margin-top: 12px">
           <div class="field">
             <label class="label" for="catalog-entry-search">Find Entries</label>
             <input
@@ -848,14 +322,6 @@ onMounted(() => {
               class="input mono"
               placeholder="model, origin, mode, description"
             />
-          </div>
-          <div class="field">
-            <label class="label" for="catalog-entry-kind-filter">Kind</label>
-            <select id="catalog-entry-kind-filter" v-model="catalogKindFilter" class="select">
-              <option value="all">All entries</option>
-              <option value="official">Official only</option>
-              <option value="custom">Custom only</option>
-            </select>
           </div>
           <div class="field">
             <label class="label" for="catalog-entry-origin-filter">Origin</label>
@@ -884,12 +350,7 @@ onMounted(() => {
         </div>
 
         <div v-if="filteredCatalogEntries.length" class="list" style="margin-top: 12px">
-          <div
-            v-for="entry in filteredCatalogEntries"
-            :key="makeEntryKey(entry.model_id, entry.kind)"
-            class="list-item"
-            :style="isEntrySelected(entry) ? 'border-color: var(--accent-color, #444);' : ''"
-          >
+          <div v-for="entry in filteredCatalogEntries" :key="entry.model_id" class="list-item">
             <div class="page-header" style="align-items: flex-start">
               <div>
                 <div>
@@ -897,10 +358,8 @@ onMounted(() => {
                 </div>
                 <div class="muted">
                   {{ entry.display_name || 'Unnamed model' }} · {{ entry.origin || 'Unknown origin' }} ·
-                  {{ entry.kind }} ·
                   {{ entry.source_label || entry.source }}
                 </div>
-                <div v-if="entry.kind === 'custom'" class="muted">Custom entry saved for this model.</div>
                 <div v-if="entry.lifecycle" class="muted">{{ entry.lifecycle }}</div>
                 <div v-if="entry.description" class="muted">{{ entry.description }}</div>
                 <div v-if="formatOutputModalities(entry.output_modalities)" class="muted">
@@ -963,21 +422,6 @@ onMounted(() => {
                   </div>
                 </div>
               </div>
-              <span v-if="entry.kind === 'custom'" class="badge">custom</span>
-            </div>
-
-            <div class="button-row" style="margin-top: 10px; flex-wrap: wrap">
-              <button class="button" :disabled="submitting" @click="editEntry(entry)">
-                {{ entry.kind === 'custom' ? 'Edit Custom Entry' : 'Create Custom Entry' }}
-              </button>
-              <button
-                v-if="entry.kind === 'custom'"
-                class="button danger"
-                :disabled="submitting"
-                @click="deleteEntry(entry)"
-              >
-                Delete Custom Entry
-              </button>
             </div>
           </div>
         </div>

@@ -7604,12 +7604,7 @@ impl App {
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ModelCatalog,
                 label: "Model Catalog".to_string(),
-                summary: format!(
-                    "{} entries · {} official · {} custom",
-                    model_catalog.summary.entry_count,
-                    model_catalog.summary.official_entry_count,
-                    model_catalog.summary.custom_entry_count
-                ),
+                summary: format!("{} entries", model_catalog.summary.entry_count),
                 description:
                     "Browse the resolved model catalog, inspect entry metadata, and refresh the local cache."
                         .to_string(),
@@ -9229,8 +9224,6 @@ impl App {
                 last_successful_source: None,
                 last_error: None,
                 entry_count: 0,
-                official_entry_count: 0,
-                custom_entry_count: 0,
             },
             total: 0,
             offset: 0,
@@ -14207,10 +14200,7 @@ fn provider_studio_catalog_match_entry<'a>(
     entries
         .iter()
         .filter(|entry| entry.model_id == model.id.as_str() || entry.model_id == lookup_id)
-        .min_by_key(|entry| match entry.kind {
-            agena_api_server::local_api::ModelCatalogEntryKind::Custom => 0,
-            agena_api_server::local_api::ModelCatalogEntryKind::Official => 1,
-        })
+        .min_by_key(|entry| entry.model_id.as_str())
 }
 
 impl SessionViewMode {

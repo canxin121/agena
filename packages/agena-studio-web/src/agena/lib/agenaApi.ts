@@ -411,12 +411,10 @@ export type ProviderAdapterSummary = {
   configured_model_count: number
 }
 
-export type ModelCatalogSourceKind = 'generated' | 'cache' | 'custom'
-export type ModelCatalogEntryKind = 'official' | 'custom'
+export type ModelCatalogSourceKind = 'generated' | 'cache'
 
 export type ModelCatalogEntry = {
   model_id: string
-  kind: ModelCatalogEntryKind
   source: ModelCatalogSourceKind
   source_label?: string | null
   display_name?: string | null
@@ -453,8 +451,6 @@ export type ModelCatalogResponse = {
   last_successful_source?: ModelCatalogSourceKind | null
   last_error?: string | null
   entry_count: number
-  official_entry_count: number
-  custom_entry_count: number
 }
 
 export type ModelCatalogSummary = ModelCatalogResponse
@@ -474,41 +470,9 @@ export type ModelCatalogLookupResponse = {
 
 export type ModelCatalogListQuery = {
   q?: string
-  kind?: 'official' | 'custom' | 'all'
   origin?: string
   offset?: number
   limit?: number
-}
-
-export type ModelCatalogEntryWriteRequest = {
-  model_id: string
-  lifecycle?: string | null
-  context_window_tokens?: number | null
-  max_input_tokens?: number | null
-  max_output_tokens?: number | null
-  description?: string | null
-  knowledge_cutoff?: string | null
-  release_date?: string | null
-  last_updated?: string | null
-  open_weights?: boolean | null
-  default_thinking_mode?: string | null
-  supports_parallel_tool_calls?: boolean | null
-  supports_verbosity?: boolean | null
-  default_verbosity?: string | null
-  default_temperature?: string | null
-  default_top_p?: string | null
-  default_top_k?: number | null
-  assistant_reasoning_interleaved?: boolean | null
-  assistant_reasoning_field?: string | null
-  output_modalities?: string[] | null
-  pricing?: ProviderModelPricing | null
-  display_name?: string | null
-  origin?: string | null
-  thinking_modes?: Record<string, ProviderModelThinkingMode>
-  speed_modes?: Record<string, ProviderModelSpeedMode>
-  input?: unknown
-  features?: unknown
-  capabilities?: Record<string, unknown>
 }
 
 export type ConfigSettingsPatchRequest = {
@@ -1053,7 +1017,6 @@ export async function getSettings(input: ConfigSettingsGetRequest = {}): Promise
 export async function listModelCatalogEntries(query: ModelCatalogListQuery = {}): Promise<ModelCatalogListResponse> {
   const params = new URLSearchParams()
   if (query.q?.trim()) params.set('q', query.q.trim())
-  if (query.kind && query.kind !== 'all') params.set('kind', query.kind)
   if (query.origin?.trim()) params.set('origin', query.origin.trim())
   if (query.offset !== undefined) params.set('offset', String(query.offset))
   if (query.limit !== undefined) params.set('limit', String(query.limit))
@@ -1073,23 +1036,6 @@ export async function lookupModelCatalogEntries(modelIds: string[]): Promise<Mod
 export async function refreshModelCatalog(): Promise<ModelCatalogResponse> {
   return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog/refresh', {
     method: 'POST',
-  })
-}
-
-export async function upsertModelCatalogEntry(input: ModelCatalogEntryWriteRequest): Promise<ModelCatalogResponse> {
-  return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog/entries', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(input),
-  })
-}
-
-export async function deleteModelCatalogEntry(modelId: string): Promise<ModelCatalogResponse> {
-  const params = new URLSearchParams({
-    model_id: modelId,
-  })
-  return await apiJson<ModelCatalogResponse>(`/api/v1/model-catalog/entries?${params.toString()}`, {
-    method: 'DELETE',
   })
 }
 

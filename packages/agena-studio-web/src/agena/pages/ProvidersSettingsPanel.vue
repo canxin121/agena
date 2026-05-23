@@ -61,8 +61,6 @@ const props = defineProps<{
 function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSummary {
   return {
     entry_count: entries.length,
-    official_entry_count: entries.filter((entry) => entry.kind !== 'custom').length,
-    custom_entry_count: entries.filter((entry) => entry.kind === 'custom').length,
   }
 }
 
@@ -117,15 +115,12 @@ const providerConfigCount = computed(() => props.providers.length)
 function mergeCatalogEntries(existing: ModelCatalogEntry[], incoming: ModelCatalogEntry[]) {
   const merged = new Map<string, ModelCatalogEntry>()
   for (const entry of existing) {
-    merged.set(`${entry.model_id}/${entry.kind}`, entry)
+    merged.set(entry.model_id, entry)
   }
   for (const entry of incoming) {
-    merged.set(`${entry.model_id}/${entry.kind}`, entry)
+    merged.set(entry.model_id, entry)
   }
-  return [...merged.values()].sort((left, right) => {
-    if (left.model_id !== right.model_id) return left.model_id.localeCompare(right.model_id)
-    return left.kind.localeCompare(right.kind)
-  })
+  return [...merged.values()].sort((left, right) => left.model_id.localeCompare(right.model_id))
 }
 
 const cachedCatalogEntries = computed(() => mergeCatalogEntries(catalogLookupEntries.value, catalogSearchEntries.value))
@@ -1021,15 +1016,12 @@ onMounted(() => {
       </p>
 
       <div v-if="sortedCatalogEntries.length" class="record-list">
-        <article v-for="entry in sortedCatalogEntries" :key="`${entry.model_id}/${entry.kind}`" class="record-card">
+        <article v-for="entry in sortedCatalogEntries" :key="entry.model_id" class="record-card">
           <div class="record-header">
             <div>
-              <p class="settings-panel-kicker">{{ entry.source_label || entry.source || entry.kind }}</p>
+              <p class="settings-panel-kicker">{{ entry.source_label || entry.source }}</p>
               <h3 class="record-title">{{ entry.display_name || entry.model_id }}</h3>
               <div class="record-subtitle mono">{{ entry.model_id }}</div>
-            </div>
-            <div class="record-meta">
-              <span class="badge neutral">{{ entry.kind }}</span>
             </div>
           </div>
           <p v-if="entry.origin" class="muted">Origin: {{ entry.origin }}</p>

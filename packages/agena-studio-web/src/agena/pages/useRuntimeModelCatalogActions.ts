@@ -2,14 +2,13 @@ import type { Ref } from 'vue'
 
 import type {
   ModelCatalogEntry,
-  ModelCatalogEntryWriteRequest,
   ProviderModel,
   ProviderModelPricing,
   ProviderModelSpeedMode,
   ProviderModelSpeedModeRequestOverride,
   ProviderModelThinkingMode,
 } from '../lib/agenaApi'
-import { deleteModelCatalogEntry, refreshModelCatalog, upsertModelCatalogEntry } from '../lib/agenaApi'
+import { refreshModelCatalog } from '../lib/agenaApi'
 
 export type RuntimeModelCatalogActionsInput = {
   actionError: Ref<string>
@@ -19,15 +18,11 @@ export type RuntimeModelCatalogActionsInput = {
 }
 
 export type RuntimeModelCatalogActionsDeps = {
-  deleteModelCatalogEntry: typeof deleteModelCatalogEntry
   refreshModelCatalog: typeof refreshModelCatalog
-  upsertModelCatalogEntry: typeof upsertModelCatalogEntry
 }
 
 const defaultDeps: RuntimeModelCatalogActionsDeps = {
-  deleteModelCatalogEntry,
   refreshModelCatalog,
-  upsertModelCatalogEntry,
 }
 
 export type ModelCatalogEditableDraft = {
@@ -74,8 +69,6 @@ export type ModelCatalogSpeedModeEditableDraft = {
   request_override_json: string
   adapter_overrides_json: string
 }
-
-export const MODEL_LIFECYCLE_OPTIONS = ['active', 'preview', 'beta', 'alpha', 'experimental', 'deprecated'] as const
 
 function normalizeOptionalText(value: string): string | null {
   const normalized = String(value || '').trim()
@@ -355,7 +348,7 @@ export function findCatalogEntryForProviderModel(
     ...new Set([String(model.id || '').trim(), catalogLookupIdForProviderModel(model)].filter(Boolean)),
   ]
   const matches = entries.filter((entry) => lookupIds.includes(entry.model_id))
-  return matches.find((entry) => entry.kind === 'custom') || matches[0] || null
+  return matches[0] || null
 }
 
 export function createModelCatalogDraftFromProviderSelection(
@@ -454,7 +447,7 @@ function buildModelCatalogSpeedModes(
   return Object.keys(normalized).length ? (normalized as Record<string, ProviderModelSpeedMode>) : undefined
 }
 
-export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft): ModelCatalogEntryWriteRequest {
+function buildModelCatalogDefinitionRecord(draft: ModelCatalogEditableDraft): Record<string, unknown> {
   const supportedFeatures: string[] = []
   if (draft.tool_calling) supportedFeatures.push('tool_calling')
   if (draft.streaming) supportedFeatures.push('streaming')
@@ -485,7 +478,7 @@ export function buildModelCatalogWriteRequest(draft: ModelCatalogEditableDraft):
 }
 
 export function buildConfiguredProviderModelFromDraft(draft: ModelCatalogEditableDraft): Record<string, unknown> {
-  const request = buildModelCatalogWriteRequest(draft) as Record<string, unknown>
+  const request = buildModelCatalogDefinitionRecord(draft)
   delete request.model_id
   delete request.origin
 
@@ -522,45 +515,7 @@ export function useRuntimeModelCatalogActions(
     }
   }
 
-  async function saveCatalogEntryAction(draft: ModelCatalogEditableDraft) {
-    input.actionMessage.value = ''
-    input.actionError.value = ''
-    try {
-      const request = buildModelCatalogWriteRequest(draft)
-      if (!request.model_id) {
-        input.actionError.value = 'model_id is required.'
-        return
-      }
-
-      await deps.upsertModelCatalogEntry(request)
-      if (input.reloadCatalogEntries) {
-        await input.reloadCatalogEntries()
-      }
-      input.actionMessage.value = `Saved catalog entry ${request.model_id}.`
-      await input.load()
-    } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
-    }
-  }
-
-  async function deleteCatalogEntryAction(modelId: string) {
-    input.actionMessage.value = ''
-    input.actionError.value = ''
-    try {
-      await deps.deleteModelCatalogEntry(modelId)
-      if (input.reloadCatalogEntries) {
-        await input.reloadCatalogEntries()
-      }
-      input.actionMessage.value = `Deleted local catalog override ${modelId}.`
-      await input.load()
-    } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
-    }
-  }
-
   return {
-    deleteCatalogEntryAction,
     refreshCatalogAction,
-    saveCatalogEntryAction,
   }
 }

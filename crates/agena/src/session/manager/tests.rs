@@ -2114,7 +2114,7 @@ fn duplicate_user_input_reply_is_idempotent() {
         let db = open_temp_database(&workspace.root, "user-input-idempotent.db").await;
         let manager = build_manager_with_provider_on_db(
             &workspace.root,
-            db,
+            db.clone(),
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::allow_all(),
             SessionManagerConfig::default(),
@@ -2252,6 +2252,151 @@ fn duplicate_user_input_reply_is_idempotent() {
                 }),
             "user input operation should complete after duplicate reply: messages={:?}",
             session.messages,
+        );
+    });
+}
+
+#[test]
+fn replied_host_user_input_survives_restart_and_restores_answer_from_history() {
+    run_async_with_large_stack(async move {
+        let workspace = TempWorkspace::new();
+        let db = open_temp_database(&workspace.root, "host-user-input-resume.db").await;
+        let first = build_manager_with_provider_on_db(
+            &workspace.root,
+            db.clone(),
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        let created = first
+            .create_session(SessionCreateRequest {
+                title: "host-user-input-resume".to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+
+        let state = first.execution_state();
+        let session = first
+            .get_session(created.id)
+            .await
+            .expect("session should load");
+        let ids = first
+            .store
+            .reserve_message_ids(2)
+            .await
+            .expect("message ids should reserve");
+        let todo_input = crate::message::StructuredObject::try_from(serde_json::json!({
+            "action": "write",
+            "items": [{
+                "content": "resume host input",
+                "status": "completed",
+                "priority": "low",
+            }],
+        }))
+        .expect("todo tool input should serialize");
+        let mut assistant_message = build_message(
+            ids,
+            Role::Assistant,
+            MessageStatus::Pending,
+            vec![PartContent::Operation(OperationPart::pending(
+                1,
+                ToolInvocation::new("todo", todo_input),
+                "todo",
+                TimeRange::default(),
+            ))],
+            MessageMetadata::default(),
+        );
+        assistant_message.parts[0].operation_id = Some("call_host_input_1".to_string());
+        let session = first
+            .store
+            .append_history_items(
+                session,
+                vec![EventKind::AssistantMessageCompleted(
+                    crate::session::history::AssistantMessageCompleted {
+                        message_id: HistoryMessageId(assistant_message.id),
+                        turn_id: HistoryTurnId::new(),
+                        created_at: assistant_message.created_at,
+                        content: TranscriptContent::from_message_lossy(&assistant_message),
+                        parts: assistant_message.parts.clone(),
+                        usage: None,
+                        finish_reason: FinishReason::ToolCalls,
+                        metadata: assistant_message.metadata.clone(),
+                    },
+                )],
+                state.cache_policy(),
+            )
+            .await
+            .expect("pending tool should persist");
+        let pending_tool = session
+            .pending_tools()
+            .into_iter()
+            .next()
+            .expect("pending tool should exist");
+        let blocked = first
+            .apply_user_input_request_with_id(
+                session,
+                &pending_tool,
+                AskUserToolInput {
+                    questions: vec![UserInputQuestion {
+                        id: "confirm".to_string(),
+                        header: "Confirm".to_string(),
+                        question: "Should the resumed host tool continue?".to_string(),
+                        options: vec![
+                            UserInputOption {
+                                label: "yes".to_string(),
+                                description: "Continue the resumed tool.".to_string(),
+                            },
+                            UserInputOption {
+                                label: "no".to_string(),
+                                description: "Stop the resumed tool.".to_string(),
+                            },
+                        ],
+                        multiple: false,
+                        allow_custom: false,
+                    }],
+                },
+                "host-input:1:1:0".to_string(),
+                state.clone(),
+            )
+            .await
+            .expect("host user input request should persist");
+        let request_id = pending_user_input_request_id(&blocked);
+        drop(first);
+
+        let second = build_manager_with_provider_on_db(
+            &workspace.root,
+            db,
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+            SessionManagerConfig::default(),
+            ContextPolicy::default(),
+            ScriptedProvider,
+        )
+        .await;
+        resume_event_sequence(&second).await;
+
+        let completed = second
+            .reply_user_input(SessionUserInputReplyRequest {
+                session_id: created.id,
+                options: run_options(),
+                reply: UserInputReply {
+                    request_id: request_id.clone(),
+                    kind: UserInputReplyKind::Submit,
+                    reason: None,
+                    answers: BTreeMap::from([("confirm".to_string(), vec!["yes".to_string()])]),
+                },
+            })
+            .await
+            .expect("host user input reply should survive restart without a waiter");
+        let (status, error, _) = operation_snapshot(&completed, "call_host_input_1");
+        assert_eq!(status, ExecutionStatus::Completed);
+        assert!(
+            error.is_none(),
+            "replayed host tool should complete cleanly"
         );
     });
 }

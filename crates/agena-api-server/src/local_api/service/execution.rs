@@ -216,6 +216,7 @@ impl ApiService {
         })?;
 
         let scheduler_jobs = list_scheduled_jobs(manager).await;
+        let pending_interactive_requests = pending_interactive_requests(session);
 
         Ok(SessionExecutionResource {
             session: session_resource,
@@ -250,8 +251,13 @@ impl ApiService {
                     .map(|path| path.display().to_string()),
                 task_id: session.runtime().execution.task_id.clone(),
             },
-            pending_permission_requests: pending_permission_requests(session),
-            pending_user_input_requests: pending_user_input_requests(session),
+            pending_interactive_requests: pending_interactive_requests.clone(),
+            pending_permission_requests: pending_permission_requests(
+                pending_interactive_requests.as_slice(),
+            ),
+            pending_user_input_requests: pending_user_input_requests(
+                pending_interactive_requests.as_slice(),
+            ),
             goal: match session.goal.as_ref() {
                 Some(goal) => Some(self.session_goal_resource(manager, session, goal).await?),
                 None => None,
@@ -408,42 +414,24 @@ fn scheduled_job_run_resource(run: agena_scheduler::JobRunRecord) -> ScheduledJo
     }
 }
 
-fn pending_permission_requests(session: &Session) -> Vec<agena::permission::PermissionRequest> {
-    session
-        .messages
-        .iter()
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| {
-            if part.status != ExecutionStatus::Pending {
-                return None;
-            }
+fn pending_interactive_requests(session: &Session) -> Vec<agena::message::InteractiveRequest> {
+    session.pending_interactive_requests()
+}
 
-            match part.content.as_ref()? {
-                PartContent::Request(agena::message::RequestPart::Permission(
-                    PermissionRequestPart { request, reply },
-                )) => reply.is_none().then_some(request.clone()),
-                _ => None,
-            }
-        })
+fn pending_permission_requests(
+    requests: &[agena::message::InteractiveRequest],
+) -> Vec<agena::permission::PermissionRequest> {
+    requests
+        .iter()
+        .filter_map(|request| request.as_permission().cloned())
         .collect()
 }
 
-fn pending_user_input_requests(session: &Session) -> Vec<UserInputRequest> {
-    session
-        .messages
+fn pending_user_input_requests(
+    requests: &[agena::message::InteractiveRequest],
+) -> Vec<UserInputRequest> {
+    requests
         .iter()
-        .flat_map(|message| message.parts.iter())
-        .filter_map(|part| {
-            if part.status != ExecutionStatus::Pending {
-                return None;
-            }
-
-            match part.content.as_ref()? {
-                PartContent::Request(agena::message::RequestPart::UserInput(
-                    UserInputRequestPart { request, reply },
-                )) => reply.is_none().then_some(request.clone()),
-                _ => None,
-            }
-        })
+        .filter_map(|request| request.as_user_input().cloned())
         .collect()
 }

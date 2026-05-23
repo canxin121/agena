@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
@@ -323,6 +323,35 @@ struct PendingHostUserInput {
     response: oneshot::Sender<crate::plugin::sdk::host_api::AskUserResponse>,
 }
 
+type HostUserInputSequenceKey = (i64, i64);
+
+struct HostUserInputSequenceGuard {
+    sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
+    key: HostUserInputSequenceKey,
+}
+
+impl HostUserInputSequenceGuard {
+    fn new(
+        sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
+        session_id: i64,
+        call_id: i64,
+    ) -> Self {
+        let key = (session_id, call_id);
+        if let Ok(mut guard) = sequences.lock() {
+            guard.remove(&key);
+        }
+        Self { sequences, key }
+    }
+}
+
+impl Drop for HostUserInputSequenceGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.sequences.lock() {
+            guard.remove(&self.key);
+        }
+    }
+}
+
 #[derive(Clone)]
 struct SessionManagerState {
     processor: SessionProcessor,
@@ -363,6 +392,7 @@ pub struct SessionManager {
     turn_registry: Arc<TurnRegistry>,
     reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
+    host_user_input_sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
 }
 
 impl SessionManager {
@@ -375,6 +405,7 @@ impl SessionManager {
             turn_registry: Arc::clone(&self.turn_registry),
             reply_session_locks: Arc::clone(&self.reply_session_locks),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
+            host_user_input_sequences: Arc::clone(&self.host_user_input_sequences),
         }
     }
 
@@ -413,6 +444,7 @@ impl SessionManager {
             turn_registry: Arc::new(TurnRegistry::new()),
             reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
+            host_user_input_sequences: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
@@ -465,14 +497,33 @@ impl SessionManager {
                     "pending tool not found for host user input: session={session_id}, call={call_id}"
                 ))
             })?;
-        let request_id = format!("host-input:{call_id}:{}", uuid::Uuid::new_v4().simple());
-        let (response_tx, response_rx) = oneshot::channel();
-        self.host_user_input_waiters.lock().await.insert(
-            request_id.clone(),
-            PendingHostUserInput {
-                response: response_tx,
-            },
-        );
+        let resolved_pending = resolve_pending_tool(&session, &pending_tool)?;
+        let sequence_index = self.next_host_user_input_sequence(session_id, call_id);
+        if let Some(existing) = session.user_input_request_for_operation(
+            resolved_pending.operation_id.as_str(),
+            sequence_index,
+        ) {
+            if existing.request.questions != request.questions {
+                return Err(AppError::Internal(format!(
+                    "host user input request mismatch for operation {} at step {}",
+                    resolved_pending.operation_id, sequence_index
+                )));
+            }
+            if let Some(reply) = existing.reply.as_ref() {
+                return host_user_input_response(&existing.request, reply);
+            }
+            let response_rx = self
+                .install_host_user_input_waiter(existing.request.request_id.clone())
+                .await;
+            return self
+                .await_host_user_input_reply(existing.request.request_id.as_str(), response_rx)
+                .await;
+        }
+
+        let request_id = host_user_input_request_id(session_id, call_id, sequence_index);
+        let response_rx = self
+            .install_host_user_input_waiter(request_id.clone())
+            .await;
         if let Err(err) = self
             .apply_user_input_request_with_id(
                 session,
@@ -489,11 +540,8 @@ impl SessionManager {
                 .remove(&request_id);
             return Err(err);
         }
-        response_rx.await.map_err(|_| {
-            AppError::Internal(format!(
-                "host user input waiter closed before reply: {request_id}"
-            ))
-        })
+        self.await_host_user_input_reply(request_id.as_str(), response_rx)
+            .await
     }
 
     pub async fn execute_host_invoked_tool(
@@ -502,6 +550,7 @@ impl SessionManager {
         call_id: i64,
         invocation: ToolInvocation,
     ) -> Result<ToolInvocationExecution, AppError> {
+        let _host_user_input_sequence = self.host_user_input_sequence_guard(session_id, call_id);
         let session = self.get_session(session_id).await?;
         let state = self.execution_state();
         let scoped_executor = state
@@ -529,6 +578,55 @@ impl SessionManager {
         .await
         .map_err(|err| AppError::Internal(format!("host-invoked tool task failed: {err}")))?
         .map_err(tool_error_to_app_error)
+    }
+
+    fn next_host_user_input_sequence(&self, session_id: i64, call_id: i64) -> usize {
+        let mut guard = self
+            .host_user_input_sequences
+            .lock()
+            .expect("host user input sequence lock poisoned");
+        let sequence = guard.entry((session_id, call_id)).or_insert(0);
+        let next = *sequence;
+        *sequence += 1;
+        next
+    }
+
+    fn host_user_input_sequence_guard(
+        &self,
+        session_id: i64,
+        call_id: i64,
+    ) -> HostUserInputSequenceGuard {
+        HostUserInputSequenceGuard::new(
+            Arc::clone(&self.host_user_input_sequences),
+            session_id,
+            call_id,
+        )
+    }
+
+    async fn install_host_user_input_waiter(
+        &self,
+        request_id: String,
+    ) -> oneshot::Receiver<crate::plugin::sdk::host_api::AskUserResponse> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.host_user_input_waiters.lock().await.insert(
+            request_id,
+            PendingHostUserInput {
+                response: response_tx,
+            },
+        );
+        response_rx
+    }
+
+    async fn await_host_user_input_reply(
+        &self,
+        request_id: &str,
+        response_rx: oneshot::Receiver<crate::plugin::sdk::host_api::AskUserResponse>,
+    ) -> Result<crate::plugin::sdk::host_api::AskUserResponse, AppError> {
+        response_rx.await.map_err(|_| {
+            AppError::Internal(format!(
+                "host user input waiter closed before reply: {request_id}"
+            ))
+        })
     }
 
     pub fn with_config(self, config: SessionManagerConfig) -> Self {
@@ -999,6 +1097,10 @@ fn ask_user_title(request: &UserInputRequest) -> String {
         }
         count => format!("Ask user ({count})"),
     }
+}
+
+fn host_user_input_request_id(session_id: i64, call_id: i64, sequence_index: usize) -> String {
+    format!("host-input:{session_id}:{call_id}:{sequence_index}")
 }
 
 fn user_input_execution(

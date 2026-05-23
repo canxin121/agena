@@ -252,6 +252,8 @@ pub struct SessionExecutionResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automation: Option<SessionAutomationResource>,
     pub execution: SessionExecutionContextResource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_interactive_requests: Vec<InteractiveRequest>,
     pub pending_permission_requests: Vec<PermissionRequest>,
     pub pending_user_input_requests: Vec<UserInputRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]

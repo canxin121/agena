@@ -765,9 +765,6 @@ impl App {
 
     fn composer_status_parts(&self) -> Vec<String> {
         let mut parts = self.current_session_status_parts();
-        if self.transcript.submitting {
-            parts.push(ui_text::t(&self.i18n, "transcript-header-busy"));
-        }
         if self.transcript.loading_initial {
             parts.push(ui_text::t(&self.i18n, "transcript-header-loading"));
         } else if self.transcript.loading_older {
@@ -822,19 +819,21 @@ impl App {
             parts.push(format!("slash {suffix}"));
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
-            if !execution.pending_user_input_requests.is_empty() {
+            let (permission_count, user_input_count) =
+                pending_interactive_counts_for_execution(execution);
+            if user_input_count > 0 {
                 parts.push(self.i18n.text_args(
                     "composer-status-pending-user-input",
                     &crate::fl_args!(
-                        "count" => execution.pending_user_input_requests.len() as i64,
+                        "count" => user_input_count as i64,
                     ),
                 ));
             }
-            if !execution.pending_permission_requests.is_empty() {
+            if permission_count > 0 {
                 parts.push(self.i18n.text_args(
                     "composer-status-pending-approval",
                     &crate::fl_args!(
-                        "count" => execution.pending_permission_requests.len() as i64,
+                        "count" => permission_count as i64,
                     ),
                 ));
             }

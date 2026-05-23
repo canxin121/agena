@@ -7,9 +7,10 @@ mod structured;
 mod tool;
 
 pub use activity::{
-    ErrorPart, FileChangeEntry, FileChangeKind, PermissionRequestPart, ReasoningPart, RequestPart,
-    TextPart, TodoItem, TodoPriority, TodoStatus, UserInputOption, UserInputQuestion,
-    UserInputReply, UserInputReplyKind, UserInputRequest, UserInputRequestPart, WebSearchResult,
+    ErrorPart, FileChangeEntry, FileChangeKind, InteractiveRequest, InteractiveRequestKind,
+    PermissionRequestPart, ReasoningPart, RequestPart, TextPart, TodoItem, TodoPriority,
+    TodoStatus, UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind,
+    UserInputRequest, UserInputRequestPart, WebSearchResult,
 };
 pub(crate) use activity::{deserialize_user_input_answers, user_input_answers_is_empty};
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};

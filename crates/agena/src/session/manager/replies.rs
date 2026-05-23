@@ -257,11 +257,7 @@ impl SessionManager {
             input_part.status = ExecutionStatus::Completed;
         }
 
-        let is_host_request = self
-            .host_user_input_waiters
-            .lock()
-            .await
-            .contains_key(request.reply.request_id.as_str());
+        let is_host_request = request.reply.request_id.starts_with("host-input:");
         if is_host_request {
             let response = host_user_input_response(&user_input_request, &request.reply)?;
             let tool_part_ref = session
@@ -291,33 +287,31 @@ impl SessionManager {
                 let _ = waiter.response.send(response);
                 return Ok(session);
             }
-            return Err(AppError::Internal(format!(
-                "host user input waiter disappeared before reply delivery: {}",
-                request.reply.request_id
-            )));
-        }
-        if request.reply.request_id.starts_with("host-input:") {
-            return Err(AppError::Internal(format!(
-                "host user input waiter missing: {}",
-                request.reply.request_id
-            )));
-        }
-
-        match request.reply.kind {
-            UserInputReplyKind::Submit => {
-                let execution = user_input_execution(&user_input_request, &request.reply)?;
-                session = self
-                    .apply_tool_success(session, &pending.tool, execution, None, state.clone())
-                    .await?;
-            }
-            UserInputReplyKind::Cancel => {
-                let reason =
-                    request.reply.reason.clone().unwrap_or_else(|| {
+            tracing::info!(
+                target: "agena::session::reply",
+                session_id = request.session_id,
+                request_id = %request.reply.request_id,
+                "host user input waiter missing; resuming by replaying the pending tool"
+            );
+            session = self
+                .resolve_pending_tool(session, pending.tool.clone(), state.clone())
+                .await?;
+        } else {
+            match request.reply.kind {
+                UserInputReplyKind::Submit => {
+                    let execution = user_input_execution(&user_input_request, &request.reply)?;
+                    session = self
+                        .apply_tool_success(session, &pending.tool, execution, None, state.clone())
+                        .await?;
+                }
+                UserInputReplyKind::Cancel => {
+                    let reason = request.reply.reason.clone().unwrap_or_else(|| {
                         "user declined to answer requested questions".to_string()
                     });
-                session = self
-                    .apply_tool_failure(session, &pending.tool, reason, None, state.clone())
-                    .await?;
+                    session = self
+                        .apply_tool_failure(session, &pending.tool, reason, None, state.clone())
+                        .await?;
+                }
             }
         }
 
@@ -3204,6 +3198,8 @@ impl SessionManager {
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        let _host_user_input_sequence =
+            self.host_user_input_sequence_guard(session_id, pending_tool.call_id);
         let scoped_executor = state
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution);
@@ -3221,6 +3217,8 @@ impl SessionManager {
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        let _host_user_input_sequence =
+            self.host_user_input_sequence_guard(session_id, pending_tool.call_id);
         let scoped_executor = state
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution);

@@ -222,7 +222,7 @@ impl RuntimeSnapshot {
         // Make the active host visible to provider request builders for the
         // `chat.headers` hook (no constructor threading required).
         super::plugin_slot::install(Arc::clone(&plugins));
-        let mut model_catalog_config = ModelCatalogConfig::for_workspace_root(workspace_root);
+        let mut model_catalog_config = ModelCatalogConfig::default();
         model_catalog_config.cache_max_age_secs =
             resolution.config.runtime.model_catalog.cache_max_age_secs;
         let catalog_source_providers = Arc::new(
@@ -230,10 +230,11 @@ impl RuntimeSnapshot {
                 .build_provider_registry_with_plugins_and_catalog(plugins.as_ref(), None)
                 .await?,
         );
-        let model_catalog_store = match database.as_ref() {
-            Some(db) => ModelCatalogStore::new_database(model_catalog_config, Arc::clone(db)),
-            None => ModelCatalogStore::new(model_catalog_config),
-        };
+        let catalog_store_db = database
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| AppError::Config("runtime database connection missing".to_owned()))?;
+        let model_catalog_store = ModelCatalogStore::new(model_catalog_config, catalog_store_db);
         let model_catalog = Arc::new(ModelCatalogService::new(model_catalog_store).await?);
         let mut catalog_snapshot = model_catalog.snapshot();
         if let Ok(snapshot) = model_catalog

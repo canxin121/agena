@@ -11,7 +11,9 @@ use tokio::sync::Mutex;
 use crate::{
     error::{AppError, ProviderErrorKind},
     message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
-    model::{CapabilitySupport, ModelCapabilities, ModelId, ModelThinkingMode, ProviderId},
+    model::{
+        CapabilitySupport, ModelCapabilities, ModelId, ModelMetadata, ModelThinkingMode, ProviderId,
+    },
     provider::{
         CapabilityFamily, CompletionFinishReason, CompletionRequest, CompletionResponse,
         CompletionStreamEvent, CompletionToolCall, CompletionUsage, ManagedCredential,
@@ -2257,9 +2259,13 @@ impl ModelRuntime for OpenAiAdapter {
             .into_items()
             .into_iter()
             .map(|m| {
+                let metadata = m.metadata();
                 let model = ProviderModel::new(self.id.as_str(), m.id);
                 let capabilities = self.model_capabilities(&model.id);
-                let model = model.with_capabilities(capabilities);
+                let mut model = model.with_capabilities(capabilities);
+                if !metadata.is_empty() {
+                    model = model.with_metadata(metadata);
+                }
                 if let Some(name) = m.display_name.or(m.name) {
                     model.with_display_name(name)
                 } else {
@@ -2970,11 +2976,56 @@ struct OpenAiModel {
     display_name: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    #[serde(
+        default,
+        alias = "context_window",
+        alias = "context_length",
+        alias = "contextWindow",
+        alias = "context_window_tokens"
+    )]
+    context_window_tokens: Option<u64>,
+    #[serde(
+        default,
+        alias = "input_token_limit",
+        alias = "inputTokenLimit",
+        alias = "max_input_tokens",
+        alias = "maxInputTokens"
+    )]
+    max_input_tokens: Option<u64>,
+    #[serde(
+        default,
+        alias = "max_completion_tokens",
+        alias = "output_token_limit",
+        alias = "outputTokenLimit",
+        alias = "max_output_tokens",
+        alias = "maxOutputTokens"
+    )]
+    max_output_tokens: Option<u64>,
+}
+
+impl OpenAiModel {
+    fn metadata(&self) -> ModelMetadata {
+        let mut metadata = ModelMetadata::default();
+
+        if let Some(context_window_tokens) = self.context_window_tokens.or(self.max_input_tokens) {
+            metadata = metadata.with_context_window_tokens(clamp_u64_to_u32(context_window_tokens));
+        }
+        if let Some(max_input_tokens) = self.max_input_tokens {
+            metadata = metadata.with_max_input_tokens(clamp_u64_to_u32(max_input_tokens));
+        }
+        if let Some(max_output_tokens) = self.max_output_tokens {
+            metadata = metadata.with_max_output_tokens(clamp_u64_to_u32(max_output_tokens));
+        }
+
+        metadata
+    }
 }
 
 #[derive(Debug, Deserialize)]
 struct AtomGitCodingPlanModel {
     display_model_name: String,
+    #[serde(default)]
+    context_window: Option<u64>,
     #[serde(default)]
     plan_available: bool,
 }
@@ -2990,6 +3041,9 @@ impl AtomGitCodingPlanModel {
             id: model_name.to_owned(),
             display_name: Some(model_name.to_owned()),
             name: Some(model_name.to_owned()),
+            context_window_tokens: self.context_window,
+            max_input_tokens: None,
+            max_output_tokens: None,
         })
     }
 }
@@ -3154,4 +3208,59 @@ fn normalize_domain(value: &str) -> String {
         .trim_start_matches("http://")
         .trim_end_matches('/')
         .to_owned()
+}
+
+fn clamp_u64_to_u32(value: u64) -> u32 {
+    value.min(u32::MAX as u64) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_model_parses_compatible_token_limits() {
+        let payload = r#"{
+            "data": [
+                {
+                    "id": "reasoner-x",
+                    "display_name": "Reasoner X",
+                    "context_length": 262144,
+                    "input_token_limit": 260000,
+                    "max_completion_tokens": 64000
+                }
+            ]
+        }"#;
+
+        let parsed: OpenAiModelListResponse =
+            serde_json::from_str(payload).expect("parse openai model list");
+        let models = parsed.into_items();
+        assert_eq!(models.len(), 1);
+
+        let metadata = models[0].metadata();
+        assert_eq!(metadata.limits.context_window_tokens, Some(262_144));
+        assert_eq!(metadata.limits.max_input_tokens, Some(260_000));
+        assert_eq!(metadata.limits.max_output_tokens, Some(64_000));
+    }
+
+    #[test]
+    fn atomgit_coding_plan_preserves_context_window() {
+        let payload = r#"[
+            {
+                "display_model_name": "deepseek-v4-flash",
+                "context_window": 128000,
+                "plan_available": true
+            }
+        ]"#;
+
+        let parsed: OpenAiModelListResponse =
+            serde_json::from_str(payload).expect("parse atomgit coding plan models");
+        let models = parsed.into_items();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "deepseek-v4-flash");
+        assert_eq!(
+            models[0].metadata().limits.context_window_tokens,
+            Some(128_000)
+        );
+    }
 }

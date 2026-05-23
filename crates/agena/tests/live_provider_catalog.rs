@@ -7,10 +7,12 @@ use agena::{
         patch_file_settings_with_env, provider_model_overlay_from_catalog_definition,
         saved_provider_adapter_models_target,
     },
+    db::init_schema,
     model_catalog::{
         CatalogModelDefinition, ModelCatalogConfig, ModelCatalogService, ModelCatalogStore,
     },
     provider::ProviderRegistry,
+    tracing as tracing_config,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 use tempfile::tempdir;
@@ -113,6 +115,47 @@ async fn opencode_public_saved_provider_models_match_public_catalog_and_save_sam
     );
 }
 
+#[tokio::test]
+#[ignore = "uses remote public model catalog sources"]
+async fn public_catalog_remote_sources_capture_context_limits() {
+    let catalog = public_catalog().await;
+
+    let deepseek = catalog
+        .definitions
+        .get("deepseek-v4-flash")
+        .expect("deepseek-v4-flash should exist in public catalog");
+    assert!(
+        deepseek
+            .context_window_tokens
+            .is_some_and(|value| value >= 1_000_000),
+        "expected deepseek-v4-flash to expose a large context window, got {:?}",
+        deepseek.context_window_tokens
+    );
+
+    let nemotron = catalog
+        .definitions
+        .get("nemotron-3-super-120b-a12b")
+        .expect("nemotron-3-super-120b-a12b should exist in public catalog");
+    assert!(
+        nemotron
+            .context_window_tokens
+            .is_some_and(|value| value >= 1_000_000),
+        "expected nemotron-3-super-120b-a12b to expose a 1M-class context window, got {:?}",
+        nemotron.context_window_tokens
+    );
+
+    let gpt = catalog
+        .definitions
+        .get("gpt-5.5")
+        .expect("gpt-5.5 should exist in public catalog");
+    assert!(
+        gpt.context_window_tokens
+            .is_some_and(|value| value >= 272_000),
+        "expected gpt-5.5 to expose codex context metadata, got {:?}",
+        gpt.context_window_tokens
+    );
+}
+
 impl MatchResult {
     fn match_rate(&self) -> f64 {
         if self.total == 0 {
@@ -165,12 +208,7 @@ fn require_env(key: &str) {
 async fn public_catalog() -> Arc<CatalogDefinitions> {
     PUBLIC_CATALOG
         .get_or_init(|| async {
-            let dir = tempdir().expect("tempdir for live public catalog");
-            let store = ModelCatalogStore::new(ModelCatalogConfig {
-                cache_path: dir.path().join("model-catalog-cache.json"),
-                custom_path: dir.path().join("model-catalog-custom.json"),
-                cache_max_age_secs: 0,
-            });
+            let store = build_test_catalog_store().await;
             let service = ModelCatalogService::new(store)
                 .await
                 .expect("build public catalog service");
@@ -190,12 +228,7 @@ async fn effective_catalog(
     registry: &ProviderRegistry,
     resolution: &agena::config::ConfigResolution,
 ) -> CatalogDefinitions {
-    let dir = tempdir().expect("tempdir for effective live catalog");
-    let store = ModelCatalogStore::new(ModelCatalogConfig {
-        cache_path: dir.path().join("model-catalog-cache.json"),
-        custom_path: dir.path().join("model-catalog-custom.json"),
-        cache_max_age_secs: 0,
-    });
+    let store = build_test_catalog_store().await;
     let service = ModelCatalogService::new(store)
         .await
         .expect("build effective catalog service");
@@ -206,6 +239,23 @@ async fn effective_catalog(
     CatalogDefinitions {
         definitions: snapshot.official.models,
     }
+}
+
+async fn build_test_catalog_store() -> ModelCatalogStore {
+    let db = Arc::new(
+        tracing_config::connect_database("sqlite::memory:", &Default::default())
+            .await
+            .expect("connect sqlite catalog test database"),
+    );
+    init_schema(db.as_ref())
+        .await
+        .expect("migrate sqlite catalog test database");
+    ModelCatalogStore::new(
+        ModelCatalogConfig {
+            cache_max_age_secs: 0,
+        },
+        db,
+    )
 }
 
 async fn run_live_provider_case(

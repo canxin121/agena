@@ -354,15 +354,24 @@ pub(super) fn merge_public_source_catalog_definition(
     if current.lifecycle.is_none() {
         current.lifecycle = next.lifecycle;
     }
-    if current.context_window_tokens.is_none() {
-        current.context_window_tokens = next.context_window_tokens;
-    }
-    if current.max_input_tokens.is_none() {
-        current.max_input_tokens = next.max_input_tokens;
-    }
-    if current.max_output_tokens.is_none() {
-        current.max_output_tokens = next.max_output_tokens;
-    }
+    merge_limit_field(
+        &mut current.context_window_tokens,
+        next.context_window_tokens,
+        current.source_priority.limits_priority,
+        next.source_priority.limits_priority,
+    );
+    merge_limit_field(
+        &mut current.max_input_tokens,
+        next.max_input_tokens,
+        current.source_priority.limits_priority,
+        next.source_priority.limits_priority,
+    );
+    merge_limit_field(
+        &mut current.max_output_tokens,
+        next.max_output_tokens,
+        current.source_priority.limits_priority,
+        next.source_priority.limits_priority,
+    );
     if current.description.is_none() {
         current.description = next.description.clone();
     }
@@ -431,6 +440,17 @@ pub(super) fn merge_public_source_catalog_definition(
     merge_source_priority(&mut current.source_priority, &next.source_priority);
 }
 
+fn merge_limit_field(
+    current: &mut Option<u32>,
+    next: Option<u32>,
+    current_priority: i32,
+    next_priority: i32,
+) {
+    if current.is_none() || (next.is_some() && next_priority > current_priority) {
+        *current = next.or(*current);
+    }
+}
+
 fn merge_source_priority(
     current: &mut CatalogDefinitionSourcePriority,
     next: &CatalogDefinitionSourcePriority,
@@ -468,6 +488,59 @@ pub(super) fn merge_json_patch_maps_fill_missing(
                 current.insert(key.clone(), value.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_source_merge_prefers_higher_limit_priority() {
+        let mut current = CatalogModelDefinition {
+            context_window_tokens: Some(262_144),
+            source_priority: CatalogDefinitionSourcePriority {
+                limits_priority: 950,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let next = CatalogModelDefinition {
+            context_window_tokens: Some(1_000_000),
+            source_priority: CatalogDefinitionSourcePriority {
+                limits_priority: 975,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        merge_public_source_catalog_definition(&mut current, &next);
+        assert_eq!(current.context_window_tokens, Some(1_000_000));
+        assert_eq!(current.source_priority.limits_priority, 975);
+    }
+
+    #[test]
+    fn public_source_merge_keeps_existing_limit_for_lower_priority() {
+        let mut current = CatalogModelDefinition {
+            context_window_tokens: Some(1_000_000),
+            source_priority: CatalogDefinitionSourcePriority {
+                limits_priority: 975,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let next = CatalogModelDefinition {
+            context_window_tokens: Some(262_144),
+            source_priority: CatalogDefinitionSourcePriority {
+                limits_priority: 950,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        merge_public_source_catalog_definition(&mut current, &next);
+        assert_eq!(current.context_window_tokens, Some(1_000_000));
+        assert_eq!(current.source_priority.limits_priority, 975);
     }
 }
 

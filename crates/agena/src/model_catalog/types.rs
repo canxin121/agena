@@ -1,9 +1,5 @@
 use super::*;
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelCatalogEntrySourceKind {
@@ -159,8 +155,6 @@ pub struct ModelCatalogEntryRecord {
     pub display_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub has_local_override: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,52 +259,29 @@ pub struct ModelCatalogSnapshot {
     pub last_error: Option<String>,
     #[serde(default)]
     pub official: ModelCatalogDocument,
-    #[serde(default)]
-    pub custom: ModelCatalogDocument,
 }
 
 impl ModelCatalogSnapshot {
     pub fn merged_models(&self) -> ModelCatalogProviderRecord {
-        let mut merged = self.official.model_record();
-        let custom = self.custom.model_record();
-        merged.appendable_model_ids = custom.models.keys().cloned().collect();
-        for (model_id, definition) in custom.models {
-            merged.models.insert(model_id, definition);
-        }
-        merged
+        self.official.model_record()
     }
 
     pub fn entries(&self) -> Vec<ModelCatalogEntryRecord> {
         let mut entries = Vec::new();
         let official = self.official.model_record();
-        let custom = self.custom.model_record();
 
         for (model_id, definition) in &official.models {
-            entries.push(Self::entry_record(model_id.as_str(), definition, false));
+            entries.push(Self::entry_record(model_id.as_str(), definition));
         }
-
-        for (model_id, definition) in &custom.models {
-            entries.push(Self::entry_record(model_id.as_str(), definition, true));
-        }
-
-        entries.sort_by(|left, right| {
-            left.model_id
-                .cmp(&right.model_id)
-                .then(left.has_local_override.cmp(&right.has_local_override))
-        });
+        entries.sort_by(|left, right| left.model_id.cmp(&right.model_id));
         entries
     }
 
-    pub(super) fn entry_record(
-        model_id: &str,
-        definition: &CatalogModelDefinition,
-        has_local_override: bool,
-    ) -> ModelCatalogEntryRecord {
+    pub(super) fn entry_record(model_id: &str, definition: &CatalogModelDefinition) -> ModelCatalogEntryRecord {
         ModelCatalogEntryRecord {
             model_id: model_id.to_owned(),
             display_name: definition.display_name.clone(),
             origin: definition.origin.clone(),
-            has_local_override,
             lifecycle: definition.lifecycle,
             context_window_tokens: definition.context_window_tokens,
             max_input_tokens: definition.max_input_tokens,
@@ -340,7 +311,6 @@ impl ModelCatalogSnapshot {
     pub fn model_ids(&self) -> Vec<String> {
         let mut model_ids = BTreeSet::new();
         model_ids.extend(self.official.model_ids());
-        model_ids.extend(self.custom.model_ids());
         model_ids.into_iter().collect()
     }
 
@@ -356,8 +326,6 @@ impl ModelCatalogSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelCatalogConfig {
-    pub cache_path: PathBuf,
-    pub custom_path: PathBuf,
     pub cache_max_age_secs: u64,
 }
 
@@ -372,13 +340,43 @@ pub struct ModelCatalogResponse {
     pub entries: Vec<ModelCatalogEntryRecord>,
 }
 
-impl ModelCatalogConfig {
-    pub fn for_workspace_root(workspace_root: &Path) -> Self {
-        let root = workspace_root.join(".agena").join("catalog");
+impl Default for ModelCatalogConfig {
+    fn default() -> Self {
         Self {
-            cache_path: root.join("model-catalog-cache.json"),
-            custom_path: root.join("model-catalog-custom.json"),
             cache_max_age_secs: DEFAULT_CACHE_MAX_AGE_SECS,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn definition(name: &str) -> CatalogModelDefinition {
+        CatalogModelDefinition {
+            display_name: Some(name.to_owned()),
+            ..CatalogModelDefinition::default()
+        }
+    }
+
+    #[test]
+    fn snapshot_runtime_views_expose_only_official_entries() {
+        let snapshot = ModelCatalogSnapshot {
+            official: ModelCatalogDocument {
+                models: BTreeMap::from([("official-model".to_owned(), definition("Official"))]),
+            },
+            ..ModelCatalogSnapshot::default()
+        };
+
+        let merged = snapshot.merged_models();
+        assert!(merged.models.contains_key("official-model"));
+        assert!(merged.appendable_model_ids.is_empty());
+
+        let entries = snapshot.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].model_id, "official-model");
+
+        let model_ids = snapshot.model_ids();
+        assert_eq!(model_ids, vec!["official-model".to_owned()]);
     }
 }

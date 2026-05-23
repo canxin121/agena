@@ -18,12 +18,7 @@ impl ModelCatalogService {
         store: ModelCatalogStore,
         remote_sources: Vec<sources::ModelCatalogRemoteSource>,
     ) -> Result<Self, AppError> {
-        store.migrate_legacy_files_if_needed().await?;
-        let custom = store.read_custom().await?;
-        let mut snapshot = ModelCatalogSnapshot {
-            custom,
-            ..ModelCatalogSnapshot::default()
-        };
+        let mut snapshot = ModelCatalogSnapshot::default();
 
         if let Some(cached) = store.read_cached_official().await? {
             snapshot.last_successful_source = Some(cached.source);
@@ -77,26 +72,7 @@ impl ModelCatalogService {
         providers: &ProviderRegistry,
         resolution: Option<&ConfigResolution>,
     ) -> Result<ModelCatalogSnapshot, AppError> {
-        let (document, warnings) = match self.build_catalog_document(providers, resolution).await {
-            Ok(result) => result,
-            Err(refresh_error) => {
-                if let Some(cached) = self.store.read_cached_official().await? {
-                    let cache_is_fresh = self.cache_is_fresh(&cached);
-                    let mut snapshot = self.snapshot();
-                    snapshot.official = cached.document;
-                    snapshot.last_successful_source = Some(ModelCatalogEntrySourceKind::Cache);
-                    snapshot.last_refresh_at =
-                        DateTime::<Utc>::from_timestamp_millis(cached.fetched_at_unix_ms);
-                    snapshot.last_error = Some(format!(
-                        "catalog refresh failed: {refresh_error}; using {}cache",
-                        if cache_is_fresh { "" } else { "stale " }
-                    ));
-                    self.replace_snapshot(snapshot.clone());
-                    return Ok(snapshot);
-                }
-                return Err(refresh_error);
-            }
-        };
+        let (document, warnings) = self.build_catalog_document(providers, resolution).await?;
         let fetched_at_unix_ms = now_unix_ms();
         self.store
             .write_cached_official(&CachedOfficialCatalog {
@@ -111,30 +87,6 @@ impl ModelCatalogService {
         snapshot.last_successful_source = Some(ModelCatalogEntrySourceKind::Generated);
         snapshot.last_refresh_at = DateTime::<Utc>::from_timestamp_millis(fetched_at_unix_ms);
         snapshot.last_error = warnings;
-        self.replace_snapshot(snapshot.clone());
-        Ok(snapshot)
-    }
-
-    pub async fn upsert_custom_entry(
-        &self,
-        model_id: impl Into<String>,
-        definition: CatalogModelDefinition,
-    ) -> Result<ModelCatalogSnapshot, AppError> {
-        let model_id = model_id.into();
-        let mut snapshot = self.snapshot();
-        snapshot.custom.models.insert(model_id, definition);
-        self.store.write_custom(&snapshot.custom).await?;
-        self.replace_snapshot(snapshot.clone());
-        Ok(snapshot)
-    }
-
-    pub async fn remove_custom_entry(
-        &self,
-        model_id: &str,
-    ) -> Result<ModelCatalogSnapshot, AppError> {
-        let mut snapshot = self.snapshot();
-        snapshot.custom.models.remove(model_id);
-        self.store.write_custom(&snapshot.custom).await?;
         self.replace_snapshot(snapshot.clone());
         Ok(snapshot)
     }
@@ -278,14 +230,6 @@ impl ModelCatalogService {
         Ok((Some(document), warning))
     }
 
-    fn cache_is_fresh(&self, cached: &CachedOfficialCatalog) -> bool {
-        let fetched = UNIX_EPOCH + Duration::from_millis(cached.fetched_at_unix_ms.max(0) as u64);
-        SystemTime::now()
-            .duration_since(fetched)
-            .map(|age| age.as_secs() <= self.store.config().cache_max_age_secs)
-            .unwrap_or(false)
-    }
-
     fn snapshot_needs_startup_refresh(&self, snapshot: &ModelCatalogSnapshot) -> bool {
         if snapshot.official.model_ids().is_empty() {
             return true;
@@ -304,5 +248,66 @@ impl ModelCatalogService {
     fn replace_snapshot(&self, snapshot: ModelCatalogSnapshot) {
         let mut guard = self.state.write().expect("catalog state lock poisoned");
         *guard = snapshot;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{db::init_schema, tracing as tracing_config};
+
+    async fn test_store() -> ModelCatalogStore {
+        let db = Arc::new(
+            tracing_config::connect_database("sqlite::memory:", &Default::default())
+                .await
+                .expect("connect sqlite catalog test database"),
+        );
+        init_schema(db.as_ref())
+            .await
+            .expect("migrate sqlite catalog test database");
+        ModelCatalogStore::new(
+            ModelCatalogConfig {
+                cache_max_age_secs: DEFAULT_CACHE_MAX_AGE_SECS,
+            },
+            db,
+        )
+    }
+
+    #[tokio::test]
+    async fn refresh_failure_does_not_fallback_to_cached_catalog() {
+        let store = test_store().await;
+        let service = ModelCatalogService::with_remote_sources(store.clone(), Vec::new())
+            .await
+            .expect("build catalog service");
+
+        let cached = CachedOfficialCatalog {
+            fetched_at_unix_ms: now_unix_ms(),
+            source: ModelCatalogEntrySourceKind::Generated,
+            document: ModelCatalogDocument {
+                models: BTreeMap::from([(
+                    "cached-model".to_owned(),
+                    CatalogModelDefinition::default(),
+                )]),
+            },
+        };
+        store
+            .write_cached_official(&cached)
+            .await
+            .expect("seed cached catalog");
+
+        let error = service
+            .refresh_from_registry(&ProviderRegistry::new(), None)
+            .await
+            .expect_err("refresh without sources should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("model catalog generation failed"),
+            "unexpected error: {error}"
+        );
+
+        let snapshot = service.snapshot();
+        assert!(snapshot.official.models.is_empty());
+        assert!(snapshot.last_error.is_none());
     }
 }

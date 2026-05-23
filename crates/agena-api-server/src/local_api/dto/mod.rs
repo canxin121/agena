@@ -6,7 +6,7 @@ use agena::{
     agents::AgentScope,
     message::{PartContent, PendingInteractiveRequest, UserInputReply, UserInputRequest},
     model::ModelRef,
-    model_catalog::{CatalogModelDefinition, ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},
+    model_catalog::{ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},
     permission::PermissionMode,
     permission::{PermissionReply, PermissionRequest},
     provider::ProviderModel,

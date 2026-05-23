@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::{
     error::AppError,
     message::{AttachmentItem, Message, MessageUsage},
-    model::{ModelId, ProviderId},
+    model::{ModelId, ModelMetadata, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         ManagedCredential, ModelRuntime, ProviderModel, ReasoningEffort, ResponseFormat,
@@ -885,10 +885,14 @@ impl ModelRuntime for GeminiAdapter {
             .models
             .into_iter()
             .map(|m| {
+                let metadata = m.metadata();
                 let id = m.name.trim_start_matches("models/").to_owned();
                 let mut model = ProviderModel::new(PROVIDER_ID, id);
                 let capabilities = self.model_capabilities(&model.id);
                 model = model.with_capabilities(capabilities);
+                if !metadata.is_empty() {
+                    model = model.with_metadata(metadata);
+                }
                 model.display_name = m.display_name;
                 model
             })
@@ -1468,6 +1472,31 @@ struct GeminiModel {
     name: String,
     #[serde(default, rename = "displayName")]
     display_name: Option<String>,
+    #[serde(default, rename = "inputTokenLimit")]
+    input_token_limit: Option<u64>,
+    #[serde(default, rename = "outputTokenLimit")]
+    output_token_limit: Option<u64>,
+}
+
+impl GeminiModel {
+    fn metadata(&self) -> ModelMetadata {
+        let mut metadata = ModelMetadata::default();
+
+        if let Some(input_token_limit) = self.input_token_limit {
+            let limit = clamp_u64_to_u32(input_token_limit);
+            // Gemini exposes input/output limits rather than a separate
+            // context window field, so use the input ceiling as the best
+            // available prompt-window budget.
+            metadata = metadata
+                .with_context_window_tokens(limit)
+                .with_max_input_tokens(limit);
+        }
+        if let Some(output_token_limit) = self.output_token_limit {
+            metadata = metadata.with_max_output_tokens(clamp_u64_to_u32(output_token_limit));
+        }
+
+        metadata
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1804,4 +1833,36 @@ impl GeminiLiveServerContent {
 struct GeminiLiveToolCall {
     #[serde(default, rename = "functionCalls")]
     function_calls: Vec<GeminiFunctionCall>,
+}
+
+fn clamp_u64_to_u32(value: u64) -> u32 {
+    value.min(u32::MAX as u64) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gemini_model_parses_token_limits_from_list_models() {
+        let payload = r#"{
+            "models": [
+                {
+                    "name": "models/gemini-2.5-pro",
+                    "displayName": "Gemini 2.5 Pro",
+                    "inputTokenLimit": 1048576,
+                    "outputTokenLimit": 65536
+                }
+            ]
+        }"#;
+
+        let parsed: GeminiModelListResponse =
+            serde_json::from_str(payload).expect("parse gemini model list");
+        assert_eq!(parsed.models.len(), 1);
+
+        let metadata = parsed.models[0].metadata();
+        assert_eq!(metadata.limits.context_window_tokens, Some(1_048_576));
+        assert_eq!(metadata.limits.max_input_tokens, Some(1_048_576));
+        assert_eq!(metadata.limits.max_output_tokens, Some(65_536));
+    }
 }

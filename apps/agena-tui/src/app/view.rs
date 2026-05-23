@@ -3665,7 +3665,7 @@ impl App {
         let footer_height = overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
         let content_height = model_catalog_content_height(dialog, content_width);
         let summary = format!(
-            "query {}  ·  page {}-{} / {}  ·  {} official / {} custom",
+            "query {}  ·  page {}-{} / {}  ·  {} entries",
             if dialog.query.trim().is_empty() {
                 "<all>".to_owned()
             } else {
@@ -3674,8 +3674,7 @@ impl App {
             dialog.offset.saturating_add(1),
             dialog.offset.saturating_add(dialog.items.len()),
             dialog.total,
-            dialog.summary.official_entry_count,
-            dialog.summary.custom_entry_count,
+            dialog.summary.entry_count,
         );
         let area = surface.outer_rect(
             area,
@@ -3746,19 +3745,11 @@ impl App {
                     ListItem::new(vec![
                         Line::from(sanitize_display_text(entry.model_id.as_str())),
                         Line::from(Span::styled(
-                            sanitize_display_text(format!(
-                                "{}{}",
+                            sanitize_display_text(
                                 entry.display_name.clone().unwrap_or_else(|| {
                                     entry.origin.clone().unwrap_or_else(|| "unknown".to_owned())
                                 }),
-                                if entry.kind
-                                    == agena_api_server::local_api::ModelCatalogEntryKind::Custom
-                                {
-                                    "  ·  custom"
-                                } else {
-                                    ""
-                                }
-                            )),
+                            ),
                             Style::default().fg(Color::DarkGray),
                         )),
                     ])
@@ -3805,7 +3796,7 @@ impl App {
                             .map(|value| value.to_string())
                             .unwrap_or_else(|| "?".to_owned())
                     ),
-                    format!("source: {:?}  ·  kind: {:?}", entry.source, entry.kind),
+                    format!("source: {:?}", entry.source),
                     entry.description.clone().unwrap_or_default(),
                 ]
                 .into_iter()
@@ -4835,7 +4826,7 @@ fn model_catalog_panel_heights(dialog: &ModelCatalogStudioOverlay, width: u16) -
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "?".to_owned())
                 ),
-                format!("source: {:?}  ·  kind: {:?}", entry.source, entry.kind),
+                format!("source: {:?}", entry.source),
                 entry.description.clone().unwrap_or_default(),
             ]
             .into_iter()

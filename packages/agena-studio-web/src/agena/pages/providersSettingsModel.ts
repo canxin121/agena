@@ -14,10 +14,7 @@ export type ProviderAdapterPatch = {
 export function catalogEntriesForModelId(entries: ModelCatalogEntry[], modelId: string): ModelCatalogEntry[] {
   return entries
     .filter((entry) => entry.model_id === modelId)
-    .sort((left, right) => {
-      if (left.kind !== right.kind) return left.kind === 'custom' ? -1 : 1
-      return left.model_id.localeCompare(right.model_id)
-    })
+    .sort((left, right) => left.model_id.localeCompare(right.model_id))
 }
 
 export function preferredCatalogEntryForModelId(entries: ModelCatalogEntry[], modelId: string): ModelCatalogEntry | null {
@@ -31,10 +28,7 @@ export function preferredCatalogEntryForLookupIds(
   const lookupIds = [...new Set(modelIds.map((value) => String(value || '').trim()).filter(Boolean))]
   if (!lookupIds.length) return null
   const matches = entries.filter((entry) => lookupIds.includes(entry.model_id))
-  return matches.sort((left, right) => {
-    if (left.kind !== right.kind) return left.kind === 'custom' ? -1 : 1
-    return left.model_id.localeCompare(right.model_id)
-  })[0] || null
+  return matches.sort((left, right) => left.model_id.localeCompare(right.model_id))[0] || null
 }
 
 export function preferredCatalogEntryForProviderModel(

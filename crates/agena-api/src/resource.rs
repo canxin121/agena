@@ -10,7 +10,7 @@ use agena::{
     config::ProviderProtocolPathsConfig,
     message::{Message, MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
-    model_catalog::{CatalogModelDefinition, ModelCatalogEntrySourceKind},
+    model_catalog::ModelCatalogEntrySourceKind,
     session::{GoalStatus, SessionStatus, SessionSummary},
 };
 
@@ -228,15 +228,6 @@ pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     pub entry_count: usize,
-    pub official_entry_count: usize,
-    pub custom_entry_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelCatalogEntryKind {
-    Official,
-    Custom,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -244,18 +235,14 @@ pub enum ModelCatalogEntryKind {
 pub enum ModelCatalogSourceKind {
     Generated,
     Cache,
-    Custom,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelCatalogEntryResource {
     pub model_id: String,
-    pub kind: ModelCatalogEntryKind,
     pub source: ModelCatalogSourceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_label: Option<String>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub has_local_override: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -307,13 +294,6 @@ pub struct ModelCatalogEntryResource {
     pub speed_modes: std::collections::BTreeMap<String, agena::provider::ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: agena::provider::ModelCapabilityPatch,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelCatalogEntryWriteRequest {
-    pub model_id: String,
-    #[serde(flatten)]
-    pub definition: CatalogModelDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

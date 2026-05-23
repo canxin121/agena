@@ -15,6 +15,7 @@ use crate::{
     },
     db::init_schema,
     session::SessionManager,
+    storage::StorageConfig,
     tracing as tracing_config,
 };
 
@@ -149,12 +150,16 @@ async fn connect_database(
 ) -> Result<Option<Arc<DatabaseConnection>>, AppError> {
     let database = if let Some(db) = database_connection {
         Some(db)
-    } else if let Some(url) = database_url {
+    } else {
+        let url = StorageConfig {
+            database_url,
+            database_path: None,
+        }
+        .resolve_url()?;
+        StorageConfig::ensure_parent(url.as_str())?;
         Some(Arc::new(
             tracing_config::connect_database(url.as_str(), tracing).await?,
         ))
-    } else {
-        None
     };
 
     if auto_migrate && let Some(db) = database.as_ref() {

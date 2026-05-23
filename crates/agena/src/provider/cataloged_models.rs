@@ -8,8 +8,9 @@ use crate::{
     model::{AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode},
     model_catalog::{
         ModelCatalogProviderRecord, apply_catalog_definition_as_baseline,
-        canonical_model_catalog_id, catalog_definition_to_provider_definition,
-        merge_catalog_baseline_speed_modes, merge_catalog_baseline_thinking_modes,
+        apply_catalog_display_name_as_fallback, canonical_model_catalog_id,
+        catalog_definition_to_provider_definition, merge_catalog_baseline_speed_modes,
+        merge_catalog_baseline_thinking_modes,
     },
 };
 
@@ -56,30 +57,16 @@ impl CatalogedModelsProvider {
             .map(catalog_definition_to_provider_definition)
     }
 
-    fn display_name_for_model(&self, model: &ModelId) -> Option<String> {
-        self.provider
-            .models
-            .get(model.as_str())
-            .or_else(|| {
-                catalog_model_id_for_raw(model.as_str())
-                    .as_ref()
-                    .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
-            })
-            .and_then(|definition| definition.display_name.clone())
-    }
-
     fn apply_to_model(&self, model_id: &ModelId, mut model: Model) -> Model {
         if let Some(catalog_model_id) = catalog_model_id_for_raw(model_id.as_str()) {
             model.catalog_model_id = Some(ModelId::new(catalog_model_id));
-        }
-        if let Some(display_name) = self.display_name_for_model(model_id) {
-            model.display_name = Some(display_name);
         }
         if let Some(definition) = self.provider.models.get(model_id.as_str()).or_else(|| {
             catalog_model_id_for_raw(model_id.as_str())
                 .as_ref()
                 .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
         }) {
+            apply_catalog_display_name_as_fallback(&mut model, definition);
             let capability_fallback = self
                 .target
                 .model_capabilities_for_adapter(model.adapter_id.as_ref(), model_id);

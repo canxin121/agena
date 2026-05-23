@@ -1,16 +1,9 @@
 use super::*;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct ModelCatalogEntryDeleteQuery {
-    pub model_id: String,
-}
-
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ModelCatalogListQuery {
     #[serde(default)]
     pub q: Option<String>,
-    #[serde(default)]
-    pub kind: Option<String>,
     #[serde(default)]
     pub origin: Option<String>,
     #[serde(default)]
@@ -22,23 +15,11 @@ pub struct ModelCatalogListQuery {
 fn model_catalog_summary(
     catalog: &agena::model_catalog::ModelCatalogResponse,
 ) -> ModelCatalogResponse {
-    let official_entry_count = catalog
-        .entries
-        .iter()
-        .filter(|entry| !entry.has_local_override)
-        .count();
-    let custom_entry_count = catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.has_local_override)
-        .count();
     ModelCatalogResponse {
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error.clone(),
         entry_count: catalog.entries.len(),
-        official_entry_count,
-        custom_entry_count,
     }
 }
 
@@ -119,14 +100,9 @@ fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryRe
             .default_top_k
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        match entry.kind {
-            crate::local_api::ModelCatalogEntryKind::Official => "official".to_owned(),
-            crate::local_api::ModelCatalogEntryKind::Custom => "custom".to_owned(),
-        },
         match entry.source {
             crate::local_api::ModelCatalogSourceKind::Generated => "generated".to_owned(),
             crate::local_api::ModelCatalogSourceKind::Cache => "cache".to_owned(),
-            crate::local_api::ModelCatalogSourceKind::Custom => "custom".to_owned(),
         },
         entry.source_label.clone().unwrap_or_default(),
         entry
@@ -151,21 +127,6 @@ fn model_catalog_entry_search_text(entry: &crate::local_api::ModelCatalogEntryRe
     .to_lowercase()
 }
 
-fn parse_model_catalog_kind_filter(
-    value: Option<&str>,
-) -> Result<Option<crate::local_api::ModelCatalogEntryKind>, ServerError> {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    match value {
-        "official" => Ok(Some(crate::local_api::ModelCatalogEntryKind::Official)),
-        "custom" => Ok(Some(crate::local_api::ModelCatalogEntryKind::Custom)),
-        other => Err(ServerError::BadRequest(format!(
-            "invalid model catalog kind filter: {other}"
-        ))),
-    }
-}
-
 pub async fn get_model_catalog(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<ModelCatalogListQuery>,
@@ -188,7 +149,6 @@ pub async fn get_model_catalog(
         origins
     };
 
-    let kind_filter = parse_model_catalog_kind_filter(query.kind.as_deref())?;
     let search = query
         .q
         .as_deref()
@@ -206,11 +166,6 @@ pub async fn get_model_catalog(
     let filtered = model_catalog_entry_resources(&catalog)
         .into_iter()
         .filter(|entry| {
-            if let Some(kind_filter) = kind_filter
-                && entry.kind != kind_filter
-            {
-                return false;
-            }
             if let Some(origin_filter) = origin_filter
                 && entry.origin.as_deref().map(str::trim) != Some(origin_filter)
             {
@@ -279,38 +234,6 @@ pub async fn refresh_model_catalog(
             source_providers.as_ref(),
             Some(snapshot.config_resolution()),
         )
-        .await
-        .map_err(ServerError::Core)?;
-    reload_runtime_from_config(&state).await?;
-    let snapshot = state.runtime().current_snapshot();
-    let catalog = snapshot.model_catalog_response();
-    Ok(Json(model_catalog_summary(&catalog)))
-}
-
-pub async fn upsert_model_catalog_entry(
-    State(state): State<AppState>,
-    Json(request): Json<ModelCatalogEntryWriteRequest>,
-) -> Result<impl IntoResponse, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
-    snapshot
-        .model_catalog()
-        .upsert_custom_entry(request.model_id, request.definition)
-        .await
-        .map_err(ServerError::Core)?;
-    reload_runtime_from_config(&state).await?;
-    let snapshot = state.runtime().current_snapshot();
-    let catalog = snapshot.model_catalog_response();
-    Ok(Json(model_catalog_summary(&catalog)))
-}
-
-pub async fn delete_model_catalog_entry(
-    State(state): State<AppState>,
-    AxumQuery(query): AxumQuery<ModelCatalogEntryDeleteQuery>,
-) -> Result<impl IntoResponse, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
-    snapshot
-        .model_catalog()
-        .remove_custom_entry(query.model_id.as_str())
         .await
         .map_err(ServerError::Core)?;
     reload_runtime_from_config(&state).await?;

@@ -8,134 +8,39 @@ pub(super) struct CachedOfficialCatalog {
 }
 
 #[derive(Clone)]
-enum ModelCatalogStoreBackend {
-    File(ModelCatalogConfig),
-    Database {
-        config: ModelCatalogConfig,
-        db: Arc<DatabaseConnection>,
-    },
-}
-
-#[derive(Clone)]
 pub struct ModelCatalogStore {
-    backend: ModelCatalogStoreBackend,
+    config: ModelCatalogConfig,
+    db: Arc<DatabaseConnection>,
 }
 
 impl ModelCatalogStore {
-    pub fn new(config: ModelCatalogConfig) -> Self {
-        Self {
-            backend: ModelCatalogStoreBackend::File(config),
-        }
-    }
-
-    pub fn new_database(config: ModelCatalogConfig, db: Arc<DatabaseConnection>) -> Self {
-        Self {
-            backend: ModelCatalogStoreBackend::Database { config, db },
-        }
+    pub fn new(config: ModelCatalogConfig, db: Arc<DatabaseConnection>) -> Self {
+        Self { config, db }
     }
 
     pub fn config(&self) -> &ModelCatalogConfig {
-        match &self.backend {
-            ModelCatalogStoreBackend::File(config) => config,
-            ModelCatalogStoreBackend::Database { config, .. } => config,
-        }
+        &self.config
     }
 
-    fn database(&self) -> Option<&Arc<DatabaseConnection>> {
-        match &self.backend {
-            ModelCatalogStoreBackend::File(_) => None,
-            ModelCatalogStoreBackend::Database { db, .. } => Some(db),
-        }
-    }
-
-    fn read_json<T: for<'de> Deserialize<'de>>(&self, path: &Path) -> Result<Option<T>, AppError> {
-        if !path.exists() {
-            return Ok(None);
-        }
-        let text = fs::read_to_string(path)?;
-        let parsed = serde_json::from_str(&text)
-            .map_err(|err| AppError::Config(format!("parse {}: {err}", path.display())))?;
-        Ok(Some(parsed))
-    }
-
-    fn write_json<T: Serialize>(&self, path: &Path, value: &T) -> Result<(), AppError> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let text = serde_json::to_string_pretty(value).map_err(AppError::from)?;
-        fs::write(path, format!("{text}\n"))?;
-        Ok(())
-    }
-
-    pub(super) async fn migrate_legacy_files_if_needed(&self) -> Result<(), AppError> {
-        let Some(db) = self.database() else {
-            return Ok(());
-        };
-
-        let has_any_entries = model_catalog_entry::Entity::find()
-            .one(db.as_ref())
-            .await?
-            .is_some();
-        let has_state = model_catalog_state::Entity::find_by_id(CATALOG_STATE_ID)
-            .one(db.as_ref())
-            .await?
-            .is_some();
-        if has_any_entries || has_state {
-            return Ok(());
-        }
-
-        if let Some(custom) = self.read_json::<ModelCatalogDocument>(&self.config().custom_path)? {
-            self.write_document_to_db(CATALOG_KIND_CUSTOM, &custom)
-                .await?;
-        }
-        if let Some(cached) = self.read_json::<CachedOfficialCatalog>(&self.config().cache_path)? {
-            self.write_cached_official_to_db(&cached).await?;
-        }
-
-        Ok(())
-    }
-
-    pub async fn read_custom(&self) -> Result<ModelCatalogDocument, AppError> {
-        if self.database().is_some() {
-            return self.read_document_from_db(CATALOG_KIND_CUSTOM).await;
-        }
-        Ok(self
-            .read_json(&self.config().custom_path)?
-            .unwrap_or_default())
-    }
-
-    pub async fn write_custom(&self, document: &ModelCatalogDocument) -> Result<(), AppError> {
-        if self.database().is_some() {
-            return self
-                .write_document_to_db(CATALOG_KIND_CUSTOM, document)
-                .await;
-        }
-        self.write_json(&self.config().custom_path, document)
+    fn database(&self) -> &Arc<DatabaseConnection> {
+        &self.db
     }
 
     pub(super) async fn read_cached_official(
         &self,
     ) -> Result<Option<CachedOfficialCatalog>, AppError> {
-        if self.database().is_some() {
-            return self.read_cached_official_from_db().await;
-        }
-        self.read_json(&self.config().cache_path)
+        self.read_cached_official_from_db().await
     }
 
     pub(super) async fn write_cached_official(
         &self,
         cached: &CachedOfficialCatalog,
     ) -> Result<(), AppError> {
-        if self.database().is_some() {
-            return self.write_cached_official_to_db(cached).await;
-        }
-        self.write_json(&self.config().cache_path, cached)
+        self.write_cached_official_to_db(cached).await
     }
 
     async fn read_document_from_db(&self, kind: &str) -> Result<ModelCatalogDocument, AppError> {
-        let db = self
-            .database()
-            .expect("database-backed catalog store should have a database");
+        let db = self.database();
         let rows = model_catalog_entry::Entity::find()
             .filter(model_catalog_entry::Column::Kind.eq(kind))
             .order_by_asc(model_catalog_entry::Column::ModelId)
@@ -160,9 +65,7 @@ impl ModelCatalogStore {
         kind: &str,
         document: &ModelCatalogDocument,
     ) -> Result<(), AppError> {
-        let db = self
-            .database()
-            .expect("database-backed catalog store should have a database");
+        let db = self.database();
         model_catalog_entry::Entity::delete_many()
             .filter(model_catalog_entry::Column::Kind.eq(kind))
             .exec(db.as_ref())
@@ -194,9 +97,7 @@ impl ModelCatalogStore {
     pub(super) async fn read_cached_official_from_db(
         &self,
     ) -> Result<Option<CachedOfficialCatalog>, AppError> {
-        let db = self
-            .database()
-            .expect("database-backed catalog store should have a database");
+        let db = self.database();
         let Some(state) = model_catalog_state::Entity::find_by_id(CATALOG_STATE_ID)
             .one(db.as_ref())
             .await?
@@ -226,9 +127,7 @@ impl ModelCatalogStore {
         &self,
         cached: &CachedOfficialCatalog,
     ) -> Result<(), AppError> {
-        let db = self
-            .database()
-            .expect("database-backed catalog store should have a database");
+        let db = self.database();
         self.write_document_to_db(CATALOG_KIND_OFFICIAL, &cached.document)
             .await?;
         model_catalog_state::Entity::delete_by_id(CATALOG_STATE_ID)

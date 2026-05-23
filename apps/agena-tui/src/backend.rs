@@ -78,8 +78,8 @@ use agena_api::{
 use agena_api_server::{
     dispatch,
     local_api::{
-        ModelCatalogEntryKind, ModelCatalogEntryResource, ModelCatalogListResponse,
-        ModelCatalogResponse as LocalModelCatalogResponse, ModelCatalogSourceKind, normalize_limit,
+        ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse as LocalModelCatalogResponse,
+        ModelCatalogSourceKind, normalize_limit,
     },
     state::AppState,
 };
@@ -4096,23 +4096,11 @@ async fn continue_provider_draft_auth(
 fn local_model_catalog_summary(
     catalog: &agena::model_catalog::ModelCatalogResponse,
 ) -> LocalModelCatalogResponse {
-    let official_entry_count = catalog
-        .entries
-        .iter()
-        .filter(|entry| !entry.has_local_override)
-        .count();
-    let custom_entry_count = catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.has_local_override)
-        .count();
     LocalModelCatalogResponse {
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error.clone(),
         entry_count: catalog.entries.len(),
-        official_entry_count,
-        custom_entry_count,
     }
 }
 
@@ -4176,14 +4164,9 @@ fn local_model_catalog_entry_search_text(entry: &ModelCatalogEntryResource) -> S
             .max_output_tokens
             .map(|value| value.to_string())
             .unwrap_or_default(),
-        match entry.kind {
-            ModelCatalogEntryKind::Official => "official".to_owned(),
-            ModelCatalogEntryKind::Custom => "custom".to_owned(),
-        },
         match entry.source {
             ModelCatalogSourceKind::Generated => "generated".to_owned(),
             ModelCatalogSourceKind::Cache => "cache".to_owned(),
-            ModelCatalogSourceKind::Custom => "custom".to_owned(),
         },
         entry.source_label.clone().unwrap_or_default(),
         entry
@@ -4231,10 +4214,7 @@ fn preferred_catalog_entry_for_lookup_ids<'a>(
                 .iter()
                 .any(|model_id| entry.model_id == *model_id)
         })
-        .min_by_key(|entry| match entry.kind {
-            ModelCatalogEntryKind::Custom => 0,
-            ModelCatalogEntryKind::Official => 1,
-        })
+        .min_by_key(|entry| entry.model_id.as_str())
 }
 
 fn preferred_catalog_entry_for_provider_model<'a>(

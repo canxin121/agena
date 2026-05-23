@@ -654,11 +654,9 @@ Provider models:
 
 | Method | Path                            | 说明                                                                  |
 | ------ | ------------------------------- | --------------------------------------------------------------------- |
-| GET    | `/api/v1/model-catalog`         | paginated catalog query，支持 `q` / `kind` / `origin` / `offset` / `limit` |
+| GET    | `/api/v1/model-catalog`         | paginated catalog query，支持 `q` / `origin` / `offset` / `limit` |
 | POST   | `/api/v1/model-catalog/lookup`  | lookup 一组 `model_id`，返回最匹配的 catalog entries                   |
 | POST   | `/api/v1/model-catalog/refresh` | refresh official catalog，按 source 优先级重新拉 public sources 并 merge live provider model lists |
-| PUT    | `/api/v1/model-catalog/entries` | create or update a local catalog override                             |
-| DELETE | `/api/v1/model-catalog/entries` | delete a local catalog override                                       |
 
 Model catalog list response:
 
@@ -667,9 +665,7 @@ Model catalog list response:
   "summary": {
     "last_refresh_at": "2026-05-15T08:00:00Z",
     "last_successful_source": "generated",
-    "entry_count": 984,
-    "official_entry_count": 940,
-    "custom_entry_count": 44
+    "entry_count": 984
   },
   "total": 2,
   "offset": 0,
@@ -678,7 +674,6 @@ Model catalog list response:
   "items": [
     {
       "model_id": "gpt-5",
-      "kind": "official",
       "source": "generated",
       "source_label": "generated catalog",
       "display_name": "GPT-5",
@@ -726,62 +721,12 @@ Model catalog list response:
           }
         }
       }
-    },
-    {
-      "model_id": "gpt-5",
-      "kind": "custom",
-      "source": "custom",
-      "source_label": "workspace override",
-      "display_name": "Workspace GPT-5"
     }
   ]
 }
 ```
 
-`items` 同时包含官方条目和本地 override，按 `model_id` 聚合展示时可以把它们视为同一个 model 的不同来源。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。官方 catalog 主要来自公开 online sources，再叠加 live provider model lists；catalog 会把 thinking 和 speed modes 保留在同一个 model entry 下，不会展开成新的模型 id。
-
-Create/update local override:
-
-```json
-{
-  "model_id": "gpt-5",
-  "lifecycle": "active",
-  "context_window_tokens": 400000,
-  "max_output_tokens": 16384,
-  "display_name": "Workspace GPT-5",
-  "description": "Pinned for agent runs",
-  "features": {
-    "supported": ["tool_calling", "streaming", "reasoning"],
-    "unsupported": ["temperature"]
-  },
-  "thinking_modes": {
-    "high": {
-      "display_name": "High",
-      "description": "Higher reasoning effort",
-      "thinking": {
-        "type": "effort",
-        "effort": "high"
-      }
-    }
-  },
-  "speed_modes": {
-    "fast": {
-      "display_name": "Fast",
-      "request_override": {
-        "body_patch": {
-          "service_tier": "priority"
-        }
-      }
-    }
-  }
-}
-```
-
-Delete local override query:
-
-```text
-model_id=gpt-5
-```
+`items` 只包含官方 catalog 条目。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。官方 catalog 主要来自公开 online sources，再叠加 live provider model lists；catalog 会把 thinking 和 speed modes 保留在同一个 model entry 下，不会展开成新的模型 id。
 
 ### Workspaces
 

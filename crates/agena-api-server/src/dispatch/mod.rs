@@ -4,10 +4,8 @@
 
 use std::collections::HashMap;
 
-use crate::local_api::dto::MessageResource as HttpMessageResource;
 use crate::local_api::{
-    MessageListQuery, ModelCatalogResponse as HttpModelCatalogResponse,
-    PartLoadMode as HttpPartLoadMode, PermissionRuleListQuery,
+    MessageListQuery, ModelCatalogResponse as HttpModelCatalogResponse, PermissionRuleListQuery,
     PermissionRuleResource as HttpPermissionRuleResource, PermissionRuleWriteRequest,
     SessionAutomationResource as HttpSessionAutomationResource,
     SessionCreateRequest as HttpSessionCreateRequest,
@@ -173,34 +171,6 @@ impl From<HttpSessionResource> for SessionResource {
             child_session_count: value.child_session_count,
             last_message_at: value.last_message_at,
             goal: value.goal.map(Into::into),
-        }
-    }
-}
-
-impl From<HttpMessageResource> for agena_api::resource::MessageResource {
-    fn from(value: HttpMessageResource) -> Self {
-        Self {
-            id: value.id,
-            session_id: value.session_id,
-            role: value.role,
-            state: value.state,
-            created_at: value.created_at,
-            updated_at: value.updated_at,
-            metadata: value.metadata,
-            usage: value.usage,
-            finish: value.finish,
-            part_count: value.part_count,
-            parts: value.parts,
-        }
-    }
-}
-
-impl From<agena_api::resource::PartLoadMode> for HttpPartLoadMode {
-    fn from(value: agena_api::resource::PartLoadMode) -> Self {
-        match value {
-            agena_api::resource::PartLoadMode::None => Self::None,
-            agena_api::resource::PartLoadMode::Summary => Self::Summary,
-            agena_api::resource::PartLoadMode::Full => Self::Full,
         }
     }
 }

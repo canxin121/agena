@@ -896,31 +896,7 @@ export type SessionExecutionResource = {
   usage: SessionUsageResource
 }
 
-export type SessionEventRecord = {
-  event_id?: number | null
-  session_id: number
-  seq: number
-  event_type: string
-  payload: Record<string, unknown>
-  causation_id?: number | null
-  correlation_id?: number | null
-  created_at: string
-}
-
-export type TimelineEventRecord = {
-  event_id?: number | null
-  workspace_id?: number | null
-  session_id?: number | null
-  seq_global: number
-  causation_id?: number | null
-  correlation_id?: number | null
-  created_at?: string | null
-  ts_ms?: number | null
-  kind: string
-  payload: Record<string, unknown>
-}
-
-export type GlobalEventRecord = {
+export type DomainEventRecord = {
   id?: string | null
   seq_global: number
   seq_session?: number | null
@@ -936,6 +912,93 @@ export type GlobalEventRecord = {
 
 export type SessionEventStreamHandle = {
   close: () => void
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function readMessageRole(value: unknown): MessageResource['role'] | null {
+  return value === 'user' || value === 'assistant' || value === 'system' ? value : null
+}
+
+function readMessageParts(value: unknown): MessagePart[] | null {
+  if (!Array.isArray(value)) return null
+  return value
+    .map((item) => asRecord(item) as MessagePart | null)
+    .filter((item): item is MessagePart => Boolean(item))
+}
+
+function isoFromTimestampMs(value: unknown, fallback: string): string {
+  const timestampMs = readFiniteNumber(value)
+  if (timestampMs === null) return fallback
+  const date = new Date(timestampMs)
+  return Number.isFinite(date.getTime()) ? date.toISOString() : fallback
+}
+
+export function messageResourceFromEvent(event: DomainEventRecord): MessageResource | null {
+  const payload = asRecord(event.payload)
+  if (!payload) return null
+
+  switch (event.kind) {
+    case 'message_part_updated': {
+      const sessionId = event.session_id ?? readFiniteNumber(payload.session_id)
+      const messageId = readFiniteNumber(payload.message_id)
+      const role = readMessageRole(payload.message_role)
+      const state = readString(payload.message_state)
+      const createdAt = readString(payload.message_created_at)
+      const part = asRecord(payload.part) as MessagePart | null
+      if (sessionId == null || messageId === null || !role || !state || !createdAt || !part) {
+        return null
+      }
+      return {
+        id: messageId,
+        session_id: sessionId,
+        role,
+        state,
+        created_at: createdAt,
+        updated_at: isoFromTimestampMs(payload.ts_ms, createdAt),
+        metadata: {},
+        usage: null,
+        finish: null,
+        part_count: 1,
+        parts: [part],
+      }
+    }
+    case 'user_message_appended':
+    case 'assistant_message_completed': {
+      const sessionId = event.session_id
+      const messageId = readFiniteNumber(payload.message_id)
+      const createdAt = readString(payload.created_at)
+      const parts = readMessageParts(payload.parts)
+      if (sessionId == null || messageId === null || !createdAt || !parts) {
+        return null
+      }
+      return {
+        id: messageId,
+        session_id: sessionId,
+        role: event.kind === 'user_message_appended' ? 'user' : 'assistant',
+        state: 'completed',
+        created_at: createdAt,
+        updated_at: createdAt,
+        metadata: asRecord(payload.metadata) ?? {},
+        usage: event.kind === 'assistant_message_completed' ? asRecord(payload.usage) : null,
+        finish: event.kind === 'assistant_message_completed' ? readString(payload.finish_reason) : null,
+        part_count: parts.length,
+        parts,
+      }
+    }
+    default:
+      return null
+  }
 }
 
 type PaginatedResponse<T> = {
@@ -1772,12 +1835,12 @@ export async function listSessionTimeline(
     afterSeq?: number
     limit?: number
   },
-): Promise<TimelineEventRecord[]> {
+): Promise<DomainEventRecord[]> {
   const params = new URLSearchParams()
   if (options?.afterSeq !== undefined) params.set('after_seq', String(options.afterSeq))
   if (options?.limit !== undefined) params.set('limit', String(options.limit))
   const query = params.toString()
-  const response = await apiJson<PaginatedResponse<TimelineEventRecord>>(
+  const response = await apiJson<PaginatedResponse<DomainEventRecord>>(
     `/api/v1/sessions/${sessionId}/events${query ? `?${query}` : ''}`,
   )
   return response.items ?? []
@@ -1802,7 +1865,7 @@ export async function listGlobalEvents(options?: {
   workspaceId?: number
   sessionId?: number
   kinds?: string[]
-}): Promise<GlobalEventRecord[]> {
+}): Promise<DomainEventRecord[]> {
   const params = new URLSearchParams()
   if (options?.sinceSeqGlobal !== undefined) params.set('since_seq_global', String(options.sinceSeqGlobal))
   if (options?.limit !== undefined) params.set('limit', String(options.limit))
@@ -1821,7 +1884,7 @@ export async function listGlobalEvents(options?: {
     )
   }
   const query = params.toString()
-  const response = await apiJson<PaginatedResponse<GlobalEventRecord>>(`/api/v1/events${query ? `?${query}` : ''}`)
+  const response = await apiJson<PaginatedResponse<DomainEventRecord>>(`/api/v1/events${query ? `?${query}` : ''}`)
   return response.items ?? []
 }
 
@@ -1830,7 +1893,7 @@ export function streamSessionEvents(
   options: {
     afterSeq?: number | null
     pollIntervalMs?: number
-    onEvent: (event: SessionEventRecord) => void
+    onEvent: (event: DomainEventRecord) => void
     onError?: (error: Error) => void
     onOpen?: () => void
   },
@@ -1870,9 +1933,9 @@ export function streamSessionEvents(
 
     if (parsed.event !== 'session_event') return
 
-    const record = JSON.parse(parsed.data) as SessionEventRecord
-    if (typeof record.seq === 'number' && Number.isFinite(record.seq)) {
-      afterSeq = Math.max(afterSeq, record.seq)
+    const record = JSON.parse(parsed.data) as DomainEventRecord
+    if (typeof record.seq_global === 'number' && Number.isFinite(record.seq_global)) {
+      afterSeq = Math.max(afterSeq, record.seq_global)
     } else if (parsed.id) {
       const seq = Number(parsed.id)
       if (Number.isFinite(seq)) {

@@ -81,8 +81,7 @@ use self::provider_studio::*;
 
 use self::transcript_view::{
     render_message, render_message_detailed, render_transcript_export_markdown,
-    rewind_message_preview,
-    sanitize_terminal_text,
+    rewind_message_preview, sanitize_terminal_text,
 };
 
 const MESSAGE_PAGE_SIZE: u64 = 40;
@@ -1575,9 +1574,18 @@ struct TranscriptDetailDefaults {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum TranscriptNodeKey {
-    MessagePart { message_id: i64, part_id: Option<i64> },
-    Reasoning { message_id: i64, part_id: i64 },
-    Tool { message_id: i64, part_id: i64 },
+    MessagePart {
+        message_id: i64,
+        part_id: Option<i64>,
+    },
+    Reasoning {
+        message_id: i64,
+        part_id: i64,
+    },
+    Tool {
+        message_id: i64,
+        part_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1727,14 +1735,8 @@ impl App {
             transcript: TranscriptState::new(
                 i18n,
                 TranscriptDetailDefaults {
-                    tool_output_expanded: launch
-                        .tui_config
-                        .transcript
-                        .tool_output_default_expanded,
-                    thinking_expanded: launch
-                        .tui_config
-                        .transcript
-                        .thinking_default_expanded,
+                    tool_output_expanded: launch.tui_config.transcript.tool_output_default_expanded,
+                    thinking_expanded: launch.tui_config.transcript.thinking_default_expanded,
                 },
             ),
             run_options: RunOptionsState::default(),
@@ -3023,7 +3025,10 @@ impl App {
                 false
             }
             KeyCode::PageDown => {
-                dialog.selected = min(dialog.selected.saturating_add(10), dialog.items.len().saturating_sub(1));
+                dialog.selected = min(
+                    dialog.selected.saturating_add(10),
+                    dialog.items.len().saturating_sub(1),
+                );
                 false
             }
             KeyCode::Home => {
@@ -3039,8 +3044,10 @@ impl App {
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                dialog.selected =
-                    min(dialog.selected.saturating_add(1), dialog.items.len().saturating_sub(1));
+                dialog.selected = min(
+                    dialog.selected.saturating_add(1),
+                    dialog.items.len().saturating_sub(1),
+                );
                 false
             }
             KeyCode::Enter => self.activate_agent_studio_selection(dialog),
@@ -3109,7 +3116,10 @@ impl App {
                 false
             }
             KeyCode::PageDown => {
-                dialog.selected = min(dialog.selected.saturating_add(10), dialog.items.len().saturating_sub(1));
+                dialog.selected = min(
+                    dialog.selected.saturating_add(10),
+                    dialog.items.len().saturating_sub(1),
+                );
                 false
             }
             KeyCode::Home => {
@@ -3125,8 +3135,10 @@ impl App {
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                dialog.selected =
-                    min(dialog.selected.saturating_add(1), dialog.items.len().saturating_sub(1));
+                dialog.selected = min(
+                    dialog.selected.saturating_add(1),
+                    dialog.items.len().saturating_sub(1),
+                );
                 false
             }
             KeyCode::Enter => self.activate_agent_permission_studio_selection(dialog),
@@ -3168,13 +3180,15 @@ impl App {
                     Err(error) => self.flash_error(error),
                 }
             }
-            AgentStudioAction::SetDefault => match self.set_default_agent_value(dialog.agent_name.as_str()) {
-                Ok(()) => {
-                    self.flash_success(format!("set default.agent to {}", dialog.agent_name));
-                    self.refresh_agent_studio_overlay(dialog);
+            AgentStudioAction::SetDefault => {
+                match self.set_default_agent_value(dialog.agent_name.as_str()) {
+                    Ok(()) => {
+                        self.flash_success(format!("set default.agent to {}", dialog.agent_name));
+                        self.refresh_agent_studio_overlay(dialog);
+                    }
+                    Err(error) => self.flash_error(error),
                 }
-                Err(error) => self.flash_error(error),
-            },
+            }
             AgentStudioAction::OpenPermissionWorkbench => {
                 self.route_stack.push(Route::AgentStudio(dialog.clone()));
                 self.open_agent_permission_studio(dialog.agent_name.as_str());
@@ -3184,7 +3198,11 @@ impl App {
         false
     }
 
-    fn open_agent_studio_editor(&mut self, dialog: &mut AgentStudioOverlay, field: AgentStudioField) {
+    fn open_agent_studio_editor(
+        &mut self,
+        dialog: &mut AgentStudioOverlay,
+        field: AgentStudioField,
+    ) {
         let (title, prompt, footer, multiline, input) =
             agent_studio_editor_config(&dialog.profile, field);
         dialog.editor = Some(AgentStudioEditor {
@@ -3243,7 +3261,9 @@ impl App {
                 }
                 self.open_agent_permission_studio_editor(dialog, field);
             }
-            AgentPermissionStudioAction::OpenSource => self.open_agent_profile_source(&dialog.profile),
+            AgentPermissionStudioAction::OpenSource => {
+                self.open_agent_profile_source(&dialog.profile)
+            }
         }
         false
     }
@@ -4615,7 +4635,10 @@ impl App {
             self.copy_loaded_transcript();
         } else if matches!(key.code, KeyCode::Char('c')) {
             self.copy_last_assistant_message();
-        } else if matches!(key.code, KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char(' ')) {
+        } else if matches!(
+            key.code,
+            KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char(' ')
+        ) {
             self.toggle_transcript_cursor_node();
         } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) {
             self.transcript.scroll_by_lines(width, height, -1);
@@ -4684,7 +4707,11 @@ impl App {
         if node.toggleable {
             self.flash_info(format!(
                 "{} {}",
-                if node.expanded { "collapsed" } else { "expanded" },
+                if node.expanded {
+                    "collapsed"
+                } else {
+                    "expanded"
+                },
                 node.kind.label()
             ));
         }
@@ -7811,7 +7838,10 @@ impl App {
         })
     }
 
-    fn refresh_agent_permission_studio_overlay(&mut self, dialog: &mut AgentPermissionStudioOverlay) {
+    fn refresh_agent_permission_studio_overlay(
+        &mut self,
+        dialog: &mut AgentPermissionStudioOverlay,
+    ) {
         let preferred_item = dialog
             .items
             .get(dialog.selected)
@@ -7995,14 +8025,20 @@ impl App {
             Route::AgentStudio(dialog) => self
                 .build_agent_studio_overlay(
                     dialog.agent_name.as_str(),
-                    dialog.items.get(dialog.selected).map(|item| item.label.as_str()),
+                    dialog
+                        .items
+                        .get(dialog.selected)
+                        .map(|item| item.label.as_str()),
                 )
                 .map(Route::AgentStudio)
                 .unwrap_or(Route::AgentStudio(dialog)),
             Route::AgentPermissionStudio(dialog) => self
                 .build_agent_permission_studio_overlay(
                     dialog.agent_name.as_str(),
-                    dialog.items.get(dialog.selected).map(|item| item.label.as_str()),
+                    dialog
+                        .items
+                        .get(dialog.selected)
+                        .map(|item| item.label.as_str()),
                 )
                 .map(Route::AgentPermissionStudio)
                 .unwrap_or(Route::AgentPermissionStudio(dialog)),
@@ -12373,7 +12409,10 @@ fn settings_studio_plugin_entry_items(
 ) -> Vec<SettingsStudioItem> {
     let plugin_entries_value =
         get_json_path(&sources.effective, Some("plugins.list")).unwrap_or(JsonValue::Null);
-    let plugin_entries = plugin_entries_value.as_object().cloned().unwrap_or_default();
+    let plugin_entries = plugin_entries_value
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
     let file_entries_value =
         get_json_path(&sources.file, Some("plugins.list")).unwrap_or(JsonValue::Null);
     let file_entries = file_entries_value.as_object().cloned().unwrap_or_default();
@@ -12421,12 +12460,7 @@ fn settings_studio_plugin_entry_items(
             Some(SettingsStudioItem {
                 label: status.plugin_id.clone(),
                 value,
-                detail: plugin_entry_detail_text(
-                    status,
-                    entry_object,
-                    source.as_str(),
-                    disabled,
-                ),
+                detail: plugin_entry_detail_text(status, entry_object, source.as_str(), disabled),
                 action: SettingsPickerAction::TogglePluginEntryDisabled {
                     plugin_id: status.plugin_id.clone(),
                     entry,
@@ -12791,7 +12825,8 @@ fn agent_optional_string_summary(value: Option<&str>, empty: &str) -> String {
 }
 
 fn agent_optional_number_summary<T: ToString>(value: Option<T>, empty: &str) -> String {
-    value.map(|value| value.to_string())
+    value
+        .map(|value| value.to_string())
         .unwrap_or_else(|| empty.to_string())
 }
 
@@ -12863,10 +12898,7 @@ fn agent_studio_items(
         },
         AgentStudioItem {
             label: "Max Output Tokens".to_string(),
-            value: agent_optional_number_summary(
-                profile.frontmatter.max_output_tokens,
-                "inherit",
-            ),
+            value: agent_optional_number_summary(profile.frontmatter.max_output_tokens, "inherit"),
             detail: "Optional output token budget for this agent.".to_string(),
             action: AgentStudioAction::Edit(AgentStudioField::MaxOutputTokens),
         },
@@ -12972,7 +13004,10 @@ fn agent_studio_item_detail_text(
             lines.join("\n")
         }
         AgentStudioAction::Edit(AgentStudioField::Aliases) => {
-            let mut lines = vec!["Alternate names for invoking this agent.".to_string(), String::new()];
+            let mut lines = vec![
+                "Alternate names for invoking this agent.".to_string(),
+                String::new(),
+            ];
             if profile.frontmatter.aliases.is_empty() {
                 lines.push("No aliases configured.".to_string());
             } else {
@@ -13019,7 +13054,11 @@ fn agent_studio_item_detail_text(
             default_agent_name.unwrap_or("unset")
         ),
         AgentStudioAction::ToggleHidden => {
-            let current = if profile.frontmatter.hidden { "hidden" } else { "visible" };
+            let current = if profile.frontmatter.hidden {
+                "hidden"
+            } else {
+                "visible"
+            };
             format!(
                 "Current visibility: {current}\nScope: {}\nSource: {}\n\n{}",
                 profile.scope.as_str(),
@@ -13099,8 +13138,7 @@ fn agent_editability_hint(editable: bool) -> String {
     if editable {
         "Enter edits this field in agena.json.".to_string()
     } else {
-        "This profile is read-only in the TUI because it is backed by a markdown file."
-            .to_string()
+        "This profile is read-only in the TUI because it is backed by a markdown file.".to_string()
     }
 }
 
@@ -13198,7 +13236,12 @@ fn agent_studio_field_input_text(profile: &AgentProfile, field: AgentStudioField
             .adapter
             .clone()
             .unwrap_or_default(),
-        AgentStudioField::DefaultModel => profile.frontmatter.default.model.clone().unwrap_or_default(),
+        AgentStudioField::DefaultModel => profile
+            .frontmatter
+            .default
+            .model
+            .clone()
+            .unwrap_or_default(),
     }
 }
 
@@ -13263,11 +13306,9 @@ fn agent_studio_field_setting_value(
             if trimmed.is_empty() {
                 None
             } else {
-                Some(json!(
-                    trimmed
-                        .parse::<u32>()
-                        .map_err(|error| format!("invalid max_output_tokens: {error}"))?
-                ))
+                Some(json!(trimmed.parse::<u32>().map_err(|error| format!(
+                    "invalid max_output_tokens: {error}"
+                ))?))
             }
         }
         AgentStudioField::Steps => {
@@ -13304,20 +13345,14 @@ fn agent_permission_studio_items(
         },
         AgentPermissionStudioItem {
             label: "Inherit Network".to_string(),
-            value: permission_inherit_value_label(
-                permission,
-                AgentPermissionField::InheritNetwork,
-            ),
+            value: permission_inherit_value_label(permission, AgentPermissionField::InheritNetwork),
             detail: "Controls whether network defaults flow in from runtime permissions."
                 .to_string(),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritNetwork),
         },
         AgentPermissionStudioItem {
             label: "Inherit Entries".to_string(),
-            value: permission_inherit_value_label(
-                permission,
-                AgentPermissionField::InheritEntries,
-            ),
+            value: permission_inherit_value_label(permission, AgentPermissionField::InheritEntries),
             detail: "Controls whether tool/entry defaults flow in from runtime permissions."
                 .to_string(),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritEntries),
@@ -13498,7 +13533,10 @@ fn agent_permission_field_prompt(field: AgentPermissionField) -> &'static str {
     }
 }
 
-fn agent_permission_field_input_text(profile: &AgentProfile, field: AgentPermissionField) -> String {
+fn agent_permission_field_input_text(
+    profile: &AgentProfile,
+    field: AgentPermissionField,
+) -> String {
     match field {
         AgentPermissionField::InheritPath => permission_inherit_setting_value(
             &profile.frontmatter.permission,
@@ -13518,10 +13556,12 @@ fn agent_permission_field_input_text(profile: &AgentProfile, field: AgentPermiss
         )
         .map(|value| value.to_string())
         .unwrap_or_default(),
-        AgentPermissionField::PathConfig => pretty_json_optional(profile.frontmatter.permission.path.as_ref())
-            .unwrap_or_default(),
+        AgentPermissionField::PathConfig => {
+            pretty_json_optional(profile.frontmatter.permission.path.as_ref()).unwrap_or_default()
+        }
         AgentPermissionField::NetworkConfig => {
-            pretty_json_optional(profile.frontmatter.permission.network.as_ref()).unwrap_or_default()
+            pretty_json_optional(profile.frontmatter.permission.network.as_ref())
+                .unwrap_or_default()
         }
         AgentPermissionField::EntryConfig => {
             pretty_json_optional(profile.frontmatter.permission.tools.as_ref()).unwrap_or_default()
@@ -13681,8 +13721,8 @@ where
     if input.trim().is_empty() {
         return Ok(None);
     }
-    let parsed = serde_json::from_str::<T>(input)
-        .map_err(|error| format!("invalid json: {error}"))?;
+    let parsed =
+        serde_json::from_str::<T>(input).map_err(|error| format!("invalid json: {error}"))?;
     serde_json::to_value(parsed)
         .map(Some)
         .map_err(|error| error.to_string())
@@ -13733,9 +13773,7 @@ fn agent_permission_path(agent_name: &str, field: AgentPermissionField) -> Strin
             agent_config_path(agent_name, "permission.inherit.entries")
         }
         AgentPermissionField::PathConfig => agent_config_path(agent_name, "permission.path"),
-        AgentPermissionField::NetworkConfig => {
-            agent_config_path(agent_name, "permission.network")
-        }
+        AgentPermissionField::NetworkConfig => agent_config_path(agent_name, "permission.network"),
         AgentPermissionField::EntryConfig => agent_config_path(agent_name, "permission.entries"),
         AgentPermissionField::FullConfig => agent_config_path(agent_name, "permission"),
     }
@@ -14795,19 +14833,15 @@ impl TranscriptState {
                 self.apply_message_part_delta(delta).is_err()
             }
             AgenaSessionEvent::AssistantMessageCompleted(completed) => {
-                let message = MessageResource {
-                    id: completed.message_id.raw(),
-                    session_id: self.session_id.unwrap_or_default(),
-                    role: MessageRole::Assistant,
-                    state: MessageStatus::Completed,
-                    created_at: completed.created_at,
-                    updated_at: completed.created_at,
-                    metadata: completed.metadata.clone(),
-                    usage: completed.usage.clone(),
-                    finish: Some(completed.finish_reason.to_string()),
-                    part_count: completed.parts.len() as u64,
-                    parts: Some(completed.parts.clone()),
-                };
+                let message = MessageResource::from_completed_assistant_parts(
+                    self.session_id.unwrap_or_default(),
+                    completed.message_id.raw(),
+                    completed.created_at,
+                    completed.metadata.clone(),
+                    completed.usage.clone(),
+                    Some(completed.finish_reason.to_string()),
+                    completed.parts.clone(),
+                );
                 self.upsert_message(message);
                 self.invalidate_render();
                 false
@@ -14829,19 +14863,7 @@ impl TranscriptState {
     }
 
     fn apply_message_part_updated(&mut self, update: &agena::event::MessagePartUpdatedEvent) {
-        let shell = MessageResource {
-            id: update.message_id,
-            session_id: update.session_id,
-            role: api_message_role(update.message_role),
-            state: update.message_state,
-            created_at: update.message_created_at,
-            updated_at: timestamp_ms_or(update.ts_ms, update.message_created_at),
-            metadata: Default::default(),
-            usage: None,
-            finish: None,
-            part_count: 1,
-            parts: Some(vec![update.part.clone()]),
-        };
+        let shell = MessageResource::from_part_update(update);
 
         let Some(index) = self.upsert_message(shell) else {
             return;
@@ -15036,11 +15058,16 @@ impl TranscriptState {
             let base_line = lines.len();
             let base_node = nodes.len();
             lines.extend(rendered.lines);
-            nodes.extend(rendered.nodes.into_iter().map(|node| RenderedTranscriptNode {
-                start_line: node.start_line.saturating_add(base_line),
-                end_line: node.end_line.saturating_add(base_line),
-                ..node
-            }));
+            nodes.extend(
+                rendered
+                    .nodes
+                    .into_iter()
+                    .map(|node| RenderedTranscriptNode {
+                        start_line: node.start_line.saturating_add(base_line),
+                        end_line: node.end_line.saturating_add(base_line),
+                        ..node
+                    }),
+            );
             let added_lines = lines.len().saturating_sub(base_line);
             line_nodes.extend((0..added_lines).map(|offset| {
                 nodes
@@ -15086,7 +15113,10 @@ impl TranscriptState {
     fn clamp_scroll(&mut self, width: u16, height: u16) {
         let max_scroll = self.max_scroll(width, height);
         self.scroll = min(self.scroll, max_scroll);
-        self.cursor_line = min(self.cursor_line, self.rendered(width).lines.len().saturating_sub(1));
+        self.cursor_line = min(
+            self.cursor_line,
+            self.rendered(width).lines.len().saturating_sub(1),
+        );
     }
 
     fn scroll_to_bottom(&mut self, width: u16, height: u16) {
@@ -15167,7 +15197,10 @@ impl TranscriptState {
     fn current_cursor_node<'a>(&'a mut self, width: u16) -> Option<&'a RenderedTranscriptNode> {
         let cursor_line = self.cursor_line;
         let rendered = self.rendered(width);
-        let node_index = rendered.line_nodes.get(cursor_line).and_then(|value| *value)?;
+        let node_index = rendered
+            .line_nodes
+            .get(cursor_line)
+            .and_then(|value| *value)?;
         rendered.nodes.get(node_index)
     }
 
@@ -16175,14 +16208,6 @@ fn message_status_rank(status: MessageStatus) -> u8 {
         MessageStatus::Completed => 2,
         MessageStatus::Failed => 3,
         MessageStatus::Cancelled => 4,
-    }
-}
-
-fn api_message_role(role: agena::role::Role) -> MessageRole {
-    match role {
-        agena::role::Role::User => MessageRole::User,
-        agena::role::Role::Assistant => MessageRole::Assistant,
-        agena::role::Role::System => MessageRole::System,
     }
 }
 

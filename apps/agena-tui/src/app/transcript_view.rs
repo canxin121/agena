@@ -77,7 +77,8 @@ pub(super) fn render_message_detailed(
                 } else {
                     header_start
                 };
-                let node = render_part_node(message, part, width, &mut lines, i18n, defaults, expansions);
+                let node =
+                    render_part_node(message, part, width, &mut lines, i18n, defaults, expansions);
                 if lines.len() > start_line {
                     nodes.push(RenderedTranscriptNode {
                         key: node.key,
@@ -95,8 +96,7 @@ pub(super) fn render_message_detailed(
             }
         }
         None => {
-            let text =
-                ui_text::message_parts_not_loaded(i18n, message.part_count as usize);
+            let text = ui_text::message_parts_not_loaded(i18n, message.part_count as usize);
             lines.push(RenderedLine::dim(format!("  {text}")));
             nodes.push(RenderedTranscriptNode {
                 key: TranscriptNodeKey::MessagePart {
@@ -822,7 +822,9 @@ fn render_operation_blocks(
 ) {
     for block in blocks {
         match block {
-            OperationBlock::Text { text } => push_multiline(out, "    ", text, Style::default(), width),
+            OperationBlock::Text { text } => {
+                push_multiline(out, "    ", text, Style::default(), width)
+            }
             OperationBlock::Markdown { text } => {
                 push_markdown(out, "    ", text, width);
             }
@@ -846,14 +848,7 @@ fn render_operation_blocks(
                     if expanded {
                         push_multiline(out, "      ", stdout, Style::default(), width);
                     } else {
-                        push_collapsible_text(
-                            out,
-                            "      ",
-                            stdout,
-                            Style::default(),
-                            width,
-                            i18n,
-                        );
+                        push_collapsible_text(out, "      ", stdout, Style::default(), width, i18n);
                     }
                 }
                 if let Some(stderr) = stderr
@@ -984,14 +979,7 @@ fn render_operation_blocks(
                     if expanded {
                         push_multiline(out, "      ", text, Style::default(), width);
                     } else {
-                        push_collapsible_text(
-                            out,
-                            "      ",
-                            text,
-                            Style::default(),
-                            width,
-                            i18n,
-                        );
+                        push_collapsible_text(out, "      ", text, Style::default(), width, i18n);
                     }
                 }
             }
@@ -1281,7 +1269,11 @@ fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart) -> String {
     {
         sections.push(diff.trim().to_string());
     }
-    let operation_blocks = tool.blocks.iter().map(operation_block_copy_text).collect::<Vec<_>>();
+    let operation_blocks = tool
+        .blocks
+        .iter()
+        .map(operation_block_copy_text)
+        .collect::<Vec<_>>();
     if !operation_blocks.is_empty() {
         sections.push(operation_blocks.join("\n\n"));
     }
@@ -2383,7 +2375,11 @@ mod tests {
         render_tool_execution(&part, &tool, &mut out, 120, &I18n::english(), false);
 
         let rendered = out.into_iter().map(|line| line.text).collect::<Vec<_>>();
-        assert_eq!(rendered.len(), 1, "collapsed tool output should stay on one line");
+        assert_eq!(
+            rendered.len(),
+            1,
+            "collapsed tool output should stay on one line"
+        );
         assert!(rendered[0].contains("[tool]"));
         assert!(rendered[0].contains("completed"));
         assert!(rendered[0].contains("bash"));
@@ -2393,8 +2389,7 @@ mod tests {
     fn summary_only_tool_parts_keep_their_single_line_tool_format_after_reload() {
         let invocation = ToolInvocation::new(
             "settings",
-            serde_json::from_value(json!({ "action": "list" }))
-                .expect("valid structured input"),
+            serde_json::from_value(json!({ "action": "list" })).expect("valid structured input"),
         );
         let tool = OperationPart::completed(
             9,
@@ -2489,13 +2484,24 @@ mod tests {
         assert!(rendered.nodes[0].toggleable);
         assert!(!rendered.nodes[0].expanded);
         assert!(rendered.nodes[0].requires_full_message);
-        assert!(rendered.lines.iter().any(|line| line.text.contains("thinking")));
         assert!(
-            rendered.lines.iter().any(|line| line.text.contains("line-8")),
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("thinking"))
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("line-8")),
             "collapsed preview should still show early reasoning lines"
         );
         assert!(
-            rendered.lines.iter().all(|line| !line.text.contains("line-10")),
+            rendered
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("line-10")),
             "collapsed summary-only reasoning should not fully expand after reload"
         );
     }

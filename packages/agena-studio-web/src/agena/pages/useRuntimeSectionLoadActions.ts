@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 
 import type {
   AuthProvider,
+  DomainEventRecord,
   ModelCatalogEntry,
   PermissionRuleResource,
   PluginInspect,
@@ -12,7 +13,6 @@ import type {
   RuntimeStatus,
   SessionExecutionResource,
   SessionResource,
-  TimelineEventRecord,
   WorkspaceResource,
 } from '../lib/agenaApi'
 import {
@@ -49,7 +49,7 @@ export type RuntimeSectionLoadActionsInput = {
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sessionExecution: Ref<SessionExecutionResource | null>
-  sessionTimeline: Ref<TimelineEventRecord[]>
+  sessionTimeline: Ref<DomainEventRecord[]>
   sessions: Ref<SessionResource[]>
   stopPluginLogPolling: () => void
   workspaces: Ref<WorkspaceResource[]>

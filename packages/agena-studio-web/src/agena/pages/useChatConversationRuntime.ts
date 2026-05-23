@@ -5,11 +5,10 @@ import {
   listMessages,
   listSessionTimeline,
   streamSessionEvents,
+  type DomainEventRecord,
   type MessageResource,
-  type SessionEventRecord,
   type SessionEventStreamHandle,
   type SessionExecutionResource,
-  type TimelineEventRecord,
 } from '../lib/agenaApi'
 import { applySessionEvent, type ChatEventState } from './chatPageModel'
 
@@ -19,7 +18,7 @@ export type ChatConversationRuntimeInput = {
   messages: Ref<MessageResource[]>
   selectedSessionId: Ref<number | null>
   sessionState: Ref<SessionExecutionResource | null>
-  timelineEvents: Ref<TimelineEventRecord[]>
+  timelineEvents: Ref<DomainEventRecord[]>
 }
 
 export type ChatConversationRuntimeDeps = {
@@ -98,7 +97,7 @@ export function useChatConversationRuntime(
     }, delayMs)
   }
 
-  function applyChatSessionEvent(event: SessionEventRecord): boolean {
+  function applyChatSessionEvent(event: DomainEventRecord): boolean {
     const result = deps.applySessionEvent(
       {
         messages: input.messages.value,
@@ -143,7 +142,7 @@ export function useChatConversationRuntime(
         if (input.sessionState.value) {
           input.sessionState.value = {
             ...input.sessionState.value,
-            latest_event_seq: Math.max(input.sessionState.value.latest_event_seq ?? 0, event.seq),
+            latest_event_seq: Math.max(input.sessionState.value.latest_event_seq ?? 0, event.seq_global),
           }
         }
         if (applyChatSessionEvent(event)) {

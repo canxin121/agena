@@ -1,12 +1,11 @@
 import type {
   AuthProvider,
-  GlobalEventRecord,
+  DomainEventRecord,
   PluginLogEntry,
   PluginStatus,
   ProviderModel,
   RuntimeStatus,
   SessionExecutionResource,
-  TimelineEventRecord,
 } from '@/agena/lib/agenaApi'
 
 export type OperatorCard = {
@@ -28,10 +27,8 @@ export type TimelineSummaryItem = {
   sessionId: string
 }
 
-function readEventTimestamp(event: TimelineEventRecord | GlobalEventRecord): string {
-  if (event.created_at) return event.created_at
-  const maybeTsMs = 'ts_ms' in event ? event.ts_ms : null
-  return maybeTsMs ? new Date(maybeTsMs).toLocaleString() : 'n/a'
+function readEventTimestamp(event: DomainEventRecord): string {
+  return event.created_at
 }
 
 export function buildOperatorCards(runtime: RuntimeStatus | null): OperatorCard[] {
@@ -138,7 +135,7 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
   ]
 }
 
-export function buildTimelineSummary(events: Array<TimelineEventRecord | GlobalEventRecord>): TimelineSummaryItem[] {
+export function buildTimelineSummary(events: DomainEventRecord[]): TimelineSummaryItem[] {
   return events.map((event) => ({
     key: `${event.seq_global}`,
     kind: event.kind,
@@ -148,7 +145,7 @@ export function buildTimelineSummary(events: Array<TimelineEventRecord | GlobalE
   }))
 }
 
-function summarizeTimelineEvent(event: TimelineEventRecord | GlobalEventRecord): string {
+function summarizeTimelineEvent(event: DomainEventRecord): string {
   const payload = event.payload || {}
   const candidate = [
     readString(payload.summary),

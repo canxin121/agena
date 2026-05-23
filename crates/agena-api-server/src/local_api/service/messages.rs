@@ -136,21 +136,9 @@ fn message_resource_from_message(
                 .collect(),
         ),
     };
-    MessageResource {
-        id: message.id,
-        session_id,
-        role: visible_message_role(message.role),
-        state: message.state,
-        created_at: message.created_at,
-        // The append-only event log carries no separate "updated_at" — every
-        // message in `Session.messages` is in its terminal projected form.
-        updated_at: message.created_at,
-        metadata: message.metadata.clone(),
-        usage: message.usage.clone(),
-        finish: message.finish.clone(),
-        part_count,
-        parts,
-    }
+    // The append-only event log carries no separate "updated_at" — every
+    // message in `Session.messages` is in its terminal projected form.
+    MessageResource::from_message(session_id, message, message.created_at, part_count, parts)
 }
 
 #[derive(Debug, Clone)]
@@ -179,14 +167,6 @@ impl VisibleMessageProjection {
                 .find(|part| part.id == part_id)
                 .cloned()
         })
-    }
-}
-
-fn visible_message_role(role: agena::role::Role) -> agena_api::resource::MessageRole {
-    match role {
-        agena::role::Role::User => agena_api::resource::MessageRole::User,
-        agena::role::Role::Assistant => agena_api::resource::MessageRole::Assistant,
-        agena::role::Role::System => agena_api::resource::MessageRole::System,
     }
 }
 

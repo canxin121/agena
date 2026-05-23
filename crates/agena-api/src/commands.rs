@@ -32,8 +32,8 @@ pub enum Command {
     CompleteSessionGoal(CompleteSessionGoalParams),
     ClearSessionGoal(ClearSessionGoalParams),
 
-    // ── turn / run ──
-    SubmitTurn(SubmitTurnParams),
+    // ── message / run ──
+    SubmitMessage(SubmitMessageParams),
     ContinueRun(ContinueRunParams),
     CompactSession(CompactSessionParams),
     CancelRun(CancelRunParams),
@@ -158,10 +158,10 @@ pub struct ClearSessionGoalParams {
     pub session_id: i64,
 }
 
-// ─── turn / run ──────────────────────────────────────────────────────────
+// ─── message / run ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubmitTurnParams {
+pub struct SubmitMessageParams {
     pub session_id: i64,
     #[serde(default)]
     pub options: RunOptions,

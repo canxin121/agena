@@ -469,7 +469,7 @@ enum AppMessage {
         session_id: i64,
         result: UiResult<SessionRefresh>,
     },
-    SessionTurnSubmitted {
+    SessionMessageSubmitted {
         session_id: i64,
         draft: ComposerDraft,
         result: UiResult<SessionExecutionResource>,
@@ -5462,7 +5462,7 @@ impl App {
             AppMessage::SessionRefreshed { session_id, result } => {
                 self.handle_session_refreshed(session_id, result)
             }
-            AppMessage::SessionTurnSubmitted {
+            AppMessage::SessionMessageSubmitted {
                 session_id,
                 draft,
                 result,
@@ -5620,7 +5620,7 @@ impl App {
                 self.focus = Focus::Composer;
 
                 if let Some(draft) = submit_draft {
-                    self.request_submit_turn(session.id, draft);
+                    self.request_submit_message(session.id, draft);
                 } else {
                     self.flash_success(self.i18n.text_args(
                         "flash-created-session",
@@ -6713,7 +6713,7 @@ impl App {
         });
     }
 
-    fn request_submit_turn(&mut self, session_id: i64, draft: ComposerDraft) {
+    fn request_submit_message(&mut self, session_id: i64, draft: ComposerDraft) {
         if self
             .pending_interactive_kind_for_session(session_id)
             .is_some()
@@ -6747,10 +6747,10 @@ impl App {
         let options = self.run_options.to_request();
         tokio::spawn(async move {
             let result = backend
-                .submit_parts_turn_with_options(session_id, parts, options)
+                .submit_parts_message_with_options(session_id, parts, options)
                 .await
                 .map_err(|error| error.to_string());
-            let _ = tx.send(AppMessage::SessionTurnSubmitted {
+            let _ = tx.send(AppMessage::SessionMessageSubmitted {
                 session_id,
                 draft,
                 result,
@@ -7033,7 +7033,7 @@ impl App {
     }
 
     /// Primary submit action (Ctrl+Enter by default). When the AI is
-    /// idle, sends a normal turn. When the AI is mid-run, attempts to
+    /// idle, submits the message immediately. When the AI is mid-run, attempts to
     /// `steer_input` (Phase 3) — i.e. inject the message into the live
     /// run so the model sees it on its next step. If the backend rejects
     /// the steer (e.g. the run is in a non-steerable phase), we fall
@@ -7155,7 +7155,7 @@ impl App {
             .or_else(|| self.sessions.current_selected_id());
 
         match target_session_id {
-            Some(session_id) => self.request_submit_turn(session_id, draft),
+            Some(session_id) => self.request_submit_message(session_id, draft),
             None => self.create_session(Some(draft)),
         }
     }
@@ -10626,7 +10626,7 @@ impl App {
             .session_id
             .or_else(|| self.sessions.current_selected_id())
         {
-            Some(session_id) => self.request_submit_turn(session_id, draft),
+            Some(session_id) => self.request_submit_message(session_id, draft),
             None => self.create_session(Some(draft)),
         }
     }
@@ -10660,13 +10660,13 @@ impl App {
                     let session_id = session.id;
                     let parts = vec![PartContent::text(prompt)];
                     let result = backend
-                        .submit_parts_turn_with_options(session_id, parts, options)
+                        .submit_parts_message_with_options(session_id, parts, options)
                         .await
                         .map_err(|error| error.to_string());
                     // Reuse the existing run-submitted message — the
                     // handler will route the new session into the UI if
                     // appropriate, otherwise just refresh the list.
-                    let _ = tx.send(AppMessage::SessionTurnSubmitted {
+                    let _ = tx.send(AppMessage::SessionMessageSubmitted {
                         session_id,
                         draft: ComposerDraft::default(),
                         result,

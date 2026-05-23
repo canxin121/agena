@@ -2,7 +2,7 @@
 //!
 //! `ProviderTranscript` is the **canonical** representation of "what the LLM
 //! sees". It is intentionally devoid of any field that mutates over a
-//! message's lifetime (status, usage, timestamps, in-memory turn IDs, tags,
+//! message's lifetime (status, usage, timestamps, in-memory run IDs, tags,
 //! …). Anything that *does* end up in this structure is stable once the
 //! producing event has been appended to the history log.
 //!

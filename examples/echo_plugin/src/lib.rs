@@ -27,8 +27,8 @@ impl Plugin for EchoPlugin {
                     | HookSubscription::TOOL_AFTER
                     | HookSubscription::SHELL_ENV
                     | HookSubscription::EVENT
-                    | HookSubscription::PRE_TURN
-                    | HookSubscription::POST_TURN
+                    | HookSubscription::PRE_RUN
+                    | HookSubscription::POST_RUN
                     | HookSubscription::PERMISSION_ASK
                     | HookSubscription::SESSION_START
                     | HookSubscription::SESSION_END
@@ -124,11 +124,11 @@ impl Plugin for EchoPlugin {
         Ok(())
     }
 
-    async fn pre_turn(&self, _input: PreTurnInput) -> Result<()> {
+    async fn pre_run(&self, _input: PreRunInput) -> Result<()> {
         Ok(())
     }
 
-    async fn post_turn(&self, _input: PostTurnInput) -> Result<()> {
+    async fn post_run(&self, _input: PostRunInput) -> Result<()> {
         Ok(())
     }
 

@@ -35,7 +35,7 @@ class AgenaClient {
   }
 
   async submitTurn(sessionId: number, prompt: string): Promise<string> {
-    const result = await this.request('turn/submit', { session_id: sessionId, prompt }) as { text?: string };
+    const result = await this.request('message/submit', { session_id: sessionId, prompt }) as { text?: string };
     return result.text ?? '';
   }
 

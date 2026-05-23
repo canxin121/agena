@@ -580,7 +580,7 @@ Hook 名称遵循 plugin SDK 协议命名；`tool.*` hook 作用于 plugin tool 
 | permission | `permission.ask_permission` |
 | command/shell | `command.execute.before`, `command.execute.after`, `shell.env` |
 | session | `session.start`, `session.end` |
-| turn | `pre_turn`, `post_turn`, `user.prompt.submit`, `agent.stop` |
+| run | `pre_run`, `post_run`, `user.prompt.submit`, `agent.stop` |
 | event/notification | `event`, `notification` |
 | config | `config` |
 

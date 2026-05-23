@@ -152,17 +152,17 @@ pub async fn dispatch_command(
             }
             Ok(CommandResult::SessionGoalCleared { session_id })
         }
-        Command::SubmitTurn(SubmitTurnParams {
+        Command::SubmitMessage(SubmitMessageParams {
             session_id,
             options,
             parts,
         }) => {
-            let request = SessionUserTurnRequest {
+            let request = SessionUserMessageRequest {
                 session_id,
                 options: run_options_to_core(state, session_id, &options).await?,
                 parts,
             };
-            let session = manager.submit_user_turn(request).await?;
+            let session = manager.submit_user_message(request).await?;
             let resource = state
                 .service()
                 .session_execution_resource(manager.as_ref(), &session)
@@ -203,7 +203,7 @@ pub async fn dispatch_command(
             Ok(CommandResult::Execution(resource.into()))
         }
         Command::CancelRun(CancelRunParams { session_id }) => {
-            // Best-effort: if the turn just finished moments before the
+            // Best-effort: if the run just finished moments before the
             // cancel arrived, NoActiveRun is normal — surface as Ack so
             // the client doesn't spin on it.
             match manager.cancel_active_run(session_id).await {

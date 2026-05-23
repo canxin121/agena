@@ -24,7 +24,7 @@ const props = defineProps<{
   deleteCurrentSession: () => void | Promise<void>
   exportCurrentSession: () => void | Promise<void>
   continueCurrentSession: () => void | Promise<void>
-  cancelCurrentSessionTurn: () => void | Promise<void>
+  cancelCurrentSessionRun: () => void | Promise<void>
   formatMessageTime: (value: string) => string
 }>()
 
@@ -94,7 +94,7 @@ const activeGoal = computed(
         <button
           class="button danger"
           :disabled="!props.selectedSessionId || props.continuing || props.sessionState?.run_state === 'idle'"
-          @click="props.cancelCurrentSessionTurn"
+          @click="props.cancelCurrentSessionRun"
         >
           {{ props.continuing ? 'Cancelling…' : 'Cancel Run' }}
         </button>

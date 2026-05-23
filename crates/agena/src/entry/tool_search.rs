@@ -87,7 +87,7 @@ pub(crate) fn execute_with_tools(
 
     if !loaded_tools.is_empty() {
         lines.push(format!(
-            "Loaded deferred tools for later turns: {}.",
+            "Loaded deferred tools for later runs: {}.",
             loaded_tools.join(", ")
         ));
     } else if !results.is_empty() && results.iter().any(|tool| tool.deferred) {

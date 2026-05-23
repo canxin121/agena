@@ -348,7 +348,7 @@ export type RuntimeReloadResponse = {
 export type UsagePeriod = 'today' | 'last_7_days' | 'last_30_days' | 'month_to_date' | 'all_time'
 
 export type UsageTotals = {
-  turns: number
+  runs: number
   sessions: number
   input_tokens: number
   output_tokens: number
@@ -361,7 +361,7 @@ export type UsageTotals = {
   total_cost_usd: number
   recorded_cost_usd: number
   estimated_cost_usd: number
-  unpriced_turns: number
+  unpriced_runs: number
 }
 
 export type UsageDailyBreakdown = UsageTotals & {
@@ -2009,7 +2009,7 @@ export async function continueSession(input: {
   })
 }
 
-export async function cancelSessionTurn(sessionId: number): Promise<{ ok: boolean }> {
+export async function cancelSessionRun(sessionId: number): Promise<{ ok: boolean }> {
   return await apiJson<{ ok: boolean }>(`/api/v1/sessions/${sessionId}/cancel`, {
     method: 'POST',
   })
@@ -2067,7 +2067,7 @@ export async function submitTurn(input: {
     body.parallel_tool_calls = input.parallelToolCalls
   }
 
-  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/turns`, {
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

@@ -55,8 +55,8 @@ use crate::sdk::{
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
     HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
     PermissionDecision, PluginError, PluginErrorCode, PluginManifest, PluginStudioCommand,
-    PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostTurnInput,
-    PreTurnInput, ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput,
+    PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostRunInput,
+    PreRunInput, ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput,
     SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
     ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput,
     ToolInvokeInput, ToolInvokeOutput, ToolPermissionNetworksInput, ToolPermissionPathsInput,
@@ -1177,15 +1177,15 @@ impl PluginHost {
         .map_err(transport_to_plugin_error)
     }
 
-    // ── turn lifecycle ─────────────────────────────────────────────────────
+    // ── run lifecycle ──────────────────────────────────────────────────────
 
-    pub async fn broadcast_pre_turn(&self, input: PreTurnInput) {
-        self.broadcast_lifecycle(method::HOOK_PRE_TURN, HookSubscription::PRE_TURN, input)
+    pub async fn broadcast_pre_run(&self, input: PreRunInput) {
+        self.broadcast_lifecycle(method::HOOK_PRE_RUN, HookSubscription::PRE_RUN, input)
             .await;
     }
 
-    pub async fn broadcast_post_turn(&self, input: PostTurnInput) {
-        self.broadcast_lifecycle(method::HOOK_POST_TURN, HookSubscription::POST_TURN, input)
+    pub async fn broadcast_post_run(&self, input: PostRunInput) {
+        self.broadcast_lifecycle(method::HOOK_POST_RUN, HookSubscription::POST_RUN, input)
             .await;
     }
 

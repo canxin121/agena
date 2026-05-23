@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 
 import {
-  cancelSessionTurn,
+  cancelSessionRun,
   cancelUserInput,
   continueSession,
   clearSessionGoal,
@@ -74,7 +74,7 @@ export type ChatSessionActionsInput = {
 }
 
 export type ChatSessionActionsDeps = {
-  cancelSessionTurn: typeof cancelSessionTurn
+  cancelSessionRun: typeof cancelSessionRun
   cancelUserInput: typeof cancelUserInput
   clearSessionGoal: typeof clearSessionGoal
   completeSessionGoal: typeof completeSessionGoal
@@ -99,7 +99,7 @@ export type ChatSessionActionsDeps = {
 }
 
 const defaultDeps: ChatSessionActionsDeps = {
-  cancelSessionTurn,
+  cancelSessionRun,
   cancelUserInput,
   clearSessionGoal,
   completeSessionGoal,
@@ -495,14 +495,14 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
   }
 
-  async function cancelCurrentSessionTurn() {
+  async function cancelCurrentSessionRun() {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
 
     input.continuing.value = true
     input.errorMessage.value = ''
     try {
-      await deps.cancelSessionTurn(sessionId)
+      await deps.cancelSessionRun(sessionId)
       input.localCommandNotice.value = `Cancellation requested for session #${sessionId}.`
       await input.refreshConversation(false)
     } catch (err) {
@@ -650,7 +650,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   return {
-    cancelCurrentSessionTurn,
+    cancelCurrentSessionRun,
     approvePermission,
     cancelUserAnswers,
     clearSessionGoalAction,

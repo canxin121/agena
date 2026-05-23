@@ -984,7 +984,7 @@ impl SessionStore {
         // Re-map every message id in the imported event stream onto a fresh
         // contiguous range we reserve from the global allocator. Without this
         // the imported events would collide with whatever message ids the
-        // current process has already handed out — fork/turn appends after
+        // current process has already handed out — fork/run appends after
         // the import would silently overwrite an imported message.
         let mut max_imported_id: i64 = 0;
         let mut max_imported_part_id: i64 = 0;
@@ -1028,7 +1028,7 @@ impl SessionStore {
 
         // Restore the exported runtime state — provider anchors, prompt token
         // accounting and execution context — onto the new row. Without this
-        // round-trip the import would lose every cache hint and the next turn
+        // round-trip the import would lose every cache hint and the next run
         // would re-prime caches from scratch.
         if !meta.runtime_state.prompt_tokens.is_empty()
             || !meta.runtime_state.provider_anchors.is_empty()

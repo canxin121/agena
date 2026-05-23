@@ -695,8 +695,8 @@ bitflags::bitflags! {
         const TOOL_DEFINITION           = 1 << 24;
         const COMMAND_AFTER             = 1 << 25;
         const CHAT_MESSAGES_TRANSFORM   = 1 << 26;
-        const PRE_TURN                  = 1 << 27;
-        const POST_TURN                 = 1 << 28;
+        const PRE_RUN                  = 1 << 27;
+        const POST_RUN                 = 1 << 28;
         const NOTIFICATION              = 1 << 29;
     }
 }
@@ -768,8 +768,8 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("session.end", HookSubscription::SESSION_END),
     ("user.prompt.submit", HookSubscription::USER_PROMPT_SUBMIT),
     ("agent.stop", HookSubscription::AGENT_STOP),
-    ("pre_turn", HookSubscription::PRE_TURN),
-    ("post_turn", HookSubscription::POST_TURN),
+    ("pre_run", HookSubscription::PRE_RUN),
+    ("post_run", HookSubscription::POST_RUN),
 ];
 
 fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {

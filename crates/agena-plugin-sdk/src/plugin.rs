@@ -193,11 +193,11 @@ pub trait Plugin: Send + Sync + 'static {
     }
 
     // -------- session lifecycle --------
-    async fn pre_turn(&self, _input: PreTurnInput) -> Result<()> {
+    async fn pre_run(&self, _input: PreRunInput) -> Result<()> {
         Ok(())
     }
 
-    async fn post_turn(&self, _input: PostTurnInput) -> Result<()> {
+    async fn post_run(&self, _input: PostRunInput) -> Result<()> {
         Ok(())
     }
 

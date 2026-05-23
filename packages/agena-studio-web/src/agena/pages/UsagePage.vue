@@ -89,7 +89,7 @@ onMounted(() => {
         </div>
         <div class="field">
           <label class="label">Assistant Turns</label>
-          <div class="muted mono">{{ formatUsageInteger(stats?.totals.turns || 0) }}</div>
+          <div class="muted mono">{{ formatUsageInteger(stats?.totals.runs || 0) }}</div>
         </div>
         <div class="field">
           <label class="label">Sessions</label>
@@ -145,7 +145,7 @@ onMounted(() => {
           <div v-for="day in dailyRows" :key="day.date" class="list-item">
             <div>
               <strong>{{ day.date }}</strong>
-              <div class="muted mono">turns {{ formatUsageInteger(day.turns) }} · sessions {{ formatUsageInteger(day.sessions) }}</div>
+              <div class="muted mono">runs {{ formatUsageInteger(day.runs) }} · sessions {{ formatUsageInteger(day.sessions) }}</div>
             </div>
             <div class="stack" style="justify-items: end">
               <span class="badge">{{ formatUsageCost(day.total_cost_usd) }}</span>
@@ -164,7 +164,7 @@ onMounted(() => {
           <div>
             <strong>#{{ session.session_id }} · {{ session.title }}</strong>
             <div class="muted mono">
-              turns {{ formatUsageInteger(session.turns) }} · {{ tokenSummary(session) }}
+              runs {{ formatUsageInteger(session.runs) }} · {{ tokenSummary(session) }}
               <span v-if="session.is_subagent"> · subagent</span>
             </div>
           </div>

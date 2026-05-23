@@ -197,7 +197,7 @@ The resolved config builds:
 常见写操作：
 
 ```text
-submit_user_turn
+submit_user_message
 continue_session
 reply_permission
 reply_user_input
@@ -208,7 +208,7 @@ export_session_jsonl
 import_session_jsonl
 ```
 
-一次 turn 的高层流程：
+一次 run 的高层流程：
 
 ```text
 user parts
@@ -342,7 +342,7 @@ Plugin host can invoke hooks for:
 - session start/end. Runtime provider prompts are kept append-only for cache stability.
 - user prompt submit.
 - agent stop.
-- pre_turn/post_turn.
+- pre_run/post_run.
 - notification.
 
 Host callbacks allow plugins to ask user input, spawn subagents, list/invoke entries, read and reload config, publish/subscribe events, use scheduler, manage worktrees, access LSP/MCP registries, store plugin data/secrets, register entries/agents/hooks/themes/statusline segments, and more. Static UI contributions live in the manifest, while dynamic statusline/theme updates still flow through host callbacks and are merged into the same UI catalog.

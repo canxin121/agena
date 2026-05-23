@@ -195,14 +195,14 @@ impl<P: Plugin> PluginDispatcher<P> {
                 let i: ConfigInput = serde_json::from_value(params)?;
                 ok_json(&plugin.config_resolved(i).await?)
             }
-            method::HOOK_PRE_TURN => {
-                let i: PreTurnInput = serde_json::from_value(params)?;
-                plugin.pre_turn(i).await?;
+            method::HOOK_PRE_RUN => {
+                let i: PreRunInput = serde_json::from_value(params)?;
+                plugin.pre_run(i).await?;
                 Ok(Value::Object(Default::default()))
             }
-            method::HOOK_POST_TURN => {
-                let i: PostTurnInput = serde_json::from_value(params)?;
-                plugin.post_turn(i).await?;
+            method::HOOK_POST_RUN => {
+                let i: PostRunInput = serde_json::from_value(params)?;
+                plugin.post_run(i).await?;
                 Ok(Value::Object(Default::default()))
             }
             method::HOOK_SESSION_START => {

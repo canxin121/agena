@@ -3,7 +3,7 @@ import type { MessageResource } from '@/agena/lib/agenaApi'
 export type ChatUsageBreakdown = {
   providerId: string
   modelId: string
-  turns: number
+  runs: number
   inputTokens: number
   outputTokens: number
   reasoningTokens: number
@@ -13,7 +13,7 @@ export type ChatUsageBreakdown = {
 }
 
 export type ChatUsageSummary = {
-  turns: number
+  runs: number
   inputTokens: number
   outputTokens: number
   reasoningTokens: number
@@ -33,7 +33,7 @@ function readString(value: unknown): string {
 
 export function summarizeChatUsage(messages: MessageResource[]): ChatUsageSummary {
   const summary: ChatUsageSummary = {
-    turns: 0,
+    runs: 0,
     inputTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0,
@@ -60,7 +60,7 @@ export function summarizeChatUsage(messages: MessageResource[]): ChatUsageSummar
     const cacheReadTokens = readFiniteNumber(usage.cache_read_tokens)
     const totalCostUsd = readFiniteNumber(usage.total_cost)
 
-    summary.turns += 1
+    summary.runs += 1
     summary.inputTokens += inputTokens
     summary.outputTokens += outputTokens
     summary.reasoningTokens += reasoningTokens
@@ -71,7 +71,7 @@ export function summarizeChatUsage(messages: MessageResource[]): ChatUsageSummar
     const item = byModel.get(key) || {
       providerId,
       modelId,
-      turns: 0,
+      runs: 0,
       inputTokens: 0,
       outputTokens: 0,
       reasoningTokens: 0,
@@ -80,7 +80,7 @@ export function summarizeChatUsage(messages: MessageResource[]): ChatUsageSummar
       totalCostUsd: 0,
     }
 
-    item.turns += 1
+    item.runs += 1
     item.inputTokens += inputTokens
     item.outputTokens += outputTokens
     item.reasoningTokens += reasoningTokens
@@ -103,10 +103,10 @@ export function formatUsageUsd(value: number): string {
 }
 
 export function chatUsageFacts(summary: ChatUsageSummary): string[] {
-  if (!summary.turns) return []
+  if (!summary.runs) return []
 
   const facts = [
-    `turns ${formatUsageCount(summary.turns)}`,
+    `runs ${formatUsageCount(summary.runs)}`,
     `in ${formatUsageCount(summary.inputTokens)}`,
     `out ${formatUsageCount(summary.outputTokens)}`,
   ]
@@ -123,7 +123,7 @@ export function chatUsageFacts(summary: ChatUsageSummary): string[] {
 
 export function chatUsageBreakdownFacts(item: ChatUsageBreakdown): string[] {
   const facts = [
-    `turns ${formatUsageCount(item.turns)}`,
+    `runs ${formatUsageCount(item.runs)}`,
     `in ${formatUsageCount(item.inputTokens)}`,
     `out ${formatUsageCount(item.outputTokens)}`,
   ]

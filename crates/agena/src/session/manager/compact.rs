@@ -1,7 +1,7 @@
 use super::*;
 
 const COMPACTION_AGENT: &str = "compaction";
-const DEFAULT_TAIL_USER_TURNS: usize = 2;
+const DEFAULT_TAIL_USER_MESSAGES: usize = 2;
 
 struct CompactionRuntimeInstall {
     summary: String,
@@ -352,11 +352,11 @@ impl SessionManager {
 }
 
 fn select_tail_start_message_id(messages: &[Message]) -> Option<i64> {
-    let mut user_turns = 0usize;
+    let mut user_messages = 0usize;
     for message in messages.iter().rev() {
         if message.role == Role::User && message.metadata.source == MessageSource::User {
-            user_turns += 1;
-            if user_turns == DEFAULT_TAIL_USER_TURNS {
+            user_messages += 1;
+            if user_messages == DEFAULT_TAIL_USER_MESSAGES {
                 return Some(message.id);
             }
         }

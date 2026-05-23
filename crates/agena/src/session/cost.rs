@@ -44,7 +44,7 @@ struct CostContribution {
     total_cost_usd: f64,
     recorded_cost_usd: f64,
     estimated_cost_usd: f64,
-    unpriced_turns: u64,
+    unpriced_runs: u64,
 }
 
 fn cost_contribution(provider_id: &str, model_id: &str, usage: &MessageUsage) -> CostContribution {
@@ -53,7 +53,7 @@ fn cost_contribution(provider_id: &str, model_id: &str, usage: &MessageUsage) ->
             total_cost_usd: usage.total_cost,
             recorded_cost_usd: usage.total_cost,
             estimated_cost_usd: 0.0,
-            unpriced_turns: 0,
+            unpriced_runs: 0,
         };
     }
 
@@ -62,7 +62,7 @@ fn cost_contribution(provider_id: &str, model_id: &str, usage: &MessageUsage) ->
             total_cost_usd: estimated_cost_usd,
             recorded_cost_usd: 0.0,
             estimated_cost_usd,
-            unpriced_turns: 0,
+            unpriced_runs: 0,
         };
     }
 
@@ -70,7 +70,7 @@ fn cost_contribution(provider_id: &str, model_id: &str, usage: &MessageUsage) ->
         total_cost_usd: 0.0,
         recorded_cost_usd: 0.0,
         estimated_cost_usd: 0.0,
-        unpriced_turns: 1,
+        unpriced_runs: 1,
     }
 }
 
@@ -282,7 +282,7 @@ fn looks_like_local_model(model: &str) -> bool {
 pub struct ModelCostBreakdown {
     pub provider_id: String,
     pub model_id: String,
-    pub turns: u64,
+    pub runs: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
@@ -291,7 +291,7 @@ pub struct ModelCostBreakdown {
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
-    pub unpriced_turns: u64,
+    pub unpriced_runs: u64,
 }
 
 impl ModelCostBreakdown {
@@ -314,7 +314,7 @@ impl ModelCostBreakdown {
     }
 
     fn fold(&mut self, usage: &MessageUsage) {
-        self.turns = self.turns.saturating_add(1);
+        self.runs = self.runs.saturating_add(1);
         self.input_tokens = self.input_tokens.saturating_add(usage.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(usage.output_tokens);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(usage.reasoning_tokens);
@@ -328,13 +328,13 @@ impl ModelCostBreakdown {
         self.total_cost_usd += cost.total_cost_usd;
         self.recorded_cost_usd += cost.recorded_cost_usd;
         self.estimated_cost_usd += cost.estimated_cost_usd;
-        self.unpriced_turns = self.unpriced_turns.saturating_add(cost.unpriced_turns);
+        self.unpriced_runs = self.unpriced_runs.saturating_add(cost.unpriced_runs);
     }
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct SessionCostSummary {
-    pub turns: u64,
+    pub runs: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
@@ -343,7 +343,7 @@ pub struct SessionCostSummary {
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
-    pub unpriced_turns: u64,
+    pub unpriced_runs: u64,
     pub by_model: Vec<ModelCostBreakdown>,
 }
 
@@ -367,11 +367,11 @@ impl SessionCostSummary {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.turns == 0
+        self.runs == 0
     }
 
     /// One-line human summary, e.g.
-    /// `1,234 in + 100 cache + 567 out + 12 reasoning = 1,913 tokens · $0.0420 over 4 turns`.
+    /// `1,234 in + 100 cache + 567 out + 12 reasoning = 1,913 tokens · $0.0420 over 4 runs`.
     pub fn one_line(&self) -> String {
         if self.is_empty() {
             return "no usage recorded yet".to_string();
@@ -380,7 +380,7 @@ impl SessionCostSummary {
             .cache_write_tokens
             .saturating_add(self.cache_read_tokens);
         format!(
-            "{} in{} + {} out{} = {} tokens{} · ${:.4} over {} turn{}",
+            "{} in{} + {} out{} = {} tokens{} · ${:.4} over {} run{}",
             format_count(self.input_tokens),
             if cache_tokens > 0 {
                 format!(" + {} cache", format_count(cache_tokens))
@@ -400,8 +400,8 @@ impl SessionCostSummary {
                 String::new()
             },
             self.total_cost_usd,
-            self.turns,
-            if self.turns == 1 { "" } else { "s" },
+            self.runs,
+            if self.runs == 1 { "" } else { "s" },
         )
     }
 }
@@ -464,7 +464,7 @@ impl UsageStatsQuery {
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct UsageTotals {
-    pub turns: u64,
+    pub runs: u64,
     pub sessions: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -477,12 +477,12 @@ pub struct UsageTotals {
     pub total_cost_usd: f64,
     pub recorded_cost_usd: f64,
     pub estimated_cost_usd: f64,
-    pub unpriced_turns: u64,
+    pub unpriced_runs: u64,
 }
 
 impl UsageTotals {
     fn fold(&mut self, provider_id: &str, model_id: &str, usage: &MessageUsage) {
-        self.turns = self.turns.saturating_add(1);
+        self.runs = self.runs.saturating_add(1);
         self.input_tokens = self.input_tokens.saturating_add(usage.input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(usage.output_tokens);
         self.reasoning_tokens = self.reasoning_tokens.saturating_add(usage.reasoning_tokens);
@@ -496,7 +496,7 @@ impl UsageTotals {
         self.total_cost_usd += cost.total_cost_usd;
         self.recorded_cost_usd += cost.recorded_cost_usd;
         self.estimated_cost_usd += cost.estimated_cost_usd;
-        self.unpriced_turns = self.unpriced_turns.saturating_add(cost.unpriced_turns);
+        self.unpriced_runs = self.unpriced_runs.saturating_add(cost.unpriced_runs);
     }
 
     fn finalize(&mut self, session_count: usize) {
@@ -734,7 +734,7 @@ where
         .total_cost_usd
         .partial_cmp(&left.totals().total_cost_usd)
         .unwrap_or(std::cmp::Ordering::Equal)
-        .then(right.totals().turns.cmp(&left.totals().turns))
+        .then(right.totals().runs.cmp(&left.totals().runs))
 }
 
 trait HasUsageTotals {
@@ -774,7 +774,7 @@ pub fn summarize(messages: &[Message]) -> SessionCostSummary {
         let provider = message.metadata.model_provider_id.clone();
         let model = message.metadata.model_id.clone();
 
-        totals.turns = totals.turns.saturating_add(1);
+        totals.runs = totals.runs.saturating_add(1);
         totals.input_tokens = totals.input_tokens.saturating_add(usage.input_tokens);
         totals.output_tokens = totals.output_tokens.saturating_add(usage.output_tokens);
         totals.reasoning_tokens = totals
@@ -790,7 +790,7 @@ pub fn summarize(messages: &[Message]) -> SessionCostSummary {
         totals.total_cost_usd += cost.total_cost_usd;
         totals.recorded_cost_usd += cost.recorded_cost_usd;
         totals.estimated_cost_usd += cost.estimated_cost_usd;
-        totals.unpriced_turns = totals.unpriced_turns.saturating_add(cost.unpriced_turns);
+        totals.unpriced_runs = totals.unpriced_runs.saturating_add(cost.unpriced_runs);
 
         let entry = by_key
             .entry((provider.clone(), model.clone()))

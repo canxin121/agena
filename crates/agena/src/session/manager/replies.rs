@@ -537,7 +537,7 @@ impl SessionManager {
                     session_id = session.id,
                     tool = %hit.tool_label,
                     repeat = hit.repeat_count,
-                    "aborting turn: doom-loop detected"
+                    "aborting run: doom-loop detected"
                 );
                 self.persist_run_failed_event(session.id, hit.message(), state.clone())
                     .await?;
@@ -655,7 +655,7 @@ impl SessionManager {
                     projected_tokens,
                     usable_tokens = limit_tokens,
                     reserved_tokens = session_usage.reserved_tokens.unwrap_or_default(),
-                    "automatic session compaction triggered before model turn"
+                    "automatic session compaction triggered before model run"
                 );
                 session = Box::pin(self.auto_compact_session(
                     session,
@@ -672,7 +672,7 @@ impl SessionManager {
                 current_options.model.provider_id, current_options.model.model_id
             );
             let message_count = session.messages.len();
-            let pre_turn_input = crate::plugin::PreTurnInput {
+            let pre_run_input = crate::plugin::PreRunInput {
                 session_id,
                 model: model.clone(),
                 message_count,
@@ -680,7 +680,7 @@ impl SessionManager {
             state
                 .tool_executor
                 .plugin_manager()
-                .broadcast_pre_turn(pre_turn_input)
+                .broadcast_pre_run(pre_run_input)
                 .await;
 
             let mut model_session = session;
@@ -729,7 +729,7 @@ impl SessionManager {
                             .await?;
                     }
                     session = next_session;
-                    let post_turn_input = crate::plugin::PostTurnInput {
+                    let post_run_input = crate::plugin::PostRunInput {
                         session_id: session.id,
                         model,
                         status: format!("{:?}", session.status()),
@@ -738,11 +738,11 @@ impl SessionManager {
                     state
                         .tool_executor
                         .plugin_manager()
-                        .broadcast_post_turn(post_turn_input)
+                        .broadcast_post_run(post_run_input)
                         .await;
                 }
                 Err(err) => {
-                    let post_turn_input = crate::plugin::PostTurnInput {
+                    let post_run_input = crate::plugin::PostRunInput {
                         session_id,
                         model,
                         status: format!("error: {err}"),
@@ -751,7 +751,7 @@ impl SessionManager {
                     state
                         .tool_executor
                         .plugin_manager()
-                        .broadcast_post_turn(post_turn_input)
+                        .broadcast_post_run(post_run_input)
                         .await;
                     return Err(err);
                 }
@@ -771,8 +771,8 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
         control: Arc<RunControl>,
     ) -> Result<Session, AppError> {
-        let turn_span = tracing::info_span!(
-            "session.turn",
+        let run_span = tracing::info_span!(
+            "session.run",
             session_id = session.id,
             provider_id = %options.model.provider_id,
             model_id = %options.model.model_id,
@@ -788,7 +788,7 @@ impl SessionManager {
             );
             let request_tools = tools.clone();
             let prompt_budget =
-                self.prompt_budget_for_turn(&session, options, tools.as_slice(), state.as_ref());
+                self.prompt_budget_for_run(&session, options, tools.as_slice(), state.as_ref());
             let provider_request_shape = state.processor.prompt_cache_shape(&options.model)?;
             let continuation_supported =
                 state.processor.supports_prompt_continuation(&options.model);
@@ -851,7 +851,7 @@ impl SessionManager {
                 provider_request_shape_change_keys = ?provider_shape_change_keys,
                 prompt_message_count = prepared.messages.len(),
                 system_included = prepared.system.is_some(),
-                "prepared prompt for session turn"
+                "prepared prompt for session run"
             );
 
             session.runtime.run.record_run_request(
@@ -901,14 +901,14 @@ impl SessionManager {
                 )
                 .await?;
 
-            let processor_fut = state.processor.run_turn(run).instrument(turn_span.clone());
-            let turn_outcome = tokio::select! {
+            let processor_fut = state.processor.run_turn(run).instrument(run_span.clone());
+            let run_outcome = tokio::select! {
                 res = processor_fut => res,
                 _ = control.cancel.cancelled() => {
                     Err(AppError::Internal("run cancelled by user".to_string()))
                 }
             };
-            match turn_outcome {
+            match run_outcome {
                 Ok(result) => {
                     let run_id = result.run_id;
                     let terminal_error = result.terminal_error;
@@ -923,7 +923,7 @@ impl SessionManager {
                         .find(|message| message.id == result.assistant_message_id)
                         .ok_or_else(|| {
                             AppError::Internal(format!(
-                                "assistant message not found after processor turn: {}",
+                                "assistant message not found after processor run: {}",
                                 result.assistant_message_id
                             ))
                         })?;
@@ -944,7 +944,7 @@ impl SessionManager {
                                 provider_id = %options.model.provider_id,
                                 model_id = %options.model.model_id,
                                 error = %err,
-                                "failed to refresh provider request shape after turn; falling back to prepared shape"
+                                "failed to refresh provider request shape after run; falling back to prepared shape"
                             );
                             prepared.provider_request_shape.clone()
                         }
@@ -1078,7 +1078,7 @@ impl SessionManager {
         }
     }
 
-    fn prompt_budget_for_turn(
+    fn prompt_budget_for_run(
         &self,
         _session: &Session,
         options: &SessionRunOptions,
@@ -2448,7 +2448,7 @@ impl SessionManager {
             GoalRunDirectiveKind::Continuation => join_runtime_context_lines(&[
                 "Continue working toward the active runtime goal.".to_string(),
                 format!("Objective:\n{objective}"),
-                "Do not wait for the user just because the last turn ended. Make the next concrete move toward finishing the objective, explain the blocker if you are truly blocked, and call `update_goal` with `status = complete` once the objective is actually done.".to_string(),
+                "Do not wait for the user just because the last run ended. Make the next concrete move toward finishing the objective, explain the blocker if you are truly blocked, and call `update_goal` with `status = complete` once the objective is actually done.".to_string(),
             ]),
         }
     }
@@ -3225,7 +3225,7 @@ impl SessionManager {
     }
 
     /// Drain every pending steer message (non-blocking) and append each as
-    /// a User message before the next model turn. A user steer becomes the
+    /// a User message before the next model run. A user steer becomes the
     /// next input the model sees.
     async fn drain_steer_input(
         &self,

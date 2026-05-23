@@ -180,7 +180,7 @@ pub trait ModelRuntime: Send + Sync {
 
     /// Provider-native conversation compaction. Providers that do not expose a
     /// dedicated compaction API return `Ok(None)` so callers can fall back to
-    /// an ordinary local summarization turn.
+    /// an ordinary local summarization run.
     async fn compact_conversation(
         &self,
         request: CompletionRequest,

@@ -75,7 +75,7 @@ impl InboundMessage {
 
 pub mod method {
     pub const SESSION_CREATE: &str = "session/create";
-    pub const TURN_SUBMIT: &str = "turn/submit";
+    pub const MESSAGE_SUBMIT: &str = "message/submit";
     pub const PERMISSION_REPLY: &str = "permission/reply";
     pub const SESSIONS_LIST: &str = "sessions/list";
     pub const MESSAGES_LIST: &str = "messages/list";
@@ -98,7 +98,7 @@ pub struct CreateSessionResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SubmitTurnParams {
+pub struct SubmitMessageParams {
     pub session_id: i64,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -110,7 +110,7 @@ pub struct SubmitTurnParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SubmitTurnResult {
+pub struct SubmitMessageResult {
     pub session_id: i64,
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

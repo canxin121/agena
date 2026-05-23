@@ -199,7 +199,7 @@ impl SessionRunOptions {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionUserTurnRequest {
+pub struct SessionUserMessageRequest {
     pub session_id: i64,
     pub options: SessionRunOptions,
     pub parts: Vec<PartContent>,
@@ -363,8 +363,8 @@ mod compact;
 mod goals;
 mod history;
 mod replies;
+mod runs;
 mod sessions;
-mod turns;
 
 impl SessionManagerState {
     fn new(

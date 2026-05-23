@@ -143,7 +143,7 @@ pub struct SessionRunOptionsRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SessionTurnRequest {
+pub struct SessionMessageRequest {
     #[serde(flatten)]
     pub options: SessionRunOptionsRequest,
     #[serde(default)]

@@ -2,9 +2,9 @@ use super::*;
 
 impl SessionManager {
     #[tracing::instrument(skip(self, request), fields(session_id = request.session_id))]
-    pub async fn submit_user_turn(
+    pub async fn submit_user_message(
         &self,
-        request: SessionUserTurnRequest,
+        request: SessionUserMessageRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         let (control, steer_rx) = self.run_registry.register(session_id).await;
@@ -13,7 +13,7 @@ impl SessionManager {
         let task_control = control.clone();
         let result = tokio::task::spawn(async move {
             manager
-                .submit_user_turn_inner(request, task_control, steer_rx)
+                .submit_user_message_inner(request, task_control, steer_rx)
                 .await
         })
         .await
@@ -26,9 +26,9 @@ impl SessionManager {
         result
     }
 
-    async fn submit_user_turn_inner(
+    async fn submit_user_message_inner(
         &self,
-        mut request: SessionUserTurnRequest,
+        mut request: SessionUserMessageRequest,
         control: Arc<RunControl>,
         steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
@@ -360,7 +360,7 @@ impl SessionManager {
         let run_options = options.clone();
         let session = tokio::task::spawn(async move {
             manager
-                .submit_user_turn(SessionUserTurnRequest {
+                .submit_user_message(SessionUserMessageRequest {
                     session_id: child_id,
                     options: run_options,
                     parts: vec![PartContent::text(request.prompt)],

@@ -436,7 +436,7 @@ impl SessionHistoryStore {
     /// `RunStarted` that lacks a matching `RunCompleted` / `RunAborted` in
     /// `events`. Returns the freshly published events so the caller can fold
     /// them into the view in one pass.
-    async fn abort_hanging_turns(
+    async fn abort_hanging_runs(
         &self,
         session_id: i64,
         events: &[DomainEvent],
@@ -563,7 +563,7 @@ impl SessionHistoryStore {
 
     async fn rebuild_projection_from_history(&self, session_id: i64) -> Result<(), DbErr> {
         let mut events = self.list_session_events(session_id).await?;
-        let aborted = self.abort_hanging_turns(session_id, &events).await?;
+        let aborted = self.abort_hanging_runs(session_id, &events).await?;
         if !aborted.is_empty() {
             events.extend(aborted);
         }

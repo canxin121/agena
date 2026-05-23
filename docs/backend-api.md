@@ -300,7 +300,7 @@ search=<optional>
 
 ## Optimistic concurrency
 
-Session update、delete、turn、continue、fork、permission reply、user input reply、rewind 等写操作可使用：
+Session update、delete、message submit、continue、fork、permission reply、user input reply、rewind 等写操作可使用：
 
 ```text
 If-Match: <session.version>
@@ -844,7 +844,7 @@ limit=<1..2000>
 | GET    | `/api/v1/sessions/{session_id}/events`             | session events                   |
 | GET    | `/api/v1/sessions/{session_id}/events/stream`      | session event SSE                |
 | GET    | `/api/v1/sessions/{session_id}/messages`           | session messages                 |
-| POST   | `/api/v1/sessions/{session_id}/turns`              | submit user turn                 |
+| POST   | `/api/v1/sessions/{session_id}/messages`              | submit user message                 |
 | POST   | `/api/v1/sessions/{session_id}/continue`           | continue blocked/incomplete run  |
 | POST   | `/api/v1/sessions/{session_id}/fork`               | fork session                     |
 | POST   | `/api/v1/sessions/{session_id}/cancel`             | cancel active run               |
@@ -884,7 +884,7 @@ Update:
 }
 ```
 
-Run options shared by turn/continue/replies:
+Run options shared by message submit/continue/replies:
 
 ```json
 {
@@ -903,7 +903,7 @@ Run options shared by turn/continue/replies:
 }
 ```
 
-Submit turn:
+Submit message:
 
 ```json
 {
@@ -1374,7 +1374,7 @@ Supported methods:
 
 ```text
 session/create
-turn/submit
+message/submit
 permission/reply
 sessions/list
 messages/list
@@ -1402,7 +1402,7 @@ Result:
 }
 ```
 
-### `turn/submit`
+### `message/submit`
 
 Params:
 
@@ -1514,7 +1514,7 @@ High-level methods include:
 
 - `health`
 - `create_session`
-- `submit_turn`
+- `submit_message`
 - `continue_run`
 - `cancel_run`
 - `reply_permission`

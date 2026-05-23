@@ -27,7 +27,7 @@ pub use manager::{
     SessionCreateRequest, SessionForkRequest, SessionGoalCreateRequest, SessionGoalUpdateRequest,
     SessionManager, SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest,
     SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse, SessionUsage,
-    SessionUsageLimitBasis, SessionUserInputReplyRequest, SessionUserTurnRequest,
+    SessionUsageLimitBasis, SessionUserInputReplyRequest, SessionUserMessageRequest,
 };
 pub use model::{
     GoalStatus, MAX_SESSION_GOAL_OBJECTIVE_CHARS, PlanState, PromptCompactionRuntime,

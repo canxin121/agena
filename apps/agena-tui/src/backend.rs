@@ -60,7 +60,7 @@ use agena_api::{
     commands::{
         Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
         CreateSessionParams, ReplacePermissionRuleParams, ReplyPermissionParams,
-        ReplyUserInputParams, RewindSessionParams, SubmitTurnParams, UpdateSessionParams,
+        ReplyUserInputParams, RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
         UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
@@ -2905,7 +2905,7 @@ impl Backend {
         Some(rx)
     }
 
-    pub async fn submit_parts_turn_with_options(
+    pub async fn submit_parts_message_with_options(
         &self,
         session_id: i64,
         parts: Vec<PartContent>,
@@ -2913,7 +2913,7 @@ impl Backend {
     ) -> Result<SessionExecutionResource> {
         match dispatch::dispatch_command(
             &self.app_state,
-            ApiCommand::SubmitTurn(SubmitTurnParams {
+            ApiCommand::SubmitMessage(SubmitMessageParams {
                 session_id,
                 options: request,
                 parts,
@@ -2925,7 +2925,7 @@ impl Backend {
             CommandResult::Execution(state) => Ok(state),
             other => Err(anyhow!("unexpected command result: {:?}", other)),
         }
-        .context("failed to submit user turn")
+        .context("failed to submit user message")
     }
 
     pub fn prepare_attachment_from_path(&self, path: &Path) -> Result<AttachmentItem> {

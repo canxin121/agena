@@ -11,7 +11,7 @@ use agena::{
     runtime::AgenaRuntime,
     session::{
         Session, SessionCreateRequest, SessionListRequest, SessionManager,
-        SessionPermissionReplyRequest, SessionRunOptions, SessionUserTurnRequest,
+        SessionPermissionReplyRequest, SessionRunOptions, SessionUserMessageRequest,
     },
     storage::StorageConfig,
 };
@@ -20,7 +20,7 @@ use agena_api_server::jsonrpc::protocol::{
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
     MessageItem, PermissionDecision as AppPermissionDecision, PermissionRememberScope,
     PermissionReplyParams, PermissionReplyResult, ReadMessagesParams, ReadMessagesResult,
-    SessionListItem, SubmitTurnParams, SubmitTurnResult,
+    SessionListItem, SubmitMessageParams, SubmitMessageResult,
 };
 use agena_api_server::jsonrpc::{self, AppServerError};
 use async_trait::async_trait;
@@ -160,10 +160,10 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         })
     }
 
-    async fn submit_turn(
+    async fn submit_message(
         &self,
-        params: SubmitTurnParams,
-    ) -> Result<SubmitTurnResult, AppServerError> {
+        params: SubmitMessageParams,
+    ) -> Result<SubmitMessageResult, AppServerError> {
         let manager = app_session_manager(&self.runtime)?;
         let options = resolve_run_options(
             &self.runtime,
@@ -173,14 +173,14 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         )
         .map_err(app_backend_error)?;
         let session = manager
-            .submit_user_turn(SessionUserTurnRequest {
+            .submit_user_message(SessionUserMessageRequest {
                 session_id: params.session_id,
                 options,
                 parts: vec![PartContent::text(params.prompt)],
             })
             .await
             .map_err(app_backend_error)?;
-        Ok(SubmitTurnResult {
+        Ok(SubmitMessageResult {
             session_id: session.id,
             status: format!("{:?}", session.runtime().run.status).to_ascii_lowercase(),
             text: last_assistant_text(&session),

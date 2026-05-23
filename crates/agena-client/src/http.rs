@@ -8,7 +8,7 @@ use agena_api::{
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
         ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, SubmitTurnParams, UpdateSessionParams,
+        RevokePermissionRuleParams, RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
         UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     queries::{
@@ -168,16 +168,16 @@ impl AgenaClient {
         self.post_json("/api/v1/sessions", body).await
     }
 
-    pub async fn submit_turn(
+    pub async fn submit_message(
         &self,
-        params: SubmitTurnParams,
+        params: SubmitMessageParams,
     ) -> Result<SessionExecutionResource, ClientError> {
         let mut body = serde_json::to_value(params.options)?;
         if let serde_json::Value::Object(ref mut object) = body {
             object.insert("parts".to_string(), serde_json::to_value(params.parts)?);
         }
         self.post_json(
-            &format!("/api/v1/sessions/{}/turns", params.session_id),
+            &format!("/api/v1/sessions/{}/messages", params.session_id),
             body,
         )
         .await
@@ -337,8 +337,8 @@ impl AgenaClient {
                     .await?;
                 Ok(CommandResult::SessionDeleted { id: session_id })
             }
-            Command::SubmitTurn(params) => {
-                Ok(CommandResult::Execution(self.submit_turn(params).await?))
+            Command::SubmitMessage(params) => {
+                Ok(CommandResult::Execution(self.submit_message(params).await?))
             }
             Command::ContinueRun(ContinueRunParams {
                 session_id,

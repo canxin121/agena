@@ -136,7 +136,6 @@ const props = defineProps<{
         :inspect-message="props.state.inspectMessage"
         :rewind-to-message="props.state.rewindToMessage"
         :format-message-time="props.state.formatMessageTime"
-        :message-tags="props.state.messageTags"
         :message-usage-facts="props.state.messageUsageFacts"
         :message-blocks="props.state.messageBlocks"
       />

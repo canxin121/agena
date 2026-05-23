@@ -3,7 +3,7 @@
 
 use agena_api::{
     commands::{
-        CancelTurnParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
+        CancelRunParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
         ListRewindCheckpointsParams, ListSessionTreeParams, ReplacePermissionRuleParams,
@@ -197,7 +197,7 @@ impl AgenaClient {
             .await
     }
 
-    pub async fn cancel_turn(&self, session_id: i64) -> Result<(), ClientError> {
+    pub async fn cancel_run(&self, session_id: i64) -> Result<(), ClientError> {
         let _: serde_json::Value = self
             .post_no_body_json(&format!("/api/v1/sessions/{session_id}/cancel"))
             .await?;
@@ -346,8 +346,8 @@ impl AgenaClient {
             }) => Ok(CommandResult::Execution(
                 self.continue_run(session_id, options).await?,
             )),
-            Command::CancelTurn(CancelTurnParams { session_id }) => {
-                self.cancel_turn(session_id).await?;
+            Command::CancelRun(CancelRunParams { session_id }) => {
+                self.cancel_run(session_id).await?;
                 Ok(CommandResult::Ack)
             }
             Command::RewindSession(RewindSessionParams {

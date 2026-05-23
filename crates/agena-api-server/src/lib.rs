@@ -285,7 +285,7 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/sessions/{session_id}/cancel",
-                post(rest::cancel_turn),
+                post(rest::cancel_run),
             )
             .route(
                 "/api/v1/sessions/{session_id}/permission-replies",

@@ -4,10 +4,10 @@ use smol_str::SmolStr;
 use strum::Display;
 
 use crate::{
-    message::{MessageMetadata, MessagePart, MessageUsage},
+    message::{MessageMetadata, MessagePart, MessageProviderState, MessageUsage},
     session::{
         history::transcript::{TranscriptContent, TranscriptToolOutput},
-        ids::{MessageId, ToolCallId, TurnId},
+        ids::{MessageId, RunId, ToolCallId},
     },
 };
 
@@ -18,8 +18,10 @@ use crate::{
 // `EventKind` variants.
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TurnStarted {
-    pub turn_id: TurnId,
+pub struct RunStarted {
+    pub run_id: RunId,
+    #[serde(default)]
+    pub source: RunSource,
     pub model_id: SmolStr,
     pub provider_id: SmolStr,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -27,15 +29,15 @@ pub struct TurnStarted {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TurnCompleted {
-    pub turn_id: TurnId,
+pub struct RunCompleted {
+    pub run_id: RunId,
     pub finish_reason: FinishReason,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TurnAborted {
-    pub turn_id: TurnId,
-    pub reason: TurnAbortReason,
+pub struct RunAborted {
+    pub run_id: RunId,
+    pub reason: RunAbortReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
@@ -43,15 +45,28 @@ pub struct TurnAborted {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum TurnAbortReason {
-    /// Detected on session load — an in-flight turn from a prior process.
+pub enum RunAbortReason {
+    /// Detected on session load — an in-flight run from a prior process.
     ProcessRestart,
-    /// User cancelled the turn (e.g. via UI cancel button).
+    /// User cancelled the run (e.g. via UI cancel button).
     UserCancelled,
-    /// Provider returned an error before the turn could close.
+    /// Provider returned an error before the run could close.
     ProviderError,
     /// Internal scheduling error.
     Internal,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Display)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum RunSource {
+    #[default]
+    User,
+    Continue,
+    Goal,
+    Compaction,
+    PermissionReply,
+    UserInputReply,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Display)]
@@ -70,7 +85,7 @@ pub enum FinishReason {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UserMessageAppended {
     pub message_id: MessageId,
-    pub turn_id: TurnId,
+    pub run_id: RunId,
     pub created_at: DateTime<Utc>,
     /// Cache-stable transcript projection of the message body. Used to
     /// re-derive `ProviderTranscript::digest()` without re-folding the full
@@ -83,12 +98,14 @@ pub struct UserMessageAppended {
     pub parts: Vec<MessagePart>,
     #[serde(default)]
     pub metadata: MessageMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_state: Option<MessageProviderState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AssistantMessageCompleted {
     pub message_id: MessageId,
-    pub turn_id: TurnId,
+    pub run_id: RunId,
     pub created_at: DateTime<Utc>,
     pub content: TranscriptContent,
     /// Authoritative copy of the assistant message body. See the
@@ -100,12 +117,14 @@ pub struct AssistantMessageCompleted {
     pub finish_reason: FinishReason,
     #[serde(default)]
     pub metadata: MessageMetadata,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_state: Option<MessageProviderState>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ToolCallIssued {
     pub message_id: MessageId,
-    pub turn_id: TurnId,
+    pub run_id: RunId,
     pub call_id: ToolCallId,
     pub name: SmolStr,
     pub arguments: serde_json::Value,
@@ -119,7 +138,7 @@ pub struct ToolCallCompleted {
     /// message.
     pub message_id: MessageId,
     pub call_id: ToolCallId,
-    pub turn_id: TurnId,
+    pub run_id: RunId,
     /// Stable name of the tool that produced this result. Stored verbatim so
     /// the projection can reconstruct a faithful `ToolInvocation` rather than
     /// the placeholder `name: "tool"` it had to use when the field was

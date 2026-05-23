@@ -12,8 +12,8 @@ use tracing::Instrument;
 use crate::AppError;
 use crate::db::crud::session_goal::GoalUpdate;
 use crate::event::{
-    ErrorInfo, EventKind, PermissionRepliedEvent, PermissionRequestedEvent, RunFailedEvent,
-    RunStartedEvent, SessionGoalEvent,
+    ErrorInfo, EventKind, ExecutionFailedEvent, ExecutionStartedEvent, PermissionRepliedEvent,
+    PermissionRequestedEvent, SessionGoalEvent,
 };
 use crate::message::{
     ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
@@ -38,12 +38,12 @@ use std::path::PathBuf;
 
 use super::cache::SessionCachePolicy;
 pub use super::cache::SessionCacheStats;
-use super::control::{TurnControl, TurnControlError, TurnRegistry};
+use super::control::{RunControl, RunControlError, RunRegistry};
 use super::cost::{SessionCostSummary, UsageStats, UsageStatsQuery};
 use super::history::{
-    FinishReason, MessageId as HistoryMessageId, ToolCallCompleted,
-    ToolCallId as HistoryToolCallId, TranscriptContent, TranscriptToolOutput, TurnAbortReason,
-    TurnAborted, TurnCompleted, TurnId as HistoryTurnId, TurnStarted, UserMessageAppended,
+    FinishReason, MessageId as HistoryMessageId, RunAbortReason, RunAborted, RunCompleted,
+    RunId as HistoryRunId, RunSource, RunStarted, ToolCallCompleted,
+    ToolCallId as HistoryToolCallId, TranscriptContent, TranscriptToolOutput, UserMessageAppended,
 };
 use super::model::{
     GoalStatus, GoalSteeringKind, PromptCompactionRuntime, PromptCompactionStrategy,
@@ -60,7 +60,7 @@ pub struct SessionManagerConfig {
     pub cache_max_sessions: usize,
     pub cache_ttl: Duration,
     pub cache_max_bytes: usize,
-    pub max_turn_loops: usize,
+    pub max_run_loops: usize,
     pub doom_loop: crate::session::DoomLoopPolicy,
     pub default_selection: crate::execution_prefs::ExecutionSelection,
     pub default_agent: Option<String>,
@@ -108,7 +108,7 @@ impl Default for SessionManagerConfig {
             cache_max_sessions: 128,
             cache_ttl: Duration::from_secs(15 * 60),
             cache_max_bytes: 64 * 1024 * 1024,
-            max_turn_loops: 16,
+            max_run_loops: 16,
             doom_loop: crate::session::DoomLoopPolicy::default(),
             default_selection: crate::execution_prefs::ExecutionSelection::default(),
             default_agent: None,
@@ -146,7 +146,7 @@ pub struct SessionRunOptions {
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub agent_profile: Option<String>,
-    pub max_turn_loops: Option<usize>,
+    pub max_run_loops: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,15 +289,15 @@ pub struct SessionGoalUpdateRequest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GoalTurnDirectiveKind {
+enum GoalRunDirectiveKind {
     ObjectiveUpdated,
     Continuation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct GoalTurnDirective {
+struct GoalRunDirective {
     goal_id: i64,
-    kind: GoalTurnDirectiveKind,
+    kind: GoalRunDirectiveKind,
     prompt: String,
 }
 
@@ -389,7 +389,7 @@ pub struct SessionManager {
     publisher: Arc<crate::event::EventPublisher>,
     bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>>,
     execution: ArcSwap<SessionManagerState>,
-    turn_registry: Arc<TurnRegistry>,
+    run_registry: Arc<RunRegistry>,
     reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
     host_user_input_sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
@@ -402,7 +402,7 @@ impl SessionManager {
             publisher: Arc::clone(&self.publisher),
             bus: Arc::clone(&self.bus),
             execution: ArcSwap::from(self.execution.load_full()),
-            turn_registry: Arc::clone(&self.turn_registry),
+            run_registry: Arc::clone(&self.run_registry),
             reply_session_locks: Arc::clone(&self.reply_session_locks),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
             host_user_input_sequences: Arc::clone(&self.host_user_input_sequences),
@@ -441,7 +441,7 @@ impl SessionManager {
             publisher,
             bus,
             execution: ArcSwap::from_pointee(state),
-            turn_registry: Arc::new(TurnRegistry::new()),
+            run_registry: Arc::new(RunRegistry::new()),
             reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_sequences: Arc::new(StdMutex::new(HashMap::new())),
@@ -686,19 +686,19 @@ fn permission_subject(action: &PermissionAction) -> serde_json::Value {
     }
 }
 
-fn turn_control_to_app_error(err: TurnControlError) -> AppError {
+fn run_control_to_app_error(err: RunControlError) -> AppError {
     match err {
-        TurnControlError::NoActiveTurn(id) => {
-            AppError::Internal(format!("no in-flight turn for session {id}"))
+        RunControlError::NoActiveRun(id) => {
+            AppError::Internal(format!("no in-flight run for session {id}"))
         }
-        TurnControlError::SteerClosed => {
+        RunControlError::SteerClosed => {
             AppError::Internal("steer channel closed for session".to_string())
         }
     }
 }
 
 fn is_user_cancelled_error(err: &AppError) -> bool {
-    matches!(err, AppError::Internal(message) if message == "turn cancelled by user")
+    matches!(err, AppError::Internal(message) if message == "run cancelled by user")
 }
 
 fn build_message(
@@ -716,8 +716,8 @@ fn build_message(
         parts: Vec::with_capacity(parts.len()),
         created_at,
         metadata,
+        provider_state: None,
         usage: None,
-        finish: None,
     };
 
     for content in parts {

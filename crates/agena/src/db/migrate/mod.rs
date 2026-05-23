@@ -9,6 +9,8 @@ mod m20260518_000007_model_catalog;
 mod m20260520_000008_activity_projection_state;
 mod m20260520_000009_remove_legacy_history_rewrites;
 mod m20260521_000011_session_usage_cleanup;
+mod m20260523_000012_remove_activity_message_finish;
+mod m20260523_000013_add_activity_message_provider_state;
 mod migrator;
 
 use sea_orm::{DatabaseConnection, DbErr};

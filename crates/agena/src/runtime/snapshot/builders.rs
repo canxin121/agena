@@ -286,7 +286,7 @@ pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionMa
         cache_max_sessions: resolution.config.runtime.session_cache.max_sessions,
         cache_ttl: Duration::from_secs(resolution.config.runtime.session_cache.ttl_secs),
         cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
-        max_turn_loops: defaults.max_turn_loops,
+        max_run_loops: defaults.max_run_loops,
         doom_loop: defaults.doom_loop,
         default_selection: resolution.config.default.clone(),
         default_agent: resolution.config.default.agent.clone(),
@@ -429,10 +429,10 @@ pub(super) fn build_scheduler(
             job: &agena_scheduler::ScheduledJob,
         ) -> agena_scheduler::JobDeliveryResult {
             let result = if let Some(session_id) = job.owner_session_id {
-                if self.session_manager.is_turn_active(session_id).await {
+                if self.session_manager.is_run_active(session_id).await {
                     agena_scheduler::JobDeliveryResult::skipped(
                         Some(session_id),
-                        "session already has an active turn",
+                        "session already has an active run",
                     )
                 } else {
                     let session = match self.session_manager.get_session(session_id).await {

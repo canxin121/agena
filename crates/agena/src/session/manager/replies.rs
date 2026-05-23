@@ -185,12 +185,24 @@ impl SessionManager {
             }
         }
 
+        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
+        if self.apply_run_selection_to_session(&mut session, &options) {
+            session = self
+                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .await?;
+        }
+
         let manager = self.background_handle();
         let session_id = request.session_id;
-        let options = request.options;
         tokio::task::spawn(async move {
             manager
-                .run_until_stable_for(session_id, session, &options, state)
+                .run_until_stable_for(
+                    session_id,
+                    session,
+                    &options,
+                    RunSource::PermissionReply,
+                    state,
+                )
                 .await
         })
         .await
@@ -315,19 +327,31 @@ impl SessionManager {
             }
         }
 
+        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
+        if self.apply_run_selection_to_session(&mut session, &options) {
+            session = self
+                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .await?;
+        }
+
         let manager = self.background_handle();
         let session_id = request.session_id;
-        let options = request.options;
         tokio::task::spawn(async move {
             manager
-                .run_until_stable_for(session_id, session, &options, state)
+                .run_until_stable_for(
+                    session_id,
+                    session,
+                    &options,
+                    RunSource::UserInputReply,
+                    state,
+                )
                 .await
         })
         .await
         .map_err(|err| AppError::Internal(format!("user input continuation task failed: {err}")))?
     }
 
-    /// Convenience wrapper that registers a fresh `TurnControl` for
+    /// Convenience wrapper that registers a fresh `RunControl` for
     /// `session_id`, runs the loop, then unregisters. Used by entry points
     /// that don't already own a control (continuation-style: permission
     /// reply, user-input reply).
@@ -336,13 +360,22 @@ impl SessionManager {
         session_id: i64,
         session: Session,
         options: &SessionRunOptions,
+        run_source: RunSource,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let (control, steer_rx) = self.turn_registry.register(session_id).await;
+        let (control, steer_rx) = self.run_registry.register(session_id).await;
         let result = self
-            .run_until_stable(session, options, false, state, control.clone(), steer_rx)
+            .run_until_stable(
+                session,
+                options,
+                false,
+                run_source,
+                state,
+                control.clone(),
+                steer_rx,
+            )
             .await;
-        self.turn_registry
+        self.run_registry
             .unregister_if_matches(session_id, &control)
             .await;
         result
@@ -355,7 +388,7 @@ impl SessionManager {
     ) {
         let manager = self.background_handle();
         tokio::spawn(async move {
-            if manager.turn_registry.is_active(session_id).await {
+            if manager.run_registry.is_active(session_id).await {
                 return;
             }
 
@@ -388,7 +421,7 @@ impl SessionManager {
                 _ => {}
             }
             if manager
-                .goal_turn_directive(&session, allow_goal_continuation)
+                .goal_run_directive(&session, allow_goal_continuation)
                 .is_none()
             {
                 return;
@@ -408,7 +441,7 @@ impl SessionManager {
             };
 
             let Some((control, steer_rx)) = manager
-                .turn_registry
+                .run_registry
                 .try_register_if_inactive(session_id)
                 .await
             else {
@@ -419,6 +452,7 @@ impl SessionManager {
                     session,
                     &options,
                     allow_goal_continuation,
+                    RunSource::Goal,
                     state,
                     control.clone(),
                     steer_rx,
@@ -433,7 +467,7 @@ impl SessionManager {
                 );
             }
             manager
-                .turn_registry
+                .run_registry
                 .unregister_if_matches(session_id, &control)
                 .await;
         });
@@ -444,17 +478,18 @@ impl SessionManager {
         mut session: Session,
         options: &SessionRunOptions,
         allow_goal_continuation: bool,
+        base_run_source: RunSource,
         state: Arc<SessionManagerState>,
-        control: Arc<TurnControl>,
+        control: Arc<RunControl>,
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
         let initial_options =
             self.apply_execution_context_to_run_options(&session, options.clone())?;
-        let max_turn_loops = initial_options
-            .max_turn_loops
-            .unwrap_or(state.config.max_turn_loops);
+        let max_run_loops = initial_options
+            .max_run_loops
+            .unwrap_or(state.config.max_run_loops);
         let mut continuation_available = allow_goal_continuation;
-        for _ in 0..max_turn_loops {
+        for _ in 0..max_run_loops {
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
             if control.cancel.is_cancelled() {
@@ -463,7 +498,7 @@ impl SessionManager {
                 }
                 self.persist_run_failed_event(
                     session.id,
-                    "turn cancelled by user".to_string(),
+                    "run cancelled by user".to_string(),
                     state.clone(),
                 )
                 .await?;
@@ -517,10 +552,10 @@ impl SessionManager {
                 continue;
             }
 
-            let goal_turn_directive = self.goal_turn_directive(&session, continuation_available);
+            let goal_run_directive = self.goal_run_directive(&session, continuation_available);
             match session.status() {
                 SessionStatus::Idle => {
-                    if goal_turn_directive.is_none() {
+                    if goal_run_directive.is_none() {
                         let last_assistant_text = session
                             .messages
                             .iter()
@@ -564,12 +599,6 @@ impl SessionManager {
                                         model_id: current_options.model.model_id.to_string(),
                                         model_thinking_mode: current_options.thinking_mode.clone(),
                                         model_speed_mode: current_options.speed_mode.clone(),
-                                        model_verbosity: current_options.verbosity.clone(),
-                                        model_parallel_tool_calls: current_options
-                                            .request_override
-                                            .parallel_tool_calls(),
-                                        provider_metadata: None,
-                                        tags: Vec::new(),
                                     },
                                 );
                                 session.messages.push(user_message.clone());
@@ -628,9 +657,13 @@ impl SessionManager {
                     reserved_tokens = session_usage.reserved_tokens.unwrap_or_default(),
                     "automatic session compaction triggered before model turn"
                 );
-                session = self
-                    .auto_compact_session(session, &current_options, state.clone(), control.clone())
-                    .await?;
+                session = Box::pin(self.auto_compact_session(
+                    session,
+                    &current_options,
+                    state.clone(),
+                    control.clone(),
+                ))
+                .await?;
             }
 
             let session_id = session.id;
@@ -651,9 +684,9 @@ impl SessionManager {
                 .await;
 
             let mut model_session = session;
-            if let Some(directive) = goal_turn_directive.as_ref() {
+            if let Some(directive) = goal_run_directive.as_ref() {
                 model_session = self
-                    .append_goal_turn_directive_message(
+                    .append_goal_run_directive_message(
                         model_session,
                         directive,
                         &current_options,
@@ -661,24 +694,29 @@ impl SessionManager {
                     )
                     .await?;
             }
+            let current_run_source = if goal_run_directive.is_some() {
+                RunSource::Goal
+            } else {
+                base_run_source
+            };
 
-            match self
-                .run_model_turn(
-                    model_session,
-                    &current_options,
-                    state.clone(),
-                    control.clone(),
-                )
-                .await
+            match Box::pin(self.run_model_turn(
+                model_session,
+                &current_options,
+                current_run_source,
+                state.clone(),
+                control.clone(),
+            ))
+            .await
             {
                 Ok(mut next_session) => {
-                    if goal_turn_directive.as_ref().is_some_and(|directive| {
-                        directive.kind == GoalTurnDirectiveKind::Continuation
+                    if goal_run_directive.as_ref().is_some_and(|directive| {
+                        directive.kind == GoalRunDirectiveKind::Continuation
                     }) {
                         continuation_available = false;
                     }
-                    if let Some(directive) = goal_turn_directive.as_ref()
-                        && self.apply_goal_turn_directive(&mut next_session, directive)
+                    if let Some(directive) = goal_run_directive.as_ref()
+                        && self.apply_goal_run_directive(&mut next_session, directive)
                     {
                         next_session = self
                             .persist_session_changes(
@@ -721,7 +759,7 @@ impl SessionManager {
         }
 
         Err(AppError::Internal(
-            "session manager exceeded max turn loop budget".to_string(),
+            "session manager exceeded max run loop budget".to_string(),
         ))
     }
 
@@ -729,8 +767,9 @@ impl SessionManager {
         &self,
         mut session: Session,
         options: &SessionRunOptions,
+        run_source: RunSource,
         state: Arc<SessionManagerState>,
-        control: Arc<TurnControl>,
+        control: Arc<RunControl>,
     ) -> Result<Session, AppError> {
         let turn_span = tracing::info_span!(
             "session.turn",
@@ -815,7 +854,8 @@ impl SessionManager {
                 "prepared prompt for session turn"
             );
 
-            session.runtime.turn.record_model_request(
+            session.runtime.run.record_run_request(
+                run_source,
                 options.model.provider_id.to_string(),
                 options.model.adapter_id.as_ref().map(ToString::to_string),
                 options.model.model_id.to_string(),
@@ -836,7 +876,6 @@ impl SessionManager {
                 model: options.model.clone(),
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
-                model_parallel_tool_calls: options.request_override.parallel_tool_calls(),
                 completion: options.completion_request(
                     prepared.system.clone(),
                     prepared.messages.clone(),
@@ -855,7 +894,7 @@ impl SessionManager {
             self.store
                 .append_client_events(
                     session.id,
-                    vec![EventKind::RunStarted(RunStartedEvent {
+                    vec![EventKind::ExecutionStarted(ExecutionStartedEvent {
                         session_id: session.id,
                         ts_ms: Utc::now().timestamp_millis(),
                     })],
@@ -866,12 +905,12 @@ impl SessionManager {
             let turn_outcome = tokio::select! {
                 res = processor_fut => res,
                 _ = control.cancel.cancelled() => {
-                    Err(AppError::Internal("turn cancelled by user".to_string()))
+                    Err(AppError::Internal("run cancelled by user".to_string()))
                 }
             };
             match turn_outcome {
                 Ok(result) => {
-                    let turn_id = result.turn_id;
+                    let run_id = result.run_id;
                     let terminal_error = result.terminal_error;
                     if terminal_error.as_ref().is_some_and(is_user_cancelled_error)
                         && control.is_superseded()
@@ -970,23 +1009,24 @@ impl SessionManager {
                         )
                         .await?;
 
-                    let mut turn_events: Vec<EventKind> = Vec::new();
-                    turn_events.push(EventKind::TurnStarted(TurnStarted {
-                        turn_id,
+                    let mut run_events: Vec<EventKind> = Vec::new();
+                    run_events.push(EventKind::RunStarted(RunStarted {
+                        run_id,
+                        source: run_source,
                         model_id: options.model.model_id.as_str().into(),
                         provider_id: options.model.provider_id.as_str().into(),
                         request_digest: None,
                     }));
-                    turn_events.extend(result.history_items);
+                    run_events.extend(result.history_items);
                     if let Some(err) = terminal_error.as_ref() {
-                        turn_events.push(EventKind::TurnAborted(TurnAborted {
-                            turn_id,
-                            reason: TurnAbortReason::ProviderError,
+                        run_events.push(EventKind::RunAborted(RunAborted {
+                            run_id,
+                            reason: RunAbortReason::ProviderError,
                             message: Some(err.to_string()),
                         }));
                     } else {
-                        turn_events.push(EventKind::TurnCompleted(TurnCompleted {
-                            turn_id,
+                        run_events.push(EventKind::RunCompleted(RunCompleted {
+                            run_id,
                             finish_reason: FinishReason::default(),
                         }));
                     }
@@ -994,7 +1034,7 @@ impl SessionManager {
                     let cache_policy = state.cache_policy();
                     persisted_session = tokio::task::spawn(async move {
                         store
-                            .append_history_items(persisted_session, turn_events, cache_policy)
+                            .append_history_items(persisted_session, run_events, cache_policy)
                             .await
                     })
                     .await
@@ -2092,11 +2132,11 @@ impl SessionManager {
             )
             .await?;
         let now = Utc::now();
-        let turn_id = HistoryTurnId::new();
+        let run_id = HistoryRunId::new();
         let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
             message_id: HistoryMessageId(assistant_message.id),
             call_id: tool_call_id,
-            turn_id,
+            run_id,
             tool_name: resolved.invocation.name.clone().into(),
             part: completed_part,
             output: tool_output_event,
@@ -2185,11 +2225,11 @@ impl SessionManager {
             )
             .await?;
         let now = Utc::now();
-        let turn_id = HistoryTurnId::new();
+        let run_id = HistoryRunId::new();
         let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
             message_id: HistoryMessageId(assistant_message.id),
             call_id: tool_call_id,
-            turn_id,
+            run_id,
             tool_name: resolved.invocation.name.clone().into(),
             part: completed_part,
             output: TranscriptToolOutput::Error { message: reason },
@@ -2270,11 +2310,11 @@ impl SessionManager {
         changed
     }
 
-    pub(super) fn goal_turn_directive(
+    pub(super) fn goal_run_directive(
         &self,
         session: &Session,
         allow_continuation: bool,
-    ) -> Option<GoalTurnDirective> {
+    ) -> Option<GoalRunDirective> {
         let goal = session.goal.as_ref()?;
         match goal.status {
             GoalStatus::Completed => None,
@@ -2284,18 +2324,18 @@ impl SessionManager {
                     && pending.goal_id == goal.id
                     && pending.kind == GoalSteeringKind::ObjectiveUpdated
                 {
-                    return Some(GoalTurnDirective {
+                    return Some(GoalRunDirective {
                         goal_id: goal.id,
-                        kind: GoalTurnDirectiveKind::ObjectiveUpdated,
+                        kind: GoalRunDirectiveKind::ObjectiveUpdated,
                         prompt: self
-                            .render_goal_context(goal, GoalTurnDirectiveKind::ObjectiveUpdated),
+                            .render_goal_context(goal, GoalRunDirectiveKind::ObjectiveUpdated),
                     });
                 }
                 if allow_continuation && session.status() == SessionStatus::Idle {
-                    return Some(GoalTurnDirective {
+                    return Some(GoalRunDirective {
                         goal_id: goal.id,
-                        kind: GoalTurnDirectiveKind::Continuation,
-                        prompt: self.render_goal_context(goal, GoalTurnDirectiveKind::Continuation),
+                        kind: GoalRunDirectiveKind::Continuation,
+                        prompt: self.render_goal_context(goal, GoalRunDirectiveKind::Continuation),
                     });
                 }
                 None
@@ -2303,10 +2343,10 @@ impl SessionManager {
         }
     }
 
-    pub(super) async fn append_goal_turn_directive_message(
+    pub(super) async fn append_goal_run_directive_message(
         &self,
         mut session: Session,
-        directive: &GoalTurnDirective,
+        directive: &GoalRunDirective,
         options: &SessionRunOptions,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
@@ -2331,10 +2371,6 @@ impl SessionManager {
                 model_id: options.model.model_id.to_string(),
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
-                model_verbosity: options.verbosity.clone(),
-                model_parallel_tool_calls: options.request_override.parallel_tool_calls(),
-                provider_metadata: None,
-                tags: Vec::new(),
             },
         );
         session.messages.push(goal_message.clone());
@@ -2348,24 +2384,26 @@ impl SessionManager {
             )
             .await?;
 
-        let turn_id = HistoryTurnId::new();
+        let run_id = HistoryRunId::new();
         let history_items = vec![
-            EventKind::TurnStarted(TurnStarted {
-                turn_id,
+            EventKind::RunStarted(RunStarted {
+                run_id,
+                source: RunSource::Goal,
                 model_id: options.model.model_id.as_str().into(),
                 provider_id: options.model.provider_id.as_str().into(),
                 request_digest: None,
             }),
             EventKind::UserMessageAppended(UserMessageAppended {
                 message_id: HistoryMessageId(goal_message.id),
-                turn_id,
+                run_id,
                 created_at: goal_message.created_at,
                 content: TranscriptContent::from_message_lossy(&goal_message),
                 parts: goal_message.parts.clone(),
                 metadata: goal_message.metadata.clone(),
+                provider_state: goal_message.provider_state.clone(),
             }),
-            EventKind::TurnCompleted(TurnCompleted {
-                turn_id,
+            EventKind::RunCompleted(RunCompleted {
+                run_id,
                 finish_reason: FinishReason::Stop,
             }),
         ];
@@ -2374,14 +2412,14 @@ impl SessionManager {
             .await
     }
 
-    fn apply_goal_turn_directive(
+    fn apply_goal_run_directive(
         &self,
         session: &mut Session,
-        directive: &GoalTurnDirective,
+        directive: &GoalRunDirective,
     ) -> bool {
         match directive.kind {
-            GoalTurnDirectiveKind::Continuation => false,
-            GoalTurnDirectiveKind::ObjectiveUpdated => {
+            GoalRunDirectiveKind::Continuation => false,
+            GoalRunDirectiveKind::ObjectiveUpdated => {
                 if session
                     .runtime
                     .goal
@@ -2399,15 +2437,15 @@ impl SessionManager {
         }
     }
 
-    fn render_goal_context(&self, goal: &SessionGoal, kind: GoalTurnDirectiveKind) -> String {
+    fn render_goal_context(&self, goal: &SessionGoal, kind: GoalRunDirectiveKind) -> String {
         let objective = goal.objective.trim();
         match kind {
-            GoalTurnDirectiveKind::ObjectiveUpdated => join_runtime_context_lines(&[
+            GoalRunDirectiveKind::ObjectiveUpdated => join_runtime_context_lines(&[
                 "An active runtime goal has been set or updated.".to_string(),
                 format!("Objective:\n{objective}"),
                 "Continue making concrete progress toward this goal without waiting for additional user input. Use tools when needed, keep the work grounded in the current workspace, and call `update_goal` with `status = complete` once the objective is actually finished.".to_string(),
             ]),
-            GoalTurnDirectiveKind::Continuation => join_runtime_context_lines(&[
+            GoalRunDirectiveKind::Continuation => join_runtime_context_lines(&[
                 "Continue working toward the active runtime goal.".to_string(),
                 format!("Objective:\n{objective}"),
                 "Do not wait for the user just because the last turn ended. Make the next concrete move toward finishing the objective, explain the blocker if you are truly blocked, and call `update_goal` with `status = complete` once the objective is actually done.".to_string(),
@@ -2441,6 +2479,41 @@ impl SessionManager {
         Ok(())
     }
 
+    pub(super) fn apply_run_selection_to_session(
+        &self,
+        session: &mut Session,
+        options: &SessionRunOptions,
+    ) -> bool {
+        let next_model_provider_id = options.model.provider_id.to_string();
+        let next_model_adapter_id = options.model.adapter_id.as_ref().map(ToString::to_string);
+        let next_model_id = options.model.model_id.to_string();
+        let next_thinking_mode = options.thinking_mode.clone();
+        let next_speed_mode = options.speed_mode.clone();
+        let next_verbosity = options.verbosity.clone();
+        let next_parallel_tool_calls = options.request_override.parallel_tool_calls();
+        let changed = session.runtime.execution.selection.provider.as_deref()
+            != Some(next_model_provider_id.as_str())
+            || session.runtime.execution.selection.adapter.as_deref()
+                != next_model_adapter_id.as_deref()
+            || session.runtime.execution.selection.model.as_deref() != Some(next_model_id.as_str())
+            || session.runtime.execution.selection.thinking_mode != next_thinking_mode
+            || session.runtime.execution.selection.speed_mode != next_speed_mode
+            || session.runtime.execution.selection.verbosity != next_verbosity
+            || session.runtime.execution.selection.parallel_tool_calls != next_parallel_tool_calls;
+        session.runtime.set_model_override(
+            Some(next_model_provider_id),
+            next_model_adapter_id,
+            Some(next_model_id),
+        );
+        session.runtime.set_model_mode_overrides(
+            next_thinking_mode,
+            next_speed_mode,
+            next_verbosity,
+            next_parallel_tool_calls,
+        );
+        changed
+    }
+
     pub(super) fn apply_execution_context_to_run_options(
         &self,
         session: &Session,
@@ -2468,8 +2541,8 @@ impl SessionManager {
         if options.max_output_tokens.is_none() {
             options.max_output_tokens = session.runtime.execution.agent_run.max_output_tokens;
         }
-        if options.max_turn_loops.is_none() {
-            options.max_turn_loops = session.runtime.execution.agent_run.steps;
+        if options.max_run_loops.is_none() {
+            options.max_run_loops = session.runtime.execution.agent_run.steps;
         }
         if options.agent_profile.is_none() {
             options.agent_profile = session.runtime.execution.selection.agent.clone();
@@ -2609,17 +2682,27 @@ impl SessionManager {
         state: &SessionManagerState,
     ) -> Result<Option<ModelRef>, AppError> {
         let selection = &state.config.default_selection;
-        let Some(provider_id) = selection.provider.as_deref() else {
+        if let Some(provider_id) = selection.provider.as_deref() {
+            return state
+                .processor
+                .provider_registry()
+                .resolve_model_selection(
+                    provider_id,
+                    selection.adapter.as_deref(),
+                    selection.model.as_deref(),
+                )
+                .map(Some);
+        }
+
+        let mut provider_ids = state.processor.provider_registry().provider_ids();
+        if provider_ids.len() != 1 {
             return Ok(None);
-        };
+        }
+
         state
             .processor
             .provider_registry()
-            .resolve_model_selection(
-                provider_id,
-                selection.adapter.as_deref(),
-                selection.model.as_deref(),
-            )
+            .resolve_model_selection(provider_ids.remove(0).as_str(), None, None)
             .map(Some)
     }
 
@@ -2660,7 +2743,7 @@ impl SessionManager {
                 temperature: None,
                 max_output_tokens: None,
                 agent_profile: None,
-                max_turn_loops: None,
+                max_run_loops: None,
             },
         )
     }
@@ -2840,8 +2923,8 @@ impl SessionManager {
         if options.max_output_tokens.is_none() {
             options.max_output_tokens = next_run.max_output_tokens;
         }
-        if options.max_turn_loops.is_none() {
-            options.max_turn_loops = next_run.steps;
+        if options.max_run_loops.is_none() {
+            options.max_run_loops = next_run.steps;
         }
         if !changed {
             return Ok(session);
@@ -3009,7 +3092,7 @@ impl SessionManager {
         reason: String,
         state: Arc<SessionManagerState>,
     ) -> Result<(), AppError> {
-        let event = EventKind::RunFailed(RunFailedEvent {
+        let event = EventKind::ExecutionFailed(ExecutionFailedEvent {
             session_id,
             error: ErrorInfo {
                 code: "session_run_failed".to_string(),
@@ -3109,7 +3192,7 @@ impl SessionManager {
                 .map(|value| value.0),
             max_output_tokens: child.runtime.execution.agent_run.max_output_tokens,
             agent_profile: child.runtime.execution.selection.agent.clone(),
-            max_turn_loops: child.runtime.execution.agent_run.steps,
+            max_run_loops: child.runtime.execution.agent_run.steps,
         })
     }
 
@@ -3173,10 +3256,6 @@ impl SessionManager {
                     model_id: options.model.model_id.to_string(),
                     model_thinking_mode: options.thinking_mode.clone(),
                     model_speed_mode: options.speed_mode.clone(),
-                    model_verbosity: options.verbosity.clone(),
-                    model_parallel_tool_calls: options.request_override.parallel_tool_calls(),
-                    provider_metadata: None,
-                    tags: Vec::new(),
                 },
             );
             session.messages.push(user_message.clone());

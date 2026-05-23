@@ -1,19 +1,19 @@
 mod event;
+mod run_buffer;
 mod store;
 mod transcript;
-mod turn_buffer;
 
-pub(crate) use crate::session::ids::{MessageId, ToolCallId, TurnId};
+pub(crate) use crate::session::ids::{MessageId, RunId, ToolCallId};
 pub(crate) use event::{
-    AssistantMessageCompleted, FinishReason, SystemNoticeAppended, SystemNoticeKind,
-    ToolCallCompleted, ToolCallIssued, TurnAbortReason, TurnAborted, TurnCompleted, TurnStarted,
+    AssistantMessageCompleted, FinishReason, RunAbortReason, RunAborted, RunCompleted, RunSource,
+    RunStarted, SystemNoticeAppended, SystemNoticeKind, ToolCallCompleted, ToolCallIssued,
     UserMessageAppended,
 };
 pub use event::{RewindCheckpoint, RewindCheckpointEntry};
+pub(crate) use run_buffer::{MessageIdAllocator, RunBuffer, SequentialIdAllocator};
 pub use store::ProjectedMessageHeader;
 pub(crate) use store::SessionHistoryStore;
 pub(crate) use transcript::{
     ProviderTranscript, TranscriptBlock, TranscriptContent, TranscriptFragment, TranscriptToolCall,
     TranscriptToolOutput,
 };
-pub(crate) use turn_buffer::{MessageIdAllocator, SequentialIdAllocator, TurnBuffer};

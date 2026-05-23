@@ -11,6 +11,8 @@ use super::m20260518_000007_model_catalog;
 use super::m20260520_000008_activity_projection_state;
 use super::m20260520_000009_remove_legacy_history_rewrites;
 use super::m20260521_000011_session_usage_cleanup;
+use super::m20260523_000012_remove_activity_message_finish;
+use super::m20260523_000013_add_activity_message_provider_state;
 
 pub struct Migrator;
 
@@ -29,6 +31,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260520_000008_activity_projection_state::Migration),
             Box::new(m20260520_000009_remove_legacy_history_rewrites::Migration),
             Box::new(m20260521_000011_session_usage_cleanup::Migration),
+            Box::new(m20260523_000012_remove_activity_message_finish::Migration),
+            Box::new(m20260523_000013_add_activity_message_provider_state::Migration),
         ]
     }
 }

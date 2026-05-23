@@ -11,8 +11,9 @@ use crate::event::{
     PartDeltaField, PublishContext, StreamErrorEvent,
 };
 use crate::message::{
-    ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
-    OperationPart, PartContent, ReasoningPart, StructuredObject, TimeRange, ToolInvocation,
+    AssistantReasoningField, ExecutionStatus, Message, MessageMetadata, MessagePart,
+    MessageProviderState, MessageSource, MessageStatus, OperationPart, PartContent, ReasoningPart,
+    StructuredObject, TimeRange, ToolInvocation,
 };
 use crate::model::ModelRef;
 use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
@@ -22,7 +23,7 @@ use crate::provider::{
 use crate::role::Role;
 
 use super::history::{
-    FinishReason, MessageId as HistoryMessageId, MessageIdAllocator, ToolCallId, TurnBuffer, TurnId,
+    FinishReason, MessageId as HistoryMessageId, MessageIdAllocator, RunBuffer, RunId, ToolCallId,
 };
 use super::{context_governor::ContextGovernor, store::ProcessorPartIdAllocator};
 
@@ -34,17 +35,16 @@ pub(crate) struct SessionRunRequest {
     pub model: ModelRef,
     pub model_thinking_mode: Option<String>,
     pub model_speed_mode: Option<String>,
-    pub model_parallel_tool_calls: Option<bool>,
     pub completion: CompletionRequest,
     pub next_message_id: i64,
     pub part_ids: ProcessorPartIdAllocator,
     pub next_call_id: i64,
     /// Live publisher used to push streaming events ("running") onto the
-    /// unified bus while the turn is in flight. `None` keeps test harnesses
+    /// unified bus while the run is in flight. `None` keeps test harnesses
     /// terse — they observe the buffered `client_events` on the result.
     pub event_publisher: Option<Arc<EventPublisher>>,
     /// Optional cancel handle. When the token fires the stream loop
-    /// terminates between provider events and surfaces a `TurnAbortReason::
+    /// terminates between provider events and surfaces a `RunAbortReason::
     /// Cancelled`-shaped terminal error. `None` keeps the legacy "run to
     /// completion" semantics for callers that don't have a control object.
     pub cancel: Option<tokio_util::sync::CancellationToken>,
@@ -54,17 +54,17 @@ pub(crate) struct SessionRunRequest {
 pub(crate) struct SessionRunResult {
     pub assistant_message_id: i64,
     pub state: Vec<Message>,
-    /// UI-projection events buffered during the turn (also pushed onto the
+    /// UI-projection events buffered during the run (also pushed onto the
     /// bus when `event_publisher` was set).
     pub client_events: Vec<EventKind>,
     pub provider_metadata: Option<serde_json::Value>,
     pub terminal_error: Option<AppError>,
-    /// Append-only history events emitted by the turn buffer. Routed by the
+    /// Append-only history events emitted by the run buffer. Routed by the
     /// manager into `SessionStore::append_history_items`.
     pub history_items: Vec<EventKind>,
-    /// The turn id used by `history_items` — the manager wraps this with
-    /// `TurnStarted` / `TurnCompleted` / `TurnAborted` boundary events.
-    pub turn_id: TurnId,
+    /// The run id used by `history_items` — the manager wraps this with
+    /// `RunStarted` / `RunCompleted` / `RunAborted` boundary events.
+    pub run_id: RunId,
 }
 
 #[derive(Clone)]
@@ -183,10 +183,6 @@ impl SessionProcessor {
             model_id: run.completion.model.to_string(),
             model_thinking_mode: run.model_thinking_mode.clone(),
             model_speed_mode: run.model_speed_mode.clone(),
-            model_verbosity: run.completion.verbosity.clone(),
-            model_parallel_tool_calls: run.model_parallel_tool_calls,
-            provider_metadata: None,
-            tags: Vec::new(),
         };
 
         let started_at = Utc::now();
@@ -197,15 +193,15 @@ impl SessionProcessor {
             parts: Vec::new(),
             created_at: started_at,
             metadata: assistant_metadata.clone(),
+            provider_state: None,
             usage: None,
-            finish: None,
         };
 
-        let turn_id = TurnId::new();
-        let mut turn_buffer = TurnBuffer::new(turn_id);
+        let run_id = RunId::new();
+        let mut run_buffer = RunBuffer::new(run_id);
         let mut id_provider = FixedAssistantId::new(assistant_message_id);
-        turn_buffer.begin_assistant(&mut id_provider);
-        if let Err(err) = turn_buffer.set_metadata(assistant_metadata.clone()) {
+        run_buffer.begin_assistant(&mut id_provider);
+        if let Err(err) = run_buffer.set_metadata(assistant_metadata.clone()) {
             return Err(AppError::Internal(err.to_string()));
         }
 
@@ -215,7 +211,6 @@ impl SessionProcessor {
         let mut part_delta_sequences = BTreeMap::<i64, u64>::new();
         let mut provider_err: Option<AppError> = None;
         let mut usage = None;
-        let mut finish = None;
         let mut finish_reason_enum = FinishReason::default();
         let mut provider_metadata = None;
         let mut visible_text = String::new();
@@ -251,7 +246,7 @@ impl SessionProcessor {
                     };
 
                     self.append_text_delta(&mut assistant, part_id, delta.as_str())?;
-                    turn_buffer
+                    run_buffer
                         .push_text_delta(delta.as_str())
                         .map_err(|err| AppError::Internal(err.to_string()))?;
 
@@ -294,14 +289,14 @@ impl SessionProcessor {
                     self.ensure_pending_tool_call_part(
                         &mut run,
                         &mut assistant,
-                        &mut turn_buffer,
+                        &mut run_buffer,
                         pending,
                     )
                     .await?;
                     if !arguments_delta.is_empty()
                         && let Some(history_call_id) = pending.history_call_id.as_ref()
                     {
-                        turn_buffer
+                        run_buffer
                             .append_tool_arguments(history_call_id, arguments_delta.as_str())
                             .map_err(|err| AppError::Internal(err.to_string()))?;
                     }
@@ -316,7 +311,6 @@ impl SessionProcessor {
                     if let Some(reason) = finish_reason.as_ref() {
                         finish_reason_enum = map_finish_reason(reason);
                     }
-                    finish = finish_reason.map(|item| format!("{item:?}"));
                     provider_metadata = completed_provider_metadata;
                 }
                 Ok(CompletionStreamEvent::ThinkingDelta { delta, .. }) => {
@@ -336,7 +330,7 @@ impl SessionProcessor {
                     };
 
                     self.append_reasoning_delta(&mut assistant, part_id, delta.as_str())?;
-                    turn_buffer
+                    run_buffer
                         .push_reasoning_delta(delta.as_str())
                         .map_err(|err| AppError::Internal(err.to_string()))?;
 
@@ -362,12 +356,12 @@ impl SessionProcessor {
 
         // If the cancel token tripped, the loop above broke without an
         // explicit provider error. Surface a synthetic terminal error so
-        // the caller knows the turn was cancelled rather than completed.
+        // the caller knows the run was cancelled rather than completed.
         if provider_err.is_none()
             && let Some(token) = cancel.as_ref()
             && token.is_cancelled()
         {
-            provider_err = Some(AppError::Internal("turn cancelled by user".to_string()));
+            provider_err = Some(AppError::Internal("run cancelled by user".to_string()));
         }
 
         if let Some(part_id) = active_text_part {
@@ -387,7 +381,7 @@ impl SessionProcessor {
             self.start_text_part(&mut assistant, part_id, Utc::now())?;
             self.emit_part_updated(&run, &assistant, part_id).await?;
             self.append_text_delta(&mut assistant, part_id, reasoning_text.as_str())?;
-            turn_buffer
+            run_buffer
                 .push_text_delta(reasoning_text.as_str())
                 .map_err(|err| AppError::Internal(err.to_string()))?;
 
@@ -406,12 +400,11 @@ impl SessionProcessor {
             complete_part_status(&mut assistant, part_id)?;
         }
 
-        self.finalize_pending_tool_calls(&mut run, &mut assistant, &mut turn_buffer, pending_calls)
+        self.finalize_pending_tool_calls(&mut run, &mut assistant, &mut run_buffer, pending_calls)
             .await?;
 
         if let Some(err) = provider_err {
             assistant.state = MessageStatus::Failed;
-            assistant.finish = Some(err.to_string());
 
             client_events.push(EventKind::StreamError(StreamErrorEvent {
                 session_id: run.session_id,
@@ -423,7 +416,7 @@ impl SessionProcessor {
             }));
             // Even on failure the buffer has accumulated state we can still
             // commit; downstream callers may inspect it for diagnostics.
-            let mut history_items = turn_buffer
+            let mut history_items = run_buffer
                 .commit(
                     &mut crate::session::history::SequentialIdAllocator::starting_at(
                         run.next_message_id.saturating_add(1),
@@ -438,30 +431,34 @@ impl SessionProcessor {
                 provider_metadata,
                 terminal_error: Some(err),
                 history_items,
-                turn_id,
+                run_id,
             });
         }
 
-        // Successful turn: drive terminal state on the message snapshot and
-        // reflect the same finish/usage on the turn buffer for history.
+        // Successful run: drive terminal state on the message snapshot and
+        // reflect the same finish/usage on the run buffer for history.
         if assistant.state == MessageStatus::Pending {
             let _ = assistant.transition_state(MessageStatus::InProgress);
         }
         let _ = assistant.transition_state(MessageStatus::Completed);
-        assistant.finish = finish;
         assistant.usage = usage.clone();
-        assistant.metadata.provider_metadata = provider_metadata.clone();
+        assistant.provider_state = provider_metadata
+            .as_ref()
+            .and_then(message_provider_state_from_provider_metadata);
+        run_buffer
+            .set_provider_state(assistant.provider_state.clone())
+            .map_err(|err| AppError::Internal(err.to_string()))?;
 
         if let Some(usage_ref) = usage {
-            turn_buffer
+            run_buffer
                 .set_usage(usage_ref)
                 .map_err(|err| AppError::Internal(err.to_string()))?;
         }
-        turn_buffer
+        run_buffer
             .set_finish_reason(finish_reason_enum)
             .map_err(|err| AppError::Internal(err.to_string()))?;
 
-        let mut history_items = turn_buffer
+        let mut history_items = run_buffer
             .commit(
                 &mut crate::session::history::SequentialIdAllocator::starting_at(
                     run.next_message_id.saturating_add(1),
@@ -477,7 +474,7 @@ impl SessionProcessor {
             provider_metadata,
             terminal_error: None,
             history_items,
-            turn_id,
+            run_id,
         })
     }
 
@@ -618,7 +615,7 @@ impl SessionProcessor {
         &self,
         run: &mut SessionRunRequest,
         assistant: &mut Message,
-        turn_buffer: &mut TurnBuffer,
+        run_buffer: &mut RunBuffer,
         pending: &mut PendingToolCall,
     ) -> Result<(), AppError> {
         let mut should_emit = false;
@@ -657,19 +654,19 @@ impl SessionProcessor {
             pending.started_at_ms = Some(start.timestamp_millis());
             should_emit = true;
 
-            // Mirror into TurnBuffer with a stable history-side call id.
+            // Mirror into RunBuffer with a stable history-side call id.
             // Prefer the provider-supplied id when present; otherwise fall
             // back to a synthetic one derived from the integer call_id so it
-            // remains stable for the lifetime of this turn.
+            // remains stable for the lifetime of this run.
             let history_call_id = match pending.id.as_deref() {
                 Some(id) if !id.trim().is_empty() => ToolCallId::new(id),
                 _ => ToolCallId::new(format!("call_{call_id}")),
             };
-            turn_buffer
+            run_buffer
                 .start_tool_call(history_call_id.clone())
                 .map_err(|err| AppError::Internal(err.to_string()))?;
             if let Some(name) = pending.name.as_deref() {
-                turn_buffer
+                run_buffer
                     .name_tool_call(&history_call_id, name)
                     .map_err(|err| AppError::Internal(err.to_string()))?;
             }
@@ -678,8 +675,8 @@ impl SessionProcessor {
             && let Some(name) = pending.name.as_deref()
         {
             // A second name fragment can arrive after the part already exists.
-            // Re-set the name; TurnBuffer accepts repeated assignment.
-            turn_buffer
+            // Re-set the name; RunBuffer accepts repeated assignment.
+            run_buffer
                 .name_tool_call(history_call_id, name)
                 .map_err(|err| AppError::Internal(err.to_string()))?;
         }
@@ -718,11 +715,11 @@ impl SessionProcessor {
         &self,
         run: &mut SessionRunRequest,
         assistant: &mut Message,
-        turn_buffer: &mut TurnBuffer,
+        run_buffer: &mut RunBuffer,
         pending_calls: BTreeMap<String, PendingToolCall>,
     ) -> Result<(), AppError> {
         for mut pending in pending_calls.into_values() {
-            self.ensure_pending_tool_call_part(run, assistant, turn_buffer, &mut pending)
+            self.ensure_pending_tool_call_part(run, assistant, run_buffer, &mut pending)
                 .await?;
 
             let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
@@ -755,11 +752,11 @@ impl SessionProcessor {
                 },
             )));
 
-            // Re-assert name on TurnBuffer (final, authoritative). The
+            // Re-assert name on RunBuffer (final, authoritative). The
             // accumulated `arguments_json` was already streamed in chunks via
             // `append_tool_arguments`; we don't repeat it here.
             if let Some(history_call_id) = pending.history_call_id.as_ref() {
-                turn_buffer
+                run_buffer
                     .name_tool_call(history_call_id, tool_name.as_str())
                     .map_err(|err| AppError::Internal(err.to_string()))?;
             }
@@ -842,7 +839,7 @@ impl SessionProcessor {
 }
 
 /// Adapter that returns a single, pre-allocated `MessageId` to satisfy the
-/// `TurnBuffer` API. The processor reserves message ids via the global session
+/// `RunBuffer` API. The processor reserves message ids via the global session
 /// allocator before opening the buffer, so the buffer must adopt that id
 /// rather than mint its own.
 struct FixedAssistantId {
@@ -861,7 +858,7 @@ impl MessageIdAllocator for FixedAssistantId {
     fn next_message_id(&mut self) -> HistoryMessageId {
         self.next
             .take()
-            .expect("FixedAssistantId only yields one id per turn")
+            .expect("FixedAssistantId only yields one id per run")
     }
 }
 
@@ -893,6 +890,7 @@ fn sync_assistant_completion_event(history_items: &mut [EventKind], assistant: &
         payload.parts = assistant.parts.clone();
         payload.usage = assistant.usage.clone();
         payload.metadata = assistant.metadata.clone();
+        payload.provider_state = assistant.provider_state.clone();
     }
 }
 
@@ -906,6 +904,24 @@ fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {
     }
 }
 
+fn message_provider_state_from_provider_metadata(
+    provider_metadata: &serde_json::Value,
+) -> Option<MessageProviderState> {
+    let assistant_reasoning_field = provider_metadata
+        .as_object()
+        .and_then(|metadata| metadata.get("assistant_reasoning_field"))
+        .and_then(|value| value.as_str())
+        .and_then(|value| match value {
+            "reasoning_content" => Some(AssistantReasoningField::ReasoningContent),
+            "reasoning_details" => Some(AssistantReasoningField::ReasoningDetails),
+            _ => None,
+        });
+    let state = MessageProviderState {
+        assistant_reasoning_field,
+    };
+    (!state.is_empty()).then_some(state)
+}
+
 #[derive(Debug, Default, Clone)]
 struct PendingToolCall {
     part_id: Option<i64>,
@@ -914,7 +930,7 @@ struct PendingToolCall {
     id: Option<String>,
     name: Option<String>,
     arguments_json: String,
-    /// History-side call identifier propagated to `TurnBuffer`. Set the first
+    /// History-side call identifier propagated to `RunBuffer`. Set the first
     /// time the part is materialized and reused for every subsequent argument
     /// fragment so chunks land on the right tool entry.
     history_call_id: Option<ToolCallId>,

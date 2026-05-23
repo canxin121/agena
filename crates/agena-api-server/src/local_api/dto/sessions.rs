@@ -139,7 +139,7 @@ pub struct SessionRunOptionsRequest {
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
     #[serde(default)]
-    pub max_turn_loops: Option<usize>,
+    pub max_run_loops: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

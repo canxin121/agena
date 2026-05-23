@@ -8,7 +8,6 @@ use agena::{
     agent::{AgentMode, AgentPermissionConfig, AgentRunConfig, PermissionConfig},
     agents::AgentScope,
     config::ProviderProtocolPathsConfig,
-    event::MessagePartUpdatedEvent,
     message::{Message, MessageMetadata, MessagePart, MessageStatus, MessageUsage},
     model::ModelRef,
     model_catalog::{CatalogModelDefinition, ModelCatalogEntrySourceKind},
@@ -524,7 +523,7 @@ pub struct RunOptions {
     #[serde(default)]
     pub max_output_tokens: Option<u32>,
     #[serde(default)]
-    pub max_turn_loops: Option<usize>,
+    pub max_run_loops: Option<usize>,
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────
@@ -567,8 +566,6 @@ pub struct MessageResource {
     pub metadata: MessageMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<MessageUsage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finish: Option<String>,
     pub part_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parts: Option<Vec<MessagePart>>,
@@ -591,55 +588,10 @@ impl MessageResource {
             updated_at,
             metadata: message.metadata.clone(),
             usage: message.usage.clone(),
-            finish: message.finish.clone(),
             part_count,
             parts,
         }
     }
-
-    pub fn from_part_update(update: &MessagePartUpdatedEvent) -> Self {
-        Self {
-            id: update.message_id,
-            session_id: update.session_id,
-            role: update.message_role.into(),
-            state: update.message_state,
-            created_at: update.message_created_at,
-            updated_at: timestamp_ms_or(update.ts_ms, update.message_created_at),
-            metadata: MessageMetadata::default(),
-            usage: None,
-            finish: None,
-            part_count: 1,
-            parts: Some(vec![update.part.clone()]),
-        }
-    }
-
-    pub fn from_completed_assistant_parts(
-        session_id: i64,
-        message_id: i64,
-        created_at: DateTime<Utc>,
-        metadata: MessageMetadata,
-        usage: Option<MessageUsage>,
-        finish: Option<String>,
-        parts: Vec<MessagePart>,
-    ) -> Self {
-        Self {
-            id: message_id,
-            session_id,
-            role: MessageRole::Assistant,
-            state: MessageStatus::Completed,
-            created_at,
-            updated_at: created_at,
-            metadata,
-            usage,
-            finish,
-            part_count: parts.len() as u64,
-            parts: Some(parts),
-        }
-    }
-}
-
-fn timestamp_ms_or(timestamp_ms: i64, fallback: DateTime<Utc>) -> DateTime<Utc> {
-    DateTime::<Utc>::from_timestamp_millis(timestamp_ms).unwrap_or(fallback)
 }
 
 // ─── Permission rules ────────────────────────────────────────────────────
@@ -846,10 +798,7 @@ impl From<agena::session::RewindCheckpointEntry> for RewindCheckpointEntryResour
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena::{
-        event::MessagePartUpdatedEvent,
-        message::{ExecutionStatus, PartContent},
-    };
+    use agena::message::PartContent;
     use chrono::TimeZone;
 
     #[test]
@@ -865,7 +814,6 @@ mod tests {
         let mut message = Message::prompt_parts(Role::Assistant, vec![PartContent::text("hello")]);
         message.id = 42;
         message.created_at = created_at;
-        message.finish = Some("stop".to_string());
         for (index, part) in message.parts.iter_mut().enumerate() {
             part.id = 100 + index as i64;
             part.message_id = message.id;
@@ -887,80 +835,7 @@ mod tests {
         assert_eq!(resource.state, MessageStatus::Completed);
         assert_eq!(resource.created_at, created_at);
         assert_eq!(resource.updated_at, updated_at);
-        assert_eq!(resource.finish.as_deref(), Some("stop"));
         assert_eq!(resource.part_count, 1);
         assert_eq!(resource.parts.as_ref().map(Vec::len), Some(1));
-    }
-
-    #[test]
-    fn message_resource_from_part_update_creates_incremental_shell() {
-        let created_at = Utc
-            .timestamp_millis_opt(1_700_000_010_000)
-            .single()
-            .unwrap();
-        let part = agena::message::MessagePart::with_content(
-            5,
-            55,
-            created_at,
-            ExecutionStatus::InProgress,
-            PartContent::text("chunk"),
-        );
-        let update = MessagePartUpdatedEvent {
-            session_id: 9,
-            message_id: 55,
-            message_role: Role::Assistant,
-            message_state: MessageStatus::InProgress,
-            message_created_at: created_at,
-            part: part.clone(),
-            ts_ms: created_at.timestamp_millis() + 250,
-        };
-
-        let resource = MessageResource::from_part_update(&update);
-
-        assert_eq!(resource.id, 55);
-        assert_eq!(resource.session_id, 9);
-        assert_eq!(resource.role, MessageRole::Assistant);
-        assert_eq!(resource.state, MessageStatus::InProgress);
-        assert_eq!(resource.created_at, created_at);
-        assert_eq!(
-            resource.updated_at.timestamp_millis(),
-            created_at.timestamp_millis() + 250
-        );
-        assert_eq!(resource.metadata, MessageMetadata::default());
-        assert_eq!(resource.part_count, 1);
-        assert_eq!(resource.parts, Some(vec![part]));
-    }
-
-    #[test]
-    fn message_resource_from_completed_assistant_parts_marks_completion() {
-        let created_at = Utc
-            .timestamp_millis_opt(1_700_000_020_000)
-            .single()
-            .unwrap();
-        let part = agena::message::MessagePart::with_content(
-            8,
-            88,
-            created_at,
-            ExecutionStatus::Completed,
-            PartContent::text("done"),
-        );
-
-        let resource = MessageResource::from_completed_assistant_parts(
-            12,
-            88,
-            created_at,
-            MessageMetadata::default(),
-            None,
-            Some("stop".to_string()),
-            vec![part.clone()],
-        );
-
-        assert_eq!(resource.id, 88);
-        assert_eq!(resource.session_id, 12);
-        assert_eq!(resource.role, MessageRole::Assistant);
-        assert_eq!(resource.state, MessageStatus::Completed);
-        assert_eq!(resource.finish.as_deref(), Some("stop"));
-        assert_eq!(resource.part_count, 1);
-        assert_eq!(resource.parts, Some(vec![part]));
     }
 }

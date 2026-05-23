@@ -202,7 +202,7 @@ impl ApiService {
             temperature,
             max_output_tokens: request.max_output_tokens,
             agent_profile: non_empty(request.agent_profile.as_deref()).map(ToOwned::to_owned),
-            max_turn_loops: request.max_turn_loops,
+            max_run_loops: request.max_run_loops,
         })
     }
 

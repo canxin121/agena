@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use super::protocol::{
-    self, AppServerNotification, CancelTurnParams, CancelTurnResult, CreateSessionParams,
+    self, AppServerNotification, CancelRunParams, CancelRunResult, CreateSessionParams,
     CreateSessionResult, InboundMessage, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
     ListSessionsParams, ListSessionsResult, PermissionReplyParams, PermissionReplyResult,
     ReadMessagesParams, ReadMessagesResult, SubmitTurnParams, SubmitTurnResult,
@@ -58,10 +58,7 @@ pub trait AppServerBackend: Send + Sync + 'static {
         &self,
         params: ReadMessagesParams,
     ) -> Result<ReadMessagesResult, AppServerError>;
-    async fn cancel_turn(
-        &self,
-        params: CancelTurnParams,
-    ) -> Result<CancelTurnResult, AppServerError>;
+    async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError>;
 }
 
 #[derive(Clone)]
@@ -183,10 +180,10 @@ where
                 )
                 .await
             }
-            protocol::method::TURN_CANCEL => {
-                self.dispatch::<CancelTurnParams, CancelTurnResult, _>(
+            protocol::method::RUN_CANCEL => {
+                self.dispatch::<CancelRunParams, CancelRunResult, _>(
                     request.params,
-                    |params| async move { self.backend.cancel_turn(params).await },
+                    |params| async move { self.backend.cancel_run(params).await },
                 )
                 .await
             }

@@ -2621,8 +2621,8 @@ mod tests {
             )],
             created_at: Utc::now(),
             metadata: crate::message::MessageMetadata::default(),
+            provider_state: None,
             usage: None,
-            finish: None,
         }
     }
 

@@ -36,7 +36,7 @@ pub enum Command {
     SubmitTurn(SubmitTurnParams),
     ContinueRun(ContinueRunParams),
     CompactSession(CompactSessionParams),
-    CancelTurn(CancelTurnParams),
+    CancelRun(CancelRunParams),
     RewindSession(RewindSessionParams),
 
     // ── tree / fork / portability ──
@@ -183,7 +183,7 @@ pub struct CompactSessionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CancelTurnParams {
+pub struct CancelRunParams {
     pub session_id: i64,
 }
 

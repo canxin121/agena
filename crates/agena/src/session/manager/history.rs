@@ -24,27 +24,27 @@ impl SessionManager {
             .await
     }
 
-    /// External entry: cancel the in-flight turn for `session_id`. Returns
-    /// `Ok(())` if a token was signalled, `Err` if no turn is active.
-    pub async fn cancel_active_turn(&self, session_id: i64) -> Result<(), AppError> {
-        self.turn_registry
+    /// External entry: cancel the in-flight run for `session_id`. Returns
+    /// `Ok(())` if a token was signalled, `Err` if no run is active.
+    pub async fn cancel_active_run(&self, session_id: i64) -> Result<(), AppError> {
+        self.run_registry
             .cancel(session_id)
             .await
-            .map_err(turn_control_to_app_error)
+            .map_err(run_control_to_app_error)
     }
 
     /// External entry: inject `parts` as a steer message into the in-flight
-    /// turn for `session_id`. Returns `Err` if no turn is active or the
+    /// run for `session_id`. Returns `Err` if no run is active or the
     /// channel was closed.
     pub async fn steer_input(
         &self,
         session_id: i64,
         parts: Vec<PartContent>,
     ) -> Result<(), AppError> {
-        self.turn_registry
+        self.run_registry
             .steer(session_id, parts)
             .await
-            .map_err(turn_control_to_app_error)
+            .map_err(run_control_to_app_error)
     }
 
     pub async fn rewind_session(&self, request: SessionRewindRequest) -> Result<Session, AppError> {

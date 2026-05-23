@@ -1,6 +1,7 @@
 import { reactive, ref } from 'vue'
 
 import type {
+  DomainEventRecord,
   MessagePart,
   MessageResource,
   ProviderModel,
@@ -10,7 +11,6 @@ import type {
   SessionExecutionResource,
   SessionResource,
   SessionTreeResource,
-  TimelineEventRecord,
   WorkspaceResource,
 } from '../lib/agenaApi'
 
@@ -21,7 +21,7 @@ export function useChatPageState() {
   const workspaces = ref<WorkspaceResource[]>([])
   const sessions = ref<SessionResource[]>([])
   const messages = ref<MessageResource[]>([])
-  const timelineEvents = ref<TimelineEventRecord[]>([])
+  const timelineEvents = ref<DomainEventRecord[]>([])
   const inspectedMessage = ref<MessageResource | null>(null)
   const inspectedMessageParts = ref<MessagePart[]>([])
   const inspectedPart = ref<MessagePart | null>(null)

@@ -2855,7 +2855,12 @@ impl Backend {
 
         let execution = self.get_session_state(session_id).await?;
         let latest_messages = self
-            .list_messages_with_parts(session_id, None, latest_message_limit, PartLoadMode::Summary)
+            .list_messages_with_parts(
+                session_id,
+                None,
+                latest_message_limit,
+                PartLoadMode::Summary,
+            )
             .await
             .context("failed to refresh latest message window")?;
 
@@ -4843,11 +4848,7 @@ fn detect_mime(path: &Path, bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena::{
-        config::LoadConfigRequest,
-        memory,
-        tracing as tracing_config,
-    };
+    use agena::{config::LoadConfigRequest, memory, tracing as tracing_config};
     use std::{collections::BTreeSet, sync::Arc};
     use tempfile::tempdir;
 

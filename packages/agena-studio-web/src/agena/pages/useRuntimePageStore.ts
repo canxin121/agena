@@ -4,7 +4,7 @@ import type {
   AuthProvider,
   AuthBrowserStartResponse,
   AuthDeviceStartResponse,
-  GlobalEventRecord,
+  DomainEventRecord,
   MarketplaceInstalledPluginResource,
   MarketplaceOutdatedPluginResource,
   MarketplacePluginResource,
@@ -20,7 +20,6 @@ import type {
   RuntimeStatus,
   SessionExecutionResource,
   SessionResource,
-  TimelineEventRecord,
   WorkspaceResource,
 } from '../lib/agenaApi'
 import type {
@@ -48,8 +47,8 @@ export function useRuntimePageStore() {
   const selectedWorkspaceId = ref<number | null>(null)
   const selectedSessionId = ref<number | null>(null)
   const sessionExecution = ref<SessionExecutionResource | null>(null)
-  const sessionTimeline = ref<TimelineEventRecord[]>([])
-  const globalEvents = ref<GlobalEventRecord[]>([])
+  const sessionTimeline = ref<DomainEventRecord[]>([])
+  const globalEvents = ref<DomainEventRecord[]>([])
   const selectedPluginId = ref('')
   const selectedPlugin = ref<PluginInspect | null>(null)
   const pluginLogs = ref<PluginLogEntry[]>([])

@@ -1,7 +1,7 @@
 import { computed, type Ref } from 'vue'
 
 import type {
-  GlobalEventRecord,
+  DomainEventRecord,
   MarketplaceInstalledPluginResource,
   MarketplacePluginResource,
   PermissionMode,
@@ -11,7 +11,6 @@ import type {
   RuntimeSkill,
   RuntimeStatus,
   SessionExecutionResource,
-  TimelineEventRecord,
 } from '../lib/agenaApi'
 import {
   isDesktopRuntime,
@@ -68,9 +67,9 @@ export type RuntimeDerivedStateInput = {
   runtimeSkillQuery: Ref<string>
   section?: RuntimeRouteSection
   selectedPlugin: Ref<PluginInspect | null>
-  globalEvents: Ref<GlobalEventRecord[]>
+  globalEvents: Ref<DomainEventRecord[]>
   sessionExecution: Ref<SessionExecutionResource | null>
-  sessionTimeline: Ref<TimelineEventRecord[]>
+  sessionTimeline: Ref<DomainEventRecord[]>
   tabs: SectionTabOption[]
 }
 

@@ -2,6 +2,7 @@ import { onBeforeUnmount, onMounted, watch, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 import {
+  type DomainEventRecord,
   fetchRuntimeStatus,
   getSessionState,
   getSessionTree,
@@ -20,7 +21,6 @@ import {
   type SessionExecutionResource,
   type SessionResource,
   type SessionTreeResource,
-  type TimelineEventRecord,
   type WorkspaceResource,
 } from '../lib/agenaApi'
 import { readChatRouteSessionId, readChatRouteSlash, readChatRouteWorkspaceId } from './chatRouteState'
@@ -51,7 +51,7 @@ export type ChatSessionLifecycleInput = {
   sessionState: Ref<SessionExecutionResource | null>
   sessions: Ref<SessionResource[]>
   sessionTree: Ref<SessionTreeResource[]>
-  timelineEvents: Ref<TimelineEventRecord[]>
+  timelineEvents: Ref<DomainEventRecord[]>
   workspaces: Ref<WorkspaceResource[]>
 }
 

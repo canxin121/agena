@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import type { TimelineEventRecord } from '@/agena/lib/agenaApi'
+import type { DomainEventRecord } from '@/agena/lib/agenaApi'
 
 const props = defineProps<{
-  timelineEvents: TimelineEventRecord[]
+  timelineEvents: DomainEventRecord[]
   formatMessageTime: (value: string) => string
   formatEventTime: (timestampMs: number) => string
   readPayloadMessageId: (payload: Record<string, unknown>) => number | null
@@ -11,7 +11,7 @@ const props = defineProps<{
   scrollToMessage: (messageId: number) => void
 }>()
 
-function summaryFor(event: TimelineEventRecord): string {
+function summaryFor(event: DomainEventRecord): string {
   return typeof event.payload.summary === 'string'
     ? event.payload.summary
     : typeof event.payload.command === 'string'
@@ -59,7 +59,7 @@ function inspectTargetFor(payload: Record<string, unknown>): { messageId: number
         </div>
         <div class="muted mono">
           seq={{ event.seq_global }} · session={{ event.session_id ?? 'n/a' }} ·
-          {{ event.created_at ? props.formatMessageTime(event.created_at) : props.formatEventTime(event.ts_ms ?? 0) }}
+          {{ props.formatMessageTime(event.created_at) }}
         </div>
       </div>
     </div>

@@ -1,10 +1,10 @@
 import type { ComputedRef, Ref } from 'vue'
 
 import type {
+  DomainEventRecord,
   PermissionRequest,
   SessionExecutionResource,
   SessionResource,
-  TimelineEventRecord,
   WorkspaceResource,
 } from '../lib/agenaApi'
 import type { SessionExecutionFact, TimelineSummaryItem } from './runtimePageModel'
@@ -29,7 +29,7 @@ export type RuntimeWorkflowStateInput = {
   timelineSummaries: ComputedRef<TimelineSummaryItem[]>
   workflowLoading: Ref<boolean>
   workspaces: Ref<WorkspaceResource[]>
-  sessionTimeline?: Ref<TimelineEventRecord[]>
+  sessionTimeline?: Ref<DomainEventRecord[]>
 }
 
 export function useRuntimeWorkflowState(input: RuntimeWorkflowStateInput) {

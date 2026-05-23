@@ -1,15 +1,14 @@
 import type { Ref } from 'vue'
 
 import {
+  type DomainEventRecord,
   getSessionState,
   listGlobalEvents,
   listSessions,
   listSessionTimeline,
   reloadRuntime,
-  type GlobalEventRecord,
   type SessionExecutionResource,
   type SessionResource,
-  type TimelineEventRecord,
 } from '../lib/agenaApi'
 import { pickSessionId } from './runtimePageStateModel'
 
@@ -20,8 +19,8 @@ export type RuntimeSessionWorkflowActionsInput = {
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sessionExecution: Ref<SessionExecutionResource | null>
-  globalEvents: Ref<GlobalEventRecord[]>
-  sessionTimeline: Ref<TimelineEventRecord[]>
+  globalEvents: Ref<DomainEventRecord[]>
+  sessionTimeline: Ref<DomainEventRecord[]>
   sessions: Ref<SessionResource[]>
   workflowLoading: Ref<boolean>
 }

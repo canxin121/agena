@@ -1,14 +1,10 @@
-use agena_api::resource::MessageRole;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use agena::{
     agent::{AgentMode, AgentPermissionConfig, AgentRunConfig, PermissionConfig},
     agents::AgentScope,
-    message::{
-        MessageMetadata, MessagePart, MessageStatus, MessageUsage, PartContent, UserInputReply,
-        UserInputRequest,
-    },
+    message::{PartContent, UserInputReply, UserInputRequest},
     model::ModelRef,
     model_catalog::{CatalogModelDefinition, ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},
     permission::PermissionMode,

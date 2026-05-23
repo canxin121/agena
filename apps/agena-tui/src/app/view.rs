@@ -1009,7 +1009,12 @@ impl App {
                 self.render_agent_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::AgentPermissionStudio(dialog) => {
-                self.render_agent_permission_studio_overlay(frame, area, dialog, SurfaceMode::Route);
+                self.render_agent_permission_studio_overlay(
+                    frame,
+                    area,
+                    dialog,
+                    SurfaceMode::Route,
+                );
             }
             Route::SessionSearch(dialog) => {
                 self.render_session_search_overlay(frame, area, dialog, SurfaceMode::Route);
@@ -2835,7 +2840,11 @@ impl App {
         let title_summary = format!(
             "{} · {}",
             dialog.profile.scope.as_str(),
-            if dialog.editable { "config-owned" } else { "file-backed" }
+            if dialog.editable {
+                "config-owned"
+            } else {
+                "file-backed"
+            }
         );
         let area = surface.outer_rect(
             area,
@@ -2890,7 +2899,8 @@ impl App {
             .unwrap_or_else(|| "Select a field to inspect or edit it.".to_string());
         let overview_height =
             bordered_paragraph_height(overview_text.as_str(), right_area.width, 2, 5);
-        let detail_height = bordered_paragraph_height(detail_text.as_str(), right_area.width, 3, 10);
+        let detail_height =
+            bordered_paragraph_height(detail_text.as_str(), right_area.width, 3, 10);
         let right_rows = top_aligned_vertical_areas(right_area, &[overview_height, detail_height]);
 
         let list_items = dialog
@@ -2955,7 +2965,15 @@ impl App {
         );
 
         if let Some(editor) = dialog.editor.as_ref() {
-            self.render_workbench_editor(frame, area, &editor.title, &editor.prompt, &editor.footer, &editor.input, editor.multiline);
+            self.render_workbench_editor(
+                frame,
+                area,
+                &editor.title,
+                &editor.prompt,
+                &editor.footer,
+                &editor.input,
+                editor.multiline,
+            );
         }
     }
 
@@ -2973,7 +2991,11 @@ impl App {
         let title_summary = format!(
             "{} · {}",
             dialog.profile.scope.as_str(),
-            if dialog.editable { "editable" } else { "read-only" }
+            if dialog.editable {
+                "editable"
+            } else {
+                "read-only"
+            }
         );
         let area = surface.outer_rect(
             area,
@@ -3024,7 +3046,8 @@ impl App {
             .unwrap_or_else(|| "Select a permission section to inspect or edit it.".to_string());
         let overview_height =
             bordered_paragraph_height(overview_text.as_str(), right_area.width, 2, 5);
-        let detail_height = bordered_paragraph_height(detail_text.as_str(), right_area.width, 4, 12);
+        let detail_height =
+            bordered_paragraph_height(detail_text.as_str(), right_area.width, 4, 12);
         let right_rows = top_aligned_vertical_areas(right_area, &[overview_height, detail_height]);
 
         let list_items = dialog
@@ -3089,7 +3112,15 @@ impl App {
         );
 
         if let Some(editor) = dialog.editor.as_ref() {
-            self.render_workbench_editor(frame, area, &editor.title, &editor.prompt, &editor.footer, &editor.input, editor.multiline);
+            self.render_workbench_editor(
+                frame,
+                area,
+                &editor.title,
+                &editor.prompt,
+                &editor.footer,
+                &editor.input,
+                editor.multiline,
+            );
         }
     }
 
@@ -3146,8 +3177,14 @@ impl App {
         );
         frame.render_widget(Paragraph::new(sanitize_display_text(footer)), rows[2]);
         frame.set_cursor_position((
-            rows[1].x.saturating_add(1).saturating_add(input_view.cursor_x),
-            rows[1].y.saturating_add(1).saturating_add(input_view.cursor_y),
+            rows[1]
+                .x
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_x),
+            rows[1]
+                .y
+                .saturating_add(1)
+                .saturating_add(input_view.cursor_y),
         ));
     }
 
@@ -4404,8 +4441,7 @@ fn agent_permission_studio_content_height(
         agent_profile_source_label(&dialog.profile),
         agent_permission_summary(&dialog.profile.frontmatter.permission),
     );
-    let overview_height =
-        bordered_paragraph_height(overview_text.as_str(), right_width, 2, 5);
+    let overview_height = bordered_paragraph_height(overview_text.as_str(), right_width, 2, 5);
     let detail_text = dialog
         .items
         .get(dialog.selected)

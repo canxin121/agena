@@ -1,8 +1,14 @@
-import type { MessagePart, MessageResource, SessionEventRecord, SessionExecutionResource, TimelineEventRecord } from '@/agena/lib/agenaApi'
+import {
+  messageResourceFromEvent,
+  type DomainEventRecord,
+  type MessagePart,
+  type MessageResource,
+  type SessionExecutionResource,
+} from '../lib/agenaApi'
 
 export type ChatEventState = {
   messages: MessageResource[]
-  timelineEvents: TimelineEventRecord[]
+  timelineEvents: DomainEventRecord[]
   sessionState: SessionExecutionResource | null
   selectedSessionId: number | null
 }
@@ -40,94 +46,31 @@ export function sortMessageParts(items: MessagePart[]): MessagePart[] {
 }
 
 export function appendTimelineEvent(
-  timelineEvents: TimelineEventRecord[],
-  event: SessionEventRecord,
-): TimelineEventRecord[] {
-  const record: TimelineEventRecord = {
-    event_id: event.event_id,
-    session_id: event.session_id,
-    seq_global: event.seq,
-    causation_id: event.causation_id,
-    correlation_id: event.correlation_id,
-    created_at: event.created_at,
-    kind: event.event_type,
-    payload: event.payload,
-  }
-  if (timelineEvents.some((item) => item.seq_global === record.seq_global)) {
+  timelineEvents: DomainEventRecord[],
+  event: DomainEventRecord,
+): DomainEventRecord[] {
+  if (timelineEvents.some((item) => item.seq_global === event.seq_global)) {
     return timelineEvents
   }
-  return [...timelineEvents, record].sort((left, right) => left.seq_global - right.seq_global)
+  return [...timelineEvents, event].sort((left, right) => left.seq_global - right.seq_global)
 }
 
 function applyMessagePartUpdatedEvent(
   state: ChatEventState,
-  payload: Record<string, unknown>,
+  event: DomainEventRecord,
 ): { state: ChatEventState; shouldRefresh: boolean } {
-  const messageId = readFiniteNumber(payload.message_id)
-  const messageRole = readString(payload.message_role) as MessageResource['role'] | null
-  const messageState = readString(payload.message_state)
-  const messageCreatedAt = readString(payload.message_created_at)
-  const part = asRecord(payload.part) as MessagePart | null
-
-  if (
-    !state.selectedSessionId ||
-    messageId === null ||
-    !messageRole ||
-    !messageState ||
-    !messageCreatedAt ||
-    !part
-  ) {
+  const message = messageResourceFromEvent(event)
+  const part = Array.isArray(message?.parts) ? message.parts[0] || null : null
+  if (!message || !part) {
     return { state, shouldRefresh: true }
   }
 
-  const nextMessages = state.messages.slice()
-  const messageIndex = nextMessages.findIndex((message) => message.id === messageId)
-  if (messageIndex < 0) {
-    nextMessages.push({
-      id: messageId,
-      session_id: state.selectedSessionId,
-      role: messageRole,
-      state: messageState,
-      created_at: messageCreatedAt,
-      updated_at: messageCreatedAt,
-      metadata: {},
-      usage: null,
-      finish: null,
-      part_count: 1,
-      parts: [part],
-    })
-    return {
-      state: {
-        ...state,
-        messages: sortMessages(nextMessages),
-      },
-      shouldRefresh: part.status !== 'pending' || messageState !== 'pending',
-    }
-  }
-
-  const existing = nextMessages[messageIndex]
-  const nextParts = Array.isArray(existing.parts) ? existing.parts.slice() : []
-  const partIndex = nextParts.findIndex((item) => item.id === part.id)
-  if (partIndex >= 0) {
-    nextParts[partIndex] = part
-  } else {
-    nextParts.push(part)
-  }
-
-  nextMessages[messageIndex] = {
-    ...existing,
-    role: messageRole,
-    state: messageState,
-    created_at: messageCreatedAt,
-    part_count: Math.max(existing.part_count, nextParts.length),
-    parts: sortMessageParts(nextParts),
-  }
   return {
     state: {
       ...state,
-      messages: sortMessages(nextMessages),
+      messages: upsertMessage(state.messages, message),
     },
-    shouldRefresh: part.status !== 'pending' || messageState !== 'pending',
+    shouldRefresh: part.status !== 'pending' || message.state !== 'pending',
   }
 }
 
@@ -186,9 +129,26 @@ function applyMessagePartDeltaEvent(
   }
 }
 
+function applyHistoryMessageEvent(
+  state: ChatEventState,
+  event: DomainEventRecord,
+): { state: ChatEventState; shouldRefresh: boolean } {
+  const message = messageResourceFromEvent(event)
+  if (!message) {
+    return { state, shouldRefresh: true }
+  }
+  return {
+    state: {
+      ...state,
+      messages: upsertMessage(state.messages, message),
+    },
+    shouldRefresh: false,
+  }
+}
+
 function patchSessionStateFromEvent(
   state: ChatEventState,
-  event: SessionEventRecord,
+  event: DomainEventRecord,
   payload: Record<string, unknown>,
 ): { state: ChatEventState; shouldRefresh: boolean } {
   const nextTimelineEvents = appendTimelineEvent(state.timelineEvents, event)
@@ -202,7 +162,7 @@ function patchSessionStateFromEvent(
     }
   }
 
-  switch (event.event_type) {
+  switch (event.kind) {
     case 'run_started':
     case 'turn_started':
       return {
@@ -218,7 +178,6 @@ function patchSessionStateFromEvent(
         shouldRefresh: false,
       }
     case 'turn_completed':
-    case 'assistant_message_completed':
       return {
         state: {
           ...state,
@@ -256,29 +215,58 @@ function patchSessionStateFromEvent(
   }
 }
 
-export function applySessionEvent(state: ChatEventState, event: SessionEventRecord): { state: ChatEventState; shouldRefresh: boolean } {
+export function applySessionEvent(
+  state: ChatEventState,
+  event: DomainEventRecord,
+): { state: ChatEventState; shouldRefresh: boolean } {
   const payload = asRecord(event.payload)
   if (!payload) {
     return { state, shouldRefresh: true }
   }
 
-  switch (event.event_type) {
+  switch (event.kind) {
     case 'message_part_updated': {
       const withTimeline = {
         ...state,
         timelineEvents: appendTimelineEvent(state.timelineEvents, event),
       }
-      return applyMessagePartUpdatedEvent(withTimeline, payload)
+      return applyMessagePartUpdatedEvent(withTimeline, event)
     }
     case 'message_part_delta':
       return applyMessagePartDeltaEvent(state, payload)
-    case 'user_message_appended':
+    case 'user_message_appended': {
+      const withTimeline = {
+        ...state,
+        timelineEvents: appendTimelineEvent(state.timelineEvents, event),
+      }
+      return applyHistoryMessageEvent(withTimeline, event)
+    }
+    case 'assistant_message_completed': {
+      const withTimeline = {
+        ...state,
+        timelineEvents: appendTimelineEvent(state.timelineEvents, event),
+      }
+      const result = applyHistoryMessageEvent(withTimeline, event)
+      if (!result.state.sessionState) {
+        return result
+      }
+      return {
+        state: {
+          ...result.state,
+          sessionState: {
+            ...result.state.sessionState,
+            blocked: false,
+            run_state: 'idle',
+          },
+        },
+        shouldRefresh: result.shouldRefresh,
+      }
+    }
     case 'run_started':
     case 'run_failed':
     case 'turn_started':
     case 'turn_completed':
     case 'turn_aborted':
-    case 'assistant_message_completed':
       return patchSessionStateFromEvent(state, event, payload)
     default:
       return {
@@ -288,5 +276,76 @@ export function applySessionEvent(state: ChatEventState, event: SessionEventReco
         },
         shouldRefresh: true,
       }
+  }
+}
+
+function upsertMessage(messages: MessageResource[], incoming: MessageResource): MessageResource[] {
+  const nextMessages = messages.slice()
+  const messageIndex = nextMessages.findIndex((message) => message.id === incoming.id)
+  if (messageIndex < 0) {
+    nextMessages.push({
+      ...incoming,
+      parts: Array.isArray(incoming.parts) ? sortMessageParts(incoming.parts) : incoming.parts,
+    })
+    return sortMessages(nextMessages)
+  }
+  nextMessages[messageIndex] = mergeMessageResources(nextMessages[messageIndex], incoming)
+  return sortMessages(nextMessages)
+}
+
+function mergeMessageResources(existing: MessageResource, incoming: MessageResource): MessageResource {
+  const parts = mergeMessageParts(existing.parts, incoming.parts)
+  return {
+    ...existing,
+    ...incoming,
+    state: messageStatusRank(incoming.state) >= messageStatusRank(existing.state) ? incoming.state : existing.state,
+    updated_at: laterTimestamp(existing.updated_at, incoming.updated_at),
+    metadata: Object.keys(incoming.metadata || {}).length > 0 ? incoming.metadata : existing.metadata,
+    usage: incoming.usage ?? existing.usage ?? null,
+    finish: incoming.finish ?? existing.finish ?? null,
+    part_count: Math.max(existing.part_count, incoming.part_count, Array.isArray(parts) ? parts.length : 0),
+    parts,
+  }
+}
+
+function mergeMessageParts(
+  existing: MessageResource['parts'],
+  incoming: MessageResource['parts'],
+): MessageResource['parts'] {
+  if (Array.isArray(existing) && Array.isArray(incoming)) {
+    const merged = new Map<number, MessagePart>()
+    for (const part of existing) merged.set(part.id, part)
+    for (const part of incoming) merged.set(part.id, part)
+    return sortMessageParts([...merged.values()])
+  }
+  if (Array.isArray(incoming)) {
+    return sortMessageParts(incoming)
+  }
+  if (Array.isArray(existing)) {
+    return sortMessageParts(existing)
+  }
+  return incoming ?? existing
+}
+
+function laterTimestamp(left: string, right: string): string {
+  const leftTime = Date.parse(left)
+  const rightTime = Date.parse(right)
+  if (!Number.isFinite(leftTime)) return right
+  if (!Number.isFinite(rightTime)) return left
+  return rightTime >= leftTime ? right : left
+}
+
+function messageStatusRank(status: string): number {
+  switch (status) {
+    case 'completed':
+    case 'failed':
+    case 'cancelled':
+    case 'aborted':
+      return 2
+    case 'in_progress':
+    case 'awaiting_model':
+      return 1
+    default:
+      return 0
   }
 }

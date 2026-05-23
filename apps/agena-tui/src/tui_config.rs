@@ -143,7 +143,9 @@ impl TuiConfig {
         if let Some(mode) = raw.composer_mode.as_deref() {
             match mode.trim().to_ascii_lowercase().as_str() {
                 "" | "default" | "vim" | "emacs" => {}
-                other => eprintln!("[agena-tui] invalid composer_mode: expected `vim`, got `{other}`"),
+                other => {
+                    eprintln!("[agena-tui] invalid composer_mode: expected `vim`, got `{other}`")
+                }
             }
         }
         Self {

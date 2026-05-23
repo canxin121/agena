@@ -843,8 +843,7 @@ Run options shared by message submit/continue/replies:
   "agent_profile": "build",
   "system": "optional system prompt override",
   "temperature": 0.2,
-  "max_output_tokens": 4096,
-  "max_run_loops": 16
+  "max_output_tokens": 4096
 }
 ```
 
@@ -1495,10 +1494,8 @@ Base fetch helpers in `packages/agena-studio-web/src/lib/api.ts`:
 
 Relevant tests:
 
-- `crates/agena-api-server/tests/server.rs`: REST probes, metrics, events, session state, fork, message routes, WS behavior.
-- `crates/agena-client/tests/e2e.rs`: REST client and WS client against in-memory server.
-- `packages/agena-studio-web/src/agena/lib/agenaApi.test.ts`: front-end API wrapper behavior.
-- `packages/agena-studio-web/src/agena/lib/sse.ts` and related tests: SSE parsing.
+- `apps/agena-studio-server/src/git/regression_tests.rs`: end-to-end git endpoint coverage with real git subprocesses and temp repositories.
+- `crates/agena/tests/live_provider_catalog.rs`: live provider catalog checks against external providers and remote public catalog sources. These tests are ignored by default.
 
 ## Implementation index
 

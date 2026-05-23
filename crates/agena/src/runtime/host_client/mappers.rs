@@ -95,7 +95,6 @@ pub(super) fn parse_subagent_type(value: &str) -> Result<TaskSubagentType, Plugi
 }
 
 pub(super) fn render_tool_descriptor(tool: crate::plugin::registry::PluginEntry) -> ToolDescriptor {
-    let deferred = tool.is_deferred();
     let description = tool.description_text().trim().to_string();
     let summary = tool.summary_text().map(ToString::to_string);
     let help = tool.help_text().map(ToString::to_string);
@@ -110,7 +109,6 @@ pub(super) fn render_tool_descriptor(tool: crate::plugin::registry::PluginEntry)
         input_schema,
         description_mode,
         tags,
-        deferred,
         plugin_id: (!tool.plugin_name.trim().is_empty()).then_some(tool.plugin_name),
     }
 }

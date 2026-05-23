@@ -483,13 +483,8 @@ impl SessionManager {
         control: Arc<RunControl>,
         mut steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
-        let initial_options =
-            self.apply_execution_context_to_run_options(&session, options.clone())?;
-        let max_run_loops = initial_options
-            .max_run_loops
-            .unwrap_or(state.config.max_run_loops);
         let mut continuation_available = allow_goal_continuation;
-        for _ in 0..max_run_loops {
+        loop {
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
             if control.cancel.is_cancelled() {
@@ -757,10 +752,6 @@ impl SessionManager {
                 }
             }
         }
-
-        Err(AppError::Internal(
-            "session manager exceeded max run loop budget".to_string(),
-        ))
     }
 
     pub(super) async fn run_model_turn(
@@ -782,10 +773,7 @@ impl SessionManager {
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
-            let tools = scoped_executor.available_tools_for_messages_and_loaded(
-                active_messages.as_slice(),
-                session.runtime.loaded_deferred_tools(),
-            );
+            let tools = scoped_executor.available_tools();
             let request_tools = tools.clone();
             let prompt_budget =
                 self.prompt_budget_for_run(&session, options, tools.as_slice(), state.as_ref());
@@ -2085,9 +2073,6 @@ impl SessionManager {
             execution.view.attachments.as_slice(),
             output_text.as_str(),
         );
-        if let Some(loaded_tools) = loaded_tools_from_tool_output(&tool_output) {
-            session.runtime.record_loaded_deferred_tools(&loaded_tools);
-        }
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
         {
@@ -2541,9 +2526,6 @@ impl SessionManager {
         if options.max_output_tokens.is_none() {
             options.max_output_tokens = session.runtime.execution.agent_run.max_output_tokens;
         }
-        if options.max_run_loops.is_none() {
-            options.max_run_loops = session.runtime.execution.agent_run.steps;
-        }
         if options.agent_profile.is_none() {
             options.agent_profile = session.runtime.execution.selection.agent.clone();
         }
@@ -2743,7 +2725,6 @@ impl SessionManager {
                 temperature: None,
                 max_output_tokens: None,
                 agent_profile: None,
-                max_run_loops: None,
             },
         )
     }
@@ -2922,9 +2903,6 @@ impl SessionManager {
         }
         if options.max_output_tokens.is_none() {
             options.max_output_tokens = next_run.max_output_tokens;
-        }
-        if options.max_run_loops.is_none() {
-            options.max_run_loops = next_run.steps;
         }
         if !changed {
             return Ok(session);
@@ -3192,7 +3170,6 @@ impl SessionManager {
                 .map(|value| value.0),
             max_output_tokens: child.runtime.execution.agent_run.max_output_tokens,
             agent_profile: child.runtime.execution.selection.agent.clone(),
-            max_run_loops: child.runtime.execution.agent_run.steps,
         })
     }
 

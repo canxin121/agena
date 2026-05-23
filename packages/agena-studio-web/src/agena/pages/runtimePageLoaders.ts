@@ -67,6 +67,7 @@ export type SettingsSectionData = {
 
 export type PluginsSectionData = {
   plugins: PluginStatus[]
+  runtime: RuntimeStatus
   workspaces: WorkspaceResource[]
   selectedWorkspaceId: number | null
   selectedPluginId: string
@@ -120,10 +121,11 @@ export async function loadPluginsSectionData(input: {
   selectedPluginId: string
   selectedWorkspaceId: number | null
 }): Promise<PluginsSectionData> {
-  const [plugins, workspaces] = await Promise.all([listPlugins(), listWorkspaces()])
+  const [plugins, runtime, workspaces] = await Promise.all([listPlugins(), fetchRuntimeStatus(), listWorkspaces()])
 
   return {
     plugins,
+    runtime,
     workspaces,
     selectedWorkspaceId: pickWorkspaceId(input.selectedWorkspaceId, workspaces),
     selectedPluginId: pickNextPluginId(input.selectedPluginId, plugins),

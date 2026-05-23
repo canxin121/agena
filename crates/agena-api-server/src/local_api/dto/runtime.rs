@@ -117,3 +117,55 @@ pub struct RuntimeReloadResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeBackgroundTaskResource {
+    pub id: String,
+    pub kind: RuntimeBackgroundTaskKind,
+    pub origin: RuntimeBackgroundTaskOrigin,
+    pub title: String,
+    pub status: RuntimeBackgroundTaskStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+    pub cancellable: bool,
+}
+
+impl From<RuntimeBackgroundTask> for RuntimeBackgroundTaskResource {
+    fn from(value: RuntimeBackgroundTask) -> Self {
+        Self {
+            id: value.id,
+            kind: value.kind,
+            origin: value.origin,
+            title: value.title,
+            status: value.status,
+            message: value.message,
+            error_message: value.error_message,
+            created_at: value.created_at,
+            started_at: value.started_at,
+            finished_at: value.finished_at,
+            cancellable: value.cancellable,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeBackgroundTaskListResponse {
+    pub items: Vec<RuntimeBackgroundTaskResource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeBackgroundTaskStartResponse {
+    pub started: bool,
+    pub task: RuntimeBackgroundTaskResource,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RuntimeBackgroundTaskCancelResponse {
+    pub task: RuntimeBackgroundTaskResource,
+}

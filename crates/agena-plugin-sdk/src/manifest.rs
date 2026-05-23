@@ -224,8 +224,6 @@ pub struct PluginToolDecl {
     /// catalog filtering, plan-mode defaults, and other runtime policy.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,
-    #[serde(default)]
-    pub load_priority: ToolLoadPriority,
     pub concurrency_safe: bool,
     #[serde(default)]
     pub strict: bool,
@@ -283,14 +281,6 @@ impl PluginToolDecl {
             .iter()
             .any(|existing| existing == &tag)
     }
-
-    pub fn should_load_by_default(&self) -> bool {
-        !self.is_deferred()
-    }
-
-    pub fn is_deferred(&self) -> bool {
-        matches!(self.load_priority, ToolLoadPriority::Deferred)
-    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -298,15 +288,6 @@ impl PluginToolDecl {
 pub enum PathKind {
     Read,
     Write,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolLoadPriority {
-    Always,
-    #[default]
-    Standard,
-    Deferred,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -916,7 +897,6 @@ impl PluginToolDecl {
             path_access: Vec::new(),
             network_access: Vec::new(),
             tags: Vec::new(),
-            load_priority: ToolLoadPriority::Standard,
             concurrency_safe: false,
             strict: false,
             streaming: ToolStreamingMode::Buffered,
@@ -975,19 +955,6 @@ impl PluginToolDecl {
     {
         self.tags = tags.into_iter().collect();
         self
-    }
-
-    pub fn load_priority(mut self, load_priority: ToolLoadPriority) -> Self {
-        self.load_priority = load_priority;
-        self
-    }
-
-    pub fn always_load(self) -> Self {
-        self.load_priority(ToolLoadPriority::Always)
-    }
-
-    pub fn deferred_load(self) -> Self {
-        self.load_priority(ToolLoadPriority::Deferred)
     }
 
     pub fn concurrency_safe(mut self, concurrency_safe: bool) -> Self {

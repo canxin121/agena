@@ -87,6 +87,7 @@ export type RuntimeStatus = {
     evictions: number
   } | null
   model_catalog?: ModelCatalogSummary | null
+  background_tasks: RuntimeBackgroundTask[]
   automation: RuntimeAutomationResource
   operator: {
     mcp: {
@@ -144,6 +145,45 @@ export type RuntimeStatus = {
     }
     ui?: PluginUiCatalog
   }
+}
+
+export type RuntimeBackgroundTaskKind =
+  | 'model_catalog_refresh'
+  | 'runtime_reload'
+  | 'marketplace_registry_sync'
+  | 'marketplace_plugin_install'
+  | 'marketplace_plugin_uninstall'
+  | 'marketplace_plugin_upgrade'
+
+export type RuntimeBackgroundTaskOrigin = 'system' | 'user'
+
+export type RuntimeBackgroundTaskStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export type RuntimeBackgroundTask = {
+  id: string
+  kind: RuntimeBackgroundTaskKind
+  origin: RuntimeBackgroundTaskOrigin
+  title: string
+  status: RuntimeBackgroundTaskStatus
+  message?: string | null
+  error_message?: string | null
+  created_at: string
+  started_at: string
+  finished_at?: string | null
+  cancellable: boolean
+}
+
+export type RuntimeBackgroundTaskListResponse = {
+  items: RuntimeBackgroundTask[]
+}
+
+export type RuntimeBackgroundTaskCancelResponse = {
+  task: RuntimeBackgroundTask
+}
+
+export type RuntimeBackgroundTaskStartResponse = {
+  started: boolean
+  task: RuntimeBackgroundTask
 }
 
 export type PluginStatus = {
@@ -447,6 +487,7 @@ export type ModelCatalogEntry = {
 }
 
 export type ModelCatalogResponse = {
+  refreshing: boolean
   last_refresh_at?: string | null
   last_successful_source?: ModelCatalogSourceKind | null
   last_error?: string | null
@@ -454,6 +495,12 @@ export type ModelCatalogResponse = {
 }
 
 export type ModelCatalogSummary = ModelCatalogResponse
+
+export type ModelCatalogRefreshResponse = {
+  started: boolean
+  task: RuntimeBackgroundTask
+  summary: ModelCatalogSummary
+}
 
 export type ModelCatalogListResponse = {
   summary: ModelCatalogSummary
@@ -973,8 +1020,8 @@ export async function fetchUsageStats(
   return await apiJson<UsageStats>(`/api/v1/usage${suffix ? `?${suffix}` : ''}`)
 }
 
-export async function reloadRuntime(): Promise<RuntimeReloadResponse> {
-  return await apiJson<RuntimeReloadResponse>('/api/v1/runtime/reload', {
+export async function reloadRuntime(): Promise<RuntimeBackgroundTaskStartResponse> {
+  return await apiJson<RuntimeBackgroundTaskStartResponse>('/api/v1/runtime/reload', {
     method: 'POST',
   })
 }
@@ -1033,10 +1080,25 @@ export async function lookupModelCatalogEntries(modelIds: string[]): Promise<Mod
   return response.items ?? []
 }
 
-export async function refreshModelCatalog(): Promise<ModelCatalogResponse> {
-  return await apiJson<ModelCatalogResponse>('/api/v1/model-catalog/refresh', {
+export async function refreshModelCatalog(): Promise<ModelCatalogRefreshResponse> {
+  return await apiJson<ModelCatalogRefreshResponse>('/api/v1/model-catalog/refresh', {
     method: 'POST',
   })
+}
+
+export async function listRuntimeBackgroundTasks(): Promise<RuntimeBackgroundTask[]> {
+  const response = await apiJson<RuntimeBackgroundTaskListResponse>('/api/v1/runtime/tasks')
+  return response.items ?? []
+}
+
+export async function cancelRuntimeBackgroundTask(taskId: string): Promise<RuntimeBackgroundTask> {
+  const response = await apiJson<RuntimeBackgroundTaskCancelResponse>(
+    `/api/v1/runtime/tasks/${encodeURIComponent(taskId)}/cancel`,
+    {
+      method: 'POST',
+    },
+  )
+  return response.task
 }
 
 export async function listPlugins(): Promise<PluginStatus[]> {
@@ -1131,8 +1193,8 @@ export async function searchMarketplacePlugins(input: {
 export async function syncMarketplaceRegistry(input: {
   registryId?: string
   registryUrl: string
-}): Promise<{ registry_id: string; registry_url: string; plugin_count: number }> {
-  return await apiJson('/api/v1/plugins/marketplace/sync', {
+}): Promise<RuntimeBackgroundTaskStartResponse> {
+  return await apiJson<RuntimeBackgroundTaskStartResponse>('/api/v1/plugins/marketplace/sync', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1166,8 +1228,8 @@ export async function installMarketplacePlugin(input: {
   allowUnverified?: boolean
   refresh?: boolean
   requireSignature?: boolean
-}): Promise<MarketplaceInstallOutcomeResource> {
-  return await apiJson<MarketplaceInstallOutcomeResource>('/api/v1/plugins/marketplace/install', {
+}): Promise<RuntimeBackgroundTaskStartResponse> {
+  return await apiJson<RuntimeBackgroundTaskStartResponse>('/api/v1/plugins/marketplace/install', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -1187,19 +1249,15 @@ export async function installMarketplacePlugin(input: {
 export async function uninstallMarketplacePlugin(input: {
   pluginId: string
   cascade?: boolean
-}): Promise<MarketplaceUninstallOutcomeResource[]> {
-  const response = await apiJson<{ entries: MarketplaceUninstallOutcomeResource[] }>(
-    '/api/v1/plugins/marketplace/uninstall',
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        plugin_id: input.pluginId.trim(),
-        ...(input.cascade ? { cascade: true } : {}),
-      }),
-    },
-  )
-  return response.entries ?? []
+}): Promise<RuntimeBackgroundTaskStartResponse> {
+  return await apiJson<RuntimeBackgroundTaskStartResponse>('/api/v1/plugins/marketplace/uninstall', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      plugin_id: input.pluginId.trim(),
+      ...(input.cascade ? { cascade: true } : {}),
+    }),
+  })
 }
 
 export async function upgradeMarketplacePlugins(input: {
@@ -1207,21 +1265,17 @@ export async function upgradeMarketplacePlugins(input: {
   all?: boolean
   registryId?: string
   registryUrl?: string
-}): Promise<MarketplaceUpgradeOutcomeResource[]> {
-  const response = await apiJson<{ entries: MarketplaceUpgradeOutcomeResource[] }>(
-    '/api/v1/plugins/marketplace/upgrade',
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        ...(input.pluginId?.trim() ? { plugin_id: input.pluginId.trim() } : {}),
-        ...(input.all ? { all: true } : {}),
-        ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
-        ...(input.registryUrl?.trim() ? { registry_url: input.registryUrl.trim() } : {}),
-      }),
-    },
-  )
-  return response.entries ?? []
+}): Promise<RuntimeBackgroundTaskStartResponse> {
+  return await apiJson<RuntimeBackgroundTaskStartResponse>('/api/v1/plugins/marketplace/upgrade', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...(input.pluginId?.trim() ? { plugin_id: input.pluginId.trim() } : {}),
+      ...(input.all ? { all: true } : {}),
+      ...(input.registryId?.trim() ? { registry_id: input.registryId.trim() } : {}),
+      ...(input.registryUrl?.trim() ? { registry_url: input.registryUrl.trim() } : {}),
+    }),
+  })
 }
 
 export async function listAuthProviders(): Promise<AuthProvider[]> {

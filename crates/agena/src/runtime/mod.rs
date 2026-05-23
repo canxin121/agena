@@ -1,3 +1,4 @@
+mod background_tasks;
 mod builder;
 mod event_bridge;
 pub mod host_client;
@@ -7,6 +8,11 @@ mod reload;
 mod snapshot;
 mod store;
 
+pub use background_tasks::{
+    RuntimeBackgroundTask, RuntimeBackgroundTaskControlError, RuntimeBackgroundTaskKind,
+    RuntimeBackgroundTaskOrigin, RuntimeBackgroundTaskOutcome, RuntimeBackgroundTaskStart,
+    RuntimeBackgroundTaskStatus,
+};
 pub use builder::{AgenaRuntime, AgenaRuntimeBuilder, TracingFilterReloadHandle};
 pub use event_bridge::spawn_event_bridge;
 pub use host_client::{host_client_for, noop_host_client};

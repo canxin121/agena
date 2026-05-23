@@ -42,7 +42,7 @@ pub use crate::manifest::{
     PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
     PluginToolDecl, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions,
     PluginUiAction, PluginUiContributions, PluginUiThemePalette, ToolDescriptionMode,
-    ToolLoadPriority, ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, ToolStreamSink};
 

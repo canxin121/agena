@@ -107,8 +107,10 @@ export function useRuntimeMarketplaceActions(
         registryId: input.marketplaceRegistryId.value.trim() || 'default',
         registryUrl,
       })
-      input.actionMessage.value = `Synced registry ${result.registry_id} (${result.plugin_count} plugins).`
-      await loadMarketplacePanel({ refresh: true })
+      input.actionMessage.value = result.started
+        ? 'Started marketplace registry sync.'
+        : 'Marketplace registry sync is already running.'
+      await deps.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     } finally {
@@ -124,7 +126,7 @@ export function useRuntimeMarketplaceActions(
     input.actionError.value = ''
     input.actionMessage.value = ''
     try {
-      const outcome = await deps.installMarketplacePlugin({
+      const result = await deps.installMarketplacePlugin({
         spec,
         registryId: input.marketplaceRegistryId.value.trim() || 'default',
         registryUrl,
@@ -133,10 +135,10 @@ export function useRuntimeMarketplaceActions(
         refresh: input.marketplaceRefreshIndex.value,
       })
       if (!specOverride) input.marketplaceInstallSpec.value = ''
-      input.actionMessage.value = outcome.dry_run
-        ? `Dry-run resolved ${outcome.plugin_id} v${outcome.version}.`
-        : `Installed ${outcome.plugin_id} v${outcome.version}.`
-      await Promise.all([deps.load(), loadMarketplacePanel({ refresh: false })])
+      input.actionMessage.value = result.started
+        ? `Started ${result.task.title.toLowerCase()}.`
+        : `${result.task.title} is already running.`
+      await deps.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     } finally {
@@ -150,12 +152,14 @@ export function useRuntimeMarketplaceActions(
     input.actionError.value = ''
     input.actionMessage.value = ''
     try {
-      const entries = await deps.uninstallMarketplacePlugin({
+      const result = await deps.uninstallMarketplacePlugin({
         pluginId,
         cascade: input.marketplaceCascadeUninstall.value,
       })
-      input.actionMessage.value = `Uninstalled ${entries.map((entry) => entry.plugin_id).join(', ')}.`
-      await Promise.all([deps.load(), loadMarketplacePanel({ refresh: false })])
+      input.actionMessage.value = result.started
+        ? `Started ${result.task.title.toLowerCase()}.`
+        : `${result.task.title} is already running.`
+      await deps.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     } finally {
@@ -168,18 +172,17 @@ export function useRuntimeMarketplaceActions(
     input.actionError.value = ''
     input.actionMessage.value = ''
     try {
-      const entries = await deps.upgradeMarketplacePlugins(
+      const result = await deps.upgradeMarketplacePlugins(
         pluginId
           ? { pluginId }
           : {
               all: true,
             },
       )
-      const upgraded = entries.filter((entry) => entry.upgraded)
-      input.actionMessage.value = upgraded.length
-        ? `Upgraded ${upgraded.map((entry) => entry.plugin_id).join(', ')}.`
-        : 'Marketplace plugins are already up to date.'
-      await Promise.all([deps.load(), loadMarketplacePanel({ refresh: true })])
+      input.actionMessage.value = result.started
+        ? `Started ${result.task.title.toLowerCase()}.`
+        : `${result.task.title} is already running.`
+      await deps.load()
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
     } finally {

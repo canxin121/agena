@@ -316,7 +316,6 @@ fn resolve_permission_continue_options(
         system: None,
         temperature: None,
         max_output_tokens: None,
-        max_run_loops: None,
     })
 }
 
@@ -345,7 +344,6 @@ fn resolve_run_options(
         system: None,
         temperature,
         max_output_tokens,
-        max_run_loops: None,
     })
 }
 

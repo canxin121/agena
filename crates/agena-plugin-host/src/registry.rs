@@ -63,14 +63,6 @@ impl PluginEntry {
     pub fn has_tag(&self, tag: crate::sdk::ToolTag) -> bool {
         self.decl.has_tag(tag)
     }
-
-    pub fn should_load_by_default(&self) -> bool {
-        self.decl.should_load_by_default()
-    }
-
-    pub fn is_deferred(&self) -> bool {
-        self.decl.is_deferred()
-    }
 }
 
 impl PluginEntryRegistry {

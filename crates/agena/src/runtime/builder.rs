@@ -6,6 +6,7 @@ use std::{
 
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -20,7 +21,13 @@ use crate::{
 };
 
 use super::{
-    RuntimeReloadCause, RuntimeReloadReport, RuntimeSnapshot, janitor, reload,
+    RuntimeBackgroundTask, RuntimeBackgroundTaskControlError, RuntimeBackgroundTaskKind,
+    RuntimeBackgroundTaskOrigin, RuntimeBackgroundTaskStart, RuntimeReloadCause,
+    RuntimeReloadReport, RuntimeSnapshot,
+    background_tasks::{
+        RuntimeBackgroundTaskOutcome, RuntimeBackgroundTaskRegistry, RuntimeBackgroundTaskSpec,
+    },
+    janitor, reload,
     store::{RuntimeSnapshotStore, TaskControl},
 };
 
@@ -123,6 +130,7 @@ impl AgenaRuntimeBuilder {
                 database,
                 snapshot_store: RuntimeSnapshotStore::new(initial_snapshot.clone()),
                 reload_lock: Mutex::new(()),
+                background_tasks: RuntimeBackgroundTaskRegistry::default(),
                 task_control: Arc::new(TaskControl::default()),
                 tracing_reload_handle,
             }),
@@ -181,6 +189,7 @@ pub(crate) struct AgenaRuntimeInner {
     database: Option<Arc<DatabaseConnection>>,
     snapshot_store: RuntimeSnapshotStore,
     reload_lock: Mutex<()>,
+    background_tasks: RuntimeBackgroundTaskRegistry,
     task_control: Arc<TaskControl>,
     tracing_reload_handle: Option<TracingFilterReloadHandle>,
 }
@@ -230,6 +239,7 @@ impl AgenaRuntime {
                 }
             }
         }
+        self.inner.background_tasks.cancel_all();
         self.inner.task_control.shutdown();
     }
 
@@ -266,6 +276,7 @@ impl AgenaRuntime {
             host_handle.install_client(client).await;
         }
         let _ = self.inner.snapshot_store.swap(next.clone());
+        let _ = self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System);
 
         Ok(RuntimeReloadReport {
             cause,
@@ -283,6 +294,173 @@ impl AgenaRuntime {
         self.inner.task_control.is_shutdown()
     }
 
+    pub fn background_tasks(&self) -> Vec<RuntimeBackgroundTask> {
+        self.inner.background_tasks.list()
+    }
+
+    pub fn model_catalog_refresh_active(&self) -> bool {
+        self.inner
+            .background_tasks
+            .is_kind_running(RuntimeBackgroundTaskKind::ModelCatalogRefresh)
+    }
+
+    pub fn cancel_background_task(
+        &self,
+        task_id: &str,
+    ) -> Result<RuntimeBackgroundTask, RuntimeBackgroundTaskControlError> {
+        self.inner.background_tasks.cancel(task_id)
+    }
+
+    pub fn spawn_background_task<F, Fut>(
+        &self,
+        kind: RuntimeBackgroundTaskKind,
+        origin: RuntimeBackgroundTaskOrigin,
+        title: impl Into<String>,
+        dedupe_key: Option<String>,
+        cancellable: bool,
+        work: F,
+    ) -> Result<RuntimeBackgroundTaskStart, RuntimeBackgroundTaskControlError>
+    where
+        F: FnOnce(CancellationToken) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<RuntimeBackgroundTaskOutcome, AppError>>
+            + Send
+            + 'static,
+    {
+        if self.is_shutdown() {
+            return Err(RuntimeBackgroundTaskControlError::Shutdown);
+        }
+
+        let mut spec = RuntimeBackgroundTaskSpec::new(kind, origin)
+            .with_title(title)
+            .with_cancellable(cancellable);
+        if let Some(dedupe_key) = dedupe_key {
+            spec = spec.with_dedupe_key(dedupe_key);
+        }
+        Ok(self.inner.background_tasks.spawn(spec, work))
+    }
+
+    pub fn start_runtime_reload_task(
+        &self,
+        cause: RuntimeReloadCause,
+        origin: RuntimeBackgroundTaskOrigin,
+    ) -> Result<RuntimeBackgroundTaskStart, RuntimeBackgroundTaskControlError> {
+        let dedupe_key = Some("runtime_reload".to_owned());
+        let title = match &cause {
+            RuntimeReloadCause::Manual => "Reload runtime".to_owned(),
+            RuntimeReloadCause::WatchedPathsChanged { paths } => {
+                format!(
+                    "Reload runtime after {} watched path change(s)",
+                    paths.len()
+                )
+            }
+        };
+        let runtime = self.clone();
+        self.spawn_background_task(
+            RuntimeBackgroundTaskKind::RuntimeReload,
+            origin,
+            title,
+            dedupe_key,
+            false,
+            move |_| async move {
+                let report = runtime.reload_with_cause(cause.clone()).await?;
+                let message = match &cause {
+                    RuntimeReloadCause::Manual => {
+                        format!("Runtime reloaded to generation {}.", report.generation)
+                    }
+                    RuntimeReloadCause::WatchedPathsChanged { paths } => format!(
+                        "Runtime reloaded to generation {} after changes in {} watched path(s).",
+                        report.generation,
+                        paths.len()
+                    ),
+                };
+                Ok(RuntimeBackgroundTaskOutcome::succeeded(message))
+            },
+        )
+    }
+
+    pub fn start_model_catalog_refresh(
+        &self,
+        origin: RuntimeBackgroundTaskOrigin,
+    ) -> Result<RuntimeBackgroundTaskStart, RuntimeBackgroundTaskControlError> {
+        self.spawn_model_catalog_refresh(origin)
+    }
+
+    fn start_model_catalog_refresh_if_needed(
+        &self,
+        origin: RuntimeBackgroundTaskOrigin,
+    ) -> Option<RuntimeBackgroundTaskStart> {
+        if self.is_shutdown() {
+            return None;
+        }
+
+        if !self
+            .current_snapshot()
+            .model_catalog()
+            .needs_startup_refresh()
+        {
+            return None;
+        }
+
+        self.spawn_model_catalog_refresh(origin).ok()
+    }
+
+    fn spawn_model_catalog_refresh(
+        &self,
+        origin: RuntimeBackgroundTaskOrigin,
+    ) -> Result<RuntimeBackgroundTaskStart, RuntimeBackgroundTaskControlError> {
+        let runtime = self.clone();
+        self.spawn_background_task(
+            RuntimeBackgroundTaskKind::ModelCatalogRefresh,
+            origin,
+            "Refresh model catalog",
+            Some("model_catalog_refresh".to_owned()),
+            true,
+            move |cancel| async move {
+                let result: Result<RuntimeBackgroundTaskOutcome, AppError> = async {
+                    let snapshot = runtime.current_snapshot();
+                    let providers = snapshot.catalog_source_provider_registry();
+                    let model_catalog = snapshot.model_catalog();
+                    let refreshed = model_catalog
+                        .refresh_from_registry(providers.as_ref(), Some(snapshot.config_resolution()))
+                        .await?;
+
+                    if cancel.is_cancelled() || runtime.is_shutdown() {
+                        return Ok(RuntimeBackgroundTaskOutcome::cancelled(
+                            "Cancelled before applying the refreshed catalog to the runtime snapshot.",
+                        ));
+                    }
+
+                    runtime.reload().await?;
+
+                    let message = refreshed
+                        .last_error
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(|warning| format!("Refreshed model catalog with warnings: {warning}"))
+                        .unwrap_or_else(|| "Refreshed model catalog.".to_owned());
+
+                    Ok(RuntimeBackgroundTaskOutcome::succeeded(message))
+                }
+                .await;
+
+                if let Err(error) = &result {
+                    runtime
+                        .current_snapshot()
+                        .model_catalog()
+                        .record_refresh_failure(error.to_string());
+                    tracing::warn!(
+                        error = %error,
+                        origin = ?origin,
+                        "background model catalog refresh failed"
+                    );
+                }
+
+                result
+            },
+        )
+    }
+
     fn spawn_background_tasks(&self) {
         let janitor_runtime = self.clone();
         tokio::spawn(async move {
@@ -293,6 +471,8 @@ impl AgenaRuntime {
         tokio::spawn(async move {
             reload::run(reload_runtime).await;
         });
+
+        let _ = self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System);
     }
 
     fn apply_tracing_filter(&self, tracing: &TracingConfig) {

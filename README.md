@@ -189,11 +189,17 @@ agena plugin logs <plugin-id>
 
 ## 开发检查
 
-Rust workspace:
+Rust workspace regression / e2e:
 
 ```bash
 cargo fmt --all --check
-cargo test --workspace
+cargo test -p agena-studio-server --locked git_
+```
+
+Live suites (manual, requires provider credentials and network access):
+
+```bash
+cargo test --locked -p agena --test live_provider_catalog -- --ignored
 ```
 
 Studio Web:
@@ -201,20 +207,6 @@ Studio Web:
 ```bash
 bun install --cwd packages/agena-studio-web
 bun run --cwd packages/agena-studio-web typecheck
-bun test --cwd packages/agena-studio-web
-```
-
-配置示例解析测试：
-
-```bash
-cargo test -p agena --test config_examples
-```
-
-API server 相关测试：
-
-```bash
-cargo test -p agena-api-server --features http,ws,sse,jsonrpc
-cargo test -p agena-client
 ```
 
 ## 数据与状态位置

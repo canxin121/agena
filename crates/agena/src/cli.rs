@@ -2176,7 +2176,6 @@ impl AgenaCli {
                             .map(str::trim)
                             .filter(|value| !value.is_empty())
                             .map(ToOwned::to_owned),
-                        max_run_loops: None,
                     },
                 })
                 .await?
@@ -3922,7 +3921,6 @@ fn resolve_continue_options(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
-        max_run_loops: None,
     })
 }
 
@@ -3955,7 +3953,6 @@ fn resolve_run_options(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned),
-        max_run_loops: None,
     })
 }
 

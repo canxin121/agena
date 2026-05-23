@@ -45,8 +45,7 @@ struct CompleteGoalToolInput {}
     description = "Workflow scaffold command. Use action `init`, `review`, or `security_review` to generate reusable workflow instructions; this entry does not execute shell or filesystem actions by itself.",
     tags(ToolTag::ReadOnly),
     host_capabilities(HostCapability::AgentRegistry),
-    concurrency_safe = true,
-    load = "always"
+    concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WorkflowToolInput {
@@ -70,13 +69,12 @@ enum WorkflowToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "tools",
-    description = "Tool catalog command. Use action `search` to find or load deferred tools, or `help` to fetch detailed usage for a tool. This entry does not execute the target tool for you.",
+    description = "Tool catalog command. Use action `search` to find tools or `help` to fetch detailed usage for a tool. This entry does not execute the target tool for you.",
     summary = "Search tools or fetch detailed tool help.",
-    help = "Use action `search` with `query`, optional `load`, and optional `limit` to discover tools and load deferred tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. To actually run a tool, call that tool directly after reading its help.",
+    help = "Use action `search` with `query` and optional `limit` to discover tools. Use action `help` with `tool` to retrieve the full registered help text and input schema for any model-visible tool. To actually run a tool, call that tool directly after reading its help.",
     tags(ToolTag::ReadOnly, ToolTag::Discovery),
     host_capabilities(HostCapability::ListTools),
-    concurrency_safe = true,
-    load = "always"
+    concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ToolsToolInput {
@@ -108,8 +106,7 @@ fn default_include_schema() -> bool {
     entry = "agent",
     description = "Runtime agent profile command. Use action `switch` to change the current session's active agent profile or `restore` to bring back a saved profile. This entry does not spawn delegated subagent work; use `task` for that.",
     host_capabilities(HostCapability::AgentRegistry),
-    concurrency_safe = false,
-    load = "always"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum AgentToolInput {
@@ -130,8 +127,7 @@ enum AgentToolInput {
     entry = "todo",
     description = "Todo command. Use action `write` to replace the session todo list.",
     tags(ToolTag::Mutating, ToolTag::Planning),
-    concurrency_safe = false,
-    load = "always"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum TodoToolInput {
@@ -148,8 +144,7 @@ enum TodoToolInput {
     description = "Delegated subagent task command. Use action `run` to create or resume a typed child task session for explore, implement, or verify work. This entry launches/resumes a separate task session; it does not switch the current runtime agent profile.",
     tags(ToolTag::Task, ToolTag::Subtask),
     host_capabilities(HostCapability::SpawnSubtask),
-    concurrency_safe = false,
-    load = "deferred"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum TaskEntryToolInput {
@@ -171,8 +166,7 @@ struct SessionRenameToolInput {
     description = "Session metadata command. Use action `get` to inspect the current session metadata or `rename` to update the session title. This entry does not read chat history or execute workflow actions.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating),
     host_capabilities(HostCapability::SessionRegistry),
-    concurrency_safe = false,
-    load = "always"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SessionToolInput {
@@ -191,8 +185,7 @@ enum SessionToolInput {
     description = "Goal command. Use action `get`, `create`, `clear`, or `complete`. Use `complete` only once the objective is actually finished.",
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Goal),
     host_capabilities(HostCapability::GoalRegistry),
-    concurrency_safe = false,
-    load = "always"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum GoalToolInput {
@@ -224,8 +217,7 @@ enum GoalToolInput {
     description = "User interaction command. Use action `request_input` to request structured short answers. Legacy action alias `ask` still works but is not the preferred name.",
     tags(ToolTag::ReadOnly, ToolTag::Interactive),
     host_capabilities(HostCapability::AskUser),
-    concurrency_safe = false,
-    load = "always"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum UserToolInput {
@@ -240,8 +232,7 @@ enum UserToolInput {
     description = "Plan mode command. Use action `enter` or `exit`; `enter` allocates a plan markdown file under .agena/plans/ and `exit` asks the user to approve the plan.",
     tags(ToolTag::ReadOnly, ToolTag::Planning, ToolTag::FilesystemWrite),
     host_capabilities(HostCapability::PlanRegistry, HostCapability::AgentRegistry),
-    concurrency_safe = true,
-    load = "always"
+    concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum PlanToolInput {
@@ -263,8 +254,7 @@ enum PlanToolInput {
     description = "Worktree command. Use action `enter` or `exit`; `enter` uses `target = new|existing` to create or attach to a git worktree and `exit` uses enum `exit_action = keep|remove`.",
     tags(ToolTag::Mutating, ToolTag::FilesystemWrite, ToolTag::Worktree),
     host_capabilities(HostCapability::WorktreeRegistry),
-    concurrency_safe = false,
-    load = "deferred"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum WorktreeToolInput {
@@ -498,7 +488,6 @@ impl WorkflowPlugin {
                 .or(descriptor.description)
                 .unwrap_or_default(),
             tags: descriptor.tags,
-            deferred: descriptor.deferred,
         }
     }
 
@@ -862,9 +851,6 @@ impl WorkflowPlugin {
         let mut lines = vec![format!("Tool: {}", descriptor.name)];
         if let Some(plugin_id) = descriptor.plugin_id.as_deref() {
             lines.push(format!("Plugin: {plugin_id}"));
-        }
-        if descriptor.deferred {
-            lines.push("Load priority: deferred".to_string());
         }
         if !descriptor.tags.is_empty() {
             let tags = descriptor

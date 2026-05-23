@@ -76,8 +76,7 @@ struct SettingsValidateToolInput {}
         crate::plugin::sdk::HostCapability::ReadConfig,
         crate::plugin::sdk::HostCapability::ReloadConfig
     ),
-    concurrency_safe = false,
-    load = "always"
+    concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum SettingsToolInput {

@@ -10,23 +10,22 @@ use crate::local_api::{
     AuthCopilotDeviceStartRequest, AuthCredentialType, AuthDeviceStartResource,
     AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest, AuthLoginResultResource,
     AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest, AuthOpenAiDeviceStartRequest,
-    AuthProviderResource, HealthResponse, MarketplaceInstallOutcomeResource,
-    MarketplaceInstallRequestBody, MarketplaceInstalledListResponse,
-    MarketplaceInstalledPluginResource, MarketplaceOutdatedListResponse,
-    MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequestBody,
-    MarketplaceSearchRequestBody, MarketplaceSearchResponse, MarketplaceSyncResponse,
-    MarketplaceUninstallOutcomeResource, MarketplaceUninstallRequestBody,
-    MarketplaceUninstallResponse, MarketplaceUpgradeOutcomeResource, MarketplaceUpgradeRequestBody,
-    MarketplaceUpgradeResponse, MessageListQuery, ModelCatalogListResponse,
-    ModelCatalogLookupRequest, ModelCatalogLookupResponse, ModelCatalogResponse, PartLoadMode,
-    PermissionRuleListQuery, PermissionRuleRevokeRequest,
-    PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
-    PluginStatusListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
-    PluginUiRunActionRequest, RuntimeReloadResponse, SessionContinueRequestBody,
-    SessionCreateRequest, SessionEventStreamQuery, SessionGoalSetRequest, SessionListQuery,
-    SessionMessageRequest, SessionPermissionReplyRequestBody, SessionReplaceRequest,
-    SessionRewindRequestBody, SessionRunOptionsRequest, SessionUserInputReplyRequestBody,
-    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
+    AuthProviderResource, HealthResponse, MarketplaceInstallRequestBody,
+    MarketplaceInstalledListResponse, MarketplaceInstalledPluginResource,
+    MarketplaceOutdatedListResponse, MarketplaceOutdatedPluginResource, MarketplacePluginResource,
+    MarketplaceRegistryRequestBody, MarketplaceSearchRequestBody, MarketplaceSearchResponse,
+    MarketplaceUninstallRequestBody, MarketplaceUpgradeRequestBody, MessageListQuery,
+    ModelCatalogListResponse, ModelCatalogLookupRequest, ModelCatalogLookupResponse,
+    ModelCatalogRefreshResponse, ModelCatalogResponse, PartLoadMode, PermissionRuleListQuery,
+    PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
+    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse, PluginUiCatalogResponse,
+    PluginUiInvokeToolRequest, PluginUiRunActionRequest, RuntimeBackgroundTaskCancelResponse,
+    RuntimeBackgroundTaskListResponse, RuntimeBackgroundTaskStartResponse,
+    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery,
+    SessionGoalSetRequest, SessionListQuery, SessionMessageRequest,
+    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
+    SessionRunOptionsRequest, SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery,
+    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
 };
 use agena::config::{
     ConfigError, ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
@@ -398,13 +397,45 @@ fn parse_usage_datetime(
 pub async fn reload_runtime(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let report = state.runtime().reload().await.map_err(ServerError::Core)?;
-    METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    Ok(Json(RuntimeReloadResponse {
-        cause: "manual",
-        previous_generation: report.previous_generation,
-        generation: report.generation,
-        loaded_at: report.loaded_at,
+    let task = state
+        .runtime()
+        .start_runtime_reload_task(
+            agena::runtime::RuntimeReloadCause::Manual,
+            agena::runtime::RuntimeBackgroundTaskOrigin::User,
+        )
+        .map_err(server_error_from_runtime_background_task)?;
+    if task.started {
+        METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok(Json(RuntimeBackgroundTaskStartResponse {
+        started: task.started,
+        task: task.task.into(),
+    }))
+}
+
+pub async fn list_runtime_background_tasks(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(RuntimeBackgroundTaskListResponse {
+        items: state
+            .runtime()
+            .background_tasks()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+    }))
+}
+
+pub async fn cancel_runtime_background_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+) -> Result<impl IntoResponse, ServerError> {
+    let task = state
+        .runtime()
+        .cancel_background_task(task_id.trim())
+        .map_err(server_error_from_runtime_background_task)?;
+    Ok(Json(RuntimeBackgroundTaskCancelResponse {
+        task: task.into(),
     }))
 }
 
@@ -423,6 +454,25 @@ pub async fn plugin_rpc(
 async fn reload_runtime_from_config(state: &AppState) -> Result<(), ServerError> {
     state.runtime().reload().await.map_err(ServerError::Core)?;
     Ok(())
+}
+
+fn server_error_from_runtime_background_task(
+    error: agena::runtime::RuntimeBackgroundTaskControlError,
+) -> ServerError {
+    match error {
+        agena::runtime::RuntimeBackgroundTaskControlError::Shutdown => {
+            ServerError::ServiceUnavailable("runtime is shutting down".to_owned())
+        }
+        agena::runtime::RuntimeBackgroundTaskControlError::NotFound(task_id) => {
+            ServerError::NotFound(format!("background task `{task_id}` not found"))
+        }
+        agena::runtime::RuntimeBackgroundTaskControlError::NotRunning(task_id) => {
+            ServerError::Conflict(format!("background task `{task_id}` is not running"))
+        }
+        agena::runtime::RuntimeBackgroundTaskControlError::NotCancellable(task_id) => {
+            ServerError::Conflict(format!("background task `{task_id}` cannot be cancelled"))
+        }
+    }
 }
 
 fn resolved_config_json(config: &impl serde::Serialize) -> Result<JsonValue, ServerError> {

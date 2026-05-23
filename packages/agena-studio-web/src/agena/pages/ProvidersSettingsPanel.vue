@@ -60,6 +60,7 @@ const props = defineProps<{
 
 function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSummary {
   return {
+    refreshing: false,
     entry_count: entries.length,
   }
 }

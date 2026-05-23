@@ -32,8 +32,7 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
         ToolTag::FilesystemRead,
         ToolTag::FilesystemWrite
     ),
-    concurrency_safe = true,
-    load = "always"
+    concurrency_safe = true
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum FsToolInput {

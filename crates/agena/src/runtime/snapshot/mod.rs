@@ -236,13 +236,7 @@ impl RuntimeSnapshot {
             .ok_or_else(|| AppError::Config("runtime database connection missing".to_owned()))?;
         let model_catalog_store = ModelCatalogStore::new(model_catalog_config, catalog_store_db);
         let model_catalog = Arc::new(ModelCatalogService::new(model_catalog_store).await?);
-        let mut catalog_snapshot = model_catalog.snapshot();
-        if let Ok(snapshot) = model_catalog
-            .refresh_if_stale_on_startup(catalog_source_providers.as_ref(), Some(&resolution))
-            .await
-        {
-            catalog_snapshot = snapshot;
-        }
+        let catalog_snapshot = model_catalog.snapshot();
         let providers = Arc::new(
             resolution
                 .build_provider_registry_with_plugins_and_catalog(

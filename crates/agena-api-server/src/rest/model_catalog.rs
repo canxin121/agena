@@ -13,9 +13,11 @@ pub struct ModelCatalogListQuery {
 }
 
 fn model_catalog_summary(
+    runtime: &agena::runtime::AgenaRuntime,
     catalog: &agena::model_catalog::ModelCatalogResponse,
 ) -> ModelCatalogResponse {
     ModelCatalogResponse {
+        refreshing: runtime.model_catalog_refresh_active(),
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
         last_error: catalog.last_error.clone(),
@@ -131,9 +133,10 @@ pub async fn get_model_catalog(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<ModelCatalogListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
+    let runtime = state.runtime();
+    let snapshot = runtime.current_snapshot();
     let catalog = snapshot.model_catalog_response();
-    let summary = model_catalog_summary(&catalog);
+    let summary = model_catalog_summary(runtime, &catalog);
     let available_origins = {
         let mut origins = model_catalog_entry_resources(&catalog)
             .into_iter()
@@ -226,18 +229,15 @@ pub async fn lookup_model_catalog(
 pub async fn refresh_model_catalog(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
-    let source_providers = snapshot.catalog_source_provider_registry();
-    snapshot
-        .model_catalog()
-        .refresh_from_registry(
-            source_providers.as_ref(),
-            Some(snapshot.config_resolution()),
-        )
-        .await
-        .map_err(ServerError::Core)?;
-    reload_runtime_from_config(&state).await?;
-    let snapshot = state.runtime().current_snapshot();
+    let runtime = state.runtime();
+    let task = runtime
+        .start_model_catalog_refresh(agena::runtime::RuntimeBackgroundTaskOrigin::User)
+        .map_err(super::server_error_from_runtime_background_task)?;
+    let snapshot = runtime.current_snapshot();
     let catalog = snapshot.model_catalog_response();
-    Ok(Json(model_catalog_summary(&catalog)))
+    Ok(Json(ModelCatalogRefreshResponse {
+        started: task.started,
+        task: task.task.into(),
+        summary: model_catalog_summary(runtime, &catalog),
+    }))
 }

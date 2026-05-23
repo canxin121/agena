@@ -26,7 +26,6 @@ struct SurfaceConfig {
     host_capabilities: Vec<Expr>,
     concurrency_safe: Option<bool>,
     strict: Option<bool>,
-    load: Option<LitStr>,
     streaming: Option<LitStr>,
 }
 
@@ -80,17 +79,6 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
         let capabilities = surface.host_capabilities;
         quote! { .host_capabilities([#(#capabilities),*]) }
     };
-    let load_chain = match surface.load.as_ref().map(LitStr::value).as_deref() {
-        Some("always") => quote! { .always_load() },
-        Some("deferred") => quote! { .deferred_load() },
-        Some("standard") | None => quote! {},
-        Some(other) => {
-            return Err(syn::Error::new_spanned(
-                surface.load.unwrap(),
-                format!("unsupported tool load priority '{other}'"),
-            ));
-        }
-    };
     let streaming_chain = match surface.streaming.as_ref().map(LitStr::value).as_deref() {
         Some("streaming") => {
             quote! { .streaming(crate::plugin::sdk::ToolStreamingMode::Streaming) }
@@ -131,7 +119,6 @@ fn expand_static_tool_surface(input: DeriveInput) -> Result<proc_macro2::TokenSt
                 #tags_chain
                 #capabilities_chain
                 .concurrency_safe(#concurrency_safe)
-                #load_chain
                 #streaming_chain
                 #strict_chain
             }
@@ -260,7 +247,6 @@ fn apply_surface_name_value(config: &mut SurfaceConfig, value: MetaNameValue) ->
             config.concurrency_safe = Some(expr_lit_bool(&value.value, "concurrency_safe")?)
         }
         "strict" => config.strict = Some(expr_lit_bool(&value.value, "strict")?),
-        "load" => config.load = Some(expr_lit_str(&value.value, "load")?),
         "streaming" => config.streaming = Some(expr_lit_str(&value.value, "streaming")?),
         other => {
             return Err(syn::Error::new_spanned(

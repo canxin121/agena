@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 
 import type {
   ModelCatalogEntry,
+  ModelCatalogRefreshResponse,
   ProviderModel,
   ProviderModelPricing,
   ProviderModelSpeedMode,
@@ -500,18 +501,19 @@ export function useRuntimeModelCatalogActions(
   input: RuntimeModelCatalogActionsInput,
   deps: RuntimeModelCatalogActionsDeps = defaultDeps,
 ) {
-  async function refreshCatalogAction() {
+  async function refreshCatalogAction(): Promise<ModelCatalogRefreshResponse> {
     input.actionMessage.value = ''
     input.actionError.value = ''
     try {
-      await deps.refreshModelCatalog()
-      if (input.reloadCatalogEntries) {
-        await input.reloadCatalogEntries()
-      }
-      input.actionMessage.value = 'Refreshed model catalog.'
+      const result = await deps.refreshModelCatalog()
+      input.actionMessage.value = result.started
+        ? 'Started model catalog refresh.'
+        : 'Model catalog refresh is already running.'
       await input.load()
+      return result
     } catch (err) {
       input.actionError.value = err instanceof Error ? err.message : String(err)
+      throw err
     }
   }
 

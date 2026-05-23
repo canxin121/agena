@@ -60,7 +60,6 @@ pub struct SessionManagerConfig {
     pub cache_max_sessions: usize,
     pub cache_ttl: Duration,
     pub cache_max_bytes: usize,
-    pub max_run_loops: usize,
     pub doom_loop: crate::session::DoomLoopPolicy,
     pub default_selection: crate::execution_prefs::ExecutionSelection,
     pub default_agent: Option<String>,
@@ -108,7 +107,6 @@ impl Default for SessionManagerConfig {
             cache_max_sessions: 128,
             cache_ttl: Duration::from_secs(15 * 60),
             cache_max_bytes: 64 * 1024 * 1024,
-            max_run_loops: 16,
             doom_loop: crate::session::DoomLoopPolicy::default(),
             default_selection: crate::execution_prefs::ExecutionSelection::default(),
             default_agent: None,
@@ -146,7 +144,6 @@ pub struct SessionRunOptions {
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub agent_profile: Option<String>,
-    pub max_run_loops: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -832,12 +829,6 @@ fn payload_tool_name_for_invocation(invocation: &ToolInvocation) -> String {
     crate::tool::ToolPayloadInput::from_invocation(invocation)
         .map(|payload| payload.tool_name().to_string())
         .unwrap_or_else(|| invocation.name.clone())
-}
-
-fn loaded_tools_from_tool_output(details: &ToolOutput) -> Option<Vec<String>> {
-    let loaded_tools =
-        serde_json::from_value(custom_payload_value(details)?.get("loaded_tools")?.clone()).ok()?;
-    Some(loaded_tools)
 }
 
 #[cfg(test)]

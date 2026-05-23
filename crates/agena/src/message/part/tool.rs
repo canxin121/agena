@@ -156,8 +156,6 @@ pub struct TaskToolInput {
 pub struct ToolSearchToolInput {
     #[serde(default)]
     pub query: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub load: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
 }

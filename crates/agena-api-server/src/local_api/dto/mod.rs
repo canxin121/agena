@@ -10,6 +10,10 @@ use agena::{
     permission::PermissionMode,
     permission::{PermissionReply, PermissionRequest},
     provider::ProviderModel,
+    runtime::{
+        RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
+        RuntimeBackgroundTaskStatus,
+    },
     session::{GoalStatus, SessionStatus, SessionSummary},
 };
 
@@ -123,6 +127,8 @@ pub struct RuntimeStatusResponse {
     pub session_cache: Option<RuntimeSessionCacheResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_catalog: Option<ModelCatalogResponse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_tasks: Vec<RuntimeBackgroundTaskResource>,
     pub automation: RuntimeAutomationResource,
     pub operator: RuntimeOperatorResource,
 }

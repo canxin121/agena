@@ -119,7 +119,6 @@ impl SkillsPlugin {
         .help(entry.skill.body.clone())
         .tags(tags)
         .concurrency_safe(true)
-        .deferred_load()
     }
 
     fn discovered_entries(ctx: &InitContext) -> BTreeMap<String, DiscoveredEntry> {

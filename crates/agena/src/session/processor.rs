@@ -723,11 +723,29 @@ impl SessionProcessor {
                 .await?;
 
             let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
-            let invocation = parse_tool_invocation(
-                tool_name.as_str(),
-                pending.arguments_json.as_str(),
-                run.completion.tools.as_slice(),
-            )?;
+            let invocation = if run
+                .completion
+                .tools
+                .iter()
+                .any(|tool| tool.exposed_name == tool_name)
+            {
+                parse_tool_invocation(
+                    tool_name.as_str(),
+                    pending.arguments_json.as_str(),
+                    run.completion.tools.as_slice(),
+                )?
+            } else {
+                tracing::debug!(
+                    target: "agena::session::processor",
+                    session_id = run.session_id,
+                    tool = %tool_name,
+                    "model requested unsupported tool; preserving call for tool-failure handling"
+                );
+                placeholder_tool_invocation(
+                    Some(tool_name.as_str()),
+                    run.completion.tools.as_slice(),
+                )
+            };
             let Some(part_id) = pending.part_id else {
                 continue;
             };

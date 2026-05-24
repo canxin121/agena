@@ -628,7 +628,11 @@ dependencies = [
 name = "agena-tui-components"
 version = "0.1.0"
 dependencies = [
+ "crossterm",
  "ratatui",
+ "textwrap",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]

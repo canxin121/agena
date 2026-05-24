@@ -799,7 +799,6 @@ async fn build_session_start_plugin_host(
         },
     );
     let config = crate::plugin::PluginsConfig {
-        enabled: true,
         timeouts: Default::default(),
         list,
         trusted_keys: Default::default(),
@@ -832,7 +831,6 @@ async fn build_session_end_plugin_host(
         },
     );
     let config = crate::plugin::PluginsConfig {
-        enabled: true,
         timeouts: Default::default(),
         list,
         trusted_keys: Default::default(),
@@ -868,7 +866,6 @@ async fn build_streaming_plugin_host(
         },
     );
     let config = crate::plugin::PluginsConfig {
-        enabled: true,
         timeouts: Default::default(),
         list,
         trusted_keys: Default::default(),
@@ -6238,7 +6235,7 @@ while True:
                     "settings",
                     serde_json::json!({
                         "action": "get",
-                        "path": "default.agent",
+                        "path": "agents.default",
                         "source": "file"
                     })
                     .to_string(),
@@ -6249,7 +6246,7 @@ while True:
                     "settings",
                     serde_json::json!({
                         "action": "set",
-                        "path": "default.agent",
+                        "path": "agents.default",
                         "value": "planner",
                         "reload": true
                     })

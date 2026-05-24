@@ -56,40 +56,20 @@ async fn async_main() -> Result<(), agena::AppError> {
         .as_ref()
         .map(|resolution| resolution.config.tracing.clone())
         .unwrap_or_else(TracingConfig::default);
-    let telemetry = resolution
-        .as_ref()
-        .map(|resolution| resolution.config.telemetry.clone())
-        .unwrap_or_default();
 
     let initial_filter = agena::tracing::env_filter(&tracing).unwrap_or_else(|_| {
         agena::tracing::env_filter(&TracingConfig::default())
             .expect("default tracing filter should parse")
     });
     let (filter_layer, filter_handle) = tracing_subscriber::reload::Layer::new(initial_filter);
-    if let Some(telemetry) = agena_otel::build_layer(&telemetry)
-        .map_err(|error| agena::AppError::Config(error.to_string()))?
-    {
-        let telemetry_layer = telemetry.layer();
-        let _telemetry_guard = telemetry.guard;
-        tracing_subscriber::registry()
-            .with(filter_layer)
-            .with(telemetry_layer)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(false)
-                    .compact(),
-            )
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(filter_layer)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(false)
-                    .compact(),
-            )
-            .init();
-    }
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .compact(),
+        )
+        .init();
 
     match cli.command.clone() {
         Some(AgenaCommand::AppServer(args)) => run_app_server(cli, args).await,

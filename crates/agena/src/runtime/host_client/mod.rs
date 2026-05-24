@@ -14,7 +14,7 @@ use crate::message::{
     UserInputQuestion,
 };
 use crate::plugin::sdk::host_api::{
-    AskUserRequest, AskUserResponse, EventSubscription, HostAgentDefaultModelConfig,
+    AskUserRequest, AskUserResponse, EventSubscription, HostAgentSelectionConfig,
     HostAgentDescriptor, HostAgentGetRequest, HostAgentGetResponse, HostAgentListResponse,
     HostAgentRegisterRequest, HostAgentRemoveRequest, HostAgentRemoveResponse,
     HostAgentRestoreRequest, HostAgentRestoreResponse, HostAgentSwitchRequest,
@@ -1095,10 +1095,14 @@ impl HostClient for RuntimeHostClient {
             frontmatter: crate::agents::AgentFrontmatter {
                 description: req.agent.description,
                 permission,
-                default: crate::agents::AgentDefaultModelConfig {
-                    provider: req.agent.default.provider,
-                    adapter: req.agent.default.adapter,
-                    model: req.agent.default.model,
+                defaults: crate::agents::AgentSelectionConfig {
+                    provider: req.agent.defaults.provider,
+                    adapter: req.agent.defaults.adapter,
+                    model: req.agent.defaults.model,
+                    thinking_mode: req.agent.defaults.thinking_mode,
+                    speed_mode: req.agent.defaults.speed_mode,
+                    verbosity: req.agent.defaults.verbosity,
+                    parallel_tool_calls: req.agent.defaults.parallel_tool_calls,
                 },
             },
             prompt: req.agent.prompt,

@@ -19,6 +19,7 @@ import {
   type RuntimeStatus,
   type SessionResource,
   type WorkspaceResource,
+  type ConfigSettingsReadResponse,
 } from '../lib/agenaApi'
 import { pickNextPluginId } from './runtimePageModel'
 import { pickSessionId, pickWorkspaceId } from './runtimePageStateModel'
@@ -28,9 +29,7 @@ export type ToolDescriptionMode = 'detailed' | 'help'
 export type SettingsPluginsConfigSnapshot = {
   configPath: string
   configFound: boolean
-  enabled: boolean
   defaultMode: ToolDescriptionMode
-  fileEnabled: boolean | null
   fileDefaultMode: ToolDescriptionMode | null
   pluginEntries: SettingsPluginEntrySnapshot[]
   toolPresentationPluginOverridesCount: number
@@ -58,6 +57,7 @@ export type RuntimeSectionData = {
 
 export type SettingsSectionData = {
   authProviders: AuthProvider[]
+  permissionConfig: ConfigSettingsReadResponse
   settingsPlugins: SettingsPluginsConfigSnapshot
   runtime: RuntimeStatus
   providers: ProviderSummary[]
@@ -95,9 +95,19 @@ export async function loadRuntimeSectionData(input: {
 }
 
 export async function loadSettingsSectionData(permissionSearch: string): Promise<SettingsSectionData> {
-  const [authProviders, permissionRules, runtime, providers, plugins, effectivePlugins, filePlugins] = await Promise.all([
+  const [
+    authProviders,
+    permissionRules,
+    permissionConfig,
+    runtime,
+    providers,
+    plugins,
+    effectivePlugins,
+    filePlugins,
+  ] = await Promise.all([
     listAuthProviders(),
     listPermissionRules(permissionSearch),
+    getSettings({ path: 'permission', source: 'effective' }),
     fetchRuntimeStatus(),
     listProviders(),
     listPlugins(),
@@ -109,6 +119,7 @@ export async function loadSettingsSectionData(permissionSearch: string): Promise
 
   return {
     authProviders,
+    permissionConfig,
     settingsPlugins: readSettingsPluginsConfig(effectivePlugins, filePlugins, pluginDetails),
     runtime,
     providers,
@@ -142,10 +153,6 @@ function readRecord(value: unknown): Record<string, unknown> {
 
 function readPluginEntry(value: unknown): Record<string, unknown> {
   return readRecord(value)
-}
-
-function readOptionalBoolean(value: unknown): boolean | null {
-  return typeof value === 'boolean' ? value : null
 }
 
 function readOptionalToolDescriptionMode(value: unknown): ToolDescriptionMode | null {
@@ -197,9 +204,7 @@ function readSettingsPluginsConfig(
   return {
     configPath: effective.config_path,
     configFound: effective.config_found,
-    enabled: typeof effectiveRoot.enabled === 'boolean' ? effectiveRoot.enabled : true,
     defaultMode: readToolDescriptionMode(effectiveToolPresentation.default_mode, 'detailed'),
-    fileEnabled: readOptionalBoolean(fileRoot.enabled),
     fileDefaultMode: readOptionalToolDescriptionMode(fileToolPresentation.default_mode),
     pluginEntries,
     toolPresentationPluginOverridesCount: Object.keys(readRecord(effectiveToolPresentation.plugins)).length,

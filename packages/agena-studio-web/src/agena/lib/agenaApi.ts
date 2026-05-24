@@ -71,7 +71,7 @@ export type RuntimeStatus = {
     enabled: boolean
     interval_secs: number
   }
-  janitor: {
+  session_maintenance: {
     enabled: boolean
     interval_secs: number
   }
@@ -116,12 +116,15 @@ export type RuntimeStatus = {
         name: string
         description: string
         permission?: AgentPermissionConfig
-        default?: {
+        defaults?: {
           provider?: string | null
           adapter?: string | null
           model?: string | null
+          thinking_mode?: string | null
+          speed_mode?: string | null
+          verbosity?: string | null
+          parallel_tool_calls?: boolean | null
         }
-        model?: string | null
         scope: 'project' | 'user' | 'bundled'
         source_path?: string | null
       }>
@@ -429,8 +432,10 @@ export type UsageStats = {
 
 export type ProviderSummary = {
   provider_id: string
-  default_adapter?: string | null
-  default_model: string
+  defaults: {
+    adapter?: string | null
+    model: string
+  }
   adapters?: ProviderAdapterSummary[]
 }
 

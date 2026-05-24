@@ -5,6 +5,7 @@ import type {
   AuthBrowserStartResponse,
   AuthDeviceStartResponse,
   DomainEventRecord,
+  ConfigSettingsReadResponse,
   MarketplaceInstalledPluginResource,
   MarketplaceOutdatedPluginResource,
   MarketplacePluginResource,
@@ -39,6 +40,7 @@ export function useRuntimePageStore() {
   const providers = ref<ProviderSummary[]>([])
   const providerModels = reactive<Record<string, ProviderModel[]>>({})
   const authProviders = ref<AuthProvider[]>([])
+  const permissionConfig = ref<ConfigSettingsReadResponse | null>(null)
   const permissionRules = ref<PermissionRuleResource[]>([])
   const plugins = ref<PluginStatus[]>([])
   const settingsPlugins = ref<SettingsPluginsConfigSnapshot | null>(null)
@@ -177,6 +179,7 @@ export function useRuntimePageStore() {
     marketplaceRegistryUrl,
     marketplaceRequireSignature,
     mcpQuery,
+    permissionConfig,
     permissionDraft,
     permissionModeFilter,
     permissionRules,

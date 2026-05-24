@@ -215,7 +215,7 @@ pub async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
 
 /// Process-wide counters surfaced via `/metrics`. These are intentionally
 /// lightweight (raw atomics + bucket histograms, no real meter provider)
-/// until `agena-otel` exposes a meter API.
+/// until a richer metrics backend is wired up.
 pub(crate) static METRIC_HTTP_REQUESTS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 pub(crate) static METRIC_RUNTIME_RELOADS: std::sync::atomic::AtomicU64 =
@@ -266,8 +266,7 @@ fn process_start_unix() -> u64 {
 
 /// Minimal Prometheus-style metrics endpoint. Exposes a handful of process
 /// counters today plus an HTTP latency histogram; richer metrics (provider
-/// tokens, session active counts) should land via `agena-otel` once a
-/// real meter provider is wired up.
+/// tokens, session active counts) can move to a real meter provider later.
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
     use std::sync::atomic::Ordering;
     let snapshot = state.runtime().current_snapshot();

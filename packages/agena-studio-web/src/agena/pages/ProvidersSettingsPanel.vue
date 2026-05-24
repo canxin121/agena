@@ -408,8 +408,10 @@ async function patchProviderAdapterModel(input: {
     },
   }
   if (input.setDefault) {
-    providerPatch.default_adapter = adapterId
-    providerPatch.default_model = modelId
+    providerPatch.defaults = {
+      adapter: adapterId,
+      model: modelId,
+    }
   }
 
   submittingConfig.value = true
@@ -479,8 +481,10 @@ async function createProvider() {
       changes: {
         [providerId]: {
           enabled: true,
-          default_adapter: adapterId,
-          default_model: modelId,
+          defaults: {
+            adapter: adapterId,
+            model: modelId,
+          },
           auth,
           adapters: adaptersPatch,
         },
@@ -723,7 +727,7 @@ onMounted(() => {
             <p class="settings-panel-kicker">{{ provider.provider_id }}</p>
             <h3 class="record-title">{{ provider.provider_id }}</h3>
             <div class="record-subtitle mono">
-              {{ provider.default_adapter || 'auto' }} · {{ provider.default_model || 'default unset' }}
+              {{ provider.defaults.adapter || 'auto' }} · {{ provider.defaults.model || 'default unset' }}
             </div>
           </div>
           <div class="record-meta">

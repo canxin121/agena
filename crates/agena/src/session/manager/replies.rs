@@ -2844,7 +2844,7 @@ impl SessionManager {
             options,
             &state,
             if apply_profile_model_override {
-                Some(&profile.frontmatter.default)
+                Some(&profile.frontmatter.defaults)
             } else {
                 None
             },
@@ -2905,39 +2905,39 @@ impl SessionManager {
         _session: &Session,
         options: &SessionRunOptions,
         state: &SessionManagerState,
-        requested_default: Option<&crate::agents::AgentDefaultModelConfig>,
+        requested_selection: Option<&crate::agents::AgentSelectionConfig>,
     ) -> Result<ModelRef, AppError> {
         let base_model = options.model.clone();
-        match requested_default.filter(|value| !value.is_empty()) {
-            Some(default_config) => self.resolve_agent_default_model_ref(
+        match requested_selection.filter(|value| !value.is_empty()) {
+            Some(selection) => self.resolve_agent_selection_model_ref(
                 state.processor.provider_registry(),
                 &base_model,
-                default_config,
+                selection,
             ),
             None => Ok(base_model),
         }
     }
 
-    fn resolve_agent_default_model_ref(
+    fn resolve_agent_selection_model_ref(
         &self,
         provider_registry: &crate::provider::ProviderRegistry,
         base_model: &ModelRef,
-        requested_default: &crate::agents::AgentDefaultModelConfig,
+        requested_selection: &crate::agents::AgentSelectionConfig,
     ) -> Result<ModelRef, AppError> {
-        if requested_default.is_empty() {
+        if requested_selection.is_empty() {
             return Ok(base_model.clone());
         }
-        let requested_provider = requested_default
+        let requested_provider = requested_selection
             .provider
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let requested_adapter = requested_default
+        let requested_adapter = requested_selection
             .adapter
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let requested_model = requested_default
+        let requested_model = requested_selection
             .model
             .as_deref()
             .map(str::trim)
@@ -3115,7 +3115,7 @@ impl SessionManager {
         parent: &Session,
         state: &SessionManagerState,
         requested_model: Option<&str>,
-        requested_default: Option<&crate::agents::AgentDefaultModelConfig>,
+        requested_selection: Option<&crate::agents::AgentSelectionConfig>,
     ) -> Result<SessionRunOptions, AppError> {
         let requested_model = requested_model
             .map(str::trim)
@@ -3134,11 +3134,11 @@ impl SessionManager {
         };
         let model = if let Some(model_id) = requested_model {
             self.resolve_requested_session_model_ref(&base_model, model_id)?
-        } else if let Some(default_config) = requested_default.filter(|value| !value.is_empty()) {
-            self.resolve_agent_default_model_ref(
+        } else if let Some(selection) = requested_selection.filter(|value| !value.is_empty()) {
+            self.resolve_agent_selection_model_ref(
                 state.processor.provider_registry(),
                 &base_model,
-                default_config,
+                selection,
             )?
         } else {
             base_model

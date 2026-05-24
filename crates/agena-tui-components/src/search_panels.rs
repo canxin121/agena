@@ -330,7 +330,23 @@ fn render_search_panels_overlay(
         let mut heights = Vec::with_capacity(1 + right_section_heights.len());
         heights.push(left_panel_height);
         heights.extend(right_section_heights.iter().copied());
-        let areas = top_aligned_vertical_areas(panel_area, &heights);
+        let areas = match surface {
+            SurfaceMode::Overlay => top_aligned_vertical_areas(panel_area, &heights),
+            SurfaceMode::Route => split_vertical_sections(
+                panel_area,
+                &heights
+                    .iter()
+                    .enumerate()
+                    .map(|(index, height)| {
+                        if index == 0 {
+                            VerticalSectionSize::Flexible(*height)
+                        } else {
+                            VerticalSectionSize::Fixed(*height)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        };
         (areas[0], areas[1..].to_vec())
     } else {
         let split = Layout::default()
@@ -341,10 +357,28 @@ fn render_search_panels_overlay(
                 spec.right_min_width,
             ))
             .split(panel_area);
-        (
-            top_aligned_panel_rect(split[0], left_panel_height),
-            top_aligned_vertical_areas(split[1], &right_section_heights),
-        )
+        let list_area = match surface {
+            SurfaceMode::Overlay => top_aligned_panel_rect(split[0], left_panel_height),
+            SurfaceMode::Route => split[0],
+        };
+        let section_areas = match surface {
+            SurfaceMode::Overlay => top_aligned_vertical_areas(split[1], &right_section_heights),
+            SurfaceMode::Route => split_vertical_sections(
+                split[1],
+                &right_section_heights
+                    .iter()
+                    .enumerate()
+                    .map(|(index, height)| {
+                        if index + 1 == right_section_heights.len() {
+                            VerticalSectionSize::Flexible(*height)
+                        } else {
+                            VerticalSectionSize::Fixed(*height)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        };
+        (list_area, section_areas)
     };
 
     render_list_panel_state(frame, list_area, &spec.left_panel_state);

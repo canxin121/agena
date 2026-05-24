@@ -258,12 +258,12 @@ fn map_mcp_auth(
 pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {
     let defaults = SessionManagerConfig::default();
     SessionManagerConfig {
-        cache_max_sessions: resolution.config.runtime.session_cache.max_sessions,
-        cache_ttl: Duration::from_secs(resolution.config.runtime.session_cache.ttl_secs),
-        cache_max_bytes: resolution.config.runtime.session_cache.max_bytes,
+        cache_max_sessions: resolution.config.session.cache.max_sessions,
+        cache_ttl: Duration::from_secs(resolution.config.session.cache.ttl_secs),
+        cache_max_bytes: resolution.config.session.cache.max_bytes,
         doom_loop: defaults.doom_loop,
-        default_selection: resolution.config.default.clone(),
-        default_agent: resolution.config.default.agent.clone(),
+        default_selection: resolution.config.default_selection.clone(),
+        default_agent: resolution.config.default_agent.clone(),
         permission: resolution.config.permission.clone(),
         auto_compaction: crate::session::SessionAutoCompactionConfig {
             enabled: resolution.config.session.compaction.auto,
@@ -286,7 +286,7 @@ pub(super) fn register_config_agents(
             frontmatter: crate::agents::AgentFrontmatter {
                 description: config.description.clone(),
                 permission: config.permission.clone(),
-                default: config.default.clone(),
+                defaults: config.defaults.clone(),
             },
             prompt: config.prompt.trim().to_string(),
             source_path: None,

@@ -37,7 +37,6 @@ function modeLabel(mode: ToolDescriptionMode): string {
 function formatFileSummary(settings: SettingsPluginsConfigSnapshot | null): string {
   if (!settings) return 'not loaded'
   const parts = [
-    settings.fileEnabled == null ? null : `enabled=${settings.fileEnabled ? 'on' : 'off'}`,
     settings.fileDefaultMode == null ? null : `default=${modeLabel(settings.fileDefaultMode)}`,
   ].filter(Boolean)
   return parts.length ? parts.join(' · ') : 'inherits defaults'
@@ -71,7 +70,6 @@ export function useSettingsPluginsState(input: SettingsPluginsStateInput, deps: 
     return [
       { label: 'Config Path', value: settings.configPath || 'n/a' },
       { label: 'Config Found', value: settings.configFound ? 'yes' : 'no' },
-      { label: 'Enabled', value: settings.enabled ? 'on' : 'off' },
       { label: 'Default Tool Description', value: modeLabel(settings.defaultMode) },
       { label: 'File Override', value: formatFileSummary(settings) },
       {
@@ -89,7 +87,6 @@ export function useSettingsPluginsState(input: SettingsPluginsStateInput, deps: 
     ]
   })
 
-  const enabled = computed(() => input.settingsPlugins.value?.enabled ?? true)
   const defaultMode = computed(() => input.settingsPlugins.value?.defaultMode ?? 'detailed')
   const modeOptions: Array<{ label: string; value: ToolDescriptionMode; description: string }> = [
     {
@@ -103,27 +100,6 @@ export function useSettingsPluginsState(input: SettingsPluginsStateInput, deps: 
       description: 'Keep tool descriptions short and push details into help.',
     },
   ]
-
-  async function togglePluginsEnabled() {
-    const settings = input.settingsPlugins.value
-    if (!settings) return
-    input.actionError.value = ''
-    input.actionMessage.value = ''
-    try {
-      await deps.patchSettings({
-        path: 'plugins',
-        changes: { enabled: !settings.enabled },
-        validate: true,
-        reload: true,
-      })
-      input.actionMessage.value = settings.enabled
-        ? 'Plugins disabled; runtime reloaded.'
-        : 'Plugins enabled; runtime reloaded.'
-      await input.load()
-    } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
-    }
-  }
 
   async function setDefaultToolDescriptionMode(mode: ToolDescriptionMode) {
     const settings = input.settingsPlugins.value
@@ -167,7 +143,6 @@ export function useSettingsPluginsState(input: SettingsPluginsStateInput, deps: 
     actionError: input.actionError,
     actionMessage: input.actionMessage,
     defaultMode,
-    enabled,
     load: input.load,
     modeOptions,
     pluginEntries,
@@ -175,6 +150,5 @@ export function useSettingsPluginsState(input: SettingsPluginsStateInput, deps: 
     pluginEntrySummary,
     togglePluginEntryDisabled,
     summaryFacts,
-    togglePluginsEnabled,
   }
 }

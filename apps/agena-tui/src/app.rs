@@ -147,24 +147,14 @@ const AWS_REGION_CHOICES: &[&str] = &[
     "af-south-1",
 ];
 
-const SETTINGS_FIELDS: [SettingsFieldSpec; 21] = [
+const SETTINGS_FIELDS: [SettingsFieldSpec; 16] = [
     SettingsFieldSpec {
-        path: "default.provider",
+        path: "providers.default",
         description_key: "settings-field-default-provider-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        path: "default.adapter",
-        description_key: "settings-field-default-adapter-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        path: "default.model",
-        description_key: "settings-field-default-model-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        path: "default.agent",
+        path: "agents.default",
         description_key: "settings-field-default-agent-description",
         kind: SettingsFieldKind::String,
     },
@@ -174,42 +164,27 @@ const SETTINGS_FIELDS: [SettingsFieldSpec; 21] = [
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        path: "telemetry.enabled",
-        description_key: "settings-field-telemetry-enabled-description",
-        kind: SettingsFieldKind::Bool,
-    },
-    SettingsFieldSpec {
-        path: "telemetry.service_name",
-        description_key: "settings-field-telemetry-service-name-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        path: "telemetry.otlp_endpoint",
-        description_key: "settings-field-telemetry-otlp-endpoint-description",
-        kind: SettingsFieldKind::String,
-    },
-    SettingsFieldSpec {
-        path: "runtime.provider_http.timeout_secs",
+        path: "runtime.providers.http.timeout_secs",
         description_key: "settings-field-runtime-provider-http-timeout-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "runtime.provider_http.connect_timeout_secs",
+        path: "runtime.providers.http.connect_timeout_secs",
         description_key: "settings-field-runtime-provider-http-connect-timeout-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "runtime.request_retry.max_retries",
+        path: "runtime.providers.retry.max_retries",
         description_key: "settings-field-runtime-request-retry-max-retries-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "runtime.request_retry.base_delay_ms",
+        path: "runtime.providers.retry.base_delay_ms",
         description_key: "settings-field-runtime-request-retry-base-delay-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "runtime.request_retry.max_delay_ms",
+        path: "runtime.providers.retry.max_delay_ms",
         description_key: "settings-field-runtime-request-retry-max-delay-description",
         kind: SettingsFieldKind::Integer,
     },
@@ -229,27 +204,27 @@ const SETTINGS_FIELDS: [SettingsFieldSpec; 21] = [
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "runtime.session_cache.max_sessions",
+        path: "session.cache.max_sessions",
         description_key: "settings-field-runtime-session-cache-max-sessions-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "runtime.session_cache.ttl_secs",
+        path: "session.cache.ttl_secs",
         description_key: "settings-field-runtime-session-cache-ttl-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "runtime.session_cache.max_bytes",
+        path: "session.cache.max_bytes",
         description_key: "settings-field-runtime-session-cache-max-bytes-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "plugins.list.\"agena.memory\".options.project_instructions.enabled",
+        path: "memory.project_instructions.enabled",
         description_key: "settings-field-plugin-memory-project-instructions-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
-        path: "plugins.list.\"agena.memory\".options.project_instructions.include_global",
+        path: "memory.project_instructions.include_global",
         description_key: "settings-field-plugin-memory-project-instructions-include-global-description",
         kind: SettingsFieldKind::Bool,
     },
@@ -656,7 +631,6 @@ struct SettingsStudioOverlay {
     footer: String,
     state: SectionedListState<SettingsStudioSection>,
     default_agent_name: Option<String>,
-    plugins_enabled: bool,
     plugins_default_mode: String,
 }
 
@@ -937,7 +911,6 @@ enum SettingsFieldKind {
 enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditRuntimeSetting(RuntimeSettingSpec),
-    TogglePluginsEnabled,
     ToggleToolDescriptionMode,
     TogglePluginEntryDisabled {
         plugin_id: String,
@@ -6802,10 +6775,11 @@ impl App {
                         detail: settings_choice_default_provider_detail(
                             &self.i18n,
                             provider
-                                .default_adapter
+                                .defaults
+                                .adapter
                                 .as_deref()
                                 .unwrap_or(fallback_adapter.as_str()),
-                            provider.default_model.as_str(),
+                            provider.defaults.model.as_str(),
                         ),
                         value: PickerValue::Provider(provider),
                     })
@@ -8742,7 +8716,6 @@ impl App {
             .map_err(|error| error.to_string())?;
         let agents = self.backend.list_agent_descriptors();
         let default_agent = self.backend.default_agent_name();
-        let plugins_enabled = settings_studio_plugins_enabled(&sources);
         let plugins_default_mode = settings_studio_plugins_default_mode(&sources);
         let plugin_entry_items = settings_studio_plugin_entry_items(
             &self.i18n,
@@ -8833,11 +8806,6 @@ impl App {
                 summary: self.i18n.text_args(
                     "overlay-settings-section-plugins-summary",
                     &crate::fl_args!(
-                        "state" => if plugins_enabled {
-                            ui_text::t(&self.i18n, "value-enabled")
-                        } else {
-                            ui_text::t(&self.i18n, "value-disabled")
-                        },
                         "mode" => settings_studio_tool_description_mode_label(
                             &self.i18n,
                             plugins_default_mode.as_str(),
@@ -8969,7 +8937,6 @@ impl App {
                 focus,
             ),
             default_agent_name: default_agent,
-            plugins_enabled,
             plugins_default_mode,
         })
     }
@@ -9624,10 +9591,6 @@ impl App {
                 self.open_runtime_setting_editor(field, "");
                 false
             }
-            SettingsPickerAction::TogglePluginsEnabled => {
-                self.toggle_plugins_enabled(dialog);
-                false
-            }
             SettingsPickerAction::ToggleToolDescriptionMode => {
                 self.toggle_tool_description_mode(dialog);
                 false
@@ -10229,7 +10192,7 @@ impl App {
 
     fn settings_field_choice_items(&self, field: SettingsFieldSpec) -> Option<Vec<ChoiceItem>> {
         match field.path {
-            "default.provider" => {
+            "providers.default" => {
                 let fallback_adapter = settings_choice_adapter_fallback(&self.i18n);
                 Some(
                     self.backend
@@ -10241,19 +10204,18 @@ impl App {
                                 settings_choice_default_provider_detail(
                                     &self.i18n,
                                     provider
-                                        .default_adapter
+                                        .defaults
+                                        .adapter
                                         .as_deref()
                                         .unwrap_or(fallback_adapter.as_str()),
-                                    provider.default_model.as_str(),
+                                    provider.defaults.model.as_str(),
                                 ),
                             )
                         })
                         .collect(),
                 )
             }
-            "default.adapter" => Some(self.default_adapter_choice_items()),
-            "default.model" => Some(self.default_model_choice_items()),
-            "default.agent" => Some(
+            "agents.default" => Some(
                 self.backend
                     .list_agent_names()
                     .into_iter()
@@ -10277,7 +10239,7 @@ impl App {
 
     fn settings_field_choice_overlay_style(field: SettingsFieldSpec) -> ChoiceOverlayStyle {
         match field.path {
-            "default.provider" | "default.adapter" | "default.model" | "default.agent" => {
+            "providers.default" | "agents.default" => {
                 ChoiceOverlayStyle::Searchable
             }
             "ui.locale" => ChoiceOverlayStyle::SelectOnly,
@@ -10352,52 +10314,6 @@ impl App {
             | RuntimeSettingId::MaxOutput
             | RuntimeSettingId::System => ChoiceOverlayStyle::Searchable,
         }
-    }
-
-    fn default_model_choice_items(&self) -> Vec<ChoiceItem> {
-        dedupe_choice_items(
-            self.backend
-                .default_model_options()
-                .into_iter()
-                .map(|model| {
-                    let adapter_id = model
-                        .adapter_id
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .unwrap_or_else(|| settings_choice_adapter_fallback(&self.i18n));
-                    let mut detail_parts = vec![settings_choice_configured_model_detail(
-                        &self.i18n,
-                        model.provider_id.as_str(),
-                        adapter_id.as_str(),
-                    )];
-                    if let Some(display_name) = model
-                        .display_name
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                    {
-                        detail_parts.push(display_name.to_owned());
-                    }
-                    choice_item(model.id.to_string(), join_inline_segments(detail_parts))
-                })
-                .collect(),
-        )
-    }
-
-    fn default_adapter_choice_items(&self) -> Vec<ChoiceItem> {
-        self.backend
-            .default_adapter_options()
-            .into_iter()
-            .map(|adapter| {
-                choice_item(
-                    adapter.adapter_id,
-                    settings_choice_default_adapter_detail(
-                        &self.i18n,
-                        adapter.configured_model_count,
-                    ),
-                )
-            })
-            .collect()
     }
 
     fn provider_studio_field_choice_items(
@@ -10583,27 +10499,6 @@ impl App {
         }
     }
 
-    fn toggle_plugins_enabled(&mut self, dialog: &mut SettingsStudioOverlay) {
-        let next = !dialog.plugins_enabled;
-        match self.block_on_async(
-            self.backend
-                .set_config_setting("plugins.enabled", JsonValue::Bool(next)),
-        ) {
-            Ok(_) => {
-                self.flash_success(ui_text::t(
-                    &self.i18n,
-                    if next {
-                        "flash-plugins-enabled"
-                    } else {
-                        "flash-plugins-disabled"
-                    },
-                ));
-                self.refresh_settings_studio_overlay(dialog);
-            }
-            Err(error) => self.flash_error(error),
-        }
-    }
-
     fn toggle_tool_description_mode(&mut self, dialog: &mut SettingsStudioOverlay) {
         let next = if dialog.plugins_default_mode == "help" {
             "detailed"
@@ -10662,7 +10557,7 @@ impl App {
     fn set_default_agent_value(&mut self, agent_name: &str) -> UiResult<()> {
         self.block_on_async(
             self.backend
-                .set_config_setting("default.agent", JsonValue::String(agent_name.to_string())),
+                .set_config_setting("agents.default", JsonValue::String(agent_name.to_string())),
         )
         .map(|_| ())
     }
@@ -11300,7 +11195,7 @@ impl App {
                 let providers = backend.list_providers();
                 let mut items = Vec::new();
                 for provider in providers {
-                    let default_adapter = provider.default_adapter.clone();
+                    let default_adapter = provider.defaults.adapter.clone();
                     let provider_id = provider.provider_id.clone();
                     let models = backend
                         .list_provider_models(provider_id.as_str())
@@ -12250,13 +12145,13 @@ impl App {
     }
 
     fn apply_provider_override(&mut self, provider: ProviderSummaryResource) {
-        self.run_options.model = Some(match provider.default_adapter.clone() {
+        self.run_options.model = Some(match provider.defaults.adapter.clone() {
             Some(adapter_id) => ModelRef::new_with_adapter(
                 provider.provider_id.clone(),
                 adapter_id,
-                provider.default_model.clone(),
+                provider.defaults.model.clone(),
             ),
-            None => ModelRef::new(provider.provider_id.clone(), provider.default_model.clone()),
+            None => ModelRef::new(provider.provider_id.clone(), provider.defaults.model.clone()),
         });
         self.run_options.thinking_mode = None;
         self.run_options.speed_mode = None;
@@ -12267,7 +12162,7 @@ impl App {
             "flash-provider-selected",
             &crate::fl_args!(
                 "provider" => provider.provider_id,
-                "model" => provider.default_model,
+                "model" => provider.defaults.model,
             ),
         ));
     }
@@ -14818,25 +14713,6 @@ fn runtime_setting_override_summary(i18n: &I18n, value: &str) -> String {
     )
 }
 
-fn settings_choice_configured_model_detail(i18n: &I18n, provider: &str, adapter: &str) -> String {
-    i18n.text_args(
-        "settings-choice-default-model-detail",
-        &crate::fl_args!("provider" => provider, "adapter" => adapter),
-    )
-}
-
-fn settings_choice_default_adapter_detail(i18n: &I18n, configured_model_count: usize) -> String {
-    let key = if configured_model_count == 1 {
-        "settings-choice-default-adapter-detail-one"
-    } else {
-        "settings-choice-default-adapter-detail-many"
-    };
-    i18n.text_args(
-        key,
-        &crate::fl_args!("count" => configured_model_count as i64),
-    )
-}
-
 fn settings_studio_general_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
@@ -14914,13 +14790,6 @@ fn settings_studio_tool_description_mode_label<'a>(i18n: &'a I18n, mode: &str) -
 
 fn quoted_settings_segment(value: &str) -> String {
     format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn settings_studio_plugins_enabled(sources: &ConfigJsonSources) -> bool {
-    get_json_path(&sources.effective, Some("plugins.enabled"))
-        .unwrap_or(JsonValue::Bool(true))
-        .as_bool()
-        .unwrap_or(true)
 }
 
 fn settings_studio_plugins_default_mode(sources: &ConfigJsonSources) -> String {
@@ -15106,23 +14975,12 @@ fn settings_studio_plugin_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem> {
-    let enabled = settings_studio_plugins_enabled(sources);
     let default_mode = settings_studio_plugins_default_mode(sources);
     let plugin_override_count =
         settings_studio_plugins_count(sources, "plugins.tool_presentation.plugins");
     let tool_override_count =
         settings_studio_plugins_count(sources, "plugins.tool_presentation.tools");
     vec![
-        SettingsStudioItem {
-            label: "plugins.enabled".to_string(),
-            value: if enabled {
-                ui_text::t(i18n, "value-on")
-            } else {
-                ui_text::t(i18n, "value-off")
-            },
-            detail: ui_text::t(i18n, "settings-plugin-enabled-detail"),
-            action: SettingsPickerAction::TogglePluginsEnabled,
-        },
         SettingsStudioItem {
             label: "plugins.tool_presentation.default_mode".to_string(),
             value: settings_studio_tool_description_mode_label(i18n, default_mode.as_str()),
@@ -15156,7 +15014,7 @@ fn settings_studio_plugin_entry_disabled_count(items: &[SettingsStudioItem]) -> 
         .count()
 }
 
-fn agent_default_summary(i18n: &I18n, default: &agena::agents::AgentDefaultModelConfig) -> String {
+fn agent_default_summary(i18n: &I18n, default: &agena::agents::AgentSelectionConfig) -> String {
     let mut parts = Vec::new();
     if let Some(provider) = default
         .provider
@@ -15186,6 +15044,42 @@ fn agent_default_summary(i18n: &I18n, default: &agena::agents::AgentDefaultModel
         parts.push(format_key_value_segment(
             ui_text::t(i18n, "inline-fact-model").as_str(),
             model,
+        ));
+    }
+    if let Some(thinking_mode) = default
+        .thinking_mode
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-thinking").as_str(),
+            thinking_mode,
+        ));
+    }
+    if let Some(speed_mode) = default
+        .speed_mode
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-speed").as_str(),
+            speed_mode,
+        ));
+    }
+    if let Some(verbosity) = default
+        .verbosity
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-verbosity").as_str(),
+            verbosity,
+        ));
+    }
+    if let Some(parallel_tool_calls) = default.parallel_tool_calls {
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-parallel-tools").as_str(),
+            if parallel_tool_calls { "on" } else { "off" },
         ));
     }
     if parts.is_empty() {
@@ -15377,7 +15271,7 @@ fn settings_studio_agent_detail_text(
         ),
         app_detail_labeled_line(
             ui_text::t(i18n, "overlay-settings-agent-detail-model"),
-            agent_default_summary(i18n, &agent.default),
+            agent_default_summary(i18n, &agent.defaults),
         ),
     ];
     if !agent.description.trim().is_empty() {
@@ -15451,7 +15345,7 @@ fn agent_studio_items(
             label: ui_text::t(i18n, "agent-studio-field-default-provider"),
             value: agent_optional_string_summary(
                 i18n,
-                profile.frontmatter.default.provider.as_deref(),
+                profile.frontmatter.defaults.provider.as_deref(),
                 "value-inherit",
             ),
             detail: ui_text::t(i18n, "agent-studio-item-default-provider-detail"),
@@ -15461,7 +15355,7 @@ fn agent_studio_items(
             label: ui_text::t(i18n, "agent-studio-field-default-adapter"),
             value: agent_optional_string_summary(
                 i18n,
-                profile.frontmatter.default.adapter.as_deref(),
+                profile.frontmatter.defaults.adapter.as_deref(),
                 "value-inherit",
             ),
             detail: ui_text::t(i18n, "agent-studio-item-default-adapter-detail"),
@@ -15471,7 +15365,7 @@ fn agent_studio_items(
             label: ui_text::t(i18n, "agent-studio-field-default-model"),
             value: agent_optional_string_summary(
                 i18n,
-                profile.frontmatter.default.model.as_deref(),
+                profile.frontmatter.defaults.model.as_deref(),
                 "value-inherit",
             ),
             detail: ui_text::t(i18n, "agent-studio-item-default-model-detail"),
@@ -15648,10 +15542,10 @@ fn agent_studio_overview_text(
             agent_permission_summary(i18n, &profile.frontmatter.permission),
         ),
     ];
-    if !profile.frontmatter.default.is_empty() {
+    if !profile.frontmatter.defaults.is_empty() {
         lines.push(app_detail_labeled_line(
             ui_text::t(i18n, "overlay-agent-overview-model-defaults"),
-            agent_default_summary(i18n, &profile.frontmatter.default),
+            agent_default_summary(i18n, &profile.frontmatter.defaults),
         ));
     }
     if !profile.frontmatter.description.trim().is_empty() {
@@ -15752,19 +15646,19 @@ fn agent_studio_field_input_text(profile: &AgentProfile, field: AgentStudioField
         AgentStudioField::Prompt => profile.prompt.clone(),
         AgentStudioField::DefaultProvider => profile
             .frontmatter
-            .default
+            .defaults
             .provider
             .clone()
             .unwrap_or_default(),
         AgentStudioField::DefaultAdapter => profile
             .frontmatter
-            .default
+            .defaults
             .adapter
             .clone()
             .unwrap_or_default(),
         AgentStudioField::DefaultModel => profile
             .frontmatter
-            .default
+            .defaults
             .model
             .clone()
             .unwrap_or_default(),
@@ -15781,9 +15675,9 @@ fn agent_studio_field_setting_value(
     let path = match field {
         AgentStudioField::Description => agent_config_path(agent_name, "description"),
         AgentStudioField::Prompt => agent_config_path(agent_name, "prompt"),
-        AgentStudioField::DefaultProvider => agent_config_path(agent_name, "default.provider"),
-        AgentStudioField::DefaultAdapter => agent_config_path(agent_name, "default.adapter"),
-        AgentStudioField::DefaultModel => agent_config_path(agent_name, "default.model"),
+        AgentStudioField::DefaultProvider => agent_config_path(agent_name, "defaults.provider"),
+        AgentStudioField::DefaultAdapter => agent_config_path(agent_name, "defaults.adapter"),
+        AgentStudioField::DefaultModel => agent_config_path(agent_name, "defaults.model"),
     };
     let value = match field {
         AgentStudioField::Description | AgentStudioField::Prompt => {
@@ -17338,8 +17232,8 @@ fn settings_studio_provider_items(
         label: provider.provider_id.clone(),
         value: format!(
             "{}/{}",
-            provider.default_adapter.as_deref().unwrap_or("adapter"),
-            provider.default_model
+            provider.defaults.adapter.as_deref().unwrap_or("adapter"),
+            provider.defaults.model
         ),
         detail: i18n.text_args(
             "settings-provider-existing-detail",
@@ -17747,10 +17641,11 @@ fn provider_studio_provider_rows(
             "overlay-provider-studio-provider-row-detail",
             &crate::fl_args!(
                 "adapter" => provider
-                    .default_adapter
+                    .defaults
+                    .adapter
                     .clone()
                     .unwrap_or_else(|| settings_choice_adapter_fallback(i18n)),
-                "model" => provider.default_model.clone(),
+                "model" => provider.defaults.model.clone(),
                 "count" => provider.adapters.len() as i64,
             ),
         ),

@@ -2,6 +2,7 @@ import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
 import { createSettingsAgentsPanelState } from './useSettingsAgentsPageState'
 import { createSettingsPluginsPanelState } from './useSettingsPluginsPageState'
+import { useRuntimePageState } from './useRuntimePageState'
 import { useRuntimeSectionState } from './useRuntimeSectionState'
 import { useSectionPanelRegistry } from './useSectionPanelRegistry'
 import { createSettingsDesktopPanelState } from './useSettingsDesktopPageState'
@@ -10,7 +11,10 @@ import { createSettingsProvidersPanelState } from './useSettingsProvidersPageSta
 import { createSettingsSectionShellState } from './useSettingsSectionShellState'
 
 export function useSettingsPageState(input: { route: RouteLocationNormalizedLoaded; router: Router }) {
-  const { shared, state } = useRuntimeSectionState({ ...input, section: 'settings' })
+  const { shared, state } = useRuntimeSectionState<ReturnType<typeof useRuntimePageState>>({
+    ...input,
+    section: 'settings',
+  })
 
   const providers = createSettingsProvidersPanelState({
     actionError: shared.actionError,
@@ -35,24 +39,12 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     startDeviceAuth: state.startDeviceAuth,
   })
 
-  const permissions = createSettingsPermissionsPanelState({
-    permissionDraft: state.permissionDraft,
-    editPermissionRule: state.editPermissionRule,
-    editingPermissionRuleId: state.editingPermissionRuleId,
-    filteredPermissionRules: state.filteredPermissionRules,
-    permissionModeFilter: state.permissionModeFilter,
-    permissionRuleFacts: state.permissionRuleFacts,
-    permissionRuleLabel: state.permissionRuleLabel,
-    permissionRulePreview: state.permissionRulePreview,
-    permissionScopeFilter: state.permissionScopeFilter,
-    permissionSearch: state.permissionSearch,
-    permissionStatusFilter: state.permissionStatusFilter,
-    permissionSubjectFilter: state.permissionSubjectFilter,
-    savePermissionRule: state.savePermissionRule,
-    resetPermissionDraft: state.resetPermissionDraft,
-    revokePermissionRuleAction: state.revokePermissionRuleAction,
-    deletePermissionRuleAction: state.deletePermissionRuleAction,
-  })
+  const permissions = createSettingsPermissionsPanelState(
+    {
+      permissionConfig: state.permissionConfig,
+    },
+    shared,
+  )
 
   const agents = createSettingsAgentsPanelState({
     actionError: shared.actionError,

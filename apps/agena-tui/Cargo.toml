@@ -8,7 +8,6 @@ rust-version.workspace = true
 agena = { workspace = true }
 agena-api = { workspace = true }
 agena-api-server = { workspace = true }
-agena-otel = { workspace = true }
 agena-skills = { workspace = true }
 agena-tui-components = { workspace = true }
 arboard = { workspace = true }
@@ -22,6 +21,7 @@ futures-util = { workspace = true }
 ignore = { workspace = true }
 image = { workspace = true }
 imagesize = { workspace = true }
+indexmap = { workspace = true }
 mime_guess = { workspace = true }
 ratatui = { workspace = true }
 sea-orm = { workspace = true, features = ["sqlx-sqlite", "runtime-tokio-rustls"] }

@@ -242,9 +242,9 @@ impl SessionManager {
         let profile_permission = resolved_profile
             .as_ref()
             .map(|profile| profile.frontmatter.permission.clone());
-        let profile_default = resolved_profile
+        let profile_selection = resolved_profile
             .as_ref()
-            .map(|profile| profile.frontmatter.default.clone());
+            .map(|profile| profile.frontmatter.defaults.clone());
         let requested_model = request.requested_model.clone();
 
         if let Some(existing) = self
@@ -272,7 +272,7 @@ impl SessionManager {
                 &parent,
                 &state,
                 requested_model.as_deref(),
-                profile_default.as_ref(),
+                profile_selection.as_ref(),
             )?;
             let session = Box::pin(
                 self.continue_session(SessionExecutionRequest::new(existing.id, options.clone())),
@@ -310,13 +310,13 @@ impl SessionManager {
             &parent,
             &state,
             requested_model.as_deref(),
-            profile_default.as_ref(),
+            profile_selection.as_ref(),
         )?;
         let child_id = child.id;
         drop(child);
         drop(parent);
         drop(prompt);
-        drop(profile_default);
+        drop(profile_selection);
         drop(requested_model);
         let manager = self.background_handle();
         let run_options = options.clone();

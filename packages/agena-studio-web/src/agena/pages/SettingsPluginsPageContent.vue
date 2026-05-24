@@ -13,7 +13,6 @@ const props = defineProps<{
     :action-error="props.plugins.actionError.value"
     :action-message="props.plugins.actionMessage.value"
     :default-mode="props.plugins.defaultMode.value"
-    :enabled="props.plugins.enabled.value"
     :load="props.plugins.load"
     :mode-options="props.plugins.modeOptions"
     :plugin-entries="props.plugins.pluginEntries.value"
@@ -21,6 +20,5 @@ const props = defineProps<{
     :summary-facts="props.plugins.summaryFacts.value"
     :set-default-tool-description-mode="props.plugins.setDefaultToolDescriptionMode"
     :toggle-plugin-entry-disabled="props.plugins.togglePluginEntryDisabled"
-    :toggle-plugins-enabled="props.plugins.togglePluginsEnabled"
   />
 </template>

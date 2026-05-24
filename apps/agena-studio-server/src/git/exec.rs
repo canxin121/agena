@@ -72,7 +72,7 @@ fn operation_from_args(args: &[&str]) -> Option<&'static str> {
     }
 }
 
-fn emit_git_telemetry(args: &[&str], code: i32, stdout: &str, stderr: &str, elapsed: Duration) {
+fn emit_git_diagnostics(args: &[&str], code: i32, stdout: &str, stderr: &str, elapsed: Duration) {
     let Some(operation) = operation_from_args(args) else {
         return;
     };
@@ -380,7 +380,7 @@ pub(crate) async fn run_git_env(
         }
     }
 
-    emit_git_telemetry(args, code, &stdout_text, &stderr_text, started_at.elapsed());
+    emit_git_diagnostics(args, code, &stdout_text, &stderr_text, started_at.elapsed());
     Ok((code, stdout_text, stderr_text))
 }
 
@@ -478,7 +478,7 @@ pub(crate) async fn run_git_input(
         }
     }
 
-    emit_git_telemetry(args, code, &stdout_text, &stderr_text, started_at.elapsed());
+    emit_git_diagnostics(args, code, &stdout_text, &stderr_text, started_at.elapsed());
     Ok((code, stdout_text, stderr_text))
 }
 

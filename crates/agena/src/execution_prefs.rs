@@ -1,7 +1,7 @@
 use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
-use crate::agent::AgentPermissionConfig;
+use crate::agent::PermissionConfig;
 use crate::model::ModelRef;
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -29,8 +29,8 @@ pub struct ExecutionSelection {
     pub parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
-    pub permission: AgentPermissionConfig,
+    #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
+    pub permission: PermissionConfig,
 }
 
 impl ExecutionSelection {

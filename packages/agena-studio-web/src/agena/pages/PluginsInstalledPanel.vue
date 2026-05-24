@@ -410,7 +410,7 @@ async function runStudioUiControl(control: ManifestStudioUiItem) {
                   v-else-if="controlKind(control) === 'select'"
                   class="input"
                   :value="String(controlValue(control) ?? '')"
-                  @change="setSelectControlValue(control, $event)"
+                  @input="setSelectControlValue(control, $event)"
                 >
                   <option v-for="option in control.options || []" :key="option.value" :value="option.value">
                     {{ option.label || option.value }}
@@ -472,7 +472,7 @@ async function runStudioUiControl(control: ManifestStudioUiItem) {
                       v-else-if="controlKind(control) === 'select'"
                       class="input"
                       :value="String(controlValue(control) ?? '')"
-                      @change="setSelectControlValue(control, $event)"
+                      @input="setSelectControlValue(control, $event)"
                     >
                       <option v-for="option in control.options || []" :key="option.value" :value="option.value">
                         {{ option.label || option.value }}

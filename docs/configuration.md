@@ -17,19 +17,22 @@ agena config validate
 `config.example.json` 展示了最小启动面：
 
 - `[tracing]`: 日志过滤。
-- `[default]`: 默认 provider、adapter、model 和 agent。
+- `[providers.default]`: 全局默认 provider 名称。
+- `[providers.<id>.defaults]`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
 - `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
-- `[runtime]`: runtime HTTP、retry、reload、cache、catalog 等行为参数。
+- `[runtime]`: provider HTTP、retry、reload、catalog 等运行时基础设施参数。
+- `[session]`: compaction、session cache、session maintenance。
+- `[agents.default]`: 全局默认 agent 名称。
 - `[agents.<name>]`: 自定义 agent。
 - `[permission]`: 路径、网络、tool 权限。
+- `[memory]` / `[mcp]` / `[lsp]` / `[web]`: 内建能力的顶层配置。
 
 `config.full.json` 展示了更完整的功能面：
 
-- telemetry。
 - provider HTTP timeout、retry、stream replay。
-- runtime reload、janitor、session cache。
+- runtime reload、session maintenance、session cache。
 - permission path/network/tool rules。
-- `agena.memory` durable memory / retrieval 配置。
+- `memory` durable memory / retrieval 配置。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
 - provider model metadata，以及拆分后的 model thinking/speed modes。
 
@@ -83,19 +86,17 @@ agena diagnostics
 
 ```text
 tracing.filter
-tracing.database_level
+tracing.database
 ui.locale
-default.provider
-default.adapter
-default.model
-default.agent
-runtime.provider_http.timeout_secs
-runtime.provider_http.connect_timeout_secs
-runtime.request_retry.max_retries
-runtime.request_retry.base_delay_ms
-runtime.request_retry.max_delay_ms
-runtime.stream_replay.max_retries_after_output
-runtime.stream_replay.max_tracked_events
+providers.default
+agents.default
+runtime.providers.http.timeout_secs
+runtime.providers.http.connect_timeout_secs
+runtime.providers.retry.max_retries
+runtime.providers.retry.base_delay_ms
+runtime.providers.retry.max_delay_ms
+runtime.providers.stream_replay.max_retries_after_output
+runtime.providers.stream_replay.max_tracked_events
 runtime.model_catalog.cache_max_age_secs
 ```
 
@@ -104,7 +105,13 @@ Provider 覆盖：
 当前 CLI provider 覆盖只接受 canonical 路径。
 
 ```text
-providers.<id>.default_model
+providers.<id>.defaults.provider
+providers.<id>.defaults.adapter
+providers.<id>.defaults.model
+providers.<id>.defaults.thinking_mode
+providers.<id>.defaults.speed_mode
+providers.<id>.defaults.verbosity
+providers.<id>.defaults.parallel_tool_calls
 providers.<id>.auth.base_url
 providers.<id>.auth.protocol_paths.<adapter>
 providers.<id>.auth.api_key
@@ -117,9 +124,9 @@ providers.<id>.enabled
 ```bash
 agena \
   --set tracing.filter=debug \
-  --set default.provider=openai \
-  --set default.adapter=openai \
-  --set default.model=gpt-4.1-mini \
+  --set providers.default=openai \
+  --set providers.openai.defaults.adapter=openai \
+  --set providers.openai.defaults.model=gpt-4.1-mini \
   config resolve
 ```
 
@@ -130,9 +137,9 @@ agena \
 - 顶层可选 struct 通常按字段合并。
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
-- `plugins` 的 `enabled` 和 `timeouts` 会被 overlay 替换；非空 plugin list 会替换嵌套 plugin tools。
-- MCP、LSP、web 和 memory 都作为 runtime-provided static plugin 的 `options` 解析。
-- static plugin options 的合并语义跟随对应 plugin 的配置结构，例如 server map 按名称合并，web options 整体替换。
+- `plugins` 只合并 `timeouts`、`list`、`trusted_keys`、`default_quota` 和 `tool_presentation`；没有总开关。
+- `memory`、`mcp`、`lsp`、`web` 都是顶层配置源；对应 built-in plugin 只消费解析后的结果。
+- 这些顶层块的合并语义跟随各自配置结构，例如 server map 按名称合并，`web` / `memory.search` / `memory.retrieval` 采用整体替换。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
 
@@ -144,12 +151,7 @@ agena \
 AGENA_CONFIG
 AGENA_LOG
 AGENA_DATABASE_LOG
-AGENA_TELEMETRY_ENABLED
-AGENA_OTEL_SERVICE_NAME
-AGENA_OTEL_ENDPOINT
-OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
 AGENA_LOCALE
-AGENA_PLUGIN_ENABLED
 AGENA_PROVIDER_HTTP_TIMEOUT_SECS
 AGENA_PROVIDER_CONNECT_TIMEOUT_SECS
 AGENA_PROVIDER_REQUEST_MAX_RETRIES
@@ -180,7 +182,7 @@ no
 现在只支持两种方式：
 
 - 在配置文件里显式写 canonical 结构。
-- 通过 `--set default.model=...`、`--set providers.<id>.default_model=...` 或 `--set providers.<id>.auth.api_key_env=...` 这类 canonical override 设置。
+- 通过 `--set providers.default=...`、`--set agents.default=...`、`--set providers.<id>.defaults.model=...` 或 `--set providers.<id>.auth.api_key_env=...` 这类 canonical override 设置。
 
 ### 数据库、Studio、TUI
 
@@ -236,15 +238,15 @@ AGENA_MARKETPLACE_DIR
 ```toml
 [tracing]
 filter = "info"
-database_level = "error"
+database = "error"
 ```
 
 默认值：
 
 - `filter = "info"`
-- `database_level = "error"`
+- `database = "error"`
 
-`database_level` 可选：
+`database` 可选：
 
 ```text
 off
@@ -256,18 +258,6 @@ trace
 ```
 
 它会独立应用到 `sqlx`、`sea_orm` 和 `sea_orm_migration`，避免数据库日志淹没主应用日志。
-
-## Telemetry
-
-```toml
-[telemetry]
-enabled = false
-service_name = "agena"
-otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
-headers = { }
-```
-
-`enabled` 默认 false。`headers` 是发送到 OTLP endpoint 的 header map。Endpoint 也可通过 `AGENA_OTEL_ENDPOINT` 或 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 提供。
 
 ## Provider Auth
 
@@ -282,23 +272,16 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 ## Runtime
 
 ```toml
-[default]
-provider = "openai"
-adapter = "openai"
-model = "gpt-5"
-agent = "build"
-
-[runtime]
-[runtime.provider_http]
+[runtime.providers.http]
 timeout_secs = 120
 connect_timeout_secs = 15
 
-[runtime.request_retry]
+[runtime.providers.retry]
 max_retries = 5
 base_delay_ms = 250
 max_delay_ms = 2000
 
-[runtime.stream_replay]
+[runtime.providers.stream_replay]
 max_retries_after_output = 5
 max_tracked_events = 2048
 
@@ -306,53 +289,53 @@ max_tracked_events = 2048
 enabled = true
 poll_interval_secs = 2
 
-[runtime.janitor]
-enabled = true
-interval_secs = 30
-
-[runtime.session_cache]
-max_sessions = 128
-ttl_secs = 900
-max_bytes = 67108864
-
 [runtime.model_catalog]
 cache_max_age_secs = 604800
 ```
 
-全局默认项集中放在 `[default]`。`provider` 是默认逻辑 provider，`adapter` 是默认协议路由，`model` 是 backend-visible model id，`agent` 是新 root session 的默认 agent；未配置时默认 agent 是 `build`。
+`runtime` 只放基础设施参数：
 
-Model catalog 按 model 管理元数据和本地模型覆盖，不再保存 default model。catalog key 是真实 model id，例如 `models."gpt-5"`，不是 `openai/gpt-5` 这种 provider/adapter 路由，也不再绑定某个 adapter。catalog model 定义支持一个纯展示用的 `origin` 字段，用来标记模型来源/厂商，便于 UI 分类；它不参与任何 provider/adapter/model 路由或能力推断。Agena 会在运行时优先从公开 online sources 拉 richer metadata，目前包括 `https://models.dev/api.json`、`https://raw.githubusercontent.com/openai/codex/main/codex-rs/models-manager/models.json` 和 `https://models.router-for.me/models.json`，再叠加 live provider model lists 做 canonicalize / 去重 / origin 推断，最后把整理后的 official catalog 和本地 custom overrides 存到运行时数据库中。公开 sources 会按优先级合并，当前顺序是 `models.dev` > `openai/codex models.json` > `router-for.me`，低优先级 source 只补缺，不会覆盖更高优先级 source 已经给出的 speed/thinking patch。`cache_max_age_secs` 控制 official catalog 的刷新过期时间，默认 7 天；可以通过 Runtime Overview 或 API 手动刷新。旧的 workspace `.agena/catalog/model-catalog-cache.json` 和 `.agena/catalog/model-catalog-custom.json` 会在数据库为空时迁移一次。如果需要只依赖 live provider model lists，可以设置环境变量 `AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES=1`。
+- `runtime.providers.http`：provider HTTP client 超时。
+- `runtime.providers.retry`：请求重试退避。
+- `runtime.providers.stream_replay`：流式 replay-safe 重试。
+- `runtime.reload`：配置文件变更轮询。
+- `runtime.model_catalog`：公共模型目录缓存过期。
 
-运行时 provider 会在 live model 列表里返回独立的 `adapter_id` 和真实 `model_id`，不会把二者拼成 provider-local route。`providers.<id>.default_adapter` 和 `providers.<id>.default_model` 可用作 provider 内部默认选择；如果该 provider 正好是 `default.provider` 且省略了 provider-local 默认值，解析器会分别使用 `default.adapter` 和 `default.model`。Studio Runtime Overview 页面可以刷新 catalog、从 live provider model 带入草稿、保存/删除 model-level 本地 override。Studio Settings / Providers 页面可以创建 provider，查看 provider 已启用 adapter 和 live models，把任意 catalog model 复制到某个 provider 的目标 adapter 下，也可以实时手动添加或修改 provider-local adapter model。
+`session.cache` 和 `session.maintenance` 不在 `runtime` 下，它们属于 `session`。
 
-Provider 的 live `/models` 列表是实时请求，不做磁盘缓存，也不会在失败时 fallback 到旧结果。请求失败会直接返回错误。
+`runtime` 里的这些值只影响运行时基础设施，不决定默认 provider、默认 adapter/model 或默认 agent。那部分分别由 `providers.default`、`providers.<id>.defaults` 和 `agents.default` 管。
 
 校验规则：
 
 - provider HTTP timeout 和 connect timeout 必须大于 0。
 - reload poll interval 必须大于 0。
-- janitor interval 必须大于 0。
 - session cache TTL、max sessions、max bytes 必须大于 0。
 - model catalog cache max age 必须大于 0。
-- `runtime.request_retry.max_delay_ms` 会至少等于 `base_delay_ms`。
+- `runtime.providers.retry.max_delay_ms` 会至少等于 `base_delay_ms`。
 
 Runtime 会根据配置构建 snapshot。手动 reload 或配置文件变更触发 reload 时，新的 snapshot 会重新构建 provider registry、plugin host、agent registry、MCP/LSP registry 等服务。
 
 ## Providers
 
-Provider 定义在 `[providers.<id>]`。当前 canonical 结构是 `provider + auth + adapters + models`。更完整的架构说明见 [Provider / Auth / Adapter 架构](provider-auth-adapters.md)。
+Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
+
+- `[providers.default]`：全局默认 provider 名称。
+- `[providers.<id>.defaults]`：provider-local 默认 adapter/model/thinking/speed/verbosity/parallel。
+- `[providers.<id>.auth]`：认证与身份来源。
+- `[providers.<id>.adapters.<adapter-id>]`：协议实现。
+- `[providers.<id>.adapters.<adapter-id>.models."<model-id>"]`：真实上游模型节点。
+
+更完整的架构说明见 [Provider / Auth / Adapter 架构](provider-auth-adapters.md)。
 
 最小示例：
 
 ```toml
-[default]
-provider = "openai"
+[providers]
+default = "openai"
+
+[providers.openai.defaults]
 adapter = "openai"
 model = "gpt-5"
-agent = "build"
-
-[providers.openai]
-enabled = true
 
 [providers.openai.auth]
 mode = "api"
@@ -366,18 +349,11 @@ enabled = true
 enabled = true
 ```
 
-这四层的职责是：
-
-- `provider`：逻辑入口，对外暴露 `provider_id` 和 provider 默认模型。
-- `auth`：认证与身份来源，只负责 token / OAuth / ADC / SigV4 / service key。
-- `adapter`：协议实现，例如 `openai`、`anthropic`、`gemini`、`gitlab`、`amazon_bedrock`、`ollama`。
-- `model`：真实上游模型节点，key 就是上游 model id，本身支持 metadata/capabilities/thinking_modes/speed_modes patch。
-
 关键规则：
 
-- 全局默认 provider/adapter/model/agent 写在 `[default]`。
-- `providers.<id>.default_adapter` 和 `providers.<id>.default_model` 是 provider-local 默认选择；`default_model` 必须是真实上游 model id。
-- adapter 不再有 `default_model`。
+- `providers.<id>.defaults.adapter` 和 `providers.<id>.defaults.model` 是 provider-local 默认选择。
+- `defaults.model` 必须是真实上游 model id。
+- adapter 不再有自己的默认模型字段。
 - model key 就是真实 model id，不再有 `target_model`。
 - `enabled` 可挂在 provider / adapter / model 三层。
 - 运行时模型选择由 `provider_id`、`adapter_id`、`model_id` 三个字段共同决定，不使用三段字符串编码。
@@ -435,8 +411,8 @@ OpenAI ChatGPT -> Codex、Google ADC -> Gemini CLI；没有专属身份的 auth
 
 ```toml
 [providers.openai_chatgpt]
-default_adapter = "openai"
-default_model = "gpt-5.3-codex"
+defaults.adapter = "openai"
+defaults.model = "gpt-5.3-codex"
 
 [providers.openai_chatgpt.auth]
 mode = "credential"
@@ -453,8 +429,8 @@ enabled = true
 
 ```toml
 [providers."github-copilot"]
-default_adapter = "openai"
-default_model = "gpt-4o-mini"
+defaults.adapter = "openai"
+defaults.model = "gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
@@ -470,8 +446,8 @@ enabled = true
 
 ```toml
 [providers.atomgit]
-default_adapter = "openai"
-default_model = "Kimi-K2-Instruct"
+defaults.adapter = "openai"
+defaults.model = "Kimi-K2-Instruct"
 
 [providers.atomgit.auth]
 mode = "credential"
@@ -487,8 +463,8 @@ enabled = true
 
 ```toml
 [providers.shared]
-default_adapter = "openai"
-default_model = "gpt-4.1-mini"
+defaults.adapter = "openai"
+defaults.model = "gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
@@ -658,7 +634,7 @@ TOML 示例：
 description = "Read-only planning agent"
 prompt = "You are a planning agent..."
 
-[agents.plan.default]
+[agents.plan.defaults]
 model = "anthropic/claude-sonnet-4-6"
 ```
 
@@ -667,14 +643,14 @@ Markdown frontmatter 示例：
 ```markdown
 ---
 description: "Read-only planning agent"
-default:
+defaults:
   model: "anthropic/claude-sonnet-4-6"
 permission:
   path:
     workspace:
       read: allow
       write: deny
-  entries:
+  tools:
     names:
       shell: ask
 ---
@@ -688,7 +664,7 @@ TOML agent 的 `prompt` 字段是 system prompt；Markdown agent 的正文是 sy
 - `description`
 - `prompt`
 - `permission`
-- `default`
+- `defaults`
 - `disabled`
 
 ## Permissions
@@ -713,7 +689,7 @@ internet = "ask"
 private = "deny"
 loopback = "deny"
 
-[permission.entries.tags]
+[permission.tools.tags]
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"
@@ -727,7 +703,7 @@ Agent 也可以有自己的权限：
 workspace = { read = "allow", write = "deny" }
 external = { read = "ask", write = "ask" }
 
-[agents.plan.permission.entries.names]
+[agents.plan.permission.tools.names]
 plan = "allow"
 todo = "allow"
 ```
@@ -832,23 +808,23 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 ### Tool permission
 
 ```toml
-[permission.entries.tags]
+[permission.tools.tags]
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"
 
-[permission.entries.names]
+[permission.tools.names]
 shell = "ask"
 fs = "ask"
 "my-plugin.echo" = "ask"
 
-[permission.entries.rules]
+[permission.tools.rules]
 "my-plugin.echo" = "ask"
 
-[permission.entries.rules."my-plugin.echo"]
+[permission.tools.rules."my-plugin.echo"]
 "*" = "ask"
 
-[permission.entries.rules.shell]
+[permission.tools.rules.shell]
 "git status" = "allow"
 "git push *" = "deny"
 "*" = "ask"
@@ -861,25 +837,22 @@ fs = "ask"
 ## Memory
 
 ```toml
-[plugins.list."agena.memory"]
-kind = "static"
-
-[plugins.list."agena.memory".options.project_instructions]
+[memory.project_instructions]
 enabled = true
 include_global = true
 
-[plugins.list."agena.memory".options.search]
+[memory.search]
 url = "http://127.0.0.1:7700"
 api_key = "optional-meili-key"
 index_prefix = "agena_memory"
 
-[plugins.list."agena.memory".options.retrieval]
+[memory.retrieval]
 enabled = true
 limit = 3
 min_query_chars = 8
 ```
 
-`agena.memory` 现在是“文件持久化 + Meilisearch 检索 + 会话前自动回忆”的组合，不再只是把 `MEMORY.md` 整体注入 prompt。
+`memory` 现在是“文件持久化 + Meilisearch 检索 + 会话前自动回忆”的组合，不再只是把 `MEMORY.md` 整体注入 prompt。
 
 字段说明：
 
@@ -892,7 +865,7 @@ min_query_chars = 8
 - `retrieval.limit`: 自动回忆最多注入多少条命中。
 - `retrieval.min_query_chars`: 用户消息短于这个长度时跳过自动回忆。
 
-`agena.memory` 暴露的顶层 tool 是 `memory`，支持 `search`、`get`、`list`、`write`、`delete` 五个 action。`write` / `delete` 会同步更新文件和 Meilisearch 索引。
+`memory` 顶层配置会驱动 `agena.memory` 插件；模型可见 tool 名是 `memory`，支持 `search`、`get`、`list`、`write`、`delete` 五个 action。`write` / `delete` 会同步更新文件和 Meilisearch 索引。
 
 ## Workflow Tool Search
 
@@ -996,13 +969,9 @@ Plugin transport kind：
 每种 transport 的字段：
 
 ```toml
-[plugins.list."agena.memory"]
+[plugins.list."agena.workflow"]
 kind = "static"
 timeouts = { init = "5s" }
-
-[plugins.list."agena.memory".options.project_instructions]
-enabled = true
-include_global = true
 
 [plugins.list.native]
 kind = "cdylib"
@@ -1102,16 +1071,12 @@ Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell�
 
 ## MCP
 
-MCP server 配置在 `agena.mcp` static plugin options。
-Runtime 会把配置后的 MCP servers 通过 `agena.mcp` static plugin 暴露成 plugin tools，并统一进入 plugin host 和 tool registry。
+MCP server 直接配置在顶层 `mcp`。Runtime 会把配置后的 MCP servers 通过 `agena.mcp` static plugin 暴露成 plugin tools，并统一进入 plugin host 和 tool registry。
 
 Stdio:
 
 ```toml
-[plugins.list."agena.mcp"]
-kind = "static"
-
-[plugins.list."agena.mcp".options.servers.filesystem]
+[mcp.servers.filesystem]
 transport = "stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
@@ -1122,7 +1087,7 @@ cwd = "."
 HTTP:
 
 ```toml
-[plugins.list."agena.mcp".options.servers.remote]
+[mcp.servers.remote]
 transport = "http"
 url = "https://mcp.example.com"
 headers = { }
@@ -1168,13 +1133,10 @@ auth = { kind = "custom", headers = { "X-Token" = "..." } }
 
 ## LSP
 
-LSP server 配置在 `agena.lsp` static plugin options：
+LSP server 直接配置在顶层 `lsp`：
 
 ```toml
-[plugins.list."agena.lsp"]
-kind = "static"
-
-[plugins.list."agena.lsp".options.servers.rust]
+[lsp.servers.rust]
 command = "rust-analyzer"
 args = []
 env = {}
@@ -1198,16 +1160,13 @@ initialization_options
 
 LSP registry 是 lazy-spawn 的。相关 tool 首次触及匹配文件时才会启动对应 server。
 
-## Web Plugin
+## Web
 
 ```toml
-[plugins.list."agena.web"]
-kind = "static"
-
-[plugins.list."agena.web".options]
+[web]
 fetch_enabled = true
 
-[plugins.list."agena.web".options.search]
+[web.search]
 api_key = "..."
 ```
 

@@ -155,18 +155,32 @@ pub struct RuntimeAgentsResource {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RuntimeAgentDefaultResource {
+pub struct RuntimeAgentSelectionResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adapter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
-impl RuntimeAgentDefaultResource {
+impl RuntimeAgentSelectionResource {
     pub fn is_empty(&self) -> bool {
-        self.provider.is_none() && self.adapter.is_none() && self.model.is_none()
+        self.provider.is_none()
+            && self.adapter.is_none()
+            && self.model.is_none()
+            && self.thinking_mode.is_none()
+            && self.speed_mode.is_none()
+            && self.verbosity.is_none()
+            && self.parallel_tool_calls.is_none()
     }
 }
 
@@ -178,10 +192,9 @@ pub struct RuntimeAgentResource {
     pub permission: PermissionConfig,
     #[serde(
         default,
-        rename = "default",
-        skip_serializing_if = "RuntimeAgentDefaultResource::is_empty"
+        skip_serializing_if = "RuntimeAgentSelectionResource::is_empty"
     )]
-    pub default: RuntimeAgentDefaultResource,
+    pub defaults: RuntimeAgentSelectionResource,
     pub scope: AgentScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_path: Option<String>,
@@ -199,7 +212,7 @@ pub struct RuntimeStatusResponse {
     pub session_runtime_available: bool,
     pub watch_paths: Vec<String>,
     pub reload: RuntimeTaskResource,
-    pub janitor: RuntimeTaskResource,
+    pub session_maintenance: RuntimeTaskResource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_cache: Option<RuntimeSessionCacheResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -706,11 +719,16 @@ pub struct ProviderAdapterSummaryResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderDefaultsResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderSummaryResource {
     pub provider_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_adapter: Option<String>,
-    pub default_model: String,
+    pub defaults: ProviderDefaultsResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
 }

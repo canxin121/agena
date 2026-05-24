@@ -4,22 +4,7 @@ import { useRuntimeSectionState, type RuntimeSectionSharedState } from './useRun
 import { useSettingsPermissionsState } from './useSettingsPermissionsState'
 
 export type SettingsPermissionsPageStateSource = {
-  permissionDraft: Parameters<typeof useSettingsPermissionsState>[0]['permissionDraft']
-  editPermissionRule: Parameters<typeof useSettingsPermissionsState>[0]['editPermissionRule']
-  editingPermissionRuleId: Parameters<typeof useSettingsPermissionsState>[0]['editingPermissionRuleId']
-  filteredPermissionRules: Parameters<typeof useSettingsPermissionsState>[0]['filteredPermissionRules']
-  permissionModeFilter: Parameters<typeof useSettingsPermissionsState>[0]['permissionModeFilter']
-  permissionRuleFacts: Parameters<typeof useSettingsPermissionsState>[0]['permissionRuleFacts']
-  permissionRuleLabel: Parameters<typeof useSettingsPermissionsState>[0]['permissionRuleLabel']
-  permissionRulePreview: Parameters<typeof useSettingsPermissionsState>[0]['permissionRulePreview']
-  permissionScopeFilter: Parameters<typeof useSettingsPermissionsState>[0]['permissionScopeFilter']
-  permissionSearch: Parameters<typeof useSettingsPermissionsState>[0]['permissionSearch']
-  permissionStatusFilter: Parameters<typeof useSettingsPermissionsState>[0]['permissionStatusFilter']
-  permissionSubjectFilter: Parameters<typeof useSettingsPermissionsState>[0]['permissionSubjectFilter']
-  savePermissionRule: Parameters<typeof useSettingsPermissionsState>[0]['savePermissionRule']
-  resetPermissionDraft: Parameters<typeof useSettingsPermissionsState>[0]['resetPermissionDraft']
-  revokePermissionRuleAction: Parameters<typeof useSettingsPermissionsState>[0]['revokePermissionRuleAction']
-  deletePermissionRuleAction: Parameters<typeof useSettingsPermissionsState>[0]['deletePermissionRuleAction']
+  permissionConfig: Parameters<typeof useSettingsPermissionsState>[0]['permissionConfig']
 }
 
 export type SettingsPermissionsPageStateDeps = {
@@ -41,24 +26,15 @@ const defaultDeps: SettingsPermissionsPageStateDeps = {
     },
 }
 
-export function createSettingsPermissionsPanelState(state: SettingsPermissionsPageStateSource) {
+export function createSettingsPermissionsPanelState(
+  state: SettingsPermissionsPageStateSource,
+  shared: RuntimeSectionSharedState,
+) {
   return useSettingsPermissionsState({
-    permissionDraft: state.permissionDraft,
-    editPermissionRule: state.editPermissionRule,
-    editingPermissionRuleId: state.editingPermissionRuleId,
-    filteredPermissionRules: state.filteredPermissionRules,
-    permissionModeFilter: state.permissionModeFilter,
-    permissionRuleFacts: state.permissionRuleFacts,
-    permissionRuleLabel: state.permissionRuleLabel,
-    permissionRulePreview: state.permissionRulePreview,
-    permissionScopeFilter: state.permissionScopeFilter,
-    permissionSearch: state.permissionSearch,
-    permissionStatusFilter: state.permissionStatusFilter,
-    permissionSubjectFilter: state.permissionSubjectFilter,
-    savePermissionRule: state.savePermissionRule,
-    resetPermissionDraft: state.resetPermissionDraft,
-    revokePermissionRuleAction: state.revokePermissionRuleAction,
-    deletePermissionRuleAction: state.deletePermissionRuleAction,
+    actionError: shared.actionError,
+    actionMessage: shared.actionMessage,
+    load: shared.load,
+    permissionConfig: state.permissionConfig,
   })
 }
 
@@ -70,7 +46,7 @@ export function useSettingsPermissionsPageState(
   deps: SettingsPermissionsPageStateDeps = defaultDeps,
 ) {
   const { shared, state } = deps.useRuntimeSectionState({ ...input, section: 'settings' })
-  const permissions = createSettingsPermissionsPanelState(state)
+  const permissions = createSettingsPermissionsPanelState(state, shared)
 
   return {
     actionError: shared.actionError,

@@ -1921,11 +1921,6 @@ impl PluginHostBuilder {
     }
 
     pub async fn build(self) -> Result<Arc<PluginHost>, HostError> {
-        if !self.config.enabled {
-            tracing::info!(target: "agena_plugin_host", "plugins disabled in config");
-            return Ok(PluginHost::new_empty());
-        }
-
         let host_inner = self.host_client.unwrap_or_else(|| Arc::new(NoopHostClient));
         let entries_shared = Arc::new(RwLock::new(PluginEntryRegistry::new()));
         let plugin_indices: Arc<RwLock<HashMap<String, usize>>> =

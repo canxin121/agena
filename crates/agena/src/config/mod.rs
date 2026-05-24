@@ -9,30 +9,31 @@ mod raw;
 mod registry;
 mod types;
 
-pub use agena_otel::TelemetryConfig;
 pub use error::ConfigError;
 pub use loader::{ConfigEnvironment, ConfigLoader, LoadConfigRequest, ProcessEnvironment};
 pub use overlay::{
     ProviderAdapterOverlay, ProviderAuthMode, ProviderAuthOverlay, ProviderModelOverlay,
-    ProviderOverlay, ProviderProtocolPathsOverlay, provider_model_overlay_from_catalog_definition,
-    provider_model_overlay_from_definition,
+    ProviderDefaultsOverlay, ProviderOverlay, ProviderProtocolPathsOverlay,
+    provider_model_overlay_from_catalog_definition, provider_model_overlay_from_definition,
 };
 pub use overrides::ConfigOverride;
 pub use types::{
     AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer,
     BedrockSigv4AuthConfig, ConfigOutputFormat, ConfigResolution, ConfigResolutionMeta,
-    ConfigSource, DefaultConfig, GeminiProviderOptions, GitlabProviderOptions,
+    ConfigSource, GeminiProviderOptions, GitlabProviderOptions,
     HttpProviderAdapterConfig, LspConfig, LspServerConfig, McpConfig, McpHttpAuthConfig,
-    McpServerConfig, MemoryConfig, OllamaProviderOptions, OpenAiApiModeConfig, OpenAiBackendConfig,
-    OpenAiProviderOptions, PluginConfig, ProjectInstructionsConfig, ProviderAdapterDefinition,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderCapabilityFamilyConfig,
-    ProviderCredentialAuthConfig, ProviderGitlabAuthConfig, ProviderHttpConfig,
-    ProviderModelDiscoveryConfig, ProviderProtocolPathsConfig, RequestRetryConfig, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    RuntimeConfig, RuntimeJanitorConfig, RuntimeModelCatalogConfig, RuntimeReloadConfig,
-    SessionCacheConfig, SessionCompactionConfig, SessionConfig, SimpleHttpProviderOptions,
-    StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend,
-    WebSearchConfig, WebToolsConfig,
+    McpServerConfig, MemoryConfig, MemoryRetrievalConfig, MemorySearchConfig,
+    OllamaProviderOptions, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
+    PluginConfig, ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
+    ProviderAuthConfig, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
+    ProviderDefaultsConfig, ProviderGitlabAuthConfig, ProviderHttpConfig,
+    ProviderModelDiscoveryConfig, ProviderProtocolPathsConfig, RequestRetryConfig,
+    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    ResolvedProviderModelConfig, RuntimeConfig, RuntimeModelCatalogConfig,
+    RuntimeProvidersConfig, RuntimeReloadConfig, SessionCacheConfig, SessionCompactionConfig,
+    SessionConfig, SessionMaintenanceConfig, SimpleHttpProviderOptions, StreamReplayConfig,
+    StreamTransportMode, TracingConfig, UiConfig, WebSearchBackend, WebSearchConfig,
+    WebToolsConfig,
 };
 
 pub use adapter_models::{
@@ -61,9 +62,9 @@ pub use edit::{
 };
 pub(crate) use error::parse_numeric;
 pub(crate) use raw::{
-    RawConfig, RawConfigFile, RawDefaultConfig, RawProviderHttpConfig, RawRequestRetryConfig,
-    RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig,
-    RawUiConfig,
+    RawConfig, RawConfigFile, RawProviderHttpConfig,
+    RawRequestRetryConfig, RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
+    RawStreamReplayConfig, RawTracingConfig, RawUiConfig,
 };
 pub use registry::ProviderAdapterModelsResult;
 pub use registry::list_provider_adapter_models;

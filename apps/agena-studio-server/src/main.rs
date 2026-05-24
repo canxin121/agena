@@ -160,10 +160,6 @@ async fn async_main() {
         .as_ref()
         .map(|resolution| resolution.config.tracing.clone())
         .unwrap_or_else(TracingConfig::default);
-    let telemetry = resolution
-        .as_ref()
-        .map(|resolution| resolution.config.telemetry.clone())
-        .unwrap_or_default();
     let filter = agena::tracing::env_filter(&tracing)
         .unwrap_or_else(|_| {
             agena::tracing::env_filter(&TracingConfig::default())
@@ -175,32 +171,14 @@ async fn async_main() {
                 .expect("tower_http filter should parse"),
         );
 
-    if let Some(telemetry) = agena_otel::build_layer(&telemetry)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))
-        .ok()
-        .flatten()
-    {
-        let telemetry_layer = telemetry.layer();
-        let _telemetry_guard = telemetry.guard;
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(telemetry_layer)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(false)
-                    .compact(),
-            )
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(false)
-                    .compact(),
-            )
-            .init();
-    }
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .compact(),
+        )
+        .init();
 
     if let Err(err) = app::run(args).await {
         eprintln!("{err}");

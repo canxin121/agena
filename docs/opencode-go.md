@@ -39,15 +39,12 @@ export OPENCODE_API_KEY=...
 把下面片段放进 `~/.agena/config.json`。默认模型使用 OpenAI-compatible 路由，MiniMax M2.7 / M2.5 使用 Anthropic Messages 路由。
 
 ```toml
-[default]
-provider = "opencode-go"
+[providers]
+default = "opencode-go"
+
+[providers."opencode-go".defaults]
 adapter = "openai"
 model = "kimi-k2.6"
-agent = "build"
-
-[providers."opencode-go"]
-default_adapter = "openai"
-default_model = "kimi-k2.6"
 
 [providers."opencode-go".auth]
 mode = "api"
@@ -128,9 +125,9 @@ CLI 的 `--model provider/model` 只指定 provider 和 model，不显式编码 
 
 ```bash
 cargo run -p agena-cli -- \
-  --set default.provider=opencode-go \
-  --set default.adapter=anthropic \
-  --set default.model=minimax-m2.7 \
+  --set providers.default=opencode-go \
+  --set providers."opencode-go".defaults.adapter=anthropic \
+  --set providers."opencode-go".defaults.model=minimax-m2.7 \
   exec "hello"
 ```
 
@@ -153,8 +150,8 @@ cargo run -p agena-cli -- exec --model opencode-go/kimi-k2.6 "用一句话回答
 
 ```toml
 [providers."opencode-free"]
-default_adapter = "openai"
-default_model = "deepseek-v4-flash-free"
+defaults.adapter = "openai"
+defaults.model = "deepseek-v4-flash-free"
 
 [providers."opencode-free".auth]
 mode = "api"
@@ -229,9 +226,9 @@ enabled = true
 
 ```bash
 cargo run -p agena-cli -- \
-  --set default.provider=opencode-free \
-  --set default.adapter=openai \
-  --set default.model=deepseek-v4-flash-free \
+  --set providers.default=opencode-free \
+  --set providers."opencode-free".defaults.adapter=openai \
+  --set providers."opencode-free".defaults.model=deepseek-v4-flash-free \
   exec "hello"
 ```
 
@@ -239,9 +236,9 @@ cargo run -p agena-cli -- \
 
 ```bash
 cargo run -p agena-cli -- \
-  --set default.provider=opencode-free \
-  --set default.adapter=anthropic \
-  --set default.model=minimax-m2.5-free \
+  --set providers.default=opencode-free \
+  --set providers."opencode-free".defaults.adapter=anthropic \
+  --set providers."opencode-free".defaults.model=minimax-m2.5-free \
   exec "hello"
 ```
 
@@ -251,8 +248,8 @@ cargo run -p agena-cli -- \
 
 ```toml
 [providers."opencode-zen"]
-default_adapter = "openai"
-default_model = "gpt-5.5"
+defaults.adapter = "openai"
+defaults.model = "gpt-5.5"
 
 [providers."opencode-zen".auth]
 mode = "api"

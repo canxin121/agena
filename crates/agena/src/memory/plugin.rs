@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::config::{MemoryConfig, ProjectInstructionsConfig};
+use crate::config::MemoryConfig;
 use crate::memory::paths::workspace_key;
 use crate::memory::{MemoryEntry, MemoryError, MemoryStore, MemoryType, NewMemory};
 use crate::plugin::sdk::host_api::HostClient;
@@ -30,69 +30,7 @@ const MAX_MEMORY_SEARCH_LIMIT: usize = 20;
 pub struct MemoryPlugin {
     config: MemoryConfig,
     workspace_root: OnceLock<PathBuf>,
-    options: OnceLock<ResolvedMemoryPluginOptions>,
     sync_lock: Mutex<()>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(default, deny_unknown_fields)]
-struct MemoryPluginOptions {
-    project_instructions: MemoryProjectInstructionsOptions,
-    search: MemorySearchBackendOptions,
-    retrieval: MemoryRetrievalOptions,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
-#[serde(default, deny_unknown_fields)]
-struct MemoryProjectInstructionsOptions {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    include_global: Option<bool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-struct MemorySearchBackendOptions {
-    url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    api_key: Option<String>,
-    index_prefix: String,
-}
-
-impl Default for MemorySearchBackendOptions {
-    fn default() -> Self {
-        Self {
-            url: String::new(),
-            api_key: None,
-            index_prefix: "agena_memory".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
-struct MemoryRetrievalOptions {
-    enabled: bool,
-    limit: u32,
-    min_query_chars: u32,
-}
-
-impl Default for MemoryRetrievalOptions {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            limit: 3,
-            min_query_chars: 8,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ResolvedMemoryPluginOptions {
-    project_instructions: ProjectInstructionsConfig,
-    search: MemorySearchBackendOptions,
-    retrieval: MemoryRetrievalOptions,
 }
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
@@ -196,15 +134,8 @@ impl MemoryPlugin {
         Self {
             config,
             workspace_root: OnceLock::new(),
-            options: OnceLock::new(),
             sync_lock: Mutex::new(()),
         }
-    }
-
-    fn options(&self) -> SdkResult<&ResolvedMemoryPluginOptions> {
-        self.options
-            .get()
-            .ok_or_else(|| PluginError::new("memory plugin options unavailable before init"))
     }
 
     fn workspace_root(&self) -> SdkResult<&Path> {
@@ -219,36 +150,18 @@ impl MemoryPlugin {
     }
 
     fn search_backend(&self) -> SdkResult<MeiliConnection> {
-        let search = &self.options()?.search;
+        let search = &self.config.search;
         MeiliConnection::new(search.url.as_str(), search.api_key.as_deref()).map_err(|err| {
-            PluginError::new(format!(
-                "memory search backend unavailable; set plugins.list.\"agena.memory\".options.search.url: {err}"
-            ))
+            PluginError::new(format!("memory search backend unavailable; set memory.search.url: {err}"))
         })
     }
 
     fn search_index_name(&self) -> SdkResult<String> {
-        let options = self.options()?;
         Ok(format!(
             "{}_{}",
-            options.search.index_prefix,
+            self.config.search.index_prefix,
             workspace_key(self.workspace_root()?)
         ))
-    }
-
-    fn parse_options(&self, options: MemoryPluginOptions) -> ResolvedMemoryPluginOptions {
-        let mut project_instructions = self.config.project_instructions.clone();
-        if let Some(enabled) = options.project_instructions.enabled {
-            project_instructions.enabled = enabled;
-        }
-        if let Some(include_global) = options.project_instructions.include_global {
-            project_instructions.include_global = include_global;
-        }
-        ResolvedMemoryPluginOptions {
-            project_instructions,
-            search: options.search,
-            retrieval: options.retrieval,
-        }
     }
 
     async fn sync_index(&self, store: &MemoryStore) -> SdkResult<()> {
@@ -422,11 +335,7 @@ impl MemoryPlugin {
         if should_skip_memory_retrieval(latest_user.as_str()) {
             return None;
         }
-        let min_chars = self
-            .options()
-            .ok()
-            .map(|options| options.retrieval.min_query_chars as usize)
-            .unwrap_or(usize::MAX);
+        let min_chars = self.config.retrieval.min_query_chars as usize;
         (latest_user.len() >= min_chars).then_some(latest_user)
     }
 }
@@ -443,21 +352,11 @@ impl Plugin for MemoryPlugin {
                     | HookSubscription::CHAT_MESSAGES_TRANSFORM,
             )
             .tool(memory_decl())
-            .options_schema(crate::entry::definition::json_schema_for::<
-                MemoryPluginOptions,
-            >())
             .build()
     }
 
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let _ = self.workspace_root.set(ctx.workspace_root);
-        let parsed = if ctx.options.is_null() {
-            MemoryPluginOptions::default()
-        } else {
-            serde_json::from_value(ctx.options)
-                .map_err(|err| PluginError::new(format!("invalid memory options: {err}")))?
-        };
-        let _ = self.options.set(self.parse_options(parsed));
         Ok(InitOutcome::ack(self.manifest()))
     }
 
@@ -516,7 +415,7 @@ impl Plugin for MemoryPlugin {
         if !needs_search_backend {
             return Ok(Vec::new());
         }
-        let url = self.options()?.search.url.trim();
+        let url = self.config.search.url.trim();
         if url.is_empty() {
             return Ok(Vec::new());
         }
@@ -528,12 +427,11 @@ impl Plugin for MemoryPlugin {
         _input: ChatSystemTransformInput,
     ) -> SdkResult<Option<ChatSystemTransformPatch>> {
         let workspace_root = self.workspace_root()?;
-        let options = self.options()?;
-        if !options.project_instructions.enabled {
+        if !self.config.project_instructions.enabled {
             return Ok(None);
         }
         let mut layers = Vec::new();
-        if options.project_instructions.include_global
+        if self.config.project_instructions.include_global
             && let Some(global) = super::discover_global()
         {
             layers.push(global);
@@ -552,17 +450,13 @@ impl Plugin for MemoryPlugin {
         &self,
         input: ChatMessagesTransformInput,
     ) -> SdkResult<Option<ChatMessagesTransformPatch>> {
-        let options = self.options()?;
-        if !options.retrieval.enabled {
+        if !self.config.retrieval.enabled {
             return Ok(None);
         }
         let Some(query) = self.memory_retrieval_query(&input) else {
             return Ok(None);
         };
-        let limit = options
-            .retrieval
-            .limit
-            .clamp(1, MAX_MEMORY_SEARCH_LIMIT as u32) as usize;
+        let limit = self.config.retrieval.limit.clamp(1, MAX_MEMORY_SEARCH_LIMIT as u32) as usize;
         let memories = match self.search_documents(query.as_str(), limit).await {
             Ok(memories) => memories,
             Err(err) => {
@@ -766,14 +660,14 @@ mod tests {
     }
 
     #[test]
-    fn memory_plugin_options_reject_unknown_fields() {
-        let err = serde_json::from_value::<MemoryPluginOptions>(serde_json::json!({
+    fn memory_config_rejects_unknown_fields() {
+        let err = serde_json::from_value::<MemoryConfig>(serde_json::json!({
             "search": {
                 "url": "http://localhost:7700",
                 "backend": "legacy"
             }
         }))
-        .expect_err("memory plugin options should reject unknown fields");
+        .expect_err("memory config should reject unknown fields");
         assert!(err.to_string().contains("unknown field `backend`"));
     }
 }

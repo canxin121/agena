@@ -335,10 +335,14 @@ pub(super) fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostA
         name: profile.name,
         description: profile.frontmatter.description,
         permission: sdk_agent_permission_from_core(profile.frontmatter.permission),
-        default: HostAgentDefaultModelConfig {
-            provider: profile.frontmatter.default.provider,
-            adapter: profile.frontmatter.default.adapter,
-            model: profile.frontmatter.default.model,
+        defaults: HostAgentSelectionConfig {
+            provider: profile.frontmatter.defaults.provider,
+            adapter: profile.frontmatter.defaults.adapter,
+            model: profile.frontmatter.defaults.model,
+            thinking_mode: profile.frontmatter.defaults.thinking_mode,
+            speed_mode: profile.frontmatter.defaults.speed_mode,
+            verbosity: profile.frontmatter.defaults.verbosity,
+            parallel_tool_calls: profile.frontmatter.defaults.parallel_tool_calls,
         },
         prompt: profile.prompt,
         scope: match profile.scope {

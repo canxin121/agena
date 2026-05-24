@@ -133,13 +133,31 @@ pub struct ProviderAdapterOverlay {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
+pub struct ProviderDefaultsOverlay {
+    #[merge(strategy = option_override)]
+    pub provider: Option<String>,
+    #[merge(strategy = option_override)]
+    pub adapter: Option<String>,
+    #[merge(strategy = option_override)]
+    pub model: Option<String>,
+    #[merge(strategy = option_override)]
+    pub thinking_mode: Option<String>,
+    #[merge(strategy = option_override)]
+    pub speed_mode: Option<String>,
+    #[merge(strategy = option_override)]
+    pub verbosity: Option<String>,
+    #[merge(strategy = option_override)]
+    pub parallel_tool_calls: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderOverlay {
     #[merge(strategy = option_override)]
     pub enabled: Option<bool>,
-    #[merge(strategy = option_override)]
-    pub default_adapter: Option<String>,
-    #[merge(strategy = option_override)]
-    pub default_model: Option<String>,
+    #[merge(strategy = option_struct_merge)]
+    pub defaults: Option<ProviderDefaultsOverlay>,
     #[merge(strategy = option_struct_merge)]
     pub auth: Option<ProviderAuthOverlay>,
     #[merge(strategy = map_extend)]

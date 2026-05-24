@@ -10,16 +10,17 @@ use crate::provider::{
 };
 
 use super::{
-    AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, DefaultConfig,
+    AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError,
     HttpProviderAdapterConfig, McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig,
     ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderAdapterOverlay,
     ProviderApiAuthConfig, ProviderAuthConfig, ProviderAuthMode, ProviderAuthOverlay,
     ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderGitlabAuthConfig,
     ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
-    ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay, ResolvedConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
-    RuntimeConfig, RuntimeModelCatalogConfig, SessionCompactionConfig, SessionConfig,
-    StreamTransportMode, TelemetryConfig, TracingConfig, UiConfig, WebToolsConfig,
+    ProviderDefaultsConfig, ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay,
+    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    ResolvedProviderModelConfig, RuntimeConfig, RuntimeModelCatalogConfig,
+    RuntimeProvidersConfig, SessionCompactionConfig, SessionConfig,
+    SessionMaintenanceConfig, StreamTransportMode, TracingConfig, UiConfig, WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -88,12 +89,10 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
     if table.contains_key("modes") {
         return Err(ConfigError::UnsupportedModeConfig { field: "modes" });
     }
-    for field in ["memory", "mcp", "lsp", "web"] {
-        if table.contains_key(field) {
-            return Err(ConfigError::Validation(format!(
-                "`{field}` must be configured as plugin options under `[plugins.list.\"agena.{field}\".options]`"
-            )));
-        }
+    if table.contains_key("telemetry") {
+        return Err(ConfigError::Validation(
+            "`telemetry` has been removed".to_string(),
+        ));
     }
     if table.contains_key("hooks") {
         return Err(ConfigError::Validation(
@@ -139,47 +138,87 @@ fn reject_unsupported_fields(path: &Path, text: &str) -> Result<(), ConfigError>
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
+pub(crate) struct RawProvidersConfig {
+    #[merge(strategy = option_override)]
+    pub(crate) default: Option<String>,
+    #[serde(flatten)]
+    #[merge(strategy = map_extend)]
+    pub(crate) providers: BTreeMap<String, ProviderOverlay>,
+}
+
+impl RawProvidersConfig {
+    fn is_empty(&self) -> bool {
+        self.default.is_none() && self.providers.is_empty()
+    }
+}
+
+impl Merge for RawProvidersConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.default, overlay.default);
+        merge_map(&mut self.providers, overlay.providers);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+pub(crate) struct RawAgentsConfig {
+    #[merge(strategy = option_override)]
+    pub(crate) default: Option<String>,
+    #[serde(flatten)]
+    #[merge(strategy = map_extend)]
+    pub(crate) agents: BTreeMap<String, AgentConfig>,
+}
+
+impl RawAgentsConfig {
+    fn is_empty(&self) -> bool {
+        self.default.is_none() && self.agents.is_empty()
+    }
+}
+
+impl Merge for RawAgentsConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        merge_option(&mut self.default, overlay.default);
+        merge_map(&mut self.agents, overlay.agents);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawConfig {
-    pub(crate) default: Option<RawDefaultConfig>,
     pub(crate) tracing: Option<RawTracingConfig>,
-    pub(crate) telemetry: Option<RawTelemetryConfig>,
     pub(crate) ui: Option<RawUiConfig>,
     pub(crate) runtime: Option<RawRuntimeConfig>,
     pub(crate) session: Option<RawSessionConfig>,
     pub(crate) permission: Option<crate::agent::PermissionConfig>,
-    pub(crate) agents: BTreeMap<String, AgentConfig>,
+    pub(crate) agents: RawAgentsConfig,
     pub(crate) plugins: Option<PluginConfig>,
     pub(crate) memory: Option<MemoryConfig>,
     pub(crate) mcp: Option<McpConfig>,
     pub(crate) lsp: Option<crate::config::types::LspConfig>,
     pub(crate) web: Option<WebToolsConfig>,
-    pub(crate) providers: BTreeMap<String, ProviderOverlay>,
+    pub(crate) providers: RawProvidersConfig,
 }
 
 impl RawConfig {
     pub(crate) fn merge_from(&mut self, overlay: Self) {
-        merge_option_struct(&mut self.default, overlay.default);
         merge_option_struct(&mut self.tracing, overlay.tracing);
-        merge_option_struct(&mut self.telemetry, overlay.telemetry);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
-        merge_map(&mut self.agents, overlay.agents);
+        self.agents.merge_from(overlay.agents);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_option_struct(&mut self.memory, overlay.memory);
         merge_option_struct(&mut self.mcp, overlay.mcp);
         merge_option_struct(&mut self.lsp, overlay.lsp);
         merge_option_struct(&mut self.web, overlay.web);
-        merge_map(&mut self.providers, overlay.providers);
+        self.providers.merge_from(overlay.providers);
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.tracing.is_none()
-            && self.default.is_none()
-            && self.telemetry.is_none()
             && self.ui.is_none()
             && self.runtime.is_none()
             && self.session.is_none()
@@ -215,35 +254,8 @@ impl RawConfig {
                 .get_or_insert_with(RawTracingConfig::default)
                 .adapter = Some(level);
         }
-        if let Some(enabled) = env.var("AGENA_TELEMETRY_ENABLED") {
-            config
-                .telemetry
-                .get_or_insert_with(RawTelemetryConfig::default)
-                .enabled = Some(parse_bool("AGENA_TELEMETRY_ENABLED", enabled.as_str())?);
-        }
-        if let Some(service_name) = env.var("AGENA_OTEL_SERVICE_NAME") {
-            config
-                .telemetry
-                .get_or_insert_with(RawTelemetryConfig::default)
-                .service_name = Some(service_name);
-        }
-        if let Some(endpoint) = env
-            .var("AGENA_OTEL_ENDPOINT")
-            .or_else(|| env.var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
-        {
-            config
-                .telemetry
-                .get_or_insert_with(RawTelemetryConfig::default)
-                .otlp_endpoint = Some(endpoint);
-        }
         if let Some(locale) = env.var("AGENA_LOCALE") {
             config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale);
-        }
-        if let Some(enabled) = env.var("AGENA_PLUGIN_ENABLED") {
-            config
-                .plugins
-                .get_or_insert_with(PluginConfig::default)
-                .enabled = parse_bool("AGENA_PLUGIN_ENABLED", enabled.as_str())?;
         }
         // Note: `AGENA_PLUGIN_PATHS` is no longer supported — the new plugin
         // config requires explicit `[plugins.list.<id>]` entries.
@@ -252,7 +264,9 @@ impl RawConfig {
             config
                 .runtime
                 .get_or_insert_with(RawRuntimeConfig::default)
-                .provider_http
+                .providers
+                .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                .http
                 .get_or_insert_with(RawProviderHttpConfig::default)
                 .timeout_secs = Some(value);
         })?;
@@ -260,7 +274,9 @@ impl RawConfig {
             config
                 .runtime
                 .get_or_insert_with(RawRuntimeConfig::default)
-                .provider_http
+                .providers
+                .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                .http
                 .get_or_insert_with(RawProviderHttpConfig::default)
                 .connect_timeout_secs = Some(value);
         })?;
@@ -268,7 +284,9 @@ impl RawConfig {
             config
                 .runtime
                 .get_or_insert_with(RawRuntimeConfig::default)
-                .request_retry
+                .providers
+                .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                .retry
                 .get_or_insert_with(RawRequestRetryConfig::default)
                 .max_retries = Some(value);
         })?;
@@ -276,7 +294,9 @@ impl RawConfig {
             config
                 .runtime
                 .get_or_insert_with(RawRuntimeConfig::default)
-                .request_retry
+                .providers
+                .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                .retry
                 .get_or_insert_with(RawRequestRetryConfig::default)
                 .base_delay_ms = Some(value);
         })?;
@@ -284,7 +304,9 @@ impl RawConfig {
             config
                 .runtime
                 .get_or_insert_with(RawRuntimeConfig::default)
-                .request_retry
+                .providers
+                .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                .retry
                 .get_or_insert_with(RawRequestRetryConfig::default)
                 .max_delay_ms = Some(value);
         })?;
@@ -292,6 +314,8 @@ impl RawConfig {
             config
                 .runtime
                 .get_or_insert_with(RawRuntimeConfig::default)
+                .providers
+                .get_or_insert_with(RawRuntimeProvidersConfig::default)
                 .stream_replay
                 .get_or_insert_with(RawStreamReplayConfig::default)
                 .max_retries_after_output = Some(value);
@@ -300,6 +324,8 @@ impl RawConfig {
             config
                 .runtime
                 .get_or_insert_with(RawRuntimeConfig::default)
+                .providers
+                .get_or_insert_with(RawRuntimeProvidersConfig::default)
                 .stream_replay
                 .get_or_insert_with(RawStreamReplayConfig::default)
                 .max_tracked_events = Some(value);
@@ -355,21 +381,6 @@ impl RawConfig {
             database,
             adapter,
         };
-        let raw_telemetry = self.telemetry.unwrap_or_default();
-        let telemetry = TelemetryConfig {
-            enabled: raw_telemetry.enabled.unwrap_or(false),
-            service_name: raw_telemetry
-                .service_name
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| TelemetryConfig::default().service_name),
-            otlp_endpoint: raw_telemetry
-                .otlp_endpoint
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty()),
-            headers: raw_telemetry.headers,
-        };
-
         let ui = UiConfig {
             locale: self
                 .ui
@@ -378,30 +389,31 @@ impl RawConfig {
                 .filter(|value| !value.is_empty()),
         };
 
-        let raw_default = self.default.unwrap_or_default();
         let raw_runtime = self.runtime.unwrap_or_default();
         let raw_session = self.session.unwrap_or_default();
-        let default = raw_default.clone().resolve();
         let runtime = RuntimeConfig::from_raw(raw_runtime)?;
         let session = SessionConfig::from_raw(raw_session)?;
         let permission = self.permission.unwrap_or_default();
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
-        let plugin_options = PluginRuntimeOptions::from_plugins(&plugins)?;
-        let memory: MemoryConfig = plugin_options.memory.or(self.memory).unwrap_or_default();
-        let mcp: McpConfig = plugin_options.mcp.or(self.mcp).unwrap_or_default();
-        let lsp: crate::config::types::LspConfig =
-            plugin_options.lsp.or(self.lsp).unwrap_or_default();
-        let web: WebToolsConfig = plugin_options.web.or(self.web).unwrap_or_default();
+        PluginRuntimeOptions::validate_builtin_plugins(&plugins)?;
+        let memory: MemoryConfig = self.memory.unwrap_or_default();
+        let mcp: McpConfig = self.mcp.unwrap_or_default();
+        let lsp: crate::config::types::LspConfig = self.lsp.unwrap_or_default();
+        let web: WebToolsConfig = self.web.unwrap_or_default();
+        let providers_default = self.providers.default.clone();
+        let agents_default = self.agents.default.clone();
 
         let providers = self
             .providers
+            .providers
             .into_iter()
-            .map(|(provider_id, raw)| raw.resolve(provider_id, env, &raw_default))
+            .map(|(provider_id, raw)| raw.resolve(provider_id, env))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let default_selection = resolve_default_selection(providers_default.as_deref(), &providers)?;
+        let default_agent = resolve_default_agent(agents_default.as_deref(), &self.agents.agents)?;
 
-        validate_default_config(&default, &providers)?;
         validate_permission_config("permission", &permission)?;
-        for (agent_name, agent) in &self.agents {
+        for (agent_name, agent) in &self.agents.agents {
             let effective = permission.merged_with(&agent.permission);
             validate_permission_config(
                 format!("agents.{agent_name}.permission").as_str(),
@@ -410,14 +422,14 @@ impl RawConfig {
         }
 
         Ok(ResolvedConfig {
-            default,
+            default_selection,
+            default_agent,
             tracing,
-            telemetry,
             ui,
             runtime,
             session,
             permission,
-            agents: self.agents,
+            agents: self.agents.agents,
             plugins,
             plugin_storage: crate::config::types::PluginStorageConfig::default(),
             memory,
@@ -429,65 +441,82 @@ impl RawConfig {
     }
 }
 
-fn validate_default_config(
-    default: &DefaultConfig,
+fn resolve_default_selection(
+    explicit_provider: Option<&str>,
     providers: &BTreeMap<String, ResolvedProviderConfig>,
-) -> Result<(), ConfigError> {
-    let Some(provider_id) = default.provider.as_deref() else {
-        return Ok(());
-    };
-    let Some(provider) = providers.get(provider_id) else {
-        return Err(ConfigError::Validation(format!(
-            "default.provider `{provider_id}` references unknown provider"
-        )));
-    };
-    if !provider.enabled {
-        return Err(ConfigError::Validation(format!(
-            "default.provider `{provider_id}` references disabled provider"
-        )));
-    }
-
-    let adapter_id = match default.adapter.as_deref() {
-        Some(adapter_id) => {
-            let adapter = provider.adapters.get(adapter_id).ok_or_else(|| {
-                ConfigError::Validation(format!(
-                    "default.adapter `{adapter_id}` references unknown adapter on provider `{provider_id}`"
-                ))
-            })?;
-            if !adapter.enabled {
-                return Err(ConfigError::Validation(format!(
-                    "default.adapter `{adapter_id}` references disabled adapter on provider `{provider_id}`"
-                )));
-            }
-            Some(adapter_id)
-        }
-        None if default.model.is_some() => Some(provider.default_adapter.as_str()),
-        None => None,
-    };
-
-    if let (Some(adapter_id), Some(model_id)) = (adapter_id, default.model.as_deref()) {
-        let route = format!("{adapter_id}/{model_id}");
-        if matches!(provider.models.get(route.as_str()), Some(configured) if !configured.enabled) {
+) -> Result<crate::execution_prefs::ExecutionSelection, ConfigError> {
+    let provider_id = if let Some(explicit_provider) =
+        explicit_provider.map(str::trim).filter(|value| !value.is_empty())
+    {
+        let provider = providers.get(explicit_provider).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "providers.default `{explicit_provider}` references unknown provider"
+            ))
+        })?;
+        if !provider.enabled {
             return Err(ConfigError::Validation(format!(
-                "default.model `{model_id}` references disabled model route `{route}` on provider `{provider_id}`"
+                "providers.default `{explicit_provider}` references disabled provider"
             )));
         }
+        Some(explicit_provider.to_owned())
+    } else {
+        providers
+            .iter()
+            .find_map(|(provider_id, provider)| provider.enabled.then(|| provider_id.clone()))
+    };
+
+    let Some(provider_id) = provider_id else {
+        return Ok(crate::execution_prefs::ExecutionSelection::default());
+    };
+    let provider = providers.get(provider_id.as_str()).ok_or_else(|| {
+        ConfigError::Validation(format!(
+            "providers.default `{provider_id}` references unknown provider"
+        ))
+    })?;
+
+    Ok(crate::execution_prefs::ExecutionSelection {
+        provider: Some(provider_id),
+        adapter: provider.defaults.adapter.clone(),
+        model: provider.defaults.model.clone(),
+        thinking_mode: provider.defaults.thinking_mode.clone(),
+        speed_mode: provider.defaults.speed_mode.clone(),
+        verbosity: provider.defaults.verbosity.clone(),
+        parallel_tool_calls: provider.defaults.parallel_tool_calls,
+        ..Default::default()
+    })
+}
+
+fn resolve_default_agent(
+    explicit_agent: Option<&str>,
+    agents: &BTreeMap<String, AgentConfig>,
+) -> Result<Option<String>, ConfigError> {
+    if let Some(explicit_agent) = explicit_agent
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let agent = agents.get(explicit_agent).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "agents.default `{explicit_agent}` references unknown agent"
+            ))
+        })?;
+        if agent.disabled {
+            return Err(ConfigError::Validation(format!(
+                "agents.default `{explicit_agent}` references disabled agent"
+            )));
+        }
+        return Ok(Some(explicit_agent.to_owned()));
     }
 
-    Ok(())
+    Ok(agents
+        .iter()
+        .find_map(|(agent_name, agent)| (!agent.disabled).then(|| agent_name.clone())))
 }
 
 #[derive(Debug, Default)]
-struct PluginRuntimeOptions {
-    memory: Option<MemoryConfig>,
-    mcp: Option<McpConfig>,
-    lsp: Option<crate::config::types::LspConfig>,
-    web: Option<WebToolsConfig>,
-}
+struct PluginRuntimeOptions;
 
 impl PluginRuntimeOptions {
-    fn from_plugins(plugins: &PluginConfig) -> Result<Self, ConfigError> {
-        let mut out = Self::default();
+    fn validate_builtin_plugins(plugins: &PluginConfig) -> Result<(), ConfigError> {
         for (plugin_id, entry) in &plugins.list {
             if plugin_id == "agena.hooks" {
                 return Err(ConfigError::Validation(
@@ -499,31 +528,17 @@ impl PluginRuntimeOptions {
                 continue;
             }
             match plugin_id.as_str() {
-                "agena.memory" => {
-                    out.memory = Some(parse_plugin_options(plugin_id, options.clone())?);
-                }
-                "agena.mcp" => {
-                    out.mcp = Some(parse_plugin_options(plugin_id, options.clone())?);
-                }
-                "agena.lsp" => {
-                    out.lsp = Some(parse_plugin_options(plugin_id, options.clone())?);
-                }
-                "agena.web" => {
-                    out.web = Some(parse_plugin_options(plugin_id, options.clone())?);
+                "agena.memory" | "agena.mcp" | "agena.lsp" | "agena.web" => {
+                    let field = plugin_id.trim_start_matches("agena.");
+                    return Err(ConfigError::Validation(format!(
+                        "`plugins.list.\"{plugin_id}\".options` is no longer a config source; move those fields under top-level `{field}`"
+                    )));
                 }
                 _ => {}
             }
         }
-        Ok(out)
+        Ok(())
     }
-}
-
-fn parse_plugin_options<T>(plugin_id: &str, value: serde_json::Value) -> Result<T, ConfigError>
-where
-    T: serde::de::DeserializeOwned,
-{
-    serde_json::from_value(value)
-        .map_err(|err| ConfigError::Validation(format!("plugins.list.{plugin_id}.options: {err}")))
 }
 
 impl Merge for PluginConfig {
@@ -531,7 +546,6 @@ impl Merge for PluginConfig {
         // Overlay completely replaces nested plugin tools; otherwise we'd
         // need tool-level merge logic. List entries from a more-specific
         // mode override the parent.
-        self.enabled = overlay.enabled;
         if !overlay.list.is_empty() {
             self.list = overlay.list;
         }
@@ -581,6 +595,8 @@ impl Merge for MemoryConfig {
     fn merge_from(&mut self, overlay: Self) {
         self.project_instructions
             .merge_from(overlay.project_instructions);
+        self.search.merge_from(overlay.search);
+        self.retrieval.merge_from(overlay.retrieval);
     }
 }
 
@@ -590,8 +606,20 @@ impl Merge for ProjectInstructionsConfig {
     }
 }
 
+impl Merge for crate::config::types::MemorySearchConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        *self = overlay;
+    }
+}
+
+impl Merge for crate::config::types::MemoryRetrievalConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        *self = overlay;
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawTracingConfig {
     #[merge(strategy = option_override)]
     pub(crate) filter: Option<String>,
@@ -615,21 +643,7 @@ fn validate_tracing_level(field: &str, value: &str) -> Result<(), ConfigError> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
-pub(crate) struct RawTelemetryConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) enabled: Option<bool>,
-    #[merge(strategy = option_override)]
-    pub(crate) service_name: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) otlp_endpoint: Option<String>,
-    #[serde(default)]
-    #[merge(strategy = map_extend)]
-    pub(crate) headers: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawUiConfig {
     #[merge(strategy = option_override)]
     pub(crate) locale: Option<String>,
@@ -644,9 +658,19 @@ impl Merge for crate::config::types::AgentConfig {
             self.prompt = overlay.prompt;
         }
         self.permission.merge_from(overlay.permission);
-        merge_option(&mut self.default.provider, overlay.default.provider);
-        merge_option(&mut self.default.adapter, overlay.default.adapter);
-        merge_option(&mut self.default.model, overlay.default.model);
+        merge_option(&mut self.defaults.provider, overlay.defaults.provider);
+        merge_option(&mut self.defaults.adapter, overlay.defaults.adapter);
+        merge_option(&mut self.defaults.model, overlay.defaults.model);
+        merge_option(
+            &mut self.defaults.thinking_mode,
+            overlay.defaults.thinking_mode,
+        );
+        merge_option(&mut self.defaults.speed_mode, overlay.defaults.speed_mode);
+        merge_option(&mut self.defaults.verbosity, overlay.defaults.verbosity);
+        merge_option(
+            &mut self.defaults.parallel_tool_calls,
+            overlay.defaults.parallel_tool_calls,
+        );
         if overlay.disabled {
             self.disabled = true;
         }
@@ -665,112 +689,42 @@ impl Merge for crate::permission::PermissionMode {
     }
 }
 
-fn permission_config_merge(
-    base: &mut crate::agent::PermissionConfig,
-    overlay: crate::agent::PermissionConfig,
-) {
-    base.merge_from(overlay);
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct RawDefaultConfig {
-    #[merge(strategy = option_override)]
-    pub(crate) provider: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) adapter: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) model: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) thinking_mode: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) speed_mode: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) verbosity: Option<String>,
-    #[merge(strategy = option_override)]
-    pub(crate) parallel_tool_calls: Option<bool>,
-    #[merge(strategy = option_override)]
-    pub(crate) agent: Option<String>,
-    #[serde(default)]
-    #[merge(strategy = permission_config_merge)]
-    pub(crate) permission: crate::agent::PermissionConfig,
-}
-
-impl RawDefaultConfig {
-    fn resolve(self) -> DefaultConfig {
-        DefaultConfig {
-            provider: normalize_optional_string(self.provider),
-            adapter: normalize_optional_string(self.adapter),
-            model: normalize_optional_string(self.model),
-            thinking_mode: normalize_optional_string(self.thinking_mode),
-            speed_mode: normalize_optional_string(self.speed_mode),
-            verbosity: normalize_optional_string(self.verbosity),
-            parallel_tool_calls: self.parallel_tool_calls,
-            agent: normalize_optional_string(self.agent).or_else(|| Some("build".to_owned())),
-            permission: self.permission,
-        }
-    }
-
-    fn provider_default_adapter(&self, provider_id: &str) -> Option<String> {
-        let provider = self.provider.as_deref()?.trim();
-        if provider != provider_id {
-            return None;
-        }
-        let adapter = self.adapter.as_deref()?.trim();
-        if adapter.is_empty() {
-            return None;
-        }
-        Some(adapter.to_owned())
-    }
-
-    fn provider_default_model(&self, provider_id: &str) -> Option<String> {
-        let provider = self.provider.as_deref()?.trim();
-        if provider != provider_id {
-            return None;
-        }
-        let model = self.model.as_deref()?.trim();
-        if model.is_empty() {
-            return None;
-        }
-        Some(model.to_owned())
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct RawRuntimeConfig {
     #[merge(strategy = option_struct_merge)]
-    pub(crate) provider_http: Option<RawProviderHttpConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) request_retry: Option<RawRequestRetryConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) stream_replay: Option<RawStreamReplayConfig>,
+    pub(crate) providers: Option<RawRuntimeProvidersConfig>,
     #[merge(strategy = option_struct_merge)]
     pub(crate) model_catalog: Option<RawRuntimeModelCatalogConfig>,
     #[merge(strategy = option_struct_merge)]
     pub(crate) reload: Option<RawRuntimeReloadConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawRuntimeProvidersConfig {
     #[merge(strategy = option_struct_merge)]
-    pub(crate) janitor: Option<RawRuntimeJanitorConfig>,
+    pub(crate) http: Option<RawProviderHttpConfig>,
     #[merge(strategy = option_struct_merge)]
-    pub(crate) session_cache: Option<RawSessionCacheConfig>,
+    pub(crate) retry: Option<RawRequestRetryConfig>,
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) stream_replay: Option<RawStreamReplayConfig>,
 }
 
 impl RuntimeConfig {
     pub(crate) fn from_raw(raw: RawRuntimeConfig) -> Result<Self, ConfigError> {
-        let provider_http = raw.provider_http.unwrap_or_default();
-        let request_retry = raw.request_retry.unwrap_or_default();
-        let stream_replay = raw.stream_replay.unwrap_or_default();
+        let providers = raw.providers.unwrap_or_default();
+        let provider_http = providers.http.unwrap_or_default();
+        let request_retry = providers.retry.unwrap_or_default();
+        let stream_replay = providers.stream_replay.unwrap_or_default();
         let model_catalog = raw.model_catalog.unwrap_or_default();
         let reload = raw.reload.unwrap_or_default();
-        let janitor = raw.janitor.unwrap_or_default();
-        let session_cache = raw.session_cache.unwrap_or_default();
 
         let timeout_secs = provider_http.timeout_secs.unwrap_or(120);
         let connect_timeout_secs = provider_http.connect_timeout_secs.unwrap_or(15);
         if timeout_secs == 0 || connect_timeout_secs == 0 {
             return Err(ConfigError::Validation(
-                "runtime.provider_http timeout values must be greater than 0".to_owned(),
+                "runtime.providers.http timeout values must be greater than 0".to_owned(),
             ));
         }
 
@@ -780,10 +734,6 @@ impl RuntimeConfig {
             .unwrap_or(2_000)
             .max(base_delay_ms);
         let reload_poll_interval_secs = reload.poll_interval_secs.unwrap_or(2);
-        let janitor_interval_secs = janitor.interval_secs.unwrap_or(30);
-        let session_cache_ttl_secs = session_cache.ttl_secs.unwrap_or(15 * 60);
-        let session_cache_max_sessions = session_cache.max_sessions.unwrap_or(128);
-        let session_cache_max_bytes = session_cache.max_bytes.unwrap_or(64 * 1024 * 1024);
         let model_catalog_cache_max_age_secs = model_catalog
             .cache_max_age_secs
             .unwrap_or(crate::model_catalog::DEFAULT_CACHE_MAX_AGE_SECS);
@@ -793,26 +743,6 @@ impl RuntimeConfig {
                 "runtime.reload.poll_interval_secs must be greater than 0".to_owned(),
             ));
         }
-        if janitor_interval_secs == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.janitor.interval_secs must be greater than 0".to_owned(),
-            ));
-        }
-        if session_cache_ttl_secs == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.session_cache.ttl_secs must be greater than 0".to_owned(),
-            ));
-        }
-        if session_cache_max_sessions == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.session_cache.max_sessions must be greater than 0".to_owned(),
-            ));
-        }
-        if session_cache_max_bytes == 0 {
-            return Err(ConfigError::Validation(
-                "runtime.session_cache.max_bytes must be greater than 0".to_owned(),
-            ));
-        }
         if model_catalog_cache_max_age_secs == 0 {
             return Err(ConfigError::Validation(
                 "runtime.model_catalog.cache_max_age_secs must be greater than 0".to_owned(),
@@ -820,22 +750,24 @@ impl RuntimeConfig {
         }
 
         Ok(Self {
-            provider_http: super::ProviderHttpConfig {
-                timeout_secs,
-                connect_timeout_secs,
-            },
-            request_retry: super::RequestRetryConfig {
-                max_retries: request_retry
-                    .max_retries
-                    .unwrap_or(ProviderRequestRetryConfig::default().max_retries),
-                base_delay_ms,
-                max_delay_ms,
-            },
-            stream_replay: super::StreamReplayConfig {
-                max_retries_after_output: stream_replay
-                    .max_retries_after_output
-                    .unwrap_or(ProviderStreamReplayConfig::default().max_retries_after_output),
-                max_tracked_events: stream_replay.max_tracked_events.unwrap_or(2_048),
+            providers: RuntimeProvidersConfig {
+                http: super::ProviderHttpConfig {
+                    timeout_secs,
+                    connect_timeout_secs,
+                },
+                retry: super::RequestRetryConfig {
+                    max_retries: request_retry
+                        .max_retries
+                        .unwrap_or(ProviderRequestRetryConfig::default().max_retries),
+                    base_delay_ms,
+                    max_delay_ms,
+                },
+                stream_replay: super::StreamReplayConfig {
+                    max_retries_after_output: stream_replay
+                        .max_retries_after_output
+                        .unwrap_or(ProviderStreamReplayConfig::default().max_retries_after_output),
+                    max_tracked_events: stream_replay.max_tracked_events.unwrap_or(2_048),
+                },
             },
             model_catalog: RuntimeModelCatalogConfig {
                 cache_max_age_secs: model_catalog_cache_max_age_secs,
@@ -843,15 +775,6 @@ impl RuntimeConfig {
             reload: super::RuntimeReloadConfig {
                 enabled: reload.enabled.unwrap_or(true),
                 poll_interval_secs: reload_poll_interval_secs,
-            },
-            janitor: super::RuntimeJanitorConfig {
-                enabled: janitor.enabled.unwrap_or(true),
-                interval_secs: janitor_interval_secs,
-            },
-            session_cache: super::SessionCacheConfig {
-                max_sessions: session_cache_max_sessions,
-                ttl_secs: session_cache_ttl_secs,
-                max_bytes: session_cache_max_bytes,
             },
         })
     }
@@ -862,6 +785,10 @@ impl RuntimeConfig {
 pub(crate) struct RawSessionConfig {
     #[merge(strategy = option_struct_merge)]
     pub(crate) compaction: Option<RawSessionCompactionConfig>,
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) cache: Option<RawSessionCacheConfig>,
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) maintenance: Option<RawSessionMaintenanceConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -876,10 +803,47 @@ pub(crate) struct RawSessionCompactionConfig {
 impl SessionConfig {
     pub(crate) fn from_raw(raw: RawSessionConfig) -> Result<Self, ConfigError> {
         let compaction = raw.compaction.unwrap_or_default();
+        let cache = raw.cache.unwrap_or_default();
+        let maintenance = raw.maintenance.unwrap_or_default();
+        let cache_ttl_secs = cache.ttl_secs.unwrap_or(15 * 60);
+        let cache_max_sessions = cache.max_sessions.unwrap_or(128);
+        let cache_max_bytes = cache.max_bytes.unwrap_or(64 * 1024 * 1024);
+        let maintenance_interval_secs = maintenance.interval_secs.unwrap_or(30);
+
+        if maintenance_interval_secs == 0 {
+            return Err(ConfigError::Validation(
+                "session.maintenance.interval_secs must be greater than 0".to_owned(),
+            ));
+        }
+        if cache_ttl_secs == 0 {
+            return Err(ConfigError::Validation(
+                "session.cache.ttl_secs must be greater than 0".to_owned(),
+            ));
+        }
+        if cache_max_sessions == 0 {
+            return Err(ConfigError::Validation(
+                "session.cache.max_sessions must be greater than 0".to_owned(),
+            ));
+        }
+        if cache_max_bytes == 0 {
+            return Err(ConfigError::Validation(
+                "session.cache.max_bytes must be greater than 0".to_owned(),
+            ));
+        }
+
         Ok(Self {
             compaction: SessionCompactionConfig {
                 auto: compaction.auto.unwrap_or(true),
                 reserved_tokens: compaction.reserved_tokens,
+            },
+            cache: super::SessionCacheConfig {
+                max_sessions: cache_max_sessions,
+                ttl_secs: cache_ttl_secs,
+                max_bytes: cache_max_bytes,
+            },
+            maintenance: SessionMaintenanceConfig {
+                enabled: maintenance.enabled.unwrap_or(true),
+                interval_secs: maintenance_interval_secs,
             },
         })
     }
@@ -892,7 +856,7 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawProviderHttpConfig {
     #[merge(strategy = option_override)]
     pub(crate) timeout_secs: Option<u64>,
@@ -901,7 +865,7 @@ pub(crate) struct RawProviderHttpConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawRequestRetryConfig {
     #[merge(strategy = option_override)]
     pub(crate) max_retries: Option<u32>,
@@ -912,7 +876,7 @@ pub(crate) struct RawRequestRetryConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawStreamReplayConfig {
     #[merge(strategy = option_override)]
     pub(crate) max_retries_after_output: Option<u32>,
@@ -921,14 +885,14 @@ pub(crate) struct RawStreamReplayConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawRuntimeModelCatalogConfig {
     #[merge(strategy = option_override)]
     pub(crate) cache_max_age_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawRuntimeReloadConfig {
     #[merge(strategy = option_override)]
     pub(crate) enabled: Option<bool>,
@@ -937,8 +901,8 @@ pub(crate) struct RawRuntimeReloadConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
-pub(crate) struct RawRuntimeJanitorConfig {
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawSessionMaintenanceConfig {
     #[merge(strategy = option_override)]
     pub(crate) enabled: Option<bool>,
     #[merge(strategy = option_override)]
@@ -946,7 +910,7 @@ pub(crate) struct RawRuntimeJanitorConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub(crate) struct RawSessionCacheConfig {
     #[merge(strategy = option_override)]
     pub(crate) max_sessions: Option<usize>,
@@ -998,7 +962,6 @@ impl ProviderOverlay {
         self,
         provider_id: String,
         _env: &dyn ConfigEnvironment,
-        defaults: &RawDefaultConfig,
     ) -> Result<(String, ResolvedProviderConfig), ConfigError> {
         let enabled = self.enabled.unwrap_or(true);
         if self.adapters.is_empty() {
@@ -1037,44 +1000,52 @@ impl ProviderOverlay {
             adapters.insert(adapter_id, adapter.config);
         }
 
+        let provider_defaults = self.defaults.unwrap_or_default();
+        if let Some(default_provider) = normalize_optional_string(provider_defaults.provider.clone()) {
+            if default_provider.as_str() != provider_id.as_str() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.clone(),
+                    message: format!(
+                        "provider defaults.provider `{default_provider}` must match provider key `{provider_id}`"
+                    ),
+                });
+            }
+        }
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
-        let default_adapter = match self.default_adapter {
-            Some(default_adapter) => default_adapter,
-            None => defaults
-                .provider_default_adapter(provider_id.as_str())
-                .or_else(|| {
-                    let enabled_adapters = adapters
-                        .iter()
-                        .filter(|(_, adapter)| adapter.enabled)
-                        .map(|(adapter_id, _)| adapter_id.clone())
-                        .collect::<Vec<_>>();
-                    (enabled_adapters.len() == 1).then(|| enabled_adapters[0].clone())
-                })
+        let default_adapter = if let Some(default_adapter) = provider_defaults.adapter.clone() {
+            default_adapter
+        } else {
+            let enabled_adapters = adapters
+                .iter()
+                .filter(|(_, adapter)| adapter.enabled)
+                .map(|(adapter_id, _)| adapter_id.clone())
+                .collect::<Vec<_>>();
+            (enabled_adapters.len() == 1)
+                .then(|| enabled_adapters[0].clone())
                 .ok_or_else(|| ConfigError::MissingProviderField {
                     provider_id: provider_id.clone(),
-                    field: "default_adapter",
-                })?,
+                    field: "defaults.adapter",
+                })?
         };
         if default_adapter.trim().is_empty() {
             return Err(ConfigError::MissingProviderField {
                 provider_id: provider_id.clone(),
-                field: "default_adapter",
+                field: "defaults.adapter",
             });
         }
-        let default_model = match self.default_model {
-            Some(default_model) => default_model,
-            None => defaults
-                .provider_default_model(provider_id.as_str())
-                .ok_or_else(|| ConfigError::MissingProviderField {
-                    provider_id: provider_id.clone(),
-                    field: "default_model",
-                })?,
+        let default_model = if let Some(default_model) = provider_defaults.model.clone() {
+            default_model
+        } else {
+            return Err(ConfigError::MissingProviderField {
+                provider_id: provider_id.clone(),
+                field: "defaults.model",
+            });
         };
         if default_model.is_empty() {
             return Err(ConfigError::MissingProviderField {
                 provider_id: provider_id.clone(),
-                field: "default_model",
+                field: "defaults.model",
             });
         }
         let default_adapter_id = default_adapter.trim().to_owned();
@@ -1082,7 +1053,7 @@ impl ProviderOverlay {
             ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.clone(),
                 message: format!(
-                    "provider default_adapter `{default_adapter_id}` references unknown adapter"
+                    "provider defaults.adapter `{default_adapter_id}` references unknown adapter"
                 ),
             }
         })?;
@@ -1090,7 +1061,7 @@ impl ProviderOverlay {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.clone(),
                 message: format!(
-                    "provider default_adapter `{default_adapter_id}` references disabled adapter"
+                    "provider defaults.adapter `{default_adapter_id}` references disabled adapter"
                 ),
             });
         }
@@ -1099,17 +1070,26 @@ impl ProviderOverlay {
             return Err(ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.clone(),
                 message: format!(
-                    "provider default_model `{default_model}` references disabled model route `{default_route}`"
+                    "provider defaults.model `{default_model}` references disabled model route `{default_route}`"
                 ),
             });
         }
+
+        let resolved_provider_id = provider_id.clone();
 
         Ok((
             provider_id,
             ResolvedProviderConfig {
                 enabled,
-                default_adapter: default_adapter_id,
-                default_model,
+                defaults: ProviderDefaultsConfig {
+                    provider: Some(resolved_provider_id),
+                    adapter: Some(default_adapter_id),
+                    model: Some(default_model),
+                    thinking_mode: provider_defaults.thinking_mode,
+                    speed_mode: provider_defaults.speed_mode,
+                    verbosity: provider_defaults.verbosity,
+                    parallel_tool_calls: provider_defaults.parallel_tool_calls,
+                },
                 auth,
                 adapters,
                 models,
@@ -1896,10 +1876,9 @@ macro_rules! impl_local_merge_via_crate {
 
 impl_local_merge_via_crate!(
     RawTracingConfig,
-    RawTelemetryConfig,
     RawUiConfig,
-    RawDefaultConfig,
     RawRuntimeConfig,
+    RawRuntimeProvidersConfig,
     RawSessionConfig,
     RawSessionCompactionConfig,
     RawProviderHttpConfig,
@@ -1907,7 +1886,7 @@ impl_local_merge_via_crate!(
     RawStreamReplayConfig,
     RawRuntimeModelCatalogConfig,
     RawRuntimeReloadConfig,
-    RawRuntimeJanitorConfig,
+    RawSessionMaintenanceConfig,
     RawSessionCacheConfig,
     ProviderProtocolPathsOverlay,
     ProviderAuthOverlay,

@@ -3,7 +3,7 @@
 //! Discovers Markdown files under `.agena/agents/` (project-local, walked
 //! up from the workspace root) and `~/.agena/agents/` (user-global). Each
 //! file describes a named subagent the dispatcher can route to: a system
-//! prompt, optional permission policy, and optional default model selection.
+//! prompt, optional permission policy, and optional defaults.
 //! Mirrors
 //! the layout of `crates/agena/src/commands/` and the SKILL.md frontmatter
 //! convention `agena-skills` already exposes, so users who know one know
@@ -14,7 +14,7 @@
 //! ```markdown
 //! ---
 //! description: "Read-only repo explorer"
-//! default:
+//! defaults:
 //!   model: "claude-haiku-4-5"
 //! ---
 //! You are a focused codebase explorer. Read files, grep for symbols, and
@@ -49,18 +49,32 @@ impl AgentScope {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct AgentDefaultModelConfig {
+pub struct AgentSelectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
-impl AgentDefaultModelConfig {
+impl AgentSelectionConfig {
     pub fn is_empty(&self) -> bool {
-        self.provider.is_none() && self.adapter.is_none() && self.model.is_none()
+        self.provider.is_none()
+            && self.adapter.is_none()
+            && self.model.is_none()
+            && self.thinking_mode.is_none()
+            && self.speed_mode.is_none()
+            && self.verbosity.is_none()
+            && self.parallel_tool_calls.is_none()
     }
 }
 
@@ -76,10 +90,9 @@ pub struct AgentFrontmatter {
     pub permission: crate::agent::PermissionConfig,
     #[serde(
         default,
-        rename = "default",
-        skip_serializing_if = "AgentDefaultModelConfig::is_empty"
+        skip_serializing_if = "AgentSelectionConfig::is_empty"
     )]
-    pub default: AgentDefaultModelConfig,
+    pub defaults: AgentSelectionConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -103,10 +116,9 @@ pub struct AgentDescriptor {
     pub permission: crate::agent::PermissionConfig,
     #[serde(
         default,
-        rename = "default",
-        skip_serializing_if = "AgentDefaultModelConfig::is_empty"
+        skip_serializing_if = "AgentSelectionConfig::is_empty"
     )]
-    pub default: AgentDefaultModelConfig,
+    pub defaults: AgentSelectionConfig,
     pub scope: AgentScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<PathBuf>,
@@ -304,7 +316,7 @@ impl From<AgentProfile> for AgentDescriptor {
             name: profile.name,
             description: profile.frontmatter.description,
             permission: profile.frontmatter.permission,
-            default: profile.frontmatter.default,
+            defaults: profile.frontmatter.defaults,
             scope: profile.scope,
             source_path: profile.source_path,
         }
@@ -549,7 +561,7 @@ fn compaction_profile() -> AgentProfile {
                 }),
                 tools: Some(crate::agent::ToolPermissionConfig::default()),
             },
-            default: AgentDefaultModelConfig::default(),
+            defaults: AgentSelectionConfig::default(),
         },
         prompt: "You are Agena's conversation compaction agent. Summarize only the transcript and context provided by the user message. Preserve the user's current objective, explicit constraints, decisions already made, important files or commands, tool results, pending work, blockers, and open questions. Do not call tools, do not invent facts, and do not mention the act of compaction. Return a concise Markdown summary with stable section headings.".to_string(),
         source_path: None,
@@ -568,7 +580,7 @@ fn default_profile(
         frontmatter: AgentFrontmatter {
             description: description.to_string(),
             permission,
-            default: AgentDefaultModelConfig::default(),
+            defaults: AgentSelectionConfig::default(),
         },
         prompt: prompt.to_string(),
         source_path: None,

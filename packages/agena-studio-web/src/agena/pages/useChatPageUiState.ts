@@ -42,12 +42,12 @@ export type ChatPageUiStateDeps = {
 
 export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUiStateDeps) {
   function providerDefaultModel(providerId: string): string {
-    return input.providers.value.find((provider) => provider.provider_id === providerId)?.default_model || ''
+    return input.providers.value.find((provider) => provider.provider_id === providerId)?.defaults.model || ''
   }
 
   function providerDefaultAdapter(providerId: string): string {
     const provider = input.providers.value.find((provider) => provider.provider_id === providerId)
-    return provider?.default_adapter || provider?.adapters?.find((adapter) => adapter.enabled)?.adapter_id || ''
+    return provider?.defaults.adapter || provider?.adapters?.find((adapter) => adapter.enabled)?.adapter_id || ''
   }
 
   function openWorkspaceBrowser(relativePath = '') {

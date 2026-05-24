@@ -114,9 +114,6 @@ const activeGoal = computed(
       </template>
       <div v-if="props.contextUsageLabel" class="muted mono">{{ props.contextUsageLabel }}</div>
       <template v-if="props.sessionState?.execution">
-        <div v-if="props.sessionState.execution.allowed_tools.length" class="muted mono">
-          allowed_tools={{ props.sessionState.execution.allowed_tools.join(', ') }}
-        </div>
         <div v-if="props.sessionState.execution.system_prompt_override" class="muted mono">
           system_prompt_override={{ props.sessionState.execution.system_prompt_override }}
         </div>

@@ -9,6 +9,10 @@ use std::{
 };
 
 use agena::{
+    agent::{
+        NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
+        PermissionConfig, ToolPermissionConfig, ToolPermissionRules,
+    },
     agents::{AgentDescriptor, AgentProfile},
     config::get_json_path,
     event::{DomainEvent, EventKind as AgenaSessionEvent},
@@ -37,6 +41,8 @@ use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use futures_util::StreamExt;
+#[cfg(test)]
+use indexmap::IndexMap;
 use ratatui::{
     Frame, Terminal,
     backend::Backend as RatatuiBackend,
@@ -623,7 +629,7 @@ enum Route {
     Help(HelpOverlay),
     SettingsStudio(SettingsStudioOverlay),
     AgentStudio(AgentStudioOverlay),
-    AgentPermissionStudio(AgentPermissionStudioOverlay),
+    PermissionStudio(PermissionStudioOverlay),
     PermissionRuleStudio(PermissionRuleStudioOverlay),
     SessionSearch(SessionSearchOverlay),
     Picker(PickerOverlay),
@@ -674,7 +680,6 @@ struct AgentStudioItem {
 #[derive(Debug, Clone)]
 enum AgentStudioAction {
     Edit(AgentStudioField),
-    ToggleHidden,
     SetDefault,
     OpenPermissionWorkbench,
     OpenSource,
@@ -684,12 +689,6 @@ enum AgentStudioAction {
 enum AgentStudioField {
     Description,
     Prompt,
-    Mode,
-    Aliases,
-    AllowedEntries,
-    Temperature,
-    MaxOutputTokens,
-    Steps,
     DefaultProvider,
     DefaultAdapter,
     DefaultModel,
@@ -703,43 +702,131 @@ enum AgentStudioEditorAction {
 }
 
 #[derive(Debug, Clone)]
-struct AgentPermissionStudioOverlay {
-    agent_name: String,
-    profile: AgentProfile,
-    editable: bool,
-    workbench: ListWorkbenchState<AgentPermissionStudioItem, AgentPermissionStudioEditor>,
+enum PermissionStudioSource {
+    GlobalConfig,
+    Agent { agent_name: String },
+    Session { session_id: i64 },
 }
 
 #[derive(Debug, Clone)]
-struct AgentPermissionStudioItem {
+struct PermissionStudioOverlay {
+    title: String,
+    footer: String,
+    source: PermissionStudioSource,
+    title_context: String,
+    source_label: String,
+    scope_label: String,
+    editable: bool,
+    permission: PermissionConfig,
+    nav: SelectableListState<PermissionStudioNavItem>,
+    pane_focus: PermissionStudioPaneFocus,
+    page: PermissionStudioPage,
+    state: SectionedListState<PermissionStudioSection>,
+    editor: Option<PermissionStudioEditor>,
+}
+
+#[derive(Debug, Clone)]
+struct PermissionStudioNavItem {
+    label: String,
+    level: usize,
+    page: PermissionStudioPage,
+    section: Option<PermissionStudioSectionId>,
+    selectable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionStudioPaneFocus {
+    Navigation,
+    Content,
+}
+
+#[derive(Debug, Clone)]
+struct PermissionStudioItem {
     label: String,
     value: String,
-    detail: String,
-    action: AgentPermissionStudioAction,
+    action: PermissionStudioAction,
 }
 
 #[derive(Debug, Clone)]
-enum AgentPermissionStudioAction {
-    Edit(AgentPermissionField),
-    OpenSource,
+enum PermissionStudioAction {
+    Noop,
+    EditMode(PermissionStudioModeTarget),
+    EditText(PermissionStudioTextTarget),
+}
+
+#[derive(Debug, Clone)]
+struct PermissionStudioSection {
+    id: PermissionStudioSectionId,
+    label: String,
+    items: Vec<PermissionStudioItem>,
+}
+
+type PermissionStudioFocus = SectionedListFocus;
+
+impl SectionedListSection for PermissionStudioSection {
+    type Item = PermissionStudioItem;
+
+    fn items(&self) -> &[Self::Item] {
+        self.items.as_slice()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AgentPermissionField {
-    InheritPath,
-    InheritNetwork,
-    InheritEntries,
-    PathConfig,
-    NetworkConfig,
-    EntryConfig,
-    FullConfig,
+enum PermissionStudioSectionId {
+    RootPath,
+    RootNetwork,
+    RootEntries,
+    PathDefaults,
+    PathRules,
+    NetworkZones,
+    NetworkRules,
+    EntryTags,
+    EntryNames,
+    EntryCommandRules,
 }
 
-type AgentPermissionStudioEditor = EditorDialogState<AgentPermissionStudioEditorAction>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PermissionStudioPage {
+    Overview,
+    PathDefaults,
+    PathRules,
+    NetworkZones,
+    NetworkRules,
+    EntryTags,
+    EntryNames,
+    EntryCommandRules,
+}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AgentPermissionStudioEditorAction {
-    Field(AgentPermissionField),
+type PermissionStudioEditor = EditorDialogState<PermissionStudioEditorAction>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PermissionStudioEditorAction {
+    Text(PermissionStudioTextTarget),
+    AddPathRule { duplicate_from: Option<String> },
+    AddNetworkRule { duplicate_from: Option<String> },
+    AddToolTag { duplicate_from: Option<String> },
+    AddToolName { duplicate_from: Option<String> },
+    AddToolRule { duplicate_from: Option<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PermissionStudioModeTarget {
+    PathWorkspaceRead,
+    PathWorkspaceWrite,
+    PathExternalRead,
+    PathExternalWrite,
+    NetworkInternet,
+    NetworkPrivate,
+    NetworkLoopback,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PermissionStudioTextTarget {
+    PathRulePattern { pattern: String },
+    NetworkRuleTarget { target: String },
+    ToolTagKey { key: String },
+    ToolNameKey { key: String },
+    ToolRuleName { tool_name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -808,12 +895,19 @@ struct ChoiceCustomValue {
 
 type ChoiceOverlay = SearchListOverlay<ChoiceItem, ChoiceCustomValue, ChoiceOverlayMeta, Editor>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChoiceOverlayStyle {
+    Searchable,
+    SelectOnly,
+}
+
 #[derive(Debug, Clone)]
 enum ChoiceOverlayAction {
     SettingsField(SettingsFieldSpec),
     RuntimeSetting(RuntimeSettingSpec),
     ProviderStudioField(ProviderStudioField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
+    PermissionStudioMode(PermissionStudioModeTarget),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -857,6 +951,8 @@ enum SettingsPickerAction {
     OpenRuntimeProviderOverride,
     OpenRuntimeModelOverride,
     ClearRuntimeModelStack,
+    OpenGlobalPermissionWorkbench,
+    OpenCurrentSessionPermissionWorkbench,
     OpenPermissionRules,
     OpenConfigFile,
 }
@@ -1018,6 +1114,21 @@ enum ConfirmAction {
         rule_id: i64,
         label: String,
         return_query: String,
+    },
+    PermissionStudioDeletePathRule {
+        pattern: String,
+    },
+    PermissionStudioDeleteNetworkRule {
+        target: String,
+    },
+    PermissionStudioDeleteToolTag {
+        key: String,
+    },
+    PermissionStudioDeleteToolName {
+        key: String,
+    },
+    PermissionStudioDeleteToolRule {
+        tool_name: String,
     },
     ExitWorktree {
         session_id: i64,
@@ -2375,8 +2486,8 @@ impl App {
             Route::Help(dialog) => self.handle_help_overlay_key(key, dialog),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
             Route::AgentStudio(dialog) => self.handle_agent_studio_overlay_key(key, dialog),
-            Route::AgentPermissionStudio(dialog) => {
-                self.handle_agent_permission_studio_overlay_key(key, dialog)
+            Route::PermissionStudio(dialog) => {
+                self.handle_permission_studio_overlay_key(key, dialog)
             }
             Route::PermissionRuleStudio(dialog) => {
                 self.handle_permission_rule_studio_overlay_key(key, dialog)
@@ -3054,31 +3165,6 @@ impl App {
                 self.set_default_agent(agent.name.as_str(), dialog);
                 false
             }
-            KeyCode::Char('t')
-                if dialog.state.focus() == SettingsStudioFocus::Items
-                    && matches!(
-                        dialog.state.selected_section(),
-                        Some(section) if section.id == SettingsStudioSectionId::Agents
-                    ) =>
-            {
-                let Some(item) = dialog.state.selected_item().cloned() else {
-                    return false;
-                };
-                let SettingsPickerAction::OpenAgent(agent) = item.action else {
-                    return false;
-                };
-                if agent.source_path.is_some()
-                    || !matches!(agent.scope, agena::agents::AgentScope::Project)
-                {
-                    self.flash_warning(self.i18n.text_args(
-                        "flash-agent-not-in-current-config",
-                        &crate::fl_args!("agent" => agent.name),
-                    ));
-                    return false;
-                }
-                self.toggle_agent_hidden(agent.name.as_str(), agent.hidden, dialog);
-                false
-            }
             KeyCode::Char('t') | KeyCode::Char('d')
                 if dialog.state.focus() == SettingsStudioFocus::Items
                     && matches!(
@@ -3191,47 +3277,29 @@ impl App {
                 }
                 false
             }
-            KeyCode::Char('t') => {
-                if !dialog.editable {
-                    self.flash_warning(agent_file_backed_hidden_message(&self.i18n));
-                    return false;
-                }
-                let hidden = dialog.profile.frontmatter.hidden;
-                match self.set_agent_hidden_value(dialog.agent_name.as_str(), !hidden) {
-                    Ok(_) => {
-                        self.flash_success(agent_hidden_toggled_message(
-                            &self.i18n,
-                            dialog.agent_name.as_str(),
-                            hidden,
-                        ));
-                        self.refresh_agent_studio_overlay(dialog);
-                    }
-                    Err(error) => self.flash_error(error),
-                }
-                false
-            }
             _ if dialog.workbench.list.handle_navigation_key(key, 10) => false,
             KeyCode::Enter => self.activate_agent_studio_selection(dialog),
             _ => false,
         }
     }
 
-    fn handle_agent_permission_studio_overlay_key(
+    fn handle_permission_studio_overlay_key(
         &mut self,
         key: KeyEvent,
-        dialog: &mut AgentPermissionStudioOverlay,
+        dialog: &mut PermissionStudioOverlay,
     ) -> bool {
-        if let Some(editor) = dialog.workbench.editor.as_mut() {
+        if let Some(editor) = dialog.editor.as_mut() {
             match drive_editor_dialog_key(editor, key) {
                 EditorDialogKeyResult::Continue => {}
                 EditorDialogKeyResult::Close => {
-                    dialog.workbench.editor = None;
+                    dialog.editor = None;
                 }
                 EditorDialogKeyResult::Submit(action, input) => {
-                    if let Err(error) = self.commit_agent_permission_editor(dialog, action, input) {
+                    if let Err(error) = self.commit_permission_studio_editor(dialog, action, input)
+                    {
                         self.flash_error(error);
                     } else {
-                        dialog.workbench.editor = None;
+                        dialog.editor = None;
                     }
                 }
             }
@@ -3239,17 +3307,109 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Esc => true,
+            KeyCode::Esc => match dialog.pane_focus {
+                PermissionStudioPaneFocus::Navigation => true,
+                PermissionStudioPaneFocus::Content => {
+                    set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Navigation);
+                    false
+                }
+            },
             KeyCode::Char('r') => {
-                self.refresh_agent_permission_studio_overlay(dialog);
+                self.refresh_permission_studio_overlay(dialog);
                 false
             }
-            KeyCode::Char('o') => {
-                self.open_agent_profile_source(&dialog.profile);
+            KeyCode::Char('a') => {
+                self.open_permission_studio_add_current(dialog);
                 false
             }
-            _ if dialog.workbench.list.handle_navigation_key(key, 10) => false,
-            KeyCode::Enter => self.activate_agent_permission_studio_selection(dialog),
+            KeyCode::Char('e') => self.activate_permission_studio_selection(dialog),
+            KeyCode::Char('y') => {
+                self.open_permission_studio_duplicate_current(dialog);
+                false
+            }
+            KeyCode::Char('d') => {
+                self.open_permission_studio_delete_current(dialog);
+                false
+            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l')
+                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
+            {
+                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
+                false
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h')
+                if dialog.pane_focus == PermissionStudioPaneFocus::Content =>
+            {
+                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Navigation);
+                false
+            }
+            KeyCode::PageUp
+                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
+            {
+                permission_studio_nav_move_page(&mut dialog.nav, -1, 10);
+                self.apply_permission_studio_nav_selection(dialog);
+                false
+            }
+            KeyCode::PageDown
+                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
+            {
+                permission_studio_nav_move_page(&mut dialog.nav, 1, 10);
+                self.apply_permission_studio_nav_selection(dialog);
+                false
+            }
+            KeyCode::Home if dialog.pane_focus == PermissionStudioPaneFocus::Navigation => {
+                permission_studio_nav_move_home(&mut dialog.nav);
+                self.apply_permission_studio_nav_selection(dialog);
+                false
+            }
+            KeyCode::End if dialog.pane_focus == PermissionStudioPaneFocus::Navigation => {
+                permission_studio_nav_move_end(&mut dialog.nav);
+                self.apply_permission_studio_nav_selection(dialog);
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k')
+                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
+            {
+                permission_studio_nav_move_step(&mut dialog.nav, -1);
+                self.apply_permission_studio_nav_selection(dialog);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j')
+                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
+            {
+                permission_studio_nav_move_step(&mut dialog.nav, 1);
+                self.apply_permission_studio_nav_selection(dialog);
+                false
+            }
+            KeyCode::PageUp => {
+                dialog.state.move_selection_page(-1, 10);
+                false
+            }
+            KeyCode::PageDown => {
+                dialog.state.move_selection_page(1, 10);
+                false
+            }
+            KeyCode::Home => {
+                dialog.state.move_selection_home();
+                false
+            }
+            KeyCode::End => {
+                dialog.state.move_selection_end();
+                false
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                dialog.state.move_selection(-1);
+                false
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                dialog.state.move_selection(1);
+                false
+            }
+            KeyCode::Enter if dialog.pane_focus == PermissionStudioPaneFocus::Navigation => {
+                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
+                false
+            }
+            KeyCode::Enter => self.activate_permission_studio_selection(dialog),
             _ => false,
         }
     }
@@ -3391,6 +3551,7 @@ impl App {
             all_items,
             ChoiceOverlayAction::PermissionRuleStudio(field),
             allow_clear,
+            ChoiceOverlayStyle::SelectOnly,
         ));
     }
 
@@ -3770,24 +3931,6 @@ impl App {
                 }
                 self.open_agent_studio_editor(dialog, field);
             }
-            AgentStudioAction::ToggleHidden => {
-                if !dialog.editable {
-                    self.flash_warning(agent_file_backed_edit_message(&self.i18n));
-                    return false;
-                }
-                let hidden = dialog.profile.frontmatter.hidden;
-                match self.set_agent_hidden_value(dialog.agent_name.as_str(), !hidden) {
-                    Ok(()) => {
-                        self.flash_success(agent_hidden_toggled_message(
-                            &self.i18n,
-                            dialog.agent_name.as_str(),
-                            hidden,
-                        ));
-                        self.refresh_agent_studio_overlay(dialog);
-                    }
-                    Err(error) => self.flash_error(error),
-                }
-            }
             AgentStudioAction::SetDefault => {
                 match self.set_default_agent_value(dialog.agent_name.as_str()) {
                     Ok(()) => {
@@ -3855,69 +3998,304 @@ impl App {
         Ok(())
     }
 
-    fn activate_agent_permission_studio_selection(
+    fn activate_permission_studio_selection(
         &mut self,
-        dialog: &mut AgentPermissionStudioOverlay,
+        dialog: &mut PermissionStudioOverlay,
     ) -> bool {
-        let Some(item) = dialog.workbench.list.selected_item().cloned() else {
+        if dialog.pane_focus == PermissionStudioPaneFocus::Navigation {
+            set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
+            return false;
+        }
+        let Some(item) = dialog.state.selected_item().cloned() else {
             return false;
         };
         match item.action {
-            AgentPermissionStudioAction::Edit(field) => {
+            PermissionStudioAction::Noop => return false,
+            PermissionStudioAction::EditMode(target) => {
                 if !dialog.editable {
-                    self.flash_warning(agent_file_backed_permissions_message(&self.i18n));
+                    self.flash_warning(permission_studio_read_only_message(
+                        &self.i18n,
+                        &dialog.source,
+                    ));
                     return false;
                 }
-                self.open_agent_permission_studio_editor(dialog, field);
+                self.open_permission_studio_mode_overlay(dialog, target);
+                return false;
             }
-            AgentPermissionStudioAction::OpenSource => {
-                self.open_agent_profile_source(&dialog.profile)
+            PermissionStudioAction::EditText(target) => {
+                if !dialog.editable {
+                    self.flash_warning(permission_studio_read_only_message(
+                        &self.i18n,
+                        &dialog.source,
+                    ));
+                    return false;
+                }
+                self.open_permission_studio_text_editor(dialog, target);
+                return false;
             }
         }
-        false
     }
 
-    fn open_agent_permission_studio_editor(
+    fn apply_permission_studio_nav_selection(&mut self, dialog: &mut PermissionStudioOverlay) {
+        let Some(item) = dialog.nav.selected_item().cloned() else {
+            return;
+        };
+        if !item.selectable {
+            return;
+        };
+        self.set_permission_studio_page_with_section(
+            dialog,
+            item.page,
+            item.section,
+            dialog.state.focus(),
+        );
+    }
+
+    fn open_permission_studio_mode_overlay(
         &mut self,
-        dialog: &mut AgentPermissionStudioOverlay,
-        field: AgentPermissionField,
+        dialog: &PermissionStudioOverlay,
+        target: PermissionStudioModeTarget,
     ) {
-        let (title, prompt, footer, multiline, input) =
-            agent_permission_editor_config(&self.i18n, &dialog.profile, field);
-        dialog.workbench.editor = Some(AgentPermissionStudioEditor::new(
-            title,
-            prompt,
-            footer,
-            multiline,
-            input,
-            AgentPermissionStudioEditorAction::Field(field),
+        self.open_choice_overlay(self.build_choice_overlay(
+            settings_edit_title(
+                &self.i18n,
+                permission_studio_mode_target_label(&self.i18n, &target).as_str(),
+            ),
+            String::new(),
+            Editor::from_text(permission_studio_mode_target_input_text(dialog, &target)),
+            permission_mode_choice_items(&self.i18n),
+            ChoiceOverlayAction::PermissionStudioMode(target),
+            true,
+            ChoiceOverlayStyle::SelectOnly,
         ));
     }
 
-    fn commit_agent_permission_editor(
+    fn open_permission_studio_text_editor(
         &mut self,
-        dialog: &mut AgentPermissionStudioOverlay,
-        action: AgentPermissionStudioEditorAction,
+        dialog: &mut PermissionStudioOverlay,
+        target: PermissionStudioTextTarget,
+    ) {
+        let title = settings_edit_title(
+            &self.i18n,
+            permission_studio_text_target_label(&self.i18n, &target).as_str(),
+        );
+        let prompt = String::new();
+        let footer = editor_save_footer(&self.i18n, false);
+        let input = Editor::from_text(permission_studio_text_target_input_text(&target));
+        dialog.editor = Some(PermissionStudioEditor::new(
+            title,
+            prompt,
+            footer,
+            false,
+            input,
+            PermissionStudioEditorAction::Text(target),
+        ));
+    }
+
+    fn open_permission_studio_creator(
+        &mut self,
+        dialog: &mut PermissionStudioOverlay,
+        action: PermissionStudioEditorAction,
+    ) {
+        let (title, prompt) = permission_studio_creator_spec(&self.i18n, &action);
+        let input = Editor::from_text(permission_studio_creator_input_text(&action));
+        dialog.editor = Some(PermissionStudioEditor::new(
+            title,
+            prompt,
+            editor_save_footer(&self.i18n, false),
+            false,
+            input,
+            action,
+        ));
+    }
+
+    fn commit_permission_studio_editor(
+        &mut self,
+        dialog: &mut PermissionStudioOverlay,
+        action: PermissionStudioEditorAction,
         input: String,
     ) -> UiResult<()> {
         match action {
-            AgentPermissionStudioEditorAction::Field(field) => {
-                let (path, value) = agent_permission_field_setting_value(
+            PermissionStudioEditorAction::Text(target) => {
+                let mut permission = dialog.permission.clone();
+                let next_page = apply_permission_studio_text_input(
                     &self.i18n,
-                    dialog.agent_name.as_str(),
-                    field,
+                    &mut permission,
+                    &target,
                     input.as_str(),
                 )?;
-                if let Some(value) = value {
-                    self.block_on_async(self.backend.set_config_setting(path.as_str(), value))
-                        .map_err(|error| error.to_string())?;
-                    self.flash_success(settings_path_updated_message(&self.i18n, path.as_str()));
-                } else {
-                    self.block_on_async(self.backend.delete_config_setting(path.as_str()))
-                        .map_err(|error| error.to_string())?;
-                    self.flash_success(settings_path_cleared_message(&self.i18n, path.as_str()));
-                }
-                self.refresh_agent_permission_studio_overlay(dialog);
+                self.persist_permission_studio(dialog, permission)?;
+                let next_section = match next_page {
+                    PermissionStudioPage::PathRules => Some(PermissionStudioSectionId::PathRules),
+                    PermissionStudioPage::NetworkRules => {
+                        Some(PermissionStudioSectionId::NetworkRules)
+                    }
+                    PermissionStudioPage::EntryTags => Some(PermissionStudioSectionId::EntryTags),
+                    PermissionStudioPage::EntryNames => Some(PermissionStudioSectionId::EntryNames),
+                    PermissionStudioPage::EntryCommandRules => {
+                        Some(PermissionStudioSectionId::EntryCommandRules)
+                    }
+                    PermissionStudioPage::PathDefaults
+                    | PermissionStudioPage::NetworkZones
+                    | PermissionStudioPage::Overview => None,
+                };
+                self.set_permission_studio_page_with_section(
+                    dialog,
+                    next_page,
+                    next_section,
+                    PermissionStudioFocus::Items,
+                );
+            }
+            PermissionStudioEditorAction::AddPathRule { duplicate_from } => {
+                let pattern = parse_permission_studio_key_input(
+                    &self.i18n,
+                    ui_text::t(&self.i18n, "permission-studio-field-path-rules").as_str(),
+                    input.as_str(),
+                )?;
+                let mut permission = dialog.permission.clone();
+                let rule = duplicate_from
+                    .as_ref()
+                    .and_then(|from| {
+                        permission
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.rules.get(from.as_str()))
+                            .cloned()
+                    })
+                    .unwrap_or_else(|| {
+                        PathAccessRuleConfig::Modes(PathAccessModes {
+                            read: Some(PermissionMode::Ask),
+                            write: Some(PermissionMode::Ask),
+                        })
+                    });
+                permission
+                    .path
+                    .get_or_insert_with(Default::default)
+                    .rules
+                    .insert(pattern.clone(), rule);
+                self.persist_permission_studio(dialog, permission)?;
+                self.set_permission_studio_page_with_section(
+                    dialog,
+                    PermissionStudioPage::PathRules,
+                    Some(PermissionStudioSectionId::PathRules),
+                    PermissionStudioFocus::Items,
+                );
+            }
+            PermissionStudioEditorAction::AddNetworkRule { duplicate_from } => {
+                let target = parse_permission_studio_key_input(
+                    &self.i18n,
+                    ui_text::t(&self.i18n, "permission-studio-field-network-rules").as_str(),
+                    input.as_str(),
+                )?;
+                let mut permission = dialog.permission.clone();
+                let mode = duplicate_from
+                    .as_ref()
+                    .and_then(|from| {
+                        permission
+                            .network
+                            .as_ref()
+                            .and_then(|network| network.rules.get(from.as_str()).copied())
+                    })
+                    .unwrap_or(PermissionMode::Ask);
+                permission
+                    .network
+                    .get_or_insert_with(Default::default)
+                    .rules
+                    .insert(target.clone(), mode);
+                self.persist_permission_studio(dialog, permission)?;
+                self.set_permission_studio_page_with_section(
+                    dialog,
+                    PermissionStudioPage::NetworkRules,
+                    Some(PermissionStudioSectionId::NetworkRules),
+                    PermissionStudioFocus::Items,
+                );
+            }
+            PermissionStudioEditorAction::AddToolTag { duplicate_from } => {
+                let key = parse_permission_studio_key_input(
+                    &self.i18n,
+                    ui_text::t(&self.i18n, "permission-studio-field-tool-tags").as_str(),
+                    input.as_str(),
+                )?;
+                let mut permission = dialog.permission.clone();
+                let mode = duplicate_from
+                    .as_ref()
+                    .and_then(|from| {
+                        permission
+                            .tools
+                            .as_ref()
+                            .and_then(|tools| tools.tags.get(from.as_str()).copied())
+                    })
+                    .unwrap_or(PermissionMode::Ask);
+                permission
+                    .tools
+                    .get_or_insert_with(Default::default)
+                    .tags
+                    .insert(key.clone(), mode);
+                self.persist_permission_studio(dialog, permission)?;
+                self.set_permission_studio_page_with_section(
+                    dialog,
+                    PermissionStudioPage::EntryTags,
+                    Some(PermissionStudioSectionId::EntryTags),
+                    PermissionStudioFocus::Items,
+                );
+            }
+            PermissionStudioEditorAction::AddToolName { duplicate_from } => {
+                let key = parse_permission_studio_key_input(
+                    &self.i18n,
+                    ui_text::t(&self.i18n, "permission-studio-field-tool-names").as_str(),
+                    input.as_str(),
+                )?;
+                let mut permission = dialog.permission.clone();
+                let mode = duplicate_from
+                    .as_ref()
+                    .and_then(|from| {
+                        permission
+                            .tools
+                            .as_ref()
+                            .and_then(|tools| tools.names.get(from.as_str()).copied())
+                    })
+                    .unwrap_or(PermissionMode::Ask);
+                permission
+                    .tools
+                    .get_or_insert_with(Default::default)
+                    .names
+                    .insert(key.clone(), mode);
+                self.persist_permission_studio(dialog, permission)?;
+                self.set_permission_studio_page_with_section(
+                    dialog,
+                    PermissionStudioPage::EntryNames,
+                    Some(PermissionStudioSectionId::EntryNames),
+                    PermissionStudioFocus::Items,
+                );
+            }
+            PermissionStudioEditorAction::AddToolRule { duplicate_from } => {
+                let tool_name = parse_permission_studio_key_input(
+                    &self.i18n,
+                    ui_text::t(&self.i18n, "permission-studio-field-tool-rules").as_str(),
+                    input.as_str(),
+                )?;
+                let mut permission = dialog.permission.clone();
+                let rule = duplicate_from
+                    .as_ref()
+                    .and_then(|from| {
+                        permission
+                            .tools
+                            .as_ref()
+                            .and_then(|tools| tools.rules.get(from.as_str()).cloned())
+                    })
+                    .unwrap_or(ToolPermissionRules::Mode(PermissionMode::Ask));
+                permission
+                    .tools
+                    .get_or_insert_with(Default::default)
+                    .rules
+                    .insert(tool_name.clone(), rule);
+                self.persist_permission_studio(dialog, permission)?;
+                self.set_permission_studio_page_with_section(
+                    dialog,
+                    PermissionStudioPage::EntryCommandRules,
+                    Some(PermissionStudioSectionId::EntryCommandRules),
+                    PermissionStudioFocus::Items,
+                );
             }
         }
         Ok(())
@@ -4754,8 +5132,8 @@ impl App {
                         handled_route = true;
                     }
                 }
-                Route::AgentPermissionStudio(dialog) => {
-                    if let Some(editor) = dialog.workbench.editor.as_mut() {
+                Route::PermissionStudio(dialog) => {
+                    if let Some(editor) = dialog.editor.as_mut() {
                         editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
@@ -7976,6 +8354,7 @@ impl App {
     fn standard_choice_overlay_config() -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 96,
+            input_enabled: true,
             search_enabled: true,
             custom_value_enabled: true,
             fill_selected_into_input: true,
@@ -7984,9 +8363,22 @@ impl App {
         }
     }
 
+    fn select_only_choice_overlay_config() -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 96,
+            input_enabled: false,
+            search_enabled: false,
+            custom_value_enabled: false,
+            fill_selected_into_input: false,
+            min_list_body_height: 3,
+            max_list_body_height: 12,
+        }
+    }
+
     fn standard_picker_overlay_config() -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 120,
+            input_enabled: true,
             search_enabled: true,
             custom_value_enabled: false,
             fill_selected_into_input: true,
@@ -7998,6 +8390,7 @@ impl App {
     fn path_browser_overlay_config() -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 96,
+            input_enabled: true,
             search_enabled: false,
             custom_value_enabled: true,
             fill_selected_into_input: true,
@@ -8009,6 +8402,7 @@ impl App {
     fn file_attach_overlay_config() -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 88,
+            input_enabled: true,
             search_enabled: false,
             custom_value_enabled: true,
             fill_selected_into_input: true,
@@ -8020,6 +8414,7 @@ impl App {
     fn session_search_overlay_config() -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 128,
+            input_enabled: true,
             search_enabled: false,
             custom_value_enabled: false,
             fill_selected_into_input: true,
@@ -8031,11 +8426,28 @@ impl App {
     fn session_model_chooser_overlay_config() -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 128,
+            input_enabled: true,
             search_enabled: true,
             custom_value_enabled: false,
             fill_selected_into_input: false,
             min_list_body_height: 5,
             max_list_body_height: 12,
+        }
+    }
+
+    fn choice_overlay_config(style: ChoiceOverlayStyle) -> SearchListOverlayConfig {
+        match style {
+            ChoiceOverlayStyle::Searchable => Self::standard_choice_overlay_config(),
+            ChoiceOverlayStyle::SelectOnly => Self::select_only_choice_overlay_config(),
+        }
+    }
+
+    fn choice_overlay_footer(&self, style: ChoiceOverlayStyle) -> String {
+        match style {
+            ChoiceOverlayStyle::Searchable => ui_text::t(&self.i18n, "overlay-choice-footer"),
+            ChoiceOverlayStyle::SelectOnly => {
+                ui_text::t(&self.i18n, "overlay-choice-footer-select")
+            }
         }
     }
 
@@ -8054,15 +8466,16 @@ impl App {
         all_items: Vec<ChoiceItem>,
         action: ChoiceOverlayAction,
         allow_clear: bool,
+        style: ChoiceOverlayStyle,
     ) -> ChoiceOverlay {
         let clear_action = allow_clear.then(|| self.choice_overlay_clear_action(action.clone()));
         ChoiceOverlay::new(
             title,
             prompt,
-            ui_text::t(&self.i18n, "overlay-choice-footer"),
+            self.choice_overlay_footer(style),
             ui_text::t(&self.i18n, "overlay-picker-empty"),
             input,
-            Self::standard_choice_overlay_config(),
+            Self::choice_overlay_config(style),
             clear_action,
             ChoiceOverlayMeta {
                 i18n: self.i18n.clone(),
@@ -8341,6 +8754,17 @@ impl App {
             .block_on_async(self.backend.list_permission_rules())
             .map(|rules| rules.len())
             .unwrap_or_default();
+        let global_permission = permission_config_from_json_value(
+            &get_json_path(&sources.effective, Some("permission")).unwrap_or(JsonValue::Null),
+        )?;
+        let current_session_permission =
+            self.current_or_selected_session_id()
+                .and_then(|session_id| {
+                    self.block_on_async(
+                        self.backend.get_session_permission_studio_state(session_id),
+                    )
+                    .ok()
+                });
         let model_catalog = self
             .backend
             .list_model_catalog_entries("", 0, 1)
@@ -8354,16 +8778,37 @@ impl App {
         let provider_items = settings_studio_provider_items(&self.i18n, &configured_providers);
         let model_catalog_items = settings_studio_model_catalog_items(&self.i18n, &model_catalog);
         let file_items = settings_studio_file_items(&self.i18n, &sources);
+        let mut permission_items = vec![SettingsStudioItem {
+            label: ui_text::t(&self.i18n, "settings-permission-global-label"),
+            value: permission_override_summary(&self.i18n, &global_permission),
+            detail: ui_text::t(&self.i18n, "settings-permission-global-detail"),
+            action: SettingsPickerAction::OpenGlobalPermissionWorkbench,
+        }];
+        if let Some(current_session_permission) = current_session_permission.as_ref() {
+            permission_items.push(SettingsStudioItem {
+                label: ui_text::t(&self.i18n, "settings-permission-current-label"),
+                value: permission_settings_value(
+                    &self.i18n,
+                    &current_session_permission.permission,
+                    &current_session_permission.effective_permission,
+                ),
+                detail: self.i18n.text_args(
+                    "settings-permission-current-detail",
+                    &crate::fl_args!("session" => current_session_permission.session_title.clone()),
+                ),
+                action: SettingsPickerAction::OpenCurrentSessionPermissionWorkbench,
+            });
+        }
+        permission_items.push(SettingsStudioItem {
+            label: ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
+            value: permission_rule_count.to_string(),
+            detail: ui_text::t(
+                &self.i18n,
+                "overlay-settings-manage-permission-rules-detail",
+            ),
+            action: SettingsPickerAction::OpenPermissionRules,
+        });
         let agent_count = agents.len();
-        let agent_primary_count = agents
-            .iter()
-            .filter(|agent| agent.mode.allows_root())
-            .count();
-        let agent_subagent_count = agents
-            .iter()
-            .filter(|agent| agent.mode.allows_subagent())
-            .count();
-        let agent_hidden_count = agents.iter().filter(|agent| agent.hidden).count();
         let mut sections = vec![
             SettingsStudioSection {
                 id: SettingsStudioSectionId::General,
@@ -8429,16 +8874,12 @@ impl App {
                         &crate::fl_args!(
                             "count" => agent_count as i64,
                             "default" => default.to_string(),
-                            "hidden" => agent_hidden_count as i64,
                         ),
                     ),
                     None => self.i18n.text_args(
                         "overlay-settings-section-agents-summary",
                         &crate::fl_args!(
                             "count" => agent_count as i64,
-                            "primary" => agent_primary_count as i64,
-                            "subagent" => agent_subagent_count as i64,
-                            "hidden" => agent_hidden_count as i64,
                         ),
                     ),
                 },
@@ -8474,23 +8915,18 @@ impl App {
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Permissions,
                 label: ui_text::t(&self.i18n, "overlay-settings-section-permissions-label"),
-                summary: self.i18n.text_args(
-                    "overlay-settings-section-permissions-summary",
-                    &crate::fl_args!("count" => permission_rule_count as i64),
-                ),
+                summary: join_inline_segments(vec![
+                    self.i18n.text_args(
+                        "overlay-settings-section-permissions-summary",
+                        &crate::fl_args!("count" => permission_rule_count as i64),
+                    ),
+                    permission_override_summary(&self.i18n, &global_permission),
+                ]),
                 description: ui_text::t(
                     &self.i18n,
                     "overlay-settings-section-permissions-description",
                 ),
-                items: vec![SettingsStudioItem {
-                    label: ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
-                    value: permission_rule_count.to_string(),
-                    detail: ui_text::t(
-                        &self.i18n,
-                        "overlay-settings-manage-permission-rules-detail",
-                    ),
-                    action: SettingsPickerAction::OpenPermissionRules,
-                }],
+                items: permission_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Files,
@@ -8609,58 +9045,537 @@ impl App {
         }
     }
 
-    fn open_agent_permission_studio(&mut self, agent_name: &str) {
-        match self.build_agent_permission_studio_overlay(agent_name, None) {
-            Ok(dialog) => self.current_route = Route::AgentPermissionStudio(dialog),
+    fn open_global_permission_studio(&mut self) {
+        match self.build_permission_studio_overlay(
+            PermissionStudioSource::GlobalConfig,
+            PermissionStudioPage::Overview,
+            Some(PermissionStudioSectionId::RootPath),
+            None,
+            PermissionStudioFocus::Navigation,
+        ) {
+            Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
             Err(error) => self.flash_error(error),
         }
     }
 
-    fn build_agent_permission_studio_overlay(
-        &self,
-        agent_name: &str,
-        preferred_item_label: Option<&str>,
-    ) -> UiResult<AgentPermissionStudioOverlay> {
-        let profile = self
-            .backend
-            .get_agent_profile(agent_name)
-            .ok_or_else(|| format!("agent not found: {agent_name}"))?;
-        let editable = agent_profile_editable(&profile);
-        let items = agent_permission_studio_items(&self.i18n, &profile, editable);
-        let selected = preferred_item_label
-            .and_then(|label| items.iter().position(|item| item.label == label))
-            .unwrap_or(0);
-        let title = format!(
-            "{} · {}",
-            ui_text::t(&self.i18n, "overlay-agent-permission-title"),
-            profile.name
-        );
-        let footer = ui_text::t(&self.i18n, "overlay-agent-permission-footer");
-        Ok(AgentPermissionStudioOverlay {
-            agent_name: profile.name.clone(),
-            profile,
-            editable,
-            workbench: ListWorkbenchState::new(
-                title,
-                footer,
-                SelectableListState::new(items, selected),
-            ),
-        })
+    fn open_agent_permission_studio(&mut self, agent_name: &str) {
+        match self.build_permission_studio_overlay(
+            PermissionStudioSource::Agent {
+                agent_name: agent_name.to_string(),
+            },
+            PermissionStudioPage::Overview,
+            Some(PermissionStudioSectionId::RootPath),
+            None,
+            PermissionStudioFocus::Navigation,
+        ) {
+            Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
+            Err(error) => self.flash_error(error),
+        }
     }
 
-    fn refresh_agent_permission_studio_overlay(
-        &mut self,
-        dialog: &mut AgentPermissionStudioOverlay,
-    ) {
-        let preferred_item = dialog
-            .workbench
-            .list
-            .selected_item()
-            .map(|item| item.label.as_str());
-        match self.build_agent_permission_studio_overlay(dialog.agent_name.as_str(), preferred_item)
-        {
-            Ok(updated) => *dialog = updated,
+    fn open_session_permission_studio(&mut self, session_id: i64) {
+        match self.build_permission_studio_overlay(
+            PermissionStudioSource::Session { session_id },
+            PermissionStudioPage::Overview,
+            Some(PermissionStudioSectionId::RootPath),
+            None,
+            PermissionStudioFocus::Navigation,
+        ) {
+            Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
             Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn build_permission_studio_overlay(
+        &self,
+        source: PermissionStudioSource,
+        page: PermissionStudioPage,
+        preferred_section: Option<PermissionStudioSectionId>,
+        preferred_item_label: Option<&str>,
+        preferred_focus: PermissionStudioFocus,
+    ) -> UiResult<PermissionStudioOverlay> {
+        let (
+            title_context,
+            source_label,
+            scope_label,
+            editable,
+            permission,
+        ) = match &source {
+            PermissionStudioSource::GlobalConfig => {
+                let sources = self
+                    .backend
+                    .config_json_sources()
+                    .map_err(|error| error.to_string())?;
+                let permission = permission_config_from_json_value(
+                    &get_json_path(&sources.effective, Some("permission"))
+                        .unwrap_or(JsonValue::Null),
+                )?;
+                (
+                    ui_text::t(&self.i18n, "settings-permission-global-label"),
+                    sources.config_path.display().to_string(),
+                    ui_text::t(&self.i18n, "permission-studio-source-global"),
+                    true,
+                    permission.clone(),
+                )
+            }
+            PermissionStudioSource::Agent { agent_name } => {
+                let profile = self
+                    .backend
+                    .get_agent_profile(agent_name)
+                    .ok_or_else(|| format!("agent not found: {agent_name}"))?;
+                let permission = profile.frontmatter.permission.clone();
+                (
+                    profile.name.clone(),
+                    agent_profile_source_label_localized(&self.i18n, &profile),
+                    profile.scope.as_str().to_string(),
+                    agent_profile_editable(&profile),
+                    permission.clone(),
+                )
+            }
+            PermissionStudioSource::Session { session_id } => {
+                let state = self
+                    .block_on_async(
+                        self.backend
+                            .get_session_permission_studio_state(*session_id),
+                    )
+                    .map_err(|error| error.to_string())?;
+                (
+                    state.session_title,
+                    session_id.to_string(),
+                    ui_text::t(&self.i18n, "permission-studio-source-session"),
+                    true,
+                    state.permission,
+                )
+            }
+        };
+        let mut dialog = PermissionStudioOverlay {
+            title: String::new(),
+            footer: String::new(),
+            source,
+            title_context,
+            source_label,
+            scope_label,
+            editable,
+            permission,
+            nav: SelectableListState::new(Vec::new(), 0),
+            pane_focus: PermissionStudioPaneFocus::Navigation,
+            page,
+            state: SectionedListState::new(Vec::new(), 0, 0, PermissionStudioFocus::Navigation),
+            editor: None,
+        };
+        refresh_permission_studio_dialog(
+            &self.i18n,
+            &mut dialog,
+            preferred_section,
+            preferred_item_label,
+            Some(preferred_focus),
+        );
+        Ok(dialog)
+    }
+
+    fn refresh_permission_studio_overlay(&mut self, dialog: &mut PermissionStudioOverlay) {
+        let preferred_section = dialog.state.selected_section().map(|section| section.id);
+        let preferred_item = dialog.state.selected_item().map(|item| item.label.as_str());
+        let pane_focus = dialog.pane_focus;
+        match self.build_permission_studio_overlay(
+            dialog.source.clone(),
+            dialog.page.clone(),
+            preferred_section,
+            preferred_item,
+            dialog.state.focus(),
+        ) {
+            Ok(mut updated) => {
+                set_permission_studio_pane_focus(&mut updated, pane_focus);
+                *dialog = updated;
+            }
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    fn set_permission_studio_page_with_section(
+        &mut self,
+        dialog: &mut PermissionStudioOverlay,
+        page: PermissionStudioPage,
+        section: Option<PermissionStudioSectionId>,
+        focus: PermissionStudioFocus,
+    ) {
+        dialog.page = page;
+        refresh_permission_studio_dialog(&self.i18n, dialog, section, None, Some(focus));
+    }
+
+    fn persist_permission_studio(
+        &mut self,
+        dialog: &mut PermissionStudioOverlay,
+        permission: PermissionConfig,
+    ) -> UiResult<()> {
+        match &dialog.source {
+            PermissionStudioSource::GlobalConfig => {
+                if permission.is_empty() {
+                    self.block_on_async(self.backend.delete_config_setting("permission"))
+                        .map_err(|error| error.to_string())?;
+                    self.flash_success(settings_path_cleared_message(&self.i18n, "permission"));
+                } else {
+                    self.block_on_async(self.backend.set_config_setting(
+                        "permission",
+                        serde_json::to_value(&permission).map_err(|error| error.to_string())?,
+                    ))
+                    .map_err(|error| error.to_string())?;
+                    self.flash_success(settings_path_updated_message(&self.i18n, "permission"));
+                }
+                self.refresh_current_transcript_execution_state();
+            }
+            PermissionStudioSource::Agent { agent_name } => {
+                let path = agent_config_path(agent_name.as_str(), "permission");
+                if permission.is_empty() {
+                    self.block_on_async(self.backend.delete_config_setting(path.as_str()))
+                        .map_err(|error| error.to_string())?;
+                    self.flash_success(settings_path_cleared_message(&self.i18n, path.as_str()));
+                } else {
+                    self.block_on_async(self.backend.set_config_setting(
+                        path.as_str(),
+                        serde_json::to_value(&permission).map_err(|error| error.to_string())?,
+                    ))
+                    .map_err(|error| error.to_string())?;
+                    self.flash_success(settings_path_updated_message(&self.i18n, path.as_str()));
+                }
+                self.refresh_current_transcript_execution_state();
+            }
+            PermissionStudioSource::Session { session_id } => {
+                let execution = self
+                    .block_on_async(self.backend.set_session_permission(*session_id, permission))
+                    .map_err(|error| error.to_string())?;
+                if self.transcript.session_id == Some(*session_id) {
+                    self.apply_transcript_execution(execution);
+                }
+                self.flash_success(ui_text::t(&self.i18n, "flash-session-permission-updated"));
+            }
+        }
+        self.refresh_permission_studio_overlay(dialog);
+        Ok(())
+    }
+
+    fn permission_studio_selected_item_label(
+        &self,
+        dialog: &PermissionStudioOverlay,
+    ) -> Option<String> {
+        dialog
+            .state
+            .selected_item()
+            .map(|item| item.label.as_str().to_string())
+    }
+
+    fn open_permission_studio_add_current(&mut self, dialog: &mut PermissionStudioOverlay) {
+        if !dialog.editable {
+            self.flash_warning(permission_studio_read_only_message(&self.i18n, &dialog.source));
+            return;
+        }
+        let action = match &dialog.page {
+            PermissionStudioPage::PathDefaults
+            | PermissionStudioPage::NetworkZones
+            | PermissionStudioPage::Overview => {
+                self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
+                return;
+            }
+            PermissionStudioPage::PathRules => {
+                PermissionStudioEditorAction::AddPathRule {
+                    duplicate_from: None,
+                }
+            }
+            PermissionStudioPage::NetworkRules => {
+                PermissionStudioEditorAction::AddNetworkRule {
+                    duplicate_from: None,
+                }
+            }
+            PermissionStudioPage::EntryTags => {
+                PermissionStudioEditorAction::AddToolTag {
+                    duplicate_from: None,
+                }
+            }
+            PermissionStudioPage::EntryNames => {
+                PermissionStudioEditorAction::AddToolName {
+                    duplicate_from: None,
+                }
+            }
+            PermissionStudioPage::EntryCommandRules => {
+                PermissionStudioEditorAction::AddToolRule {
+                    duplicate_from: None,
+                }
+            }
+        };
+        self.open_permission_studio_creator(dialog, action);
+    }
+
+    fn open_permission_studio_duplicate_current(&mut self, dialog: &mut PermissionStudioOverlay) {
+        if !dialog.editable {
+            self.flash_warning(permission_studio_read_only_message(&self.i18n, &dialog.source));
+            return;
+        }
+        let action = match &dialog.page {
+            PermissionStudioPage::PathDefaults
+            | PermissionStudioPage::NetworkZones
+            | PermissionStudioPage::Overview => {
+                self.flash_warning(ui_text::t(
+                    &self.i18n,
+                    "flash-permission-studio-no-duplicate",
+                ));
+                return;
+            }
+            PermissionStudioPage::PathRules => {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                PermissionStudioEditorAction::AddPathRule {
+                    duplicate_from: Some(duplicate_from),
+                }
+            }
+            PermissionStudioPage::NetworkRules => {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                PermissionStudioEditorAction::AddNetworkRule {
+                    duplicate_from: Some(duplicate_from),
+                }
+            }
+            PermissionStudioPage::EntryTags => {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                PermissionStudioEditorAction::AddToolTag {
+                    duplicate_from: Some(duplicate_from),
+                }
+            }
+            PermissionStudioPage::EntryNames => {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                PermissionStudioEditorAction::AddToolName {
+                    duplicate_from: Some(duplicate_from),
+                }
+            }
+            PermissionStudioPage::EntryCommandRules => {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                PermissionStudioEditorAction::AddToolRule {
+                    duplicate_from: Some(duplicate_from),
+                }
+            }
+        };
+        self.open_permission_studio_creator(dialog, action);
+    }
+
+    fn open_permission_studio_delete_current(&mut self, dialog: &mut PermissionStudioOverlay) {
+        if !dialog.editable {
+            self.flash_warning(permission_studio_read_only_message(&self.i18n, &dialog.source));
+            return;
+        }
+        let (title, body, action) = match &dialog.page {
+            PermissionStudioPage::PathDefaults
+            | PermissionStudioPage::NetworkZones
+            | PermissionStudioPage::Overview => {
+                self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-delete"));
+                return;
+            }
+            PermissionStudioPage::PathRules => {
+                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                (
+                    ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
+                    vec![self.i18n.text_args(
+                        "overlay-permission-studio-delete-body",
+                        &crate::fl_args!(
+                            "kind" => ui_text::t(&self.i18n, "permission-studio-page-path-rules"),
+                            "value" => label.clone(),
+                        ),
+                    )],
+                    ConfirmAction::PermissionStudioDeletePathRule { pattern: label },
+                )
+            }
+            PermissionStudioPage::NetworkRules => {
+                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                (
+                    ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
+                    vec![self.i18n.text_args(
+                        "overlay-permission-studio-delete-body",
+                        &crate::fl_args!(
+                            "kind" => ui_text::t(&self.i18n, "permission-studio-page-network-rules"),
+                            "value" => label.clone(),
+                        ),
+                    )],
+                    ConfirmAction::PermissionStudioDeleteNetworkRule { target: label },
+                )
+            }
+            PermissionStudioPage::EntryTags => {
+                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                (
+                    ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
+                    vec![self.i18n.text_args(
+                        "overlay-permission-studio-delete-body",
+                        &crate::fl_args!(
+                            "kind" => ui_text::t(&self.i18n, "permission-studio-page-tags"),
+                            "value" => label.clone(),
+                        ),
+                    )],
+                    ConfirmAction::PermissionStudioDeleteToolTag { key: label },
+                )
+            }
+            PermissionStudioPage::EntryNames => {
+                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                (
+                    ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
+                    vec![self.i18n.text_args(
+                        "overlay-permission-studio-delete-body",
+                        &crate::fl_args!(
+                            "kind" => ui_text::t(&self.i18n, "permission-studio-page-names"),
+                            "value" => label.clone(),
+                        ),
+                    )],
+                    ConfirmAction::PermissionStudioDeleteToolName { key: label },
+                )
+            }
+            PermissionStudioPage::EntryCommandRules => {
+                let Some(label) = self.permission_studio_selected_item_label(dialog) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
+                    return;
+                };
+                (
+                    ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
+                    vec![self.i18n.text_args(
+                        "overlay-permission-studio-delete-body",
+                        &crate::fl_args!(
+                            "kind" => ui_text::t(&self.i18n, "permission-studio-page-tool-rules"),
+                            "value" => label.clone(),
+                        ),
+                    )],
+                    ConfirmAction::PermissionStudioDeleteToolRule { tool_name: label },
+                )
+            }
+        };
+        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(title, body, action)));
+    }
+
+    fn delete_permission_studio_config<F>(&mut self, mutator: F)
+    where
+        F: FnOnce(&mut PermissionConfig),
+    {
+        let Some((host, mut dialog)) = self.take_permission_studio_dialog() else {
+            self.flash_error(ui_text::t(
+                &self.i18n,
+                "flash-permission-studio-context-lost",
+            ));
+            return;
+        };
+
+        let mut permission = dialog.permission.clone();
+        mutator(&mut permission);
+        normalize_permission_config(&mut permission);
+        match self.persist_permission_studio(&mut dialog, permission) {
+            Ok(()) => self.restore_permission_studio_dialog(host, dialog),
+            Err(error) => {
+                self.restore_permission_studio_dialog(host, dialog);
+                self.flash_error(error);
+            }
+        }
+    }
+
+    fn delete_permission_studio_path_rule(&mut self, pattern: &str) {
+        let pattern = pattern.to_string();
+        self.delete_permission_studio_config(move |permission| {
+            if let Some(path) = permission.path.as_mut() {
+                path.rules.shift_remove(pattern.as_str());
+            }
+        });
+    }
+
+    fn delete_permission_studio_network_rule(&mut self, target: &str) {
+        let target = target.to_string();
+        self.delete_permission_studio_config(move |permission| {
+            if let Some(network) = permission.network.as_mut() {
+                network.rules.shift_remove(target.as_str());
+            }
+        });
+    }
+
+    fn delete_permission_studio_tool_tag(&mut self, key: &str) {
+        let key = key.to_string();
+        self.delete_permission_studio_config(move |permission| {
+            if let Some(tools) = permission.tools.as_mut() {
+                tools.tags.remove(key.as_str());
+            }
+        });
+    }
+
+    fn delete_permission_studio_tool_name(&mut self, key: &str) {
+        let key = key.to_string();
+        self.delete_permission_studio_config(move |permission| {
+            if let Some(tools) = permission.tools.as_mut() {
+                tools.names.remove(key.as_str());
+            }
+        });
+    }
+
+    fn delete_permission_studio_tool_rule(&mut self, tool_name: &str) {
+        let tool_name = tool_name.to_string();
+        self.delete_permission_studio_config(move |permission| {
+            if let Some(tools) = permission.tools.as_mut() {
+                tools.rules.remove(tool_name.as_str());
+            }
+        });
+    }
+
+    fn refresh_current_transcript_execution_state(&mut self) {
+        let Some(session_id) = self.transcript.session_id else {
+            return;
+        };
+        match self.block_on_async(self.backend.get_session_state(session_id)) {
+            Ok(execution) => self.apply_transcript_execution(execution),
+            Err(error) => self.flash_error(error.to_string()),
         }
     }
 
@@ -8761,6 +9676,20 @@ impl App {
                 self.refresh_settings_studio_overlay(dialog);
                 false
             }
+            SettingsPickerAction::OpenGlobalPermissionWorkbench => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_global_permission_studio();
+                false
+            }
+            SettingsPickerAction::OpenCurrentSessionPermissionWorkbench => {
+                let Some(session_id) = self.current_or_selected_session_id() else {
+                    self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+                    return false;
+                };
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_session_permission_studio(session_id);
+                false
+            }
             SettingsPickerAction::OpenPermissionRules => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_permission_rule_picker("");
@@ -8794,17 +9723,19 @@ impl App {
                 )
                 .map(Route::AgentStudio)
                 .unwrap_or(Route::AgentStudio(dialog)),
-            Route::AgentPermissionStudio(dialog) => self
-                .build_agent_permission_studio_overlay(
-                    dialog.agent_name.as_str(),
-                    dialog
-                        .workbench
-                        .list
-                        .selected_item()
-                        .map(|item| item.label.as_str()),
+            Route::PermissionStudio(dialog) => self
+                .build_permission_studio_overlay(
+                    dialog.source.clone(),
+                    dialog.page.clone(),
+                    dialog.state.selected_section().map(|section| section.id),
+                    dialog.state.selected_item().map(|item| item.label.as_str()),
+                    dialog.state.focus(),
                 )
-                .map(Route::AgentPermissionStudio)
-                .unwrap_or(Route::AgentPermissionStudio(dialog)),
+                .map(|mut updated| {
+                    updated.pane_focus = dialog.pane_focus;
+                    Route::PermissionStudio(updated)
+                })
+                .unwrap_or(Route::PermissionStudio(dialog)),
             Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
                 self.build_permission_rule_picker_overlay(dialog.input.text())
                     .map(Route::Picker)
@@ -8929,6 +9860,27 @@ impl App {
         }
     }
 
+    fn take_permission_studio_dialog(&mut self) -> Option<(DialogHost, PermissionStudioOverlay)> {
+        match std::mem::replace(&mut self.current_route, Route::Main) {
+            Route::PermissionStudio(dialog) => Some((DialogHost::Route, dialog)),
+            route => {
+                self.current_route = route;
+                None
+            }
+        }
+    }
+
+    fn restore_permission_studio_dialog(
+        &mut self,
+        host: DialogHost,
+        dialog: PermissionStudioOverlay,
+    ) {
+        match host {
+            DialogHost::Route => self.current_route = Route::PermissionStudio(dialog),
+            DialogHost::Overlay => {}
+        }
+    }
+
     fn restore_provider_studio_dialog(&mut self, host: DialogHost, dialog: ProviderStudioOverlay) {
         match host {
             DialogHost::Route => self.current_route = Route::ProviderStudio(Box::new(dialog)),
@@ -9017,8 +9969,9 @@ impl App {
             item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
         }) {
             let custom_offset = usize::from(
-                ChoiceCustomValue::search_list_from_input(dialog.input.text(), &dialog.meta)
-                    .is_some(),
+                dialog.config.custom_value_enabled
+                    && ChoiceCustomValue::search_list_from_input(dialog.input.text(), &dialog.meta)
+                        .is_some(),
             );
             return clear_offset + custom_offset + index;
         }
@@ -9174,6 +10127,39 @@ impl App {
                     }
                 }
             }
+            ChoiceOverlayAction::PermissionStudioMode(target) => {
+                let value = match selection {
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
+                };
+                let Some((host, mut parent)) = self.take_permission_studio_dialog() else {
+                    self.flash_error(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-context-lost",
+                    ));
+                    return true;
+                };
+                let mut permission = parent.permission.clone();
+                let result = apply_permission_studio_mode_input(
+                    &self.i18n,
+                    &mut permission,
+                    &target,
+                    value.as_str(),
+                )
+                .and_then(|_| self.persist_permission_studio(&mut parent, permission));
+                match result {
+                    Ok(()) => {
+                        self.restore_permission_studio_dialog(host, parent);
+                        true
+                    }
+                    Err(error) => {
+                        self.restore_permission_studio_dialog(host, parent);
+                        self.flash_warning(error);
+                        false
+                    }
+                }
+            }
         }
     }
 
@@ -9201,6 +10187,7 @@ impl App {
                 all_items,
                 ChoiceOverlayAction::SettingsField(field),
                 true,
+                Self::settings_field_choice_overlay_style(field),
             ));
             return;
         }
@@ -9225,6 +10212,7 @@ impl App {
                 all_items,
                 ChoiceOverlayAction::RuntimeSetting(field),
                 true,
+                Self::runtime_setting_choice_overlay_style(field),
             ));
             return;
         }
@@ -9287,6 +10275,17 @@ impl App {
         }
     }
 
+    fn settings_field_choice_overlay_style(field: SettingsFieldSpec) -> ChoiceOverlayStyle {
+        match field.path {
+            "default.provider" | "default.adapter" | "default.model" | "default.agent" => {
+                ChoiceOverlayStyle::Searchable
+            }
+            "ui.locale" => ChoiceOverlayStyle::SelectOnly,
+            _ if matches!(field.kind, SettingsFieldKind::Bool) => ChoiceOverlayStyle::SelectOnly,
+            _ => ChoiceOverlayStyle::Searchable,
+        }
+    }
+
     fn runtime_setting_choice_items(
         &mut self,
         field: RuntimeSettingSpec,
@@ -9338,6 +10337,20 @@ impl App {
             RuntimeSettingId::Temperature
             | RuntimeSettingId::MaxOutput
             | RuntimeSettingId::System => None,
+        }
+    }
+
+    fn runtime_setting_choice_overlay_style(
+        field: RuntimeSettingSpec,
+    ) -> ChoiceOverlayStyle {
+        match field.id {
+            RuntimeSettingId::ParallelToolCalls => ChoiceOverlayStyle::SelectOnly,
+            RuntimeSettingId::ThinkingMode
+            | RuntimeSettingId::SpeedMode
+            | RuntimeSettingId::Verbosity
+            | RuntimeSettingId::Temperature
+            | RuntimeSettingId::MaxOutput
+            | RuntimeSettingId::System => ChoiceOverlayStyle::Searchable,
         }
     }
 
@@ -9515,6 +10528,24 @@ impl App {
         }
     }
 
+    fn provider_studio_field_choice_overlay_style(
+        field: ProviderStudioField,
+    ) -> ChoiceOverlayStyle {
+        match field {
+            ProviderStudioField::AuthMode
+            | ProviderStudioField::CredentialIssuer
+            | ProviderStudioField::InstanceUrl
+            | ProviderStudioField::RedirectUri
+            | ProviderStudioField::ApiKeyEnv
+            | ProviderStudioField::ServiceKeyEnv => ChoiceOverlayStyle::SelectOnly,
+            ProviderStudioField::Region
+            | ProviderStudioField::Profile
+            | ProviderStudioField::DefaultAdapter
+            | ProviderStudioField::DefaultModel => ChoiceOverlayStyle::Searchable,
+            _ => ChoiceOverlayStyle::Searchable,
+        }
+    }
+
     fn open_runtime_config_in_editor(&mut self) {
         let path = self.backend.config_path();
         if !path.exists() {
@@ -9646,26 +10677,6 @@ impl App {
         }
     }
 
-    fn set_agent_hidden_value(&mut self, agent_name: &str, hidden: bool) -> UiResult<()> {
-        self.block_on_async(self.backend.set_agent_hidden(agent_name, hidden))
-            .map(|_| ())
-    }
-
-    fn toggle_agent_hidden(
-        &mut self,
-        agent_name: &str,
-        hidden: bool,
-        dialog: &mut SettingsStudioOverlay,
-    ) {
-        match self.set_agent_hidden_value(agent_name, !hidden) {
-            Ok(()) => {
-                self.flash_success(agent_hidden_toggled_message(&self.i18n, agent_name, hidden));
-                self.refresh_settings_studio_overlay(dialog);
-            }
-            Err(error) => self.flash_error(error),
-        }
-    }
-
     fn open_inspector_picker(
         &mut self,
         title: String,
@@ -9726,24 +10737,6 @@ impl App {
         Ok(overlay)
     }
 
-    fn current_session_permission_rule_draft(&self) -> PermissionRuleDraft {
-        let session_id = self.current_or_selected_session_id();
-        PermissionRuleDraft {
-            subject_kind: PermissionRuleSubjectKind::PathAccess,
-            path_access_kind: "read".to_string(),
-            workspace_root: self.backend.workspace_root().display().to_string(),
-            scope: if session_id.is_some() {
-                "session".to_string()
-            } else {
-                "workspace".to_string()
-            },
-            session_id: session_id
-                .map(|session_id| session_id.to_string())
-                .unwrap_or_default(),
-            ..PermissionRuleDraft::default()
-        }
-    }
-
     fn build_permission_rule_studio_overlay(
         &self,
         rule_id: Option<i64>,
@@ -9768,15 +10761,12 @@ impl App {
     }
 
     fn open_current_session_permission_studio(&mut self) {
-        let draft = self.current_session_permission_rule_draft();
+        let Some(session_id) = self.current_or_selected_session_id() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
         self.route_stack.clear();
-        self.current_route =
-            Route::PermissionRuleStudio(self.build_permission_rule_studio_overlay(
-                None,
-                ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
-                draft,
-                None,
-            ));
+        self.open_session_permission_studio(session_id);
     }
 
     fn open_permission_rule_studio(
@@ -10579,6 +11569,7 @@ impl App {
                 all_items,
                 ChoiceOverlayAction::ProviderStudioField(field),
                 provider_studio_field_allows_clear(field),
+                Self::provider_studio_field_choice_overlay_style(field),
             ));
             return;
         }
@@ -11465,6 +12456,21 @@ impl App {
                 }
                 Err(error) => self.flash_error(error),
             },
+            ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
+                self.delete_permission_studio_path_rule(pattern.as_str())
+            }
+            ConfirmAction::PermissionStudioDeleteNetworkRule { target } => {
+                self.delete_permission_studio_network_rule(target.as_str())
+            }
+            ConfirmAction::PermissionStudioDeleteToolTag { key } => {
+                self.delete_permission_studio_tool_tag(key.as_str())
+            }
+            ConfirmAction::PermissionStudioDeleteToolName { key } => {
+                self.delete_permission_studio_tool_name(key.as_str())
+            }
+            ConfirmAction::PermissionStudioDeleteToolRule { tool_name } => {
+                self.delete_permission_studio_tool_rule(tool_name.as_str())
+            }
             ConfirmAction::ExitWorktree {
                 session_id,
                 discard_changes,
@@ -12213,10 +13219,15 @@ impl App {
                 &crate::fl_args!("value" => workspace_root),
             ));
         }
-        if !execution.execution.allowed_tools.is_empty() {
+        if !execution.execution.effective_permission.is_empty() {
             parts.push(self.i18n.text_args(
-                "status-part-tools",
-                &crate::fl_args!("count" => execution.execution.allowed_tools.len() as i64),
+                "status-part-permission",
+                &crate::fl_args!(
+                    "value" => permission_override_summary(
+                        &self.i18n,
+                        &execution.execution.effective_permission,
+                    )
+                ),
             ));
         }
         let (permission_count, user_input_count) =
@@ -12351,8 +13362,8 @@ impl App {
                     editor.input.flush_pending_input_if_due(now);
                 }
             }
-            Route::AgentPermissionStudio(dialog) => {
-                if let Some(editor) = dialog.workbench.editor.as_mut() {
+            Route::PermissionStudio(dialog) => {
+                if let Some(editor) = dialog.editor.as_mut() {
                     editor.input.flush_pending_input_if_due(now);
                 }
             }
@@ -12393,7 +13404,7 @@ impl App {
                 }
                 Overlay::Choice(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
-                    Self::sync_choice_overlay_input(dialog, true);
+                    Self::sync_choice_overlay_input(dialog, false);
                 }
                 Overlay::PermissionRuleEdit(dialog) => {
                     dialog.state.input.flush_pending_input_if_due(now);
@@ -13328,23 +14339,8 @@ fn agent_file_backed_edit_message(i18n: &I18n) -> String {
     ui_text::t(i18n, "flash-agent-file-backed-edit")
 }
 
-fn agent_file_backed_hidden_message(i18n: &I18n) -> String {
-    ui_text::t(i18n, "flash-agent-file-backed-hidden")
-}
-
 fn agent_file_backed_permissions_message(i18n: &I18n) -> String {
     ui_text::t(i18n, "flash-agent-file-backed-permissions")
-}
-
-fn agent_hidden_toggled_message(i18n: &I18n, agent_name: &str, was_hidden: bool) -> String {
-    i18n.text_args(
-        if was_hidden {
-            "flash-agent-unhidden"
-        } else {
-            "flash-agent-hidden"
-        },
-        &crate::fl_args!("agent" => agent_name),
-    )
 }
 
 fn provider_studio_no_auth_details_message(i18n: &I18n) -> String {
@@ -14160,14 +15156,6 @@ fn settings_studio_plugin_entry_disabled_count(items: &[SettingsStudioItem]) -> 
         .count()
 }
 
-fn agent_mode_label(mode: agena::agent::AgentMode) -> &'static str {
-    match mode {
-        agena::agent::AgentMode::Primary => "primary",
-        agena::agent::AgentMode::Subagent => "subagent",
-        agena::agent::AgentMode::All => "all",
-    }
-}
-
 fn agent_default_summary(i18n: &I18n, default: &agena::agents::AgentDefaultModelConfig) -> String {
     let mut parts = Vec::new();
     if let Some(provider) = default
@@ -14216,28 +15204,6 @@ fn agent_permission_summary(
     }
 
     let mut parts = Vec::new();
-    let inherit_off = [
-        (!permission.inherit.path(), ui_text::t(i18n, "value-path")),
-        (!permission.inherit.tools(), ui_text::t(i18n, "value-tools")),
-        (
-            !permission.inherit.network(),
-            ui_text::t(i18n, "value-network"),
-        ),
-        (
-            !permission.inherit.plugin_tools(),
-            ui_text::t(i18n, "value-plugin-tools"),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(disabled, label)| disabled.then_some(label))
-    .collect::<Vec<_>>();
-    if !inherit_off.is_empty() {
-        parts.push(i18n.text_args(
-            "value-inherit-off",
-            &crate::fl_args!("sections" => inherit_off.join(", ")),
-        ));
-    }
-
     if let Some(path) = permission.path.as_ref() {
         let mut detail: Vec<String> = Vec::new();
         if path.workspace.is_some() {
@@ -14349,13 +15315,7 @@ fn settings_studio_agent_items(
                 .as_ref()
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config"));
-            let mut badges = vec![
-                agent.scope.as_str().to_string(),
-                agent_mode_display_label(i18n, agent.mode),
-            ];
-            if agent.hidden {
-                badges.push(ui_text::t(i18n, "value-hidden"));
-            }
+            let mut badges = vec![agent.scope.as_str().to_string()];
             if default_agent.is_some_and(|name| name == agent.name.as_str()) {
                 badges.push(ui_text::t(i18n, "value-default"));
             }
@@ -14397,14 +15357,6 @@ fn settings_studio_agent_detail_text(
             agent.scope.as_str().to_string(),
         ),
         app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-agent-overview-mode"),
-            agent_mode_display_label(i18n, agent.mode),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-agent-overview-visibility"),
-            localized_visibility(i18n, agent.hidden),
-        ),
-        app_detail_labeled_line(
             ui_text::t(i18n, "overlay-settings-agent-detail-default"),
             localized_yes_no(
                 i18n,
@@ -14428,18 +15380,6 @@ fn settings_studio_agent_detail_text(
             agent_default_summary(i18n, &agent.default),
         ),
     ];
-    if !agent.aliases.is_empty() {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-settings-agent-detail-aliases"),
-            agent.aliases.join(", "),
-        ));
-    }
-    if !agent.allowed_tools.is_empty() {
-        lines.push(app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-settings-agent-detail-tools"),
-            agent.allowed_tools.join(", "),
-        ));
-    }
     if !agent.description.trim().is_empty() {
         lines.push(app_detail_plain_line(String::new()));
         lines.push(app_detail_plain_line(agent.description.clone()));
@@ -14475,33 +15415,10 @@ fn agent_prompt_summary(i18n: &I18n, prompt: &str) -> String {
     }
 }
 
-fn agent_list_summary(i18n: &I18n, values: &[String], empty_key: &str) -> String {
-    if values.is_empty() {
-        ui_text::t(i18n, empty_key)
-    } else if values.len() <= 3 {
-        values.join(", ")
-    } else {
-        i18n.text_args(
-            "value-item-count",
-            &crate::fl_args!("count" => values.len() as i64),
-        )
-    }
-}
-
 fn agent_optional_string_summary(i18n: &I18n, value: Option<&str>, empty_key: &str) -> String {
     value
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| ui_text::t(i18n, empty_key))
-}
-
-fn agent_optional_number_summary<T: ToString>(
-    i18n: &I18n,
-    value: Option<T>,
-    empty_key: &str,
-) -> String {
-    value
-        .map(|value| value.to_string())
         .unwrap_or_else(|| ui_text::t(i18n, empty_key))
 }
 
@@ -14529,68 +15446,6 @@ fn agent_studio_items(
             value: agent_prompt_summary(i18n, profile.prompt.as_str()),
             detail: ui_text::t(i18n, "agent-studio-item-prompt-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::Prompt),
-        },
-        AgentStudioItem {
-            label: ui_text::t(i18n, "agent-studio-field-mode"),
-            value: agent_mode_display_label(i18n, profile.frontmatter.mode),
-            detail: ui_text::t(i18n, "agent-studio-item-mode-detail"),
-            action: AgentStudioAction::Edit(AgentStudioField::Mode),
-        },
-        AgentStudioItem {
-            label: ui_text::t(i18n, "agent-studio-field-hidden"),
-            value: if profile.frontmatter.hidden {
-                ui_text::t(i18n, "value-yes")
-            } else {
-                ui_text::t(i18n, "value-no")
-            },
-            detail: if editable {
-                ui_text::t(i18n, "agent-studio-item-hidden-detail")
-            } else {
-                ui_text::t(i18n, "agent-studio-item-hidden-read-only-detail")
-            },
-            action: AgentStudioAction::ToggleHidden,
-        },
-        AgentStudioItem {
-            label: ui_text::t(i18n, "agent-studio-field-aliases"),
-            value: agent_list_summary(i18n, &profile.frontmatter.aliases, "value-none"),
-            detail: ui_text::t(i18n, "agent-studio-item-aliases-detail"),
-            action: AgentStudioAction::Edit(AgentStudioField::Aliases),
-        },
-        AgentStudioItem {
-            label: ui_text::t(i18n, "agent-studio-field-allowed-entries"),
-            value: agent_list_summary(
-                i18n,
-                &profile.frontmatter.allowed_tools,
-                "value-unrestricted",
-            ),
-            detail: ui_text::t(i18n, "agent-studio-item-allowed-entries-detail"),
-            action: AgentStudioAction::Edit(AgentStudioField::AllowedEntries),
-        },
-        AgentStudioItem {
-            label: ui_text::t(i18n, "agent-studio-field-temperature"),
-            value: profile
-                .frontmatter
-                .temperature
-                .map(|value| value.0.to_string())
-                .unwrap_or_else(|| ui_text::t(i18n, "value-inherit")),
-            detail: ui_text::t(i18n, "agent-studio-item-temperature-detail"),
-            action: AgentStudioAction::Edit(AgentStudioField::Temperature),
-        },
-        AgentStudioItem {
-            label: ui_text::t(i18n, "agent-studio-field-max-output-tokens"),
-            value: agent_optional_number_summary(
-                i18n,
-                profile.frontmatter.max_output_tokens,
-                "value-inherit",
-            ),
-            detail: ui_text::t(i18n, "agent-studio-item-max-output-tokens-detail"),
-            action: AgentStudioAction::Edit(AgentStudioField::MaxOutputTokens),
-        },
-        AgentStudioItem {
-            label: ui_text::t(i18n, "agent-studio-field-steps"),
-            value: agent_optional_number_summary(i18n, profile.frontmatter.steps, "value-inherit"),
-            detail: ui_text::t(i18n, "agent-studio-item-steps-detail"),
-            action: AgentStudioAction::Edit(AgentStudioField::Steps),
         },
         AgentStudioItem {
             label: ui_text::t(i18n, "agent-studio-field-default-provider"),
@@ -14708,60 +15563,6 @@ fn agent_studio_item_detail_text(
             )));
             build_app_detail_text(lines)
         }
-        AgentStudioAction::Edit(AgentStudioField::Aliases) => {
-            let mut lines = vec![app_detail_plain_line(ui_text::t(
-                i18n,
-                "overlay-agent-detail-aliases-help",
-            ))];
-            lines.push(app_detail_plain_line(String::new()));
-            if profile.frontmatter.aliases.is_empty() {
-                lines.push(app_detail_plain_line(ui_text::t(
-                    i18n,
-                    "overlay-agent-detail-aliases-empty",
-                )));
-            } else {
-                lines.extend(
-                    profile
-                        .frontmatter
-                        .aliases
-                        .iter()
-                        .cloned()
-                        .map(app_detail_plain_line),
-                );
-            }
-            lines.push(app_detail_plain_line(String::new()));
-            lines.push(app_detail_plain_line(agent_editability_hint(
-                i18n, editable,
-            )));
-            build_app_detail_text(lines)
-        }
-        AgentStudioAction::Edit(AgentStudioField::AllowedEntries) => {
-            let mut lines = vec![app_detail_plain_line(ui_text::t(
-                i18n,
-                "overlay-agent-detail-allowed-entries-help",
-            ))];
-            lines.push(app_detail_plain_line(String::new()));
-            if profile.frontmatter.allowed_tools.is_empty() {
-                lines.push(app_detail_plain_line(ui_text::t(
-                    i18n,
-                    "overlay-agent-detail-allowed-entries-empty",
-                )));
-            } else {
-                lines.extend(
-                    profile
-                        .frontmatter
-                        .allowed_tools
-                        .iter()
-                        .cloned()
-                        .map(app_detail_plain_line),
-                );
-            }
-            lines.push(app_detail_plain_line(String::new()));
-            lines.push(app_detail_plain_line(agent_editability_hint(
-                i18n, editable,
-            )));
-            build_app_detail_text(lines)
-        }
         AgentStudioAction::OpenPermissionWorkbench => build_app_detail_text(vec![
             app_detail_labeled_line(
                 ui_text::t(i18n, "overlay-agent-overview-permission"),
@@ -14791,29 +15592,6 @@ fn agent_studio_item_detail_text(
             ),
             app_detail_plain_line(String::new()),
             app_detail_plain_line(ui_text::t(i18n, "overlay-agent-detail-set-default-hint")),
-        ]),
-        AgentStudioAction::ToggleHidden => build_app_detail_text(vec![
-            app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-agent-overview-visibility"),
-                localized_visibility(i18n, profile.frontmatter.hidden),
-            ),
-            app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-agent-overview-scope"),
-                profile.scope.as_str().to_string(),
-            ),
-            app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-agent-overview-source"),
-                agent_profile_source_label_localized(i18n, profile),
-            ),
-            app_detail_plain_line(String::new()),
-            app_detail_plain_line(ui_text::t(
-                i18n,
-                if editable {
-                    "overlay-agent-detail-toggle-hidden-hint"
-                } else {
-                    "overlay-agent-detail-toggle-hidden-read-only"
-                },
-            )),
         ]),
         AgentStudioAction::OpenSource => build_app_detail_text(vec![
             app_detail_labeled_line(
@@ -14853,14 +15631,6 @@ fn agent_studio_overview_text(
         app_detail_labeled_line(
             ui_text::t(i18n, "overlay-agent-overview-scope"),
             profile.scope.as_str().to_string(),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-agent-overview-mode"),
-            agent_mode_display_label(i18n, profile.frontmatter.mode),
-        ),
-        app_detail_labeled_line(
-            ui_text::t(i18n, "overlay-agent-overview-visibility"),
-            localized_visibility(i18n, profile.frontmatter.hidden),
         ),
         app_detail_labeled_line(
             ui_text::t(i18n, "overlay-agent-overview-default-agent"),
@@ -14929,28 +15699,6 @@ fn localized_yes_no(i18n: &I18n, value: bool) -> String {
     ui_text::t(i18n, if value { "value-yes" } else { "value-no" })
 }
 
-fn agent_mode_display_label(i18n: &I18n, mode: agena::agent::AgentMode) -> String {
-    ui_text::t(
-        i18n,
-        match mode {
-            agena::agent::AgentMode::Primary => "value-agent-mode-primary",
-            agena::agent::AgentMode::Subagent => "value-agent-mode-subagent",
-            agena::agent::AgentMode::All => "value-agent-mode-all",
-        },
-    )
-}
-
-fn localized_visibility(i18n: &I18n, hidden: bool) -> String {
-    ui_text::t(
-        i18n,
-        if hidden {
-            "value-hidden"
-        } else {
-            "value-visible"
-        },
-    )
-}
-
 fn agent_editability_hint(i18n: &I18n, editable: bool) -> String {
     if editable {
         ui_text::t(i18n, "overlay-agent-detail-editable-hint")
@@ -14964,13 +15712,7 @@ fn agent_studio_editor_config(
     profile: &AgentProfile,
     field: AgentStudioField,
 ) -> (String, String, String, bool, Editor) {
-    let multiline = matches!(
-        field,
-        AgentStudioField::Description
-            | AgentStudioField::Prompt
-            | AgentStudioField::Aliases
-            | AgentStudioField::AllowedEntries
-    );
+    let multiline = matches!(field, AgentStudioField::Description | AgentStudioField::Prompt);
     let title = settings_edit_title(i18n, agent_studio_field_label(i18n, field).as_str());
     let prompt = agent_studio_field_prompt(i18n, field);
     let footer = editor_save_footer(i18n, multiline);
@@ -14984,12 +15726,6 @@ fn agent_studio_field_label(i18n: &I18n, field: AgentStudioField) -> String {
         match field {
             AgentStudioField::Description => "agent-studio-field-description",
             AgentStudioField::Prompt => "agent-studio-field-prompt",
-            AgentStudioField::Mode => "agent-studio-field-mode",
-            AgentStudioField::Aliases => "agent-studio-field-aliases",
-            AgentStudioField::AllowedEntries => "agent-studio-field-allowed-entries",
-            AgentStudioField::Temperature => "agent-studio-field-temperature",
-            AgentStudioField::MaxOutputTokens => "agent-studio-field-max-output-tokens",
-            AgentStudioField::Steps => "agent-studio-field-steps",
             AgentStudioField::DefaultProvider => "agent-studio-field-default-provider",
             AgentStudioField::DefaultAdapter => "agent-studio-field-default-adapter",
             AgentStudioField::DefaultModel => "agent-studio-field-default-model",
@@ -15003,12 +15739,6 @@ fn agent_studio_field_prompt(i18n: &I18n, field: AgentStudioField) -> String {
         match field {
             AgentStudioField::Description => "agent-studio-field-prompt-description",
             AgentStudioField::Prompt => "agent-studio-field-prompt-prompt",
-            AgentStudioField::Mode => "agent-studio-field-prompt-mode",
-            AgentStudioField::Aliases => "agent-studio-field-prompt-aliases",
-            AgentStudioField::AllowedEntries => "agent-studio-field-prompt-allowed-entries",
-            AgentStudioField::Temperature => "agent-studio-field-prompt-temperature",
-            AgentStudioField::MaxOutputTokens => "agent-studio-field-prompt-max-output-tokens",
-            AgentStudioField::Steps => "agent-studio-field-prompt-steps",
             AgentStudioField::DefaultProvider => "agent-studio-field-prompt-default-provider",
             AgentStudioField::DefaultAdapter => "agent-studio-field-prompt-default-adapter",
             AgentStudioField::DefaultModel => "agent-studio-field-prompt-default-model",
@@ -15020,24 +15750,6 @@ fn agent_studio_field_input_text(profile: &AgentProfile, field: AgentStudioField
     match field {
         AgentStudioField::Description => profile.frontmatter.description.clone(),
         AgentStudioField::Prompt => profile.prompt.clone(),
-        AgentStudioField::Mode => agent_mode_label(profile.frontmatter.mode).to_string(),
-        AgentStudioField::Aliases => profile.frontmatter.aliases.join("\n"),
-        AgentStudioField::AllowedEntries => profile.frontmatter.allowed_tools.join("\n"),
-        AgentStudioField::Temperature => profile
-            .frontmatter
-            .temperature
-            .map(|value| value.0.to_string())
-            .unwrap_or_default(),
-        AgentStudioField::MaxOutputTokens => profile
-            .frontmatter
-            .max_output_tokens
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-        AgentStudioField::Steps => profile
-            .frontmatter
-            .steps
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
         AgentStudioField::DefaultProvider => profile
             .frontmatter
             .default
@@ -15060,22 +15772,15 @@ fn agent_studio_field_input_text(profile: &AgentProfile, field: AgentStudioField
 }
 
 fn agent_studio_field_setting_value(
-    i18n: &I18n,
+    _i18n: &I18n,
     agent_name: &str,
     field: AgentStudioField,
     input: &str,
 ) -> UiResult<(String, Option<JsonValue>)> {
     let trimmed = input.trim();
-    let field_label = agent_studio_field_label(i18n, field);
     let path = match field {
         AgentStudioField::Description => agent_config_path(agent_name, "description"),
         AgentStudioField::Prompt => agent_config_path(agent_name, "prompt"),
-        AgentStudioField::Mode => agent_config_path(agent_name, "mode"),
-        AgentStudioField::Aliases => agent_config_path(agent_name, "aliases"),
-        AgentStudioField::AllowedEntries => agent_config_path(agent_name, "allowed_entries"),
-        AgentStudioField::Temperature => agent_config_path(agent_name, "temperature"),
-        AgentStudioField::MaxOutputTokens => agent_config_path(agent_name, "max_output_tokens"),
-        AgentStudioField::Steps => agent_config_path(agent_name, "steps"),
         AgentStudioField::DefaultProvider => agent_config_path(agent_name, "default.provider"),
         AgentStudioField::DefaultAdapter => agent_config_path(agent_name, "default.adapter"),
         AgentStudioField::DefaultModel => agent_config_path(agent_name, "default.model"),
@@ -15083,71 +15788,6 @@ fn agent_studio_field_setting_value(
     let value = match field {
         AgentStudioField::Description | AgentStudioField::Prompt => {
             (!trimmed.is_empty()).then_some(JsonValue::String(input.to_string()))
-        }
-        AgentStudioField::Mode => {
-            if trimmed.is_empty() {
-                None
-            } else {
-                let normalized = trimmed.to_ascii_lowercase();
-                match normalized.as_str() {
-                    "primary" | "subagent" | "all" => Some(JsonValue::String(normalized)),
-                    other => {
-                        return Err(i18n.text_args(
-                            "agent-studio-field-parse-mode",
-                            &crate::fl_args!("field" => field_label.as_str(), "value" => other),
-                        ));
-                    }
-                }
-            }
-        }
-        AgentStudioField::Aliases | AgentStudioField::AllowedEntries => {
-            let values = parse_string_list_input(input);
-            (!values.is_empty()).then_some(JsonValue::Array(
-                values.into_iter().map(JsonValue::String).collect(),
-            ))
-        }
-        AgentStudioField::Temperature => {
-            if trimmed.is_empty() {
-                None
-            } else {
-                let parsed = trimmed.parse::<f32>().map_err(|_| {
-                    i18n.text_args(
-                        "agent-studio-field-parse-temperature",
-                        &crate::fl_args!("field" => field_label.as_str()),
-                    )
-                })?;
-                if !parsed.is_finite() {
-                    return Err(i18n.text_args(
-                        "agent-studio-field-parse-temperature-finite",
-                        &crate::fl_args!("field" => field_label.as_str()),
-                    ));
-                }
-                Some(json!(parsed))
-            }
-        }
-        AgentStudioField::MaxOutputTokens => {
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(json!(trimmed.parse::<u32>().map_err(|_| {
-                    i18n.text_args(
-                        "agent-studio-field-parse-max-output-tokens",
-                        &crate::fl_args!("field" => field_label.as_str()),
-                    )
-                })?))
-            }
-        }
-        AgentStudioField::Steps => {
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(json!(trimmed.parse::<usize>().map_err(|_| {
-                    i18n.text_args(
-                        "agent-studio-field-parse-steps",
-                        &crate::fl_args!("field" => field_label.as_str()),
-                    )
-                })?))
-            }
         }
         AgentStudioField::DefaultProvider
         | AgentStudioField::DefaultAdapter
@@ -15158,346 +15798,887 @@ fn agent_studio_field_setting_value(
     Ok((path, value))
 }
 
-fn agent_permission_studio_items(
-    i18n: &I18n,
-    profile: &AgentProfile,
-    editable: bool,
-) -> Vec<AgentPermissionStudioItem> {
-    let permission = &profile.frontmatter.permission;
+fn permission_studio_nav_items(i18n: &I18n) -> Vec<PermissionStudioNavItem> {
     vec![
-        AgentPermissionStudioItem {
-            label: ui_text::t(i18n, "agent-permission-field-inherit-path"),
-            value: permission_inherit_value_label(
-                i18n,
-                permission,
-                AgentPermissionField::InheritPath,
-            ),
-            detail: ui_text::t(i18n, "agent-permission-item-inherit-path-detail"),
-            action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritPath),
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-overview"),
+            level: 0,
+            page: PermissionStudioPage::Overview,
+            section: Some(PermissionStudioSectionId::RootPath),
+            selectable: true,
         },
-        AgentPermissionStudioItem {
-            label: ui_text::t(i18n, "agent-permission-field-inherit-network"),
-            value: permission_inherit_value_label(
-                i18n,
-                permission,
-                AgentPermissionField::InheritNetwork,
-            ),
-            detail: ui_text::t(i18n, "agent-permission-item-inherit-network-detail"),
-            action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritNetwork),
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-filesystem"),
+            level: 0,
+            page: PermissionStudioPage::PathDefaults,
+            section: Some(PermissionStudioSectionId::PathDefaults),
+            selectable: false,
         },
-        AgentPermissionStudioItem {
-            label: ui_text::t(i18n, "agent-permission-field-inherit-entries"),
-            value: permission_inherit_value_label(
-                i18n,
-                permission,
-                AgentPermissionField::InheritEntries,
-            ),
-            detail: ui_text::t(i18n, "agent-permission-item-inherit-entries-detail"),
-            action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritEntries),
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-default-zones"),
+            level: 1,
+            page: PermissionStudioPage::PathDefaults,
+            section: Some(PermissionStudioSectionId::PathDefaults),
+            selectable: true,
         },
-        AgentPermissionStudioItem {
-            label: ui_text::t(i18n, "agent-permission-field-path-section"),
-            value: agent_path_permission_summary(i18n, permission.path.as_ref()),
-            detail: ui_text::t(i18n, "agent-permission-item-path-section-detail"),
-            action: AgentPermissionStudioAction::Edit(AgentPermissionField::PathConfig),
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-path-rules"),
+            level: 1,
+            page: PermissionStudioPage::PathRules,
+            section: Some(PermissionStudioSectionId::PathRules),
+            selectable: true,
         },
-        AgentPermissionStudioItem {
-            label: ui_text::t(i18n, "agent-permission-field-network-section"),
-            value: agent_network_permission_summary(i18n, permission.network.as_ref()),
-            detail: ui_text::t(i18n, "agent-permission-item-network-section-detail"),
-            action: AgentPermissionStudioAction::Edit(AgentPermissionField::NetworkConfig),
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-network"),
+            level: 0,
+            page: PermissionStudioPage::NetworkZones,
+            section: Some(PermissionStudioSectionId::NetworkZones),
+            selectable: false,
         },
-        AgentPermissionStudioItem {
-            label: ui_text::t(i18n, "agent-permission-field-entry-section"),
-            value: agent_tool_permission_summary(i18n, permission.tools.as_ref()),
-            detail: ui_text::t(i18n, "agent-permission-item-entry-section-detail"),
-            action: AgentPermissionStudioAction::Edit(AgentPermissionField::EntryConfig),
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-network-zones"),
+            level: 1,
+            page: PermissionStudioPage::NetworkZones,
+            section: Some(PermissionStudioSectionId::NetworkZones),
+            selectable: true,
         },
-        AgentPermissionStudioItem {
-            label: ui_text::t(i18n, "agent-permission-field-full-config"),
-            value: agent_permission_summary(i18n, permission),
-            detail: ui_text::t(i18n, "agent-permission-item-full-config-detail"),
-            action: AgentPermissionStudioAction::Edit(AgentPermissionField::FullConfig),
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-domain-rules"),
+            level: 1,
+            page: PermissionStudioPage::NetworkRules,
+            section: Some(PermissionStudioSectionId::NetworkRules),
+            selectable: true,
         },
-        AgentPermissionStudioItem {
-            label: if profile.source_path.is_some() {
-                ui_text::t(i18n, "agent-studio-item-open-source-file")
-            } else {
-                ui_text::t(i18n, "agent-studio-item-open-config-file")
-            },
-            value: agent_profile_source_label_localized(i18n, profile),
-            detail: if editable {
-                ui_text::t(i18n, "agent-permission-item-open-config-detail")
-            } else {
-                ui_text::t(i18n, "agent-studio-item-open-source-detail")
-            },
-            action: AgentPermissionStudioAction::OpenSource,
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-entry-access"),
+            level: 0,
+            page: PermissionStudioPage::EntryTags,
+            section: Some(PermissionStudioSectionId::EntryTags),
+            selectable: false,
+        },
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-tag-rules"),
+            level: 1,
+            page: PermissionStudioPage::EntryTags,
+            section: Some(PermissionStudioSectionId::EntryTags),
+            selectable: true,
+        },
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-name-rules"),
+            level: 1,
+            page: PermissionStudioPage::EntryNames,
+            section: Some(PermissionStudioSectionId::EntryNames),
+            selectable: true,
+        },
+        PermissionStudioNavItem {
+            label: ui_text::t(i18n, "permission-studio-nav-command-rules"),
+            level: 1,
+            page: PermissionStudioPage::EntryCommandRules,
+            section: Some(PermissionStudioSectionId::EntryCommandRules),
+            selectable: true,
         },
     ]
 }
 
-fn agent_permission_studio_item_detail_text(
-    i18n: &I18n,
-    profile: &AgentProfile,
-    item: &AgentPermissionStudioItem,
-    editable: bool,
-) -> Text<'static> {
-    match item.action {
-        AgentPermissionStudioAction::Edit(AgentPermissionField::InheritPath)
-        | AgentPermissionStudioAction::Edit(AgentPermissionField::InheritNetwork)
-        | AgentPermissionStudioAction::Edit(AgentPermissionField::InheritEntries) => {
-            build_app_detail_text(vec![
-                app_detail_plain_line(item.detail.clone()),
-                app_detail_labeled_line(
-                    ui_text::t(i18n, "overlay-detail-current-value"),
-                    item.value.clone(),
-                ),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(ui_text::t(
-                    i18n,
-                    if editable {
-                        "overlay-agent-permission-detail-inherit-editable"
-                    } else {
-                        "overlay-agent-permission-detail-inherit-read-only"
-                    },
-                )),
-            ])
-        }
-        AgentPermissionStudioAction::Edit(AgentPermissionField::PathConfig) => {
-            build_app_detail_text(vec![
-                app_detail_plain_line(item.detail.clone()),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(
-                    pretty_json_optional(profile.frontmatter.permission.path.as_ref())
-                        .unwrap_or_else(|| {
-                            ui_text::t(i18n, "overlay-agent-permission-section-unset")
-                        }),
-                ),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(ui_text::t(
-                    i18n,
-                    if editable {
-                        "overlay-agent-permission-detail-section-editable"
-                    } else {
-                        "overlay-agent-permission-detail-section-read-only"
-                    },
-                )),
-            ])
-        }
-        AgentPermissionStudioAction::Edit(AgentPermissionField::NetworkConfig) => {
-            build_app_detail_text(vec![
-                app_detail_plain_line(item.detail.clone()),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(
-                    pretty_json_optional(profile.frontmatter.permission.network.as_ref())
-                        .unwrap_or_else(|| {
-                            ui_text::t(i18n, "overlay-agent-permission-section-unset")
-                        }),
-                ),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(ui_text::t(
-                    i18n,
-                    if editable {
-                        "overlay-agent-permission-detail-section-editable"
-                    } else {
-                        "overlay-agent-permission-detail-section-read-only"
-                    },
-                )),
-            ])
-        }
-        AgentPermissionStudioAction::Edit(AgentPermissionField::EntryConfig) => {
-            build_app_detail_text(vec![
-                app_detail_plain_line(item.detail.clone()),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(
-                    pretty_json_optional(profile.frontmatter.permission.tools.as_ref())
-                        .unwrap_or_else(|| {
-                            ui_text::t(i18n, "overlay-agent-permission-section-unset")
-                        }),
-                ),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(ui_text::t(
-                    i18n,
-                    if editable {
-                        "overlay-agent-permission-detail-section-editable"
-                    } else {
-                        "overlay-agent-permission-detail-section-read-only"
-                    },
-                )),
-            ])
-        }
-        AgentPermissionStudioAction::Edit(AgentPermissionField::FullConfig) => {
-            build_app_detail_text(vec![
-                app_detail_plain_line(item.detail.clone()),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(permission_pretty_document_localized(
-                    i18n,
-                    &profile.frontmatter.permission,
-                )),
-                app_detail_plain_line(String::new()),
-                app_detail_plain_line(ui_text::t(
-                    i18n,
-                    if editable {
-                        "overlay-agent-permission-detail-full-editable"
-                    } else {
-                        "overlay-agent-permission-detail-full-read-only"
-                    },
-                )),
-            ])
-        }
-        AgentPermissionStudioAction::OpenSource => build_app_detail_text(vec![
-            app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-agent-overview-source"),
-                agent_profile_source_label_localized(i18n, profile),
-            ),
-            app_detail_labeled_line(
-                ui_text::t(i18n, "overlay-agent-overview-scope"),
-                profile.scope.as_str().to_string(),
-            ),
-            app_detail_plain_line(String::new()),
-            app_detail_plain_line(ui_text::t(
-                i18n,
-                "overlay-agent-permission-detail-open-source-hint",
-            )),
-        ]),
+fn permission_studio_nav_index_for_page(page: &PermissionStudioPage) -> usize {
+    match page {
+        PermissionStudioPage::Overview => 0,
+        PermissionStudioPage::PathDefaults => 2,
+        PermissionStudioPage::PathRules => 3,
+        PermissionStudioPage::NetworkZones => 5,
+        PermissionStudioPage::NetworkRules => 6,
+        PermissionStudioPage::EntryTags => 8,
+        PermissionStudioPage::EntryNames => 9,
+        PermissionStudioPage::EntryCommandRules => 10,
     }
 }
 
-fn agent_permission_editor_config(
-    i18n: &I18n,
-    profile: &AgentProfile,
-    field: AgentPermissionField,
-) -> (String, String, String, bool, Editor) {
-    let multiline = matches!(
-        field,
-        AgentPermissionField::PathConfig
-            | AgentPermissionField::NetworkConfig
-            | AgentPermissionField::EntryConfig
-            | AgentPermissionField::FullConfig
-    );
-    let title = settings_edit_title(i18n, agent_permission_field_label(i18n, field).as_str());
-    let prompt = agent_permission_field_prompt(i18n, field);
-    let footer = editor_save_footer(i18n, multiline);
-    let input = Editor::from_text(agent_permission_field_input_text(profile, field));
-    (title, prompt, footer, multiline, input)
+fn permission_studio_nav_is_selectable(item: &PermissionStudioNavItem) -> bool {
+    item.selectable
 }
 
-fn agent_permission_field_label(i18n: &I18n, field: AgentPermissionField) -> String {
-    ui_text::t(
-        i18n,
-        match field {
-            AgentPermissionField::InheritPath => "agent-permission-field-inherit-path",
-            AgentPermissionField::InheritNetwork => "agent-permission-field-inherit-network",
-            AgentPermissionField::InheritEntries => "agent-permission-field-inherit-entries",
-            AgentPermissionField::PathConfig => "agent-permission-field-path-section",
-            AgentPermissionField::NetworkConfig => "agent-permission-field-network-section",
-            AgentPermissionField::EntryConfig => "agent-permission-field-entry-section",
-            AgentPermissionField::FullConfig => "agent-permission-field-full-config",
-        },
-    )
-}
-
-fn agent_permission_field_prompt(i18n: &I18n, field: AgentPermissionField) -> String {
-    ui_text::t(
-        i18n,
-        match field {
-            AgentPermissionField::InheritPath
-            | AgentPermissionField::InheritNetwork
-            | AgentPermissionField::InheritEntries => "agent-permission-field-prompt-inherit",
-            AgentPermissionField::PathConfig => "agent-permission-field-prompt-path-section",
-            AgentPermissionField::NetworkConfig => "agent-permission-field-prompt-network-section",
-            AgentPermissionField::EntryConfig => "agent-permission-field-prompt-entry-section",
-            AgentPermissionField::FullConfig => "agent-permission-field-prompt-full-config",
-        },
-    )
-}
-
-fn agent_permission_field_input_text(
-    profile: &AgentProfile,
-    field: AgentPermissionField,
-) -> String {
-    match field {
-        AgentPermissionField::InheritPath => permission_inherit_setting_value(
-            &profile.frontmatter.permission,
-            AgentPermissionField::InheritPath,
-        )
-        .map(|value| value.to_string())
-        .unwrap_or_default(),
-        AgentPermissionField::InheritNetwork => permission_inherit_setting_value(
-            &profile.frontmatter.permission,
-            AgentPermissionField::InheritNetwork,
-        )
-        .map(|value| value.to_string())
-        .unwrap_or_default(),
-        AgentPermissionField::InheritEntries => permission_inherit_setting_value(
-            &profile.frontmatter.permission,
-            AgentPermissionField::InheritEntries,
-        )
-        .map(|value| value.to_string())
-        .unwrap_or_default(),
-        AgentPermissionField::PathConfig => {
-            pretty_json_optional(profile.frontmatter.permission.path.as_ref()).unwrap_or_default()
-        }
-        AgentPermissionField::NetworkConfig => {
-            pretty_json_optional(profile.frontmatter.permission.network.as_ref())
-                .unwrap_or_default()
-        }
-        AgentPermissionField::EntryConfig => {
-            pretty_json_optional(profile.frontmatter.permission.tools.as_ref()).unwrap_or_default()
-        }
-        AgentPermissionField::FullConfig => {
-            if profile.frontmatter.permission.is_empty() {
-                String::new()
-            } else {
-                permission_pretty_document(&profile.frontmatter.permission)
-            }
-        }
+fn permission_studio_nav_normalize_selection(nav: &mut SelectableListState<PermissionStudioNavItem>) {
+    if nav.items.is_empty() {
+        nav.selected = 0;
+        return;
     }
-}
-
-fn agent_permission_field_setting_value(
-    i18n: &I18n,
-    agent_name: &str,
-    field: AgentPermissionField,
-    input: &str,
-) -> UiResult<(String, Option<JsonValue>)> {
-    let path = agent_permission_path(agent_name, field);
-    let trimmed = input.trim();
-    let field_label = agent_permission_field_label(i18n, field);
-    let value = match field {
-        AgentPermissionField::InheritPath
-        | AgentPermissionField::InheritNetwork
-        | AgentPermissionField::InheritEntries => {
-            parse_optional_bool_input(i18n, field_label.as_str(), trimmed)?.map(JsonValue::Bool)
-        }
-        AgentPermissionField::PathConfig => parse_optional_json_config::<
-            agena::agent::PathPermissionConfig,
-        >(i18n, field_label.as_str(), trimmed)?,
-        AgentPermissionField::NetworkConfig => parse_optional_json_config::<
-            agena::agent::NetworkPermissionConfig,
-        >(i18n, field_label.as_str(), trimmed)?,
-        AgentPermissionField::EntryConfig => parse_optional_json_config::<
-            agena::agent::ToolPermissionConfig,
-        >(i18n, field_label.as_str(), trimmed)?,
-        AgentPermissionField::FullConfig => parse_optional_json_config::<
-            agena::agent::AgentPermissionConfig,
-        >(i18n, field_label.as_str(), trimmed)?,
-    };
-    Ok((path, value))
-}
-
-fn permission_pretty_document(permission: &agena::agent::AgentPermissionConfig) -> String {
-    if permission.is_empty() {
-        "Permission override is currently unset.".to_string()
+    if nav.selected >= nav.items.len() {
+        nav.selected = nav.items.len() - 1;
+    }
+    if nav
+        .selected_item()
+        .is_some_and(permission_studio_nav_is_selectable)
+    {
+        return;
+    }
+    if let Some(index) = nav.items.iter().position(permission_studio_nav_is_selectable) {
+        nav.selected = index;
     } else {
-        pretty_json(permission)
+        nav.selected = 0;
     }
 }
 
-fn permission_pretty_document_localized(
+fn permission_studio_nav_move_step(
+    nav: &mut SelectableListState<PermissionStudioNavItem>,
+    delta: isize,
+) {
+    if nav.items.is_empty() || delta == 0 {
+        return;
+    }
+    let len = nav.items.len();
+    let mut index = nav.selected;
+    'search: for _ in 0..len {
+        let next = if delta < 0 {
+            match index.checked_sub(1) {
+                Some(next) => next,
+                None => break 'search,
+            }
+        } else {
+            match index.checked_add(1).filter(|next| *next < len) {
+                Some(next) => next,
+                None => break 'search,
+            }
+        };
+        index = next;
+        if nav.items[index].selectable {
+            nav.selected = index;
+            return;
+        }
+    }
+}
+
+fn permission_studio_nav_move_page(
+    nav: &mut SelectableListState<PermissionStudioNavItem>,
+    delta: isize,
+    page_size: usize,
+) {
+    for _ in 0..page_size {
+        permission_studio_nav_move_step(nav, delta);
+    }
+}
+
+fn permission_studio_nav_move_home(nav: &mut SelectableListState<PermissionStudioNavItem>) {
+    if let Some(index) = nav.items.iter().position(permission_studio_nav_is_selectable) {
+        nav.selected = index;
+    }
+}
+
+fn permission_studio_nav_move_end(nav: &mut SelectableListState<PermissionStudioNavItem>) {
+    if let Some(index) = nav
+        .items
+        .iter()
+        .rposition(permission_studio_nav_is_selectable)
+    {
+        nav.selected = index;
+    }
+}
+
+fn set_permission_studio_pane_focus(
+    dialog: &mut PermissionStudioOverlay,
+    pane_focus: PermissionStudioPaneFocus,
+) {
+    dialog.pane_focus = pane_focus;
+    dialog.state.set_focus(match pane_focus {
+        PermissionStudioPaneFocus::Navigation => PermissionStudioFocus::Navigation,
+        PermissionStudioPaneFocus::Content => PermissionStudioFocus::Items,
+    });
+}
+
+fn refresh_permission_studio_dialog(
     i18n: &I18n,
-    permission: &agena::agent::AgentPermissionConfig,
+    dialog: &mut PermissionStudioOverlay,
+    preferred_section: Option<PermissionStudioSectionId>,
+    preferred_item_label: Option<&str>,
+    preferred_focus: Option<PermissionStudioFocus>,
+) {
+    let nav_items = permission_studio_nav_items(i18n);
+    let nav_selected = permission_studio_nav_index_for_page(&dialog.page)
+        .min(nav_items.len().saturating_sub(1));
+    dialog.nav = SelectableListState::new(nav_items, nav_selected);
+    permission_studio_nav_normalize_selection(&mut dialog.nav);
+    if let Some(nav_item) = dialog.nav.selected_item() {
+        dialog.page = nav_item.page.clone();
+    }
+    let current_section = dialog.state.selected_section().map(|section| section.id);
+    let current_item_label = dialog
+        .state
+        .selected_item()
+        .map(|item| item.label.as_str().to_string());
+    let sections = permission_studio_sections(
+        i18n,
+        dialog,
+    );
+    let selected_section = preferred_section
+        .or(current_section)
+        .and_then(|id| sections.iter().position(|section| section.id == id))
+        .unwrap_or(0)
+        .min(sections.len().saturating_sub(1));
+    let section_items = sections
+        .get(selected_section)
+        .map(|section| section.items.as_slice())
+        .unwrap_or(&[]);
+    let selected_item = preferred_item_label
+        .or(current_item_label.as_deref())
+        .and_then(|label| section_items.iter().position(|item| item.label == label))
+        .unwrap_or(0)
+        .min(section_items.len().saturating_sub(1));
+    let focus = preferred_focus
+        .or(Some(dialog.state.focus()))
+        .unwrap_or_else(|| permission_studio_default_focus(&dialog.page));
+    dialog.title = permission_studio_title(i18n, dialog);
+    dialog.footer = permission_studio_footer(i18n, &dialog.page);
+    dialog.state = SectionedListState::new(sections, selected_section, selected_item, focus);
+    if dialog.state.selected_item().is_none()
+        && dialog.state.focus() == PermissionStudioFocus::Items
+    {
+        dialog.state.set_focus(PermissionStudioFocus::Navigation);
+    }
+}
+
+fn permission_studio_title(i18n: &I18n, dialog: &PermissionStudioOverlay) -> String {
+    match &dialog.page {
+        PermissionStudioPage::Overview => format!(
+            "{} · {}",
+            ui_text::t(i18n, "overlay-permission-studio-title"),
+            dialog.title_context
+        ),
+        page => format!(
+            "{} · {} · {}",
+            ui_text::t(i18n, "overlay-permission-studio-title"),
+            dialog.title_context,
+            permission_studio_page_label(i18n, page)
+        ),
+    }
+}
+
+fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage) -> String {
+    match page {
+        PermissionStudioPage::Overview => ui_text::t(i18n, "overlay-permission-studio-footer"),
+        PermissionStudioPage::PathDefaults
+        | PermissionStudioPage::PathRules
+        | PermissionStudioPage::NetworkZones
+        | PermissionStudioPage::NetworkRules
+        | PermissionStudioPage::EntryTags
+        | PermissionStudioPage::EntryNames
+        | PermissionStudioPage::EntryCommandRules => {
+            ui_text::t(i18n, "overlay-permission-studio-footer-nested")
+        }
+    }
+}
+
+fn permission_studio_default_focus(page: &PermissionStudioPage) -> PermissionStudioFocus {
+    match page {
+        PermissionStudioPage::Overview => PermissionStudioFocus::Navigation,
+        _ => PermissionStudioFocus::Items,
+    }
+}
+
+fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioPage) -> String {
+    match page {
+        PermissionStudioPage::Overview => ui_text::t(i18n, "permission-studio-page-overview"),
+        PermissionStudioPage::PathDefaults => {
+            ui_text::t(i18n, "permission-studio-page-path-defaults")
+        }
+        PermissionStudioPage::PathRules => ui_text::t(i18n, "permission-studio-page-path-rules"),
+        PermissionStudioPage::NetworkZones => {
+            ui_text::t(i18n, "permission-studio-page-network-zones")
+        }
+        PermissionStudioPage::NetworkRules => {
+            ui_text::t(i18n, "permission-studio-page-network-rules")
+        }
+        PermissionStudioPage::EntryTags => ui_text::t(i18n, "permission-studio-page-entry-tags"),
+        PermissionStudioPage::EntryNames => {
+            ui_text::t(i18n, "permission-studio-page-entry-names")
+        }
+        PermissionStudioPage::EntryCommandRules => {
+            ui_text::t(i18n, "permission-studio-page-entry-command-rules")
+        }
+    }
+}
+
+fn permission_studio_sections(
+    i18n: &I18n,
+    dialog: &PermissionStudioOverlay,
+) -> Vec<PermissionStudioSection> {
+    match &dialog.page {
+        PermissionStudioPage::PathDefaults => vec![PermissionStudioSection {
+            id: PermissionStudioSectionId::PathDefaults,
+            label: ui_text::t(i18n, "permission-studio-page-path-defaults"),
+            items: vec![
+                PermissionStudioItem {
+                    label: ui_text::t(i18n, "permission-studio-path-workspace-read"),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.workspace.as_ref())
+                            .and_then(|modes| modes.read),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::PathWorkspaceRead,
+                    ),
+                },
+                PermissionStudioItem {
+                    label: ui_text::t(i18n, "permission-studio-path-workspace-write"),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.workspace.as_ref())
+                            .and_then(|modes| modes.write),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::PathWorkspaceWrite,
+                    ),
+                },
+                PermissionStudioItem {
+                    label: ui_text::t(i18n, "permission-studio-path-external-read"),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.external.as_ref())
+                            .and_then(|modes| modes.read),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::PathExternalRead,
+                    ),
+                },
+                PermissionStudioItem {
+                    label: ui_text::t(i18n, "permission-studio-path-external-write"),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.external.as_ref())
+                            .and_then(|modes| modes.write),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::PathExternalWrite,
+                    ),
+                },
+            ],
+        }],
+        PermissionStudioPage::PathRules => {
+            let mut rules = dialog
+                .permission
+                .path
+                .as_ref()
+                .map(|path| path.rules.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            rules.sort();
+            let rule_items = rules
+                .into_iter()
+                .map(|pattern| PermissionStudioItem {
+                    label: pattern.clone(),
+                    value: path_rule_summary(
+                        i18n,
+                        dialog
+                            .permission
+                            .path
+                            .as_ref()
+                            .and_then(|path| path.rules.get(pattern.as_str())),
+                    ),
+                    action: PermissionStudioAction::EditText(
+                        PermissionStudioTextTarget::PathRulePattern { pattern },
+                    ),
+                })
+                .collect::<Vec<_>>();
+            vec![PermissionStudioSection {
+                id: PermissionStudioSectionId::PathRules,
+                label: ui_text::t(i18n, "permission-studio-page-path-rules"),
+                items: rule_items,
+            }]
+        }
+        PermissionStudioPage::NetworkZones => vec![PermissionStudioSection {
+            id: PermissionStudioSectionId::NetworkZones,
+            label: ui_text::t(i18n, "permission-studio-page-network-zones"),
+            items: vec![
+                PermissionStudioItem {
+                    label: ui_text::t(i18n, "permission-studio-network-internet"),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .network
+                            .as_ref()
+                            .and_then(|network| network.internet),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::NetworkInternet,
+                    ),
+                },
+                PermissionStudioItem {
+                    label: ui_text::t(i18n, "permission-studio-network-private"),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .network
+                            .as_ref()
+                            .and_then(|network| network.private),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::NetworkPrivate,
+                    ),
+                },
+                PermissionStudioItem {
+                    label: ui_text::t(i18n, "permission-studio-network-loopback"),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .network
+                            .as_ref()
+                            .and_then(|network| network.loopback),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::NetworkLoopback,
+                    ),
+                },
+            ],
+        }],
+        PermissionStudioPage::NetworkRules => {
+            let mut rules = dialog
+                .permission
+                .network
+                .as_ref()
+                .map(|network| network.rules.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            rules.sort();
+            let rule_items = rules
+                .into_iter()
+                .map(|target| PermissionStudioItem {
+                    label: target.clone(),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .network
+                            .as_ref()
+                            .and_then(|network| network.rules.get(target.as_str()).copied()),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditText(
+                        PermissionStudioTextTarget::NetworkRuleTarget { target },
+                    ),
+                })
+                .collect::<Vec<_>>();
+            vec![PermissionStudioSection {
+                id: PermissionStudioSectionId::NetworkRules,
+                label: ui_text::t(i18n, "permission-studio-page-network-rules"),
+                items: rule_items,
+            }]
+        }
+        PermissionStudioPage::EntryTags => {
+            let mut keys = dialog
+                .permission
+                .tools
+                .as_ref()
+                .map(|tools| tools.tags.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            keys.sort();
+            let tag_items = keys
+                .into_iter()
+                .map(|key| PermissionStudioItem {
+                    label: key.clone(),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .tools
+                            .as_ref()
+                            .and_then(|tools| tools.tags.get(key.as_str()).copied()),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditText(
+                        PermissionStudioTextTarget::ToolTagKey { key },
+                    ),
+                })
+                .collect::<Vec<_>>();
+            vec![PermissionStudioSection {
+                id: PermissionStudioSectionId::EntryTags,
+                label: ui_text::t(i18n, "permission-studio-page-tags"),
+                items: tag_items,
+            }]
+        }
+        PermissionStudioPage::EntryNames => {
+            let mut keys = dialog
+                .permission
+                .tools
+                .as_ref()
+                .map(|tools| tools.names.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            keys.sort();
+            let name_items = keys
+                .into_iter()
+                .map(|key| PermissionStudioItem {
+                    label: key.clone(),
+                    value: permission_mode_input_text(
+                        dialog
+                            .permission
+                            .tools
+                            .as_ref()
+                            .and_then(|tools| tools.names.get(key.as_str()).copied()),
+                        i18n,
+                    ),
+                    action: PermissionStudioAction::EditText(
+                        PermissionStudioTextTarget::ToolNameKey { key },
+                    ),
+                })
+                .collect::<Vec<_>>();
+            vec![PermissionStudioSection {
+                id: PermissionStudioSectionId::EntryNames,
+                label: ui_text::t(i18n, "permission-studio-page-names"),
+                items: name_items,
+            }]
+        }
+        PermissionStudioPage::EntryCommandRules => {
+            let mut keys = dialog
+                .permission
+                .tools
+                .as_ref()
+                .map(|tools| tools.rules.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            keys.sort();
+            let tool_rule_items = keys
+                .into_iter()
+                .map(|tool_name| PermissionStudioItem {
+                    label: tool_name.clone(),
+                    value: tool_permission_rules_summary(
+                        i18n,
+                        dialog
+                            .permission
+                            .tools
+                            .as_ref()
+                            .and_then(|tools| tools.rules.get(tool_name.as_str())),
+                    ),
+                    action: PermissionStudioAction::EditText(
+                        PermissionStudioTextTarget::ToolRuleName { tool_name },
+                    ),
+                })
+                .collect::<Vec<_>>();
+            vec![PermissionStudioSection {
+                id: PermissionStudioSectionId::EntryCommandRules,
+                label: ui_text::t(i18n, "permission-studio-page-tool-rules"),
+                items: tool_rule_items,
+            }]
+        }
+        PermissionStudioPage::Overview => vec![
+            PermissionStudioSection {
+                id: PermissionStudioSectionId::RootPath,
+                label: ui_text::t(i18n, "permission-studio-page-path"),
+                items: vec![
+                    PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-section-workspace"),
+                        value: path_access_modes_summary(
+                            i18n,
+                            dialog
+                                .permission
+                                .path
+                                .as_ref()
+                                .and_then(|path| path.workspace.as_ref()),
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                    PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-section-external"),
+                        value: path_access_modes_summary(
+                            i18n,
+                            dialog
+                                .permission
+                                .path
+                                .as_ref()
+                                .and_then(|path| path.external.as_ref()),
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                    PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-section-rules"),
+                        value: permission_rule_count_summary(
+                            i18n,
+                            dialog
+                                .permission
+                                .path
+                                .as_ref()
+                                .map(|path| path.rules.len())
+                                .unwrap_or_default(),
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                ],
+            },
+            PermissionStudioSection {
+                id: PermissionStudioSectionId::RootNetwork,
+                label: ui_text::t(i18n, "permission-studio-page-network"),
+                items: vec![
+                    PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-section-defaults"),
+                        value: network_defaults_summary(
+                            i18n,
+                            dialog.permission.network.as_ref(),
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                    PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-section-rules"),
+                        value: permission_rule_count_summary(
+                            i18n,
+                            dialog
+                                .permission
+                                .network
+                                .as_ref()
+                                .map(|network| network.rules.len())
+                                .unwrap_or_default(),
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                ],
+            },
+            PermissionStudioSection {
+                id: PermissionStudioSectionId::RootEntries,
+                label: ui_text::t(i18n, "permission-studio-page-entries"),
+                items: vec![
+                    PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-page-tags"),
+                        value: permission_rule_count_summary(
+                            i18n,
+                            dialog
+                                .permission
+                                .tools
+                                .as_ref()
+                                .map(|tools| tools.tags.len())
+                                .unwrap_or_default(),
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                    PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-page-names"),
+                        value: permission_rule_count_summary(
+                            i18n,
+                            dialog
+                                .permission
+                                .tools
+                                .as_ref()
+                                .map(|tools| tools.names.len())
+                                .unwrap_or_default(),
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                    PermissionStudioItem {
+                        label: ui_text::t(i18n, "permission-studio-page-tool-rules"),
+                        value: permission_rule_count_summary(
+                            i18n,
+                            dialog
+                                .permission
+                                .tools
+                                .as_ref()
+                                .map(|tools| tools.rules.len())
+                                .unwrap_or_default(),
+                        ),
+                        action: PermissionStudioAction::Noop,
+                    },
+                ],
+            },
+        ],
+    }
+}
+
+fn permission_studio_mode_target_label(i18n: &I18n, target: &PermissionStudioModeTarget) -> String {
+    ui_text::t(
+        i18n,
+        match target {
+            PermissionStudioModeTarget::PathWorkspaceRead => {
+                "permission-studio-path-workspace-read"
+            }
+            PermissionStudioModeTarget::PathWorkspaceWrite => {
+                "permission-studio-path-workspace-write"
+            }
+            PermissionStudioModeTarget::PathExternalRead => "permission-studio-path-external-read",
+            PermissionStudioModeTarget::PathExternalWrite => {
+                "permission-studio-path-external-write"
+            }
+            PermissionStudioModeTarget::NetworkInternet => "permission-studio-network-internet",
+            PermissionStudioModeTarget::NetworkPrivate => "permission-studio-network-private",
+            PermissionStudioModeTarget::NetworkLoopback => "permission-studio-network-loopback",
+        },
+    )
+}
+
+fn permission_studio_mode_target_input_text(
+    dialog: &PermissionStudioOverlay,
+    target: &PermissionStudioModeTarget,
 ) -> String {
+    permission_mode_token_text(permission_studio_mode_target_value(
+        &dialog.permission,
+        target,
+    ))
+}
+
+fn permission_studio_text_target_label(i18n: &I18n, target: &PermissionStudioTextTarget) -> String {
+    ui_text::t(
+        i18n,
+        match target {
+            PermissionStudioTextTarget::PathRulePattern { .. } => "permission-studio-rule-pattern",
+            PermissionStudioTextTarget::NetworkRuleTarget { .. } => "permission-studio-rule-target",
+            PermissionStudioTextTarget::ToolTagKey { .. }
+            | PermissionStudioTextTarget::ToolNameKey { .. }
+            | PermissionStudioTextTarget::ToolRuleName { .. } => "permission-studio-rule-key",
+        },
+    )
+}
+
+fn permission_studio_text_target_input_text(target: &PermissionStudioTextTarget) -> String {
+    match target {
+        PermissionStudioTextTarget::PathRulePattern { pattern }
+        | PermissionStudioTextTarget::NetworkRuleTarget { target: pattern }
+        | PermissionStudioTextTarget::ToolTagKey { key: pattern }
+        | PermissionStudioTextTarget::ToolNameKey { key: pattern }
+        | PermissionStudioTextTarget::ToolRuleName { tool_name: pattern } => pattern.clone(),
+    }
+}
+
+fn permission_studio_creator_spec(
+    i18n: &I18n,
+    action: &PermissionStudioEditorAction,
+) -> (String, String) {
+    match action {
+        PermissionStudioEditorAction::AddPathRule { .. } => (
+            settings_edit_title(
+                i18n,
+                ui_text::t(i18n, "permission-studio-add-path-rule").as_str(),
+            ),
+            String::new(),
+        ),
+        PermissionStudioEditorAction::AddNetworkRule { .. } => (
+            settings_edit_title(
+                i18n,
+                ui_text::t(i18n, "permission-studio-add-network-rule").as_str(),
+            ),
+            String::new(),
+        ),
+        PermissionStudioEditorAction::AddToolTag { .. } => (
+            settings_edit_title(i18n, ui_text::t(i18n, "permission-studio-add-tag").as_str()),
+            String::new(),
+        ),
+        PermissionStudioEditorAction::AddToolName { .. } => (
+            settings_edit_title(
+                i18n,
+                ui_text::t(i18n, "permission-studio-add-name").as_str(),
+            ),
+            String::new(),
+        ),
+        PermissionStudioEditorAction::AddToolRule { .. } => (
+            settings_edit_title(
+                i18n,
+                ui_text::t(i18n, "permission-studio-add-tool-rule").as_str(),
+            ),
+            String::new(),
+        ),
+        _ => (String::new(), String::new()),
+    }
+}
+
+fn permission_studio_creator_input_text(action: &PermissionStudioEditorAction) -> String {
+    match action {
+        PermissionStudioEditorAction::AddPathRule { duplicate_from }
+        | PermissionStudioEditorAction::AddNetworkRule { duplicate_from }
+        | PermissionStudioEditorAction::AddToolTag { duplicate_from }
+        | PermissionStudioEditorAction::AddToolName { duplicate_from }
+        | PermissionStudioEditorAction::AddToolRule { duplicate_from } => {
+            duplicate_from.clone().unwrap_or_default()
+        }
+        _ => String::new(),
+    }
+}
+
+fn apply_permission_studio_mode_input(
+    i18n: &I18n,
+    permission: &mut PermissionConfig,
+    target: &PermissionStudioModeTarget,
+    input: &str,
+) -> UiResult<()> {
+    let mode = parse_permission_studio_optional_mode_input(i18n, input)?;
+    match target {
+        PermissionStudioModeTarget::PathWorkspaceRead => {
+            set_path_default_mode(permission, false, true, mode);
+        }
+        PermissionStudioModeTarget::PathWorkspaceWrite => {
+            set_path_default_mode(permission, false, false, mode);
+        }
+        PermissionStudioModeTarget::PathExternalRead => {
+            set_path_default_mode(permission, true, true, mode);
+        }
+        PermissionStudioModeTarget::PathExternalWrite => {
+            set_path_default_mode(permission, true, false, mode);
+        }
+        PermissionStudioModeTarget::NetworkInternet => {
+            permission
+                .network
+                .get_or_insert_with(Default::default)
+                .internet = mode;
+        }
+        PermissionStudioModeTarget::NetworkPrivate => {
+            permission
+                .network
+                .get_or_insert_with(Default::default)
+                .private = mode;
+        }
+        PermissionStudioModeTarget::NetworkLoopback => {
+            permission
+                .network
+                .get_or_insert_with(Default::default)
+                .loopback = mode;
+        }
+    }
+    normalize_permission_config(permission);
+    Ok(())
+}
+
+fn apply_permission_studio_text_input(
+    i18n: &I18n,
+    permission: &mut PermissionConfig,
+    target: &PermissionStudioTextTarget,
+    input: &str,
+) -> UiResult<PermissionStudioPage> {
+    let value = parse_permission_studio_key_input(
+        i18n,
+        permission_studio_text_target_label(i18n, target).as_str(),
+        input,
+    )?;
+    let page = match target {
+        PermissionStudioTextTarget::PathRulePattern { pattern } => {
+            rename_path_rule(permission, pattern.as_str(), value.as_str());
+            PermissionStudioPage::PathRules
+        }
+        PermissionStudioTextTarget::NetworkRuleTarget { target } => {
+            rename_network_rule(permission, target.as_str(), value.as_str());
+            PermissionStudioPage::NetworkRules
+        }
+        PermissionStudioTextTarget::ToolTagKey { key } => {
+            rename_tool_tag(permission, key.as_str(), value.as_str());
+            PermissionStudioPage::EntryTags
+        }
+        PermissionStudioTextTarget::ToolNameKey { key } => {
+            rename_tool_name(permission, key.as_str(), value.as_str());
+            PermissionStudioPage::EntryNames
+        }
+        PermissionStudioTextTarget::ToolRuleName { tool_name } => {
+            rename_tool_rule(permission, tool_name.as_str(), value.as_str());
+            PermissionStudioPage::EntryCommandRules
+        }
+    };
+    normalize_permission_config(permission);
+    Ok(page)
+}
+
+fn permission_pretty_document_localized(i18n: &I18n, permission: &PermissionConfig) -> String {
     if permission.is_empty() {
         ui_text::t(i18n, "overlay-agent-permission-document-unset")
     } else {
@@ -15505,36 +16686,68 @@ fn permission_pretty_document_localized(
     }
 }
 
-fn permission_inherit_setting_value(
-    permission: &agena::agent::AgentPermissionConfig,
-    field: AgentPermissionField,
-) -> Option<bool> {
-    match &permission.inherit {
-        agena::agent::PermissionInheritanceConfig::All(value) => Some(*value),
-        agena::agent::PermissionInheritanceConfig::Sections(sections) => match field {
-            AgentPermissionField::InheritPath => sections.path,
-            AgentPermissionField::InheritNetwork => sections.network,
-            AgentPermissionField::InheritEntries => sections.tools,
-            _ => None,
-        },
+fn permission_override_summary(i18n: &I18n, permission: &PermissionConfig) -> String {
+    let mut parts = Vec::new();
+    if permission.path.is_some() {
+        parts.push(agent_path_permission_summary(
+            i18n,
+            permission.path.as_ref(),
+        ));
+    }
+    if permission.network.is_some() {
+        parts.push(agent_network_permission_summary(
+            i18n,
+            permission.network.as_ref(),
+        ));
+    }
+    if permission.tools.is_some() {
+        parts.push(agent_tool_permission_summary(
+            i18n,
+            permission.tools.as_ref(),
+        ));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        join_inline_segments(parts)
     }
 }
 
-fn permission_inherit_value_label(
+fn permission_settings_value(
     i18n: &I18n,
-    permission: &agena::agent::AgentPermissionConfig,
-    field: AgentPermissionField,
+    override_permission: &PermissionConfig,
+    effective_permission: &PermissionConfig,
 ) -> String {
-    match permission_inherit_setting_value(permission, field) {
-        Some(value) => localized_yes_no(i18n, value),
-        None => ui_text::t(i18n, "value-default-true"),
+    if override_permission == effective_permission {
+        permission_override_summary(i18n, override_permission)
+    } else {
+        join_inline_segments(vec![
+            i18n.text_args(
+                "permission-studio-settings-override",
+                &crate::fl_args!(
+                    "value" => permission_override_summary(i18n, override_permission)
+                ),
+            ),
+            i18n.text_args(
+                "permission-studio-settings-effective",
+                &crate::fl_args!(
+                    "value" => permission_override_summary(i18n, effective_permission)
+                ),
+            ),
+        ])
     }
 }
 
-fn agent_path_permission_summary(
-    i18n: &I18n,
-    path: Option<&agena::agent::PathPermissionConfig>,
-) -> String {
+fn permission_studio_read_only_message(i18n: &I18n, source: &PermissionStudioSource) -> String {
+    match source {
+        PermissionStudioSource::Agent { .. } => agent_file_backed_permissions_message(i18n),
+        PermissionStudioSource::GlobalConfig | PermissionStudioSource::Session { .. } => {
+            ui_text::t(i18n, "permission-studio-detail-read-only")
+        }
+    }
+}
+
+fn agent_path_permission_summary(i18n: &I18n, path: Option<&PathPermissionConfig>) -> String {
     let Some(path) = path else {
         return ui_text::t(i18n, "value-unset");
     };
@@ -15560,7 +16773,7 @@ fn agent_path_permission_summary(
 
 fn agent_network_permission_summary(
     i18n: &I18n,
-    network: Option<&agena::agent::NetworkPermissionConfig>,
+    network: Option<&NetworkPermissionConfig>,
 ) -> String {
     let Some(network) = network else {
         return ui_text::t(i18n, "value-unset");
@@ -15588,10 +16801,7 @@ fn agent_network_permission_summary(
     }
 }
 
-fn agent_tool_permission_summary(
-    i18n: &I18n,
-    tools: Option<&agena::agent::ToolPermissionConfig>,
-) -> String {
+fn agent_tool_permission_summary(i18n: &I18n, tools: Option<&ToolPermissionConfig>) -> String {
     let Some(tools) = tools else {
         return ui_text::t(i18n, "value-unset");
     };
@@ -15621,86 +16831,497 @@ fn agent_tool_permission_summary(
     }
 }
 
-fn pretty_json_optional<T: Serialize>(value: Option<&T>) -> Option<String> {
-    value.map(pretty_json)
+fn path_access_modes_summary(i18n: &I18n, modes: Option<&PathAccessModes>) -> String {
+    let Some(modes) = modes else {
+        return ui_text::t(i18n, "value-unset");
+    };
+    match (modes.read, modes.write) {
+        (Some(read), Some(write)) if read == write => permission_mode_label(i18n, read),
+        (read, write) => join_inline_segments(vec![
+            i18n.text_args(
+                "permission-studio-mode-read",
+                &crate::fl_args!(
+                    "value" => read
+                        .map(|mode| permission_mode_label(i18n, mode))
+                        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
+                ),
+            ),
+            i18n.text_args(
+                "permission-studio-mode-write",
+                &crate::fl_args!(
+                    "value" => write
+                        .map(|mode| permission_mode_label(i18n, mode))
+                        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
+                ),
+            ),
+        ]),
+    }
+}
+
+fn network_defaults_summary(i18n: &I18n, network: Option<&NetworkPermissionConfig>) -> String {
+    let Some(network) = network else {
+        return ui_text::t(i18n, "value-unset");
+    };
+    let mut parts = Vec::new();
+    if let Some(mode) = network.internet {
+        parts.push(i18n.text_args(
+            "permission-studio-network-default",
+            &crate::fl_args!(
+                "label" => ui_text::t(i18n, "value-internet"),
+                "value" => permission_mode_label(i18n, mode),
+            ),
+        ));
+    }
+    if let Some(mode) = network.private {
+        parts.push(i18n.text_args(
+            "permission-studio-network-default",
+            &crate::fl_args!(
+                "label" => ui_text::t(i18n, "value-private"),
+                "value" => permission_mode_label(i18n, mode),
+            ),
+        ));
+    }
+    if let Some(mode) = network.loopback {
+        parts.push(i18n.text_args(
+            "permission-studio-network-default",
+            &crate::fl_args!(
+                "label" => ui_text::t(i18n, "value-loopback"),
+                "value" => permission_mode_label(i18n, mode),
+            ),
+        ));
+    }
+    if parts.is_empty() {
+        ui_text::t(i18n, "value-unset")
+    } else {
+        join_inline_segments(parts)
+    }
+}
+
+fn permission_rule_count_summary(i18n: &I18n, count: usize) -> String {
+    match count {
+        0 => ui_text::t(i18n, "value-unset"),
+        count => i18n.text_args(
+            "value-rule-count",
+            &crate::fl_args!("count" => count as i64),
+        ),
+    }
+}
+
+fn permission_mode_input_text(mode: Option<PermissionMode>, i18n: &I18n) -> String {
+    mode.map(|mode| permission_mode_label(i18n, mode))
+        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
+}
+
+fn permission_mode_token_text(mode: Option<PermissionMode>) -> String {
+    mode.map(permission_mode_token)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn pretty_json<T: Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn parse_optional_json_config<T>(
-    i18n: &I18n,
-    field: &str,
-    input: &str,
-) -> UiResult<Option<JsonValue>>
-where
-    T: serde::de::DeserializeOwned + Serialize,
-{
-    if input.trim().is_empty() {
-        return Ok(None);
-    }
-    let parsed = serde_json::from_str::<T>(input).map_err(|error| {
-        i18n.text_args(
-            "agent-permission-field-parse-json",
-            &crate::fl_args!("field" => field, "error" => error.to_string()),
-        )
-    })?;
-    serde_json::to_value(parsed)
-        .map(Some)
-        .map_err(|error| error.to_string())
-}
-
-fn parse_optional_bool_input(i18n: &I18n, field: &str, input: &str) -> UiResult<Option<bool>> {
-    if input.trim().is_empty() {
-        return Ok(None);
-    }
-    match input.trim().to_ascii_lowercase().as_str() {
-        "true" | "yes" | "on" => Ok(Some(true)),
-        "false" | "no" | "off" => Ok(Some(false)),
-        _ => Err(i18n.text_args(
-            "agent-permission-field-parse-bool",
-            &crate::fl_args!("field" => field),
-        )),
+fn permission_config_from_json_value(value: &JsonValue) -> UiResult<PermissionConfig> {
+    if value.is_null() {
+        Ok(PermissionConfig::default())
+    } else {
+        serde_json::from_value(value.clone()).map_err(|error| error.to_string())
     }
 }
 
-fn parse_string_list_input(input: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for token in input
-        .lines()
-        .flat_map(|line| line.split(','))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let value = token.to_string();
-        if !out.contains(&value) {
-            out.push(value);
+fn permission_studio_mode_target_value(
+    permission: &PermissionConfig,
+    target: &PermissionStudioModeTarget,
+) -> Option<PermissionMode> {
+    match target {
+        PermissionStudioModeTarget::PathWorkspaceRead => permission
+            .path
+            .as_ref()
+            .and_then(|path| path.workspace.as_ref())
+            .and_then(|modes| modes.read),
+        PermissionStudioModeTarget::PathWorkspaceWrite => permission
+            .path
+            .as_ref()
+            .and_then(|path| path.workspace.as_ref())
+            .and_then(|modes| modes.write),
+        PermissionStudioModeTarget::PathExternalRead => permission
+            .path
+            .as_ref()
+            .and_then(|path| path.external.as_ref())
+            .and_then(|modes| modes.read),
+        PermissionStudioModeTarget::PathExternalWrite => permission
+            .path
+            .as_ref()
+            .and_then(|path| path.external.as_ref())
+            .and_then(|modes| modes.write),
+        PermissionStudioModeTarget::NetworkInternet => permission
+            .network
+            .as_ref()
+            .and_then(|network| network.internet),
+        PermissionStudioModeTarget::NetworkPrivate => permission
+            .network
+            .as_ref()
+            .and_then(|network| network.private),
+        PermissionStudioModeTarget::NetworkLoopback => permission
+            .network
+            .as_ref()
+            .and_then(|network| network.loopback),
+    }
+}
+
+fn path_rule_modes(rule: Option<&PathAccessRuleConfig>) -> Option<PathAccessModes> {
+    match rule? {
+        PathAccessRuleConfig::Modes(modes) => Some(modes.clone()),
+        PathAccessRuleConfig::Shorthand(value) => path_access_shorthand_modes(value.as_str()),
+    }
+}
+
+fn path_access_shorthand_modes(value: &str) -> Option<PathAccessModes> {
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+    let both = |mode| PathAccessModes {
+        read: Some(mode),
+        write: Some(mode),
+    };
+    match normalized.as_str() {
+        "allow" | "read_write" | "rw" => Some(both(PermissionMode::Allow)),
+        "ask" => Some(both(PermissionMode::Ask)),
+        "deny" | "none" => Some(both(PermissionMode::Deny)),
+        "read" | "read_only" | "ro" => Some(PathAccessModes {
+            read: Some(PermissionMode::Allow),
+            write: Some(PermissionMode::Deny),
+        }),
+        "write" | "write_only" | "wo" => Some(PathAccessModes {
+            read: Some(PermissionMode::Deny),
+            write: Some(PermissionMode::Allow),
+        }),
+        _ => None,
+    }
+}
+
+fn path_rule_summary(i18n: &I18n, rule: Option<&PathAccessRuleConfig>) -> String {
+    path_rule_modes(rule)
+        .map(|modes| path_access_modes_summary(i18n, Some(&modes)))
+        .unwrap_or_else(|| ui_text::t(i18n, "value-custom"))
+}
+
+fn tool_permission_rules_summary(i18n: &I18n, rules: Option<&ToolPermissionRules>) -> String {
+    let Some(rules) = rules else {
+        return ui_text::t(i18n, "value-unset");
+    };
+    match rules {
+        ToolPermissionRules::Mode(mode) => permission_mode_label(i18n, *mode),
+        ToolPermissionRules::Ordered(entries) => {
+            let fallback = entries.get("*").copied();
+            let qualifier_count = entries
+                .keys()
+                .filter(|pattern| pattern.as_str() != "*")
+                .count();
+            let mut parts = Vec::new();
+            if let Some(mode) = fallback {
+                parts.push(permission_mode_label(i18n, mode));
+            }
+            if qualifier_count > 0 {
+                parts.push(i18n.text_args(
+                    "value-rule-count",
+                    &crate::fl_args!("count" => qualifier_count as i64),
+                ));
+            }
+            if parts.is_empty() {
+                ui_text::t(i18n, "value-custom")
+            } else {
+                join_inline_segments(parts)
+            }
         }
     }
-    out
+}
+
+fn parse_permission_studio_optional_mode_input(
+    i18n: &I18n,
+    input: &str,
+) -> UiResult<Option<PermissionMode>> {
+    let trimmed = input.trim();
+    if trimmed.is_empty()
+        || trimmed.eq_ignore_ascii_case("clear")
+        || trimmed.eq_ignore_ascii_case("unset")
+    {
+        return Ok(None);
+    }
+    parse_permission_mode_token(i18n, trimmed).map(Some)
+}
+
+fn parse_permission_studio_key_input(i18n: &I18n, field: &str, input: &str) -> UiResult<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(i18n.text_args(
+            "permission-studio-error-empty-value",
+            &crate::fl_args!("field" => field.to_string()),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn permission_mode_token(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Allow => "allow",
+        PermissionMode::Ask => "ask",
+        PermissionMode::Deny => "deny",
+    }
+}
+
+fn set_path_default_mode(
+    permission: &mut PermissionConfig,
+    external: bool,
+    read: bool,
+    mode: Option<PermissionMode>,
+) {
+    let path = permission.path.get_or_insert_with(Default::default);
+    let target = if external {
+        &mut path.external
+    } else {
+        &mut path.workspace
+    };
+    let modes = target.get_or_insert_with(Default::default);
+    if read {
+        modes.read = mode;
+    } else {
+        modes.write = mode;
+    }
+    if modes.read.is_none() && modes.write.is_none() {
+        *target = None;
+    }
+}
+
+fn rename_path_rule(permission: &mut PermissionConfig, from: &str, to: &str) {
+    if from == to {
+        return;
+    }
+    let Some(path) = permission.path.as_mut() else {
+        return;
+    };
+    if let Some(rule) = path.rules.shift_remove(from) {
+        path.rules.insert(to.to_string(), rule);
+    }
+}
+
+fn rename_network_rule(permission: &mut PermissionConfig, from: &str, to: &str) {
+    if from == to {
+        return;
+    }
+    let Some(network) = permission.network.as_mut() else {
+        return;
+    };
+    if let Some(mode) = network.rules.shift_remove(from) {
+        network.rules.insert(to.to_string(), mode);
+    }
+}
+
+fn rename_tool_tag(permission: &mut PermissionConfig, from: &str, to: &str) {
+    if from == to {
+        return;
+    }
+    let Some(tools) = permission.tools.as_mut() else {
+        return;
+    };
+    if let Some(mode) = tools.tags.remove(from) {
+        tools.tags.insert(to.to_string(), mode);
+    }
+}
+
+fn rename_tool_name(permission: &mut PermissionConfig, from: &str, to: &str) {
+    if from == to {
+        return;
+    }
+    let Some(tools) = permission.tools.as_mut() else {
+        return;
+    };
+    if let Some(mode) = tools.names.remove(from) {
+        tools.names.insert(to.to_string(), mode);
+    }
+}
+
+fn rename_tool_rule(permission: &mut PermissionConfig, from: &str, to: &str) {
+    if from == to {
+        return;
+    }
+    let Some(tools) = permission.tools.as_mut() else {
+        return;
+    };
+    if let Some(rule) = tools.rules.remove(from) {
+        tools.rules.insert(to.to_string(), rule);
+    }
+}
+
+#[cfg(test)]
+fn tool_rule_fallback_mode(
+    permission: &PermissionConfig,
+    tool_name: &str,
+) -> Option<PermissionMode> {
+    match permission.tools.as_ref()?.rules.get(tool_name)? {
+        ToolPermissionRules::Mode(mode) => Some(*mode),
+        ToolPermissionRules::Ordered(entries) => entries.get("*").copied(),
+    }
+}
+
+#[cfg(test)]
+fn tool_qualifier_rules(
+    permission: &PermissionConfig,
+    tool_name: &str,
+) -> Vec<(String, PermissionMode)> {
+    match permission
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.rules.get(tool_name))
+    {
+        Some(ToolPermissionRules::Ordered(entries)) => entries
+            .iter()
+            .filter(|(pattern, _)| pattern.as_str() != "*")
+            .map(|(pattern, mode)| (pattern.clone(), *mode))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+fn tool_qualifier_mode(
+    permission: &PermissionConfig,
+    tool_name: &str,
+    pattern: &str,
+) -> Option<PermissionMode> {
+    match permission.tools.as_ref()?.rules.get(tool_name)? {
+        ToolPermissionRules::Ordered(entries) => entries.get(pattern).copied(),
+        ToolPermissionRules::Mode(_) => None,
+    }
+}
+
+#[cfg(test)]
+fn add_tool_qualifier_rule(
+    permission: &mut PermissionConfig,
+    tool_name: &str,
+    pattern: &str,
+    mode: PermissionMode,
+) {
+    set_tool_qualifier_mode(permission, tool_name, pattern, Some(mode));
+}
+
+#[cfg(test)]
+fn remove_tool_qualifier_rule(permission: &mut PermissionConfig, tool_name: &str, pattern: &str) {
+    let Some(tools) = permission.tools.as_mut() else {
+        return;
+    };
+    let Some(rule) = tools.rules.get_mut(tool_name) else {
+        return;
+    };
+    match rule {
+        ToolPermissionRules::Mode(_) => {}
+        ToolPermissionRules::Ordered(entries) => {
+            entries.shift_remove(pattern);
+            if entries.is_empty() {
+                tools.rules.remove(tool_name);
+            } else if entries.len() == 1
+                && entries.contains_key("*")
+                && let Some(mode) = entries.get("*").copied()
+            {
+                tools
+                    .rules
+                    .insert(tool_name.to_string(), ToolPermissionRules::Mode(mode));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn set_tool_qualifier_mode(
+    permission: &mut PermissionConfig,
+    tool_name: &str,
+    pattern: &str,
+    mode: Option<PermissionMode>,
+) {
+    if let Some(mode) = mode {
+        let tools = permission.tools.get_or_insert_with(Default::default);
+        match tools.rules.get_mut(tool_name) {
+            Some(ToolPermissionRules::Mode(current)) => {
+                let fallback = *current;
+                let mut entries = IndexMap::new();
+                entries.insert("*".to_string(), fallback);
+                entries.insert(pattern.to_string(), mode);
+                tools
+                    .rules
+                    .insert(tool_name.to_string(), ToolPermissionRules::Ordered(entries));
+            }
+            Some(ToolPermissionRules::Ordered(entries)) => {
+                entries.insert(pattern.to_string(), mode);
+            }
+            None => {
+                let mut entries = IndexMap::new();
+                entries.insert(pattern.to_string(), mode);
+                tools
+                    .rules
+                    .insert(tool_name.to_string(), ToolPermissionRules::Ordered(entries));
+            }
+        }
+    } else {
+        remove_tool_qualifier_rule(permission, tool_name, pattern);
+    }
+}
+
+fn normalize_permission_config(permission: &mut PermissionConfig) {
+    if permission
+        .path
+        .as_ref()
+        .is_some_and(PathPermissionConfig::is_empty)
+    {
+        permission.path = None;
+    }
+    if permission
+        .network
+        .as_ref()
+        .is_some_and(NetworkPermissionConfig::is_empty)
+    {
+        permission.network = None;
+    }
+    if permission
+        .tools
+        .as_ref()
+        .is_some_and(ToolPermissionConfig::is_empty)
+    {
+        permission.tools = None;
+    }
+}
+
+fn permission_mode_label(i18n: &I18n, mode: PermissionMode) -> String {
+    ui_text::t(
+        i18n,
+        match mode {
+            PermissionMode::Allow => "value-allow",
+            PermissionMode::Ask => "value-ask",
+            PermissionMode::Deny => "value-deny",
+        },
+    )
+}
+
+fn permission_mode_choice_items(i18n: &I18n) -> Vec<ChoiceItem> {
+    [
+        PermissionMode::Allow,
+        PermissionMode::Ask,
+        PermissionMode::Deny,
+    ]
+    .into_iter()
+    .map(|mode| ChoiceItem {
+        label: permission_mode_label(i18n, mode),
+        detail: String::new(),
+        value: permission_mode_token(mode).to_string(),
+        search_text: format!(
+            "{} {}",
+            permission_mode_label(i18n, mode),
+            permission_mode_token(mode)
+        ),
+    })
+    .collect()
 }
 
 fn agent_config_path(agent_name: &str, suffix: &str) -> String {
     format!("agents.{}.{}", quoted_settings_segment(agent_name), suffix)
-}
-
-fn agent_permission_path(agent_name: &str, field: AgentPermissionField) -> String {
-    match field {
-        AgentPermissionField::InheritPath => {
-            agent_config_path(agent_name, "permission.inherit.path")
-        }
-        AgentPermissionField::InheritNetwork => {
-            agent_config_path(agent_name, "permission.inherit.network")
-        }
-        AgentPermissionField::InheritEntries => {
-            agent_config_path(agent_name, "permission.inherit.entries")
-        }
-        AgentPermissionField::PathConfig => agent_config_path(agent_name, "permission.path"),
-        AgentPermissionField::NetworkConfig => agent_config_path(agent_name, "permission.network"),
-        AgentPermissionField::EntryConfig => agent_config_path(agent_name, "permission.entries"),
-        AgentPermissionField::FullConfig => agent_config_path(agent_name, "permission"),
-    }
 }
 
 fn settings_studio_provider_items(
@@ -16058,6 +17679,10 @@ fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAction) -> Str
                 ui_text::t(i18n, "overlay-choice-clear-permission-mode")
             }
         },
+        ChoiceOverlayAction::PermissionStudioMode(target) => i18n.text_args(
+            "overlay-choice-clear-permission-override-detail",
+            &crate::fl_args!("field" => permission_studio_mode_target_label(i18n, target)),
+        ),
     }
 }
 
@@ -21067,13 +22692,9 @@ mod tests {
             automation: None,
             execution: SessionExecutionContextResource {
                 agent_profile: None,
-                agent_mode: None,
-                agent_hidden: false,
-                agent_color: None,
                 active_skill_name: None,
                 system_prompt_override: None,
-                allowed_tools: Vec::new(),
-                agent_permission: Default::default(),
+                effective_permission: Default::default(),
                 model_provider_id: None,
                 model_adapter_id: None,
                 model_id: None,
@@ -21081,7 +22702,6 @@ mod tests {
                 model_speed_mode: None,
                 model_verbosity: None,
                 model_parallel_tool_calls: None,
-                agent_run: Default::default(),
                 effective_workspace_root: None,
                 task_id: None,
             },
@@ -21104,11 +22724,13 @@ mod tests {
     }
 
     fn search_list_config(
+        input_enabled: bool,
         search_enabled: bool,
         custom_value_enabled: bool,
     ) -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 96,
+            input_enabled,
             search_enabled,
             custom_value_enabled,
             fill_selected_into_input: true,
@@ -21126,7 +22748,7 @@ mod tests {
             "Footer".to_string(),
             "Empty".to_string(),
             Editor::from_text("typed".to_string()),
-            search_list_config(false, false),
+            search_list_config(true, false, false),
             Some(SearchListClearAction {
                 label: "Clear value".to_string(),
                 detail: "reset field".to_string(),
@@ -21147,7 +22769,7 @@ mod tests {
             "Footer".to_string(),
             "Empty".to_string(),
             Editor::from_text("typed".to_string()),
-            search_list_config(false, true),
+            search_list_config(true, false, true),
             Some(SearchListClearAction {
                 label: "Clear value".to_string(),
                 detail: "reset field".to_string(),
@@ -21183,7 +22805,7 @@ mod tests {
             "Footer".to_string(),
             "Empty".to_string(),
             Editor::from_text("typed".to_string()),
-            search_list_config(false, true),
+            search_list_config(true, false, true),
             None,
             ChoiceOverlayMeta {
                 i18n: i18n.clone(),
@@ -21223,7 +22845,7 @@ mod tests {
             "Footer".to_string(),
             "Empty".to_string(),
             Editor::from_text("deny".to_string()),
-            search_list_config(true, false),
+            search_list_config(true, true, false),
             None,
             ChoiceOverlayMeta {
                 i18n: I18n::english(),
@@ -21241,7 +22863,7 @@ mod tests {
             "Footer".to_string(),
             "Empty".to_string(),
             Editor::from_text("deny".to_string()),
-            search_list_config(false, false),
+            search_list_config(true, false, false),
             None,
             ChoiceOverlayMeta {
                 i18n: I18n::english(),
@@ -21255,6 +22877,37 @@ mod tests {
 
         assert_eq!(local_search.items.len(), 1);
         assert_eq!(remote_query.items.len(), 2);
+    }
+
+    #[test]
+    fn choice_overlay_periodic_refresh_preserves_manual_selection() {
+        let mut overlay = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::default(),
+            search_list_config(true, false, false),
+            None,
+            ChoiceOverlayMeta {
+                i18n: I18n::english(),
+                all_items: vec![
+                    choice_item("allow", "always allow matching actions"),
+                    choice_item("deny", "always deny matching actions"),
+                ],
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut overlay);
+        overlay.selected = 1;
+
+        App::sync_choice_overlay_input(&mut overlay, false);
+        assert_eq!(overlay.selected, 1);
+
+        App::sync_choice_overlay_input(&mut overlay, true);
+        assert_eq!(overlay.selected, 0);
     }
 
     #[test]
@@ -21856,40 +23509,93 @@ mod tests {
 
         assert_eq!(editor_save_footer(&i18n, false), "Enter 保存 | Esc 取消");
         assert_eq!(editor_save_footer(&i18n, true), "Ctrl+S 保存 | Esc 取消");
-
-        let mode_error =
-            agent_studio_field_setting_value(&i18n, "demo", AgentStudioField::Mode, "invalid")
-                .expect_err("expected localized agent mode error");
         assert_eq!(
-            mode_error,
-            i18n.text_args(
-                "agent-studio-field-parse-mode",
-                &crate::fl_args!(
-                    "field" => agent_studio_field_label(&i18n, AgentStudioField::Mode),
-                    "value" => "invalid",
-                ),
-            )
+            agent_studio_field_label(&i18n, AgentStudioField::DefaultModel),
+            "默认 Model"
         );
+    }
 
-        let bool_error = agent_permission_field_setting_value(
+    #[test]
+    fn permission_studio_atomic_mode_edits_preserve_sibling_sections() {
+        let i18n = I18n::english();
+        let mut permission = PermissionConfig {
+            path: Some(PathPermissionConfig {
+                workspace: Some(PathAccessModes {
+                    read: Some(PermissionMode::Ask),
+                    write: Some(PermissionMode::Deny),
+                }),
+                external: Some(PathAccessModes {
+                    read: Some(PermissionMode::Deny),
+                    write: Some(PermissionMode::Deny),
+                }),
+                rules: IndexMap::from([(
+                    "tmp/**".to_string(),
+                    PathAccessRuleConfig::Shorthand("allow".to_string()),
+                )]),
+            }),
+            ..PermissionConfig::default()
+        };
+
+        apply_permission_studio_mode_input(
             &i18n,
-            "demo",
-            AgentPermissionField::InheritPath,
-            "maybe",
+            &mut permission,
+            &PermissionStudioModeTarget::PathWorkspaceRead,
+            "allow",
         )
-        .expect_err("expected localized agent permission bool error");
+        .expect("expected atomic workspace update");
+
+        let path = permission.path.expect("path section should remain present");
         assert_eq!(
-            bool_error,
-            i18n.text_args(
-                "agent-permission-field-parse-bool",
-                &crate::fl_args!(
-                    "field" => agent_permission_field_label(
-                        &i18n,
-                        AgentPermissionField::InheritPath,
-                    ),
-                ),
-            )
+            path.workspace,
+            Some(PathAccessModes {
+                read: Some(PermissionMode::Allow),
+                write: Some(PermissionMode::Deny),
+            })
         );
+        assert_eq!(
+            path.external,
+            Some(PathAccessModes {
+                read: Some(PermissionMode::Deny),
+                write: Some(PermissionMode::Deny),
+            })
+        );
+        assert_eq!(
+            path.rules.get("tmp/**"),
+            Some(&PathAccessRuleConfig::Shorthand("allow".to_string()))
+        );
+    }
+
+    #[test]
+    fn permission_studio_tool_qualifier_edits_preserve_fallback() {
+        let mut permission = PermissionConfig {
+            tools: Some(ToolPermissionConfig {
+                rules: BTreeMap::from([(
+                    "bash".to_string(),
+                    ToolPermissionRules::Mode(PermissionMode::Ask),
+                )]),
+                ..ToolPermissionConfig::default()
+            }),
+            ..PermissionConfig::default()
+        };
+
+        add_tool_qualifier_rule(&mut permission, "bash", "npm test", PermissionMode::Deny);
+
+        assert_eq!(
+            tool_rule_fallback_mode(&permission, "bash"),
+            Some(PermissionMode::Ask)
+        );
+        assert_eq!(
+            tool_qualifier_mode(&permission, "bash", "npm test"),
+            Some(PermissionMode::Deny)
+        );
+
+        remove_tool_qualifier_rule(&mut permission, "bash", "npm test");
+
+        assert_eq!(
+            tool_rule_fallback_mode(&permission, "bash"),
+            Some(PermissionMode::Ask)
+        );
+        assert!(tool_qualifier_rules(&permission, "bash").is_empty());
     }
 
     #[test]

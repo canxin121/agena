@@ -330,41 +330,16 @@ pub(super) fn agent_scope_from_str(scope: &str) -> crate::agents::AgentScope {
     }
 }
 
-pub(super) fn core_agent_mode_from_sdk(mode: &str) -> crate::agent::AgentMode {
-    match mode.trim() {
-        "subagent" => crate::agent::AgentMode::Subagent,
-        "all" => crate::agent::AgentMode::All,
-        _ => crate::agent::AgentMode::Primary,
-    }
-}
-
-pub(super) fn sdk_agent_mode_from_core(mode: crate::agent::AgentMode) -> String {
-    match mode {
-        crate::agent::AgentMode::Primary => "primary",
-        crate::agent::AgentMode::Subagent => "subagent",
-        crate::agent::AgentMode::All => "all",
-    }
-    .to_string()
-}
-
 pub(super) fn agent_to_descriptor(profile: crate::agents::AgentProfile) -> HostAgentDescriptor {
     HostAgentDescriptor {
         name: profile.name,
         description: profile.frontmatter.description,
-        mode: sdk_agent_mode_from_core(profile.frontmatter.mode),
-        hidden: profile.frontmatter.hidden,
-        color: profile.frontmatter.color,
-        temperature: profile.frontmatter.temperature.map(|value| value.0),
-        max_output_tokens: profile.frontmatter.max_output_tokens,
-        steps: profile.frontmatter.steps.map(|value| value as u32),
-        allowed_tools: profile.frontmatter.allowed_tools,
         permission: sdk_agent_permission_from_core(profile.frontmatter.permission),
         default: HostAgentDefaultModelConfig {
             provider: profile.frontmatter.default.provider,
             adapter: profile.frontmatter.default.adapter,
             model: profile.frontmatter.default.model,
         },
-        aliases: profile.frontmatter.aliases,
         prompt: profile.prompt,
         scope: match profile.scope {
             crate::agents::AgentScope::Project => "project",
@@ -379,7 +354,6 @@ pub(super) fn core_agent_permission_from_sdk(
     permission: crate::plugin::sdk::host_api::AgentPermissionConfig,
 ) -> crate::agent::AgentPermissionConfig {
     crate::agent::AgentPermissionConfig {
-        inherit: core_permission_inheritance_from_sdk(permission.inherit),
         path: permission.path.map(core_path_permission_from_sdk),
         network: permission.network.map(core_network_permission_from_sdk),
         tools: permission.tools.map(core_tool_permission_from_sdk),
@@ -390,50 +364,9 @@ pub(super) fn sdk_agent_permission_from_core(
     permission: crate::agent::AgentPermissionConfig,
 ) -> crate::plugin::sdk::host_api::AgentPermissionConfig {
     crate::plugin::sdk::host_api::AgentPermissionConfig {
-        inherit: sdk_permission_inheritance_from_core(permission.inherit),
         path: permission.path.map(sdk_path_permission_from_core),
         network: permission.network.map(sdk_network_permission_from_core),
         tools: permission.tools.map(sdk_tool_permission_from_core),
-    }
-}
-
-pub(super) fn core_permission_inheritance_from_sdk(
-    inherit: crate::plugin::sdk::host_api::AgentPermissionInheritance,
-) -> crate::agent::PermissionInheritanceConfig {
-    match inherit {
-        crate::plugin::sdk::host_api::AgentPermissionInheritance::All(value) => {
-            crate::agent::PermissionInheritanceConfig::All(value)
-        }
-        crate::plugin::sdk::host_api::AgentPermissionInheritance::Sections(sections) => {
-            crate::agent::PermissionInheritanceConfig::Sections(
-                crate::agent::PermissionInheritanceSections {
-                    path: sections.path,
-                    network: sections.network,
-                    tools: sections.tools,
-                    plugin_tools: sections.plugin_tools,
-                },
-            )
-        }
-    }
-}
-
-pub(super) fn sdk_permission_inheritance_from_core(
-    inherit: crate::agent::PermissionInheritanceConfig,
-) -> crate::plugin::sdk::host_api::AgentPermissionInheritance {
-    match inherit {
-        crate::agent::PermissionInheritanceConfig::All(value) => {
-            crate::plugin::sdk::host_api::AgentPermissionInheritance::All(value)
-        }
-        crate::agent::PermissionInheritanceConfig::Sections(sections) => {
-            crate::plugin::sdk::host_api::AgentPermissionInheritance::Sections(
-                crate::plugin::sdk::host_api::AgentPermissionInheritanceSections {
-                    path: sections.path,
-                    network: sections.network,
-                    tools: sections.tools,
-                    plugin_tools: sections.plugin_tools,
-                },
-            )
-        }
     }
 }
 

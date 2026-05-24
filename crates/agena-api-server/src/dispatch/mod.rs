@@ -337,45 +337,25 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             .or_else(|| {
                 entries
                     .iter()
-                    .find(|entry| entry.mode.allows_root() && !entry.hidden)
                     .map(|entry| entry.name.clone())
+                    .next()
             })
             .unwrap_or_else(|| "none".to_string());
         let total_count = entries.len();
-        let primary_count = entries
-            .iter()
-            .filter(|entry| entry.mode.allows_root())
-            .count();
-        let subagent_count = entries
-            .iter()
-            .filter(|entry| entry.mode.allows_subagent())
-            .count();
-        let hidden_count = entries.iter().filter(|entry| entry.hidden).count();
         RuntimeAgentsResource {
             default_agent,
             total_count,
-            primary_count,
-            subagent_count,
-            hidden_count,
             agents: entries
                 .into_iter()
                 .map(|entry| RuntimeAgentResource {
                     name: entry.name,
                     description: entry.description,
-                    mode: entry.mode,
-                    hidden: entry.hidden,
-                    color: entry.color,
-                    temperature: entry.temperature.map(|value| value.0),
-                    max_output_tokens: entry.max_output_tokens,
-                    steps: entry.steps,
-                    allowed_tools: entry.allowed_tools,
                     permission: entry.permission,
                     default: agena_api::resource::RuntimeAgentDefaultResource {
                         provider: entry.default.provider,
                         adapter: entry.default.adapter,
                         model: entry.default.model,
                     },
-                    aliases: entry.aliases,
                     scope: entry.scope,
                     source_path: entry.source_path.map(|path| path.display().to_string()),
                 })

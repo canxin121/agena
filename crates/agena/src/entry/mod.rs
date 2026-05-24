@@ -528,11 +528,11 @@ impl ToolExecutor {
         if let Some(root) = session_context.effective_workspace_root.as_ref() {
             scoped.workspace_root = root.clone();
         }
-        if !session_context.agent_permission.is_empty() {
+        if !session_context.effective_permission.is_empty() {
             scoped.agent = scoped
                 .agent
                 .clone()
-                .with_permission_config(&session_context.agent_permission);
+                .with_permission_config(&session_context.effective_permission);
         }
         if !session_context.allowed_tools.is_empty() {
             scoped.agent = scoped
@@ -3782,10 +3782,10 @@ mod tests {
         let workspace = TempWorkspace::new();
         let agent = crate::agent::Agent::new("build", PermissionPolicy::allow_all())
             .try_with_permission_config(&crate::agent::PermissionConfig {
-                network: crate::agent::NetworkPermissionConfig {
+                network: Some(crate::agent::NetworkPermissionConfig {
                     loopback: Some(crate::permission::PermissionMode::Deny),
                     ..Default::default()
-                },
+                }),
                 ..Default::default()
             })
             .expect("network permission config compiles");

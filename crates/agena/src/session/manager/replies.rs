@@ -2581,22 +2581,11 @@ impl SessionManager {
             options.system = Some(system.clone());
         }
         if options.temperature.is_none() {
-            options.temperature = session
-                .runtime
-                .execution
-                .agent_run
-                .temperature
-                .map(|value| value.0);
-        }
-        if options.temperature.is_none() {
             let execution = self.execution_state();
             let provider_registry = execution.processor.provider_registry();
             if let Ok(metadata) = provider_registry.model_metadata(&options.model) {
                 options.temperature = metadata.parsed_default_temperature();
             }
-        }
-        if options.max_output_tokens.is_none() {
-            options.max_output_tokens = session.runtime.execution.agent_run.max_output_tokens;
         }
         if options.agent_profile.is_none() {
             options.agent_profile = session.runtime.execution.selection.agent.clone();
@@ -2696,22 +2685,18 @@ impl SessionManager {
         Ok(())
     }
 
-    fn session_permission_defaults(
+    pub(super) fn resolve_effective_session_permission(
         &self,
         session: &Session,
         state: &SessionManagerState,
+        agent_permission: Option<&crate::agent::PermissionConfig>,
     ) -> crate::agent::PermissionConfig {
-        let global_defaults = state
-            .config
-            .default_selection
-            .permission
-            .effective_with_defaults(&state.config.permission);
-        session
-            .runtime
-            .execution
-            .selection
-            .permission
-            .effective_with_defaults(&global_defaults)
+        let mut effective = state.config.permission.clone();
+        if let Some(agent_permission) = agent_permission {
+            effective.merge_from(agent_permission.clone());
+        }
+        effective.merge_from(session.runtime.execution.selection.permission.clone());
+        effective
     }
 
     fn model_from_session_selection(
@@ -2774,14 +2759,10 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         session.runtime.execution.selection.agent = None;
-        session.runtime.execution.agent_mode = None;
-        session.runtime.execution.agent_hidden = false;
-        session.runtime.execution.agent_color = None;
         session.runtime.execution.system_prompt_override = None;
         session.runtime.set_allowed_tools(Vec::new());
-        session.runtime.execution.agent_permission =
-            self.session_permission_defaults(&session, &state);
-        session.runtime.execution.agent_run = crate::agent::AgentRunConfig::default();
+        session.runtime.execution.effective_permission =
+            self.resolve_effective_session_permission(&session, &state, None);
         session.runtime.set_model_override(None, None, None);
         session
             .runtime
@@ -2817,8 +2798,8 @@ impl SessionManager {
             .or_else(|| state.config.default_agent.clone());
         let Some(agent_name) = effective else {
             let mut session = session;
-            session.runtime.execution.agent_permission =
-                self.session_permission_defaults(&session, &state);
+            session.runtime.execution.effective_permission =
+                self.resolve_effective_session_permission(&session, &state, None);
             return Ok(session);
         };
         let profile = state
@@ -2826,18 +2807,6 @@ impl SessionManager {
             .subagent_registry()
             .require(agent_name.as_str())
             .map_err(|err| AppError::Config(err.to_string()))?;
-        if session.is_subagent && !profile.frontmatter.mode.allows_subagent() {
-            return Err(AppError::Config(format!(
-                "agent profile '{}' is not available for subtask sessions",
-                profile.name
-            )));
-        }
-        if !session.is_subagent && !profile.frontmatter.mode.allows_root() {
-            return Err(AppError::Config(format!(
-                "agent profile '{}' is not available for root sessions",
-                profile.name
-            )));
-        }
         options.agent_profile = Some(profile.name.clone());
         if session.runtime.execution.selection.agent.as_deref() == Some(profile.name.as_str())
             && session.runtime.execution.system_prompt_override.is_some()
@@ -2863,12 +2832,12 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
         apply_profile_model_override: bool,
     ) -> Result<Session, AppError> {
-        let next_allowed_tools = profile.frontmatter.allowed_tools.clone();
-        let permission_defaults = self.session_permission_defaults(&session, &state);
-        let next_permission = profile
-            .frontmatter
-            .permission
-            .effective_with_defaults(&permission_defaults);
+        let next_allowed_tools = crate::agents::internal_allowed_tools(profile.name.as_str());
+        let next_permission = self.resolve_effective_session_permission(
+            &session,
+            &state,
+            Some(&profile.frontmatter.permission),
+        );
         let next_system = profile.prompt.trim().to_string();
         let next_model = self.resolve_root_agent_model(
             &session,
@@ -2889,20 +2858,12 @@ impl SessionManager {
         let next_speed_mode = options.speed_mode.clone();
         let next_verbosity = options.verbosity.clone();
         let next_parallel_tool_calls = options.request_override.parallel_tool_calls();
-        let next_run = crate::agent::AgentRunConfig {
-            temperature: profile.frontmatter.temperature,
-            max_output_tokens: profile.frontmatter.max_output_tokens,
-            steps: profile.frontmatter.steps,
-        };
         let changed = session.runtime.execution.selection.agent.as_deref()
             != Some(profile.name.as_str())
-            || session.runtime.execution.agent_mode != Some(profile.frontmatter.mode)
-            || session.runtime.execution.agent_hidden != profile.frontmatter.hidden
-            || session.runtime.execution.agent_color != profile.frontmatter.color
             || session.runtime.execution.system_prompt_override.as_deref()
                 != Some(next_system.as_str())
             || session.runtime.allowed_tools() != next_allowed_tools.as_slice()
-            || session.runtime.execution.agent_permission != next_permission
+            || session.runtime.execution.effective_permission != next_permission
             || session.runtime.execution.selection.provider.as_deref()
                 != Some(next_model_provider_id.as_str())
             || session.runtime.execution.selection.adapter.as_deref()
@@ -2911,16 +2872,11 @@ impl SessionManager {
             || session.runtime.execution.selection.thinking_mode != next_thinking_mode
             || session.runtime.execution.selection.speed_mode != next_speed_mode
             || session.runtime.execution.selection.verbosity != next_verbosity
-            || session.runtime.execution.selection.parallel_tool_calls != next_parallel_tool_calls
-            || session.runtime.execution.agent_run != next_run;
+            || session.runtime.execution.selection.parallel_tool_calls != next_parallel_tool_calls;
         session.runtime.execution.selection.agent = Some(profile.name.clone());
-        session.runtime.execution.agent_mode = Some(profile.frontmatter.mode);
-        session.runtime.execution.agent_hidden = profile.frontmatter.hidden;
-        session.runtime.execution.agent_color = profile.frontmatter.color.clone();
         session.runtime.execution.system_prompt_override = Some(next_system);
         session.runtime.set_allowed_tools(next_allowed_tools);
-        session.runtime.execution.agent_permission = next_permission;
-        session.runtime.execution.agent_run = next_run.clone();
+        session.runtime.execution.effective_permission = next_permission;
         session.runtime.set_model_override(
             Some(next_model_provider_id.clone()),
             next_model_adapter_id.clone(),
@@ -2937,12 +2893,6 @@ impl SessionManager {
         options.speed_mode = next_speed_mode;
         options.verbosity = next_verbosity;
         options.system = session.runtime.execution.system_prompt_override.clone();
-        if options.temperature.is_none() {
-            options.temperature = next_run.temperature.map(|value| value.0);
-        }
-        if options.max_output_tokens.is_none() {
-            options.max_output_tokens = next_run.max_output_tokens;
-        }
         if !changed {
             return Ok(session);
         }
@@ -3195,15 +3145,6 @@ impl SessionManager {
         };
         Ok(SessionRunOptions::new(model)
             .with_system(child.runtime.execution.system_prompt_override.clone())
-            .with_temperature(
-                child
-                    .runtime
-                    .execution
-                    .agent_run
-                    .temperature
-                    .map(|value| value.0),
-            )
-            .with_max_output_tokens(child.runtime.execution.agent_run.max_output_tokens)
             .with_agent_profile(child.runtime.execution.selection.agent.clone()))
     }
 

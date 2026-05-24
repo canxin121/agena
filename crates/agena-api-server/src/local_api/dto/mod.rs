@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use agena::{
-    agent::{AgentMode, AgentPermissionConfig},
+    agent::PermissionConfig,
     agents::AgentScope,
     message::PartContent,
     model_catalog::{ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},

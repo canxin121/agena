@@ -126,11 +126,6 @@ export function buildExecutionFacts(execution: SessionExecutionResource | null):
       value: context.effective_workspace_root || 'n/a',
       mono: Boolean(context.effective_workspace_root),
     },
-    {
-      label: 'Allowed Tools',
-      value: context.allowed_tools.length ? context.allowed_tools.join(', ') : 'none',
-      mono: context.allowed_tools.length > 0,
-    },
     { label: 'Pending Permissions', value: String(execution.pending_permission_requests.length) },
     { label: 'Pending User Input', value: String(execution.pending_user_input_requests.length) },
   ]

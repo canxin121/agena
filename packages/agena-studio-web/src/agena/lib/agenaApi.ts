@@ -112,19 +112,9 @@ export type RuntimeStatus = {
     agents: {
       default_agent: string
       total_count: number
-      primary_count: number
-      subagent_count: number
-      hidden_count: number
       agents: Array<{
         name: string
         description: string
-        mode: 'primary' | 'subagent' | 'all'
-        hidden: boolean
-        color?: string | null
-        temperature?: number | null
-        max_output_tokens?: number | null
-        steps?: number | null
-        allowed_tools: string[]
         permission?: AgentPermissionConfig
         default?: {
           provider?: string | null
@@ -132,7 +122,6 @@ export type RuntimeStatus = {
           model?: string | null
         }
         model?: string | null
-        aliases: string[]
         scope: 'project' | 'user' | 'bundled'
         source_path?: string | null
       }>
@@ -637,15 +626,6 @@ export type SessionGoalResource = {
 
 export type PermissionMode = 'allow' | 'ask' | 'deny'
 
-export type PermissionInheritance =
-  | boolean
-  | {
-      path?: boolean
-      network?: boolean
-      tools?: boolean
-      plugin_tools?: boolean
-    }
-
 export type PathAccessModes = {
   read?: PermissionMode
   write?: PermissionMode
@@ -678,12 +658,11 @@ export type ToolPermissionConfig = {
 export type PermissionConfig = {
   path?: PathPermissionConfig
   network?: NetworkPermissionConfig
+  entries?: ToolPermissionConfig
   tools?: ToolPermissionConfig
 }
 
-export type AgentPermissionConfig = PermissionConfig & {
-  inherit?: PermissionInheritance
-}
+export type AgentPermissionConfig = PermissionConfig
 
 export type PermissionSubjectKind = 'tool' | 'path_access' | 'network_access'
 
@@ -860,13 +839,9 @@ export type PendingInteractiveRequest =
 
 export type SessionExecutionContextResource = {
   agent_profile?: string | null
-  agent_mode?: 'primary' | 'subagent' | 'all' | null
-  agent_hidden?: boolean
-  agent_color?: string | null
   active_skill_name?: string | null
   system_prompt_override?: string | null
-  allowed_tools: string[]
-  agent_permission?: PermissionConfig
+  effective_permission?: PermissionConfig
   model_provider_id?: string | null
   model_adapter_id?: string | null
   model_id?: string | null
@@ -874,11 +849,6 @@ export type SessionExecutionContextResource = {
   model_speed_mode?: string | null
   model_verbosity?: string | null
   model_parallel_tool_calls?: boolean | null
-  agent_run?: {
-    temperature?: number | null
-    max_output_tokens?: number | null
-    steps?: number | null
-  }
   effective_workspace_root?: string | null
   task_id?: string | null
 }

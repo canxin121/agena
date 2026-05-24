@@ -117,6 +117,13 @@ pub struct InspectorRow {
     pub detail: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SessionPermissionStudioState {
+    pub session_title: String,
+    pub permission: agena::agent::PermissionConfig,
+    pub effective_permission: agena::agent::PermissionConfig,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderDraftAuthKind {
     Unset,
@@ -1807,10 +1814,7 @@ impl Backend {
             return Some(configured);
         }
 
-        agents
-            .into_iter()
-            .find(|agent| agent.mode.allows_root() && !agent.hidden)
-            .map(|agent| agent.name)
+        agents.into_iter().map(|agent| agent.name).next()
     }
 
     pub fn list_aws_profile_names(&self) -> Vec<String> {
@@ -2017,20 +2021,6 @@ impl Backend {
                 .context("failed to reload runtime after config change")?;
         }
         Ok(response)
-    }
-
-    pub async fn set_agent_hidden(
-        &self,
-        agent_name: &str,
-        hidden: bool,
-    ) -> Result<ConfigSettingsEditResponse> {
-        let path = format!(
-            "agents.{}.hidden",
-            quoted_settings_segment(agent_name.trim())
-        );
-        self.set_config_setting(path.as_str(), JsonValue::Bool(hidden))
-            .await
-            .context("failed to set agent hidden flag")
     }
 
     pub async fn delete_config_setting(&self, path: &str) -> Result<ConfigSettingsEditResponse> {
@@ -3028,6 +3018,23 @@ impl Backend {
         .context("failed to load session state")
     }
 
+    pub async fn get_session_permission_studio_state(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionPermissionStudioState> {
+        let execution = self.get_session_state(session_id).await?;
+        let session = self
+            .session_manager()?
+            .get_session(session_id)
+            .await
+            .with_context(|| format!("failed to load session {session_id}"))?;
+        Ok(SessionPermissionStudioState {
+            session_title: execution.session.title.clone(),
+            permission: session.runtime().execution.selection.permission.clone(),
+            effective_permission: execution.execution.effective_permission.clone(),
+        })
+    }
+
     pub async fn list_messages(
         &self,
         session_id: i64,
@@ -3368,6 +3375,18 @@ impl Backend {
             other => Err(anyhow!("unexpected command result: {:?}", other)),
         }
         .context("failed to compact session")
+    }
+
+    pub async fn set_session_permission(
+        &self,
+        session_id: i64,
+        permission: agena::agent::PermissionConfig,
+    ) -> Result<SessionExecutionResource> {
+        self.session_manager()?
+            .set_session_permission(session_id, permission)
+            .await
+            .with_context(|| format!("failed to set permission for session {session_id}"))?;
+        self.get_session_state(session_id).await
     }
 
     /// Best-effort cancel of the in-flight run for `session_id`. Forwards

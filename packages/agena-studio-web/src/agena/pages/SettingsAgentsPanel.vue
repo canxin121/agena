@@ -8,7 +8,6 @@ const props = defineProps<{
   load: () => void | Promise<void>
   summaryFacts: Array<{ label: string; value: string }>
   setDefaultAgent: (agentName: string) => void | Promise<void>
-  toggleAgentHidden: (agent: SettingsAgentCard) => void | Promise<void>
 }>()
 </script>
 
@@ -50,7 +49,6 @@ const props = defineProps<{
               <div class="button-row" style="align-items: center; flex-wrap: wrap">
                 <strong>{{ agent.name }}</strong>
                 <span v-if="agent.isDefault" class="badge success">default</span>
-                <span v-if="agent.hidden" class="badge warn">hidden</span>
                 <span class="badge">{{ agent.scope }}</span>
               </div>
               <div class="muted">{{ agent.description }}</div>
@@ -58,23 +56,10 @@ const props = defineProps<{
               <div class="muted mono">{{ agent.detailFacts.join(' · ') }}</div>
               <div class="muted mono">permission={{ agent.permissionSummary }}</div>
               <div class="muted mono">default={{ agent.defaultSummary }}</div>
-              <div class="muted mono" v-if="agent.allowedTools.length">
-                tools={{ agent.allowedTools.join(', ') }}
-              </div>
-              <div class="muted mono" v-if="agent.aliases.length">
-                aliases={{ agent.aliases.join(', ') }}
-              </div>
             </div>
             <div class="button-row" style="flex-wrap: wrap">
               <button class="button primary" :disabled="agent.isDefault" @click="props.setDefaultAgent(agent.name)">
                 Make Default
-              </button>
-              <button
-                class="button"
-                :disabled="!agent.canToggleHidden"
-                @click="props.toggleAgentHidden(agent)"
-              >
-                {{ agent.hidden ? 'Unhide' : 'Hide' }}
               </button>
             </div>
           </div>

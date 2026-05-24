@@ -2846,11 +2846,6 @@ async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
         .await
         .expect("reload session to seed execution overrides");
     seeded.runtime.execution.system_prompt_override = Some("system".to_string());
-    seeded.runtime.execution.agent_run = crate::agent::AgentRunConfig {
-        temperature: Some(crate::agent::AgentTemperature(0.2)),
-        max_output_tokens: Some(256),
-        steps: None,
-    };
     let _ = manager
         .persist_session_changes(seeded, Vec::new(), Vec::new(), None, state)
         .await
@@ -2914,8 +2909,6 @@ async fn create_goal_on_idle_session_starts_one_persisted_goal_turn() {
     );
     let request = &recorded[0];
     assert_eq!(request.system.as_deref(), Some("system"));
-    assert_eq!(request.temperature, Some(0.2));
-    assert_eq!(request.max_output_tokens, Some(256));
 
     let goal_directive_message = request
         .messages
@@ -6017,6 +6010,89 @@ while True:
             assert_eq!(
                 session.runtime.execution.selection.agent, None,
                 "final agent restore should return the session to the default runtime context"
+            );
+        });
+    }
+
+    #[test]
+    fn effective_permission_prefers_session_then_agent_then_top_level() {
+        run_async_with_large_stack(async move {
+            let workspace = TempWorkspace::new();
+            let mut config = SessionManagerConfig::default();
+            config.permission = crate::agent::PermissionConfig {
+                network: Some(crate::agent::NetworkPermissionConfig {
+                    internet: Some(PermissionMode::Ask),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            config.default_selection.permission = crate::agent::PermissionConfig {
+                network: Some(crate::agent::NetworkPermissionConfig {
+                    private: Some(PermissionMode::Deny),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let manager =
+                build_manager(&workspace.root, PermissionPolicy::allow_all(), config).await;
+            manager
+                .tool_executor()
+                .subagent_registry()
+                .register_runtime(crate::agents::AgentProfile {
+                    name: "priority-test".to_string(),
+                    frontmatter: crate::agents::AgentFrontmatter {
+                        permission: crate::agent::PermissionConfig {
+                            network: Some(crate::agent::NetworkPermissionConfig {
+                                internet: Some(PermissionMode::Allow),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    prompt: "Priority test profile".to_string(),
+                    source_path: None,
+                    scope: crate::agents::AgentScope::Project,
+                });
+
+            let mut session = manager
+                .create_session(SessionCreateRequest {
+                    title: "permission-priority".to_string(),
+                    parent_session_id: None,
+                })
+                .await
+                .expect("session should be created");
+            session.runtime.execution.selection.agent = Some("priority-test".to_string());
+            session.runtime.execution.selection.permission = crate::agent::PermissionConfig {
+                network: Some(crate::agent::NetworkPermissionConfig {
+                    internet: Some(PermissionMode::Deny),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+
+            let state = manager.execution_state();
+            let mut options = SessionRunOptions::new(scripted_model_ref());
+            let updated = manager
+                .apply_requested_agent_profile(session, &mut options, state)
+                .await
+                .expect("agent profile should apply");
+
+            let network = updated
+                .runtime
+                .execution
+                .effective_permission
+                .network
+                .as_ref()
+                .expect("effective network permission should exist");
+            assert_eq!(
+                network.internet,
+                Some(PermissionMode::Deny),
+                "session permission should override agent and top-level permission"
+            );
+            assert_eq!(
+                network.private, None,
+                "default selection permission should not contribute to effective permission"
             );
         });
     }

@@ -1172,9 +1172,6 @@ struct ProviderCapabilitiesOutput {
 struct AgentsListOutput {
     default_agent: String,
     total_count: usize,
-    primary_count: usize,
-    subagent_count: usize,
-    hidden_count: usize,
     agents: Vec<crate::agents::AgentDescriptor>,
 }
 
@@ -2861,20 +2858,11 @@ impl AgenaCli {
             .or_else(|| {
                 agents
                     .iter()
-                    .find(|entry| entry.mode.allows_root() && !entry.hidden)
                     .map(|entry| entry.name.clone())
+                    .next()
             })
             .unwrap_or_else(|| "none".to_string());
         let total_count = agents.len();
-        let primary_count = agents
-            .iter()
-            .filter(|entry| entry.mode.allows_root())
-            .count();
-        let subagent_count = agents
-            .iter()
-            .filter(|entry| entry.mode.allows_subagent())
-            .count();
-        let hidden_count = agents.iter().filter(|entry| entry.hidden).count();
 
         match command
             .command
@@ -2886,9 +2874,6 @@ impl AgenaCli {
                 &AgentsListOutput {
                     default_agent,
                     total_count,
-                    primary_count,
-                    subagent_count,
-                    hidden_count,
                     agents,
                 },
             ),

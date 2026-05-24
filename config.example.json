@@ -30,17 +30,6 @@
     "plan": {
       "description": "Read-only planning agent",
       "prompt": "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable.",
-      "allowed_entries": [
-        "read",
-        "view_file",
-        "glob",
-        "grep",
-        "bash",
-        "todo_write",
-        "enter_plan_mode",
-        "exit_plan_mode"
-      ],
-      "mode": "all",
       "permission": {
         "path": {
           "workspace": {

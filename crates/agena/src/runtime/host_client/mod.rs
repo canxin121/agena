@@ -1079,15 +1079,11 @@ impl HostClient for RuntimeHostClient {
         }
         let scope = agent_scope_from_str(req.agent.scope.as_str());
         let permission = core_agent_permission_from_sdk(req.agent.permission);
-        let mode = core_agent_mode_from_sdk(req.agent.mode.as_str());
-        let temperature = req.agent.temperature.map(crate::agent::AgentTemperature);
-        let effective_permission =
-            permission.effective_with_defaults(&crate::agent::PermissionConfig::default());
         crate::agent::Agent::new(
             req.agent.name.clone(),
             crate::permission::PermissionPolicy::allow_all(),
         )
-        .try_with_permission_config(&effective_permission)
+        .try_with_permission_config(&permission)
         .map_err(|err| {
             PluginError::invalid_params(format!(
                 "agent.permission is invalid for '{}': {err}",
@@ -1098,20 +1094,12 @@ impl HostClient for RuntimeHostClient {
             name: req.agent.name.clone(),
             frontmatter: crate::agents::AgentFrontmatter {
                 description: req.agent.description,
-                mode,
-                hidden: req.agent.hidden,
-                color: req.agent.color,
-                temperature,
-                max_output_tokens: req.agent.max_output_tokens,
-                steps: req.agent.steps.map(|value| value as usize),
-                allowed_tools: req.agent.allowed_tools,
                 permission,
                 default: crate::agents::AgentDefaultModelConfig {
                     provider: req.agent.default.provider,
                     adapter: req.agent.default.adapter,
                     model: req.agent.default.model,
                 },
-                aliases: req.agent.aliases,
             },
             prompt: req.agent.prompt,
             source_path: None,

@@ -16,6 +16,5 @@ const props = defineProps<{
     :load="props.agents.load"
     :summary-facts="props.agents.summaryFacts"
     :set-default-agent="props.agents.setDefaultAgent"
-    :toggle-agent-hidden="props.agents.toggleAgentHidden"
   />
 </template>

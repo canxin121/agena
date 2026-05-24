@@ -509,12 +509,6 @@ pub struct SessionRuntimeState {
 pub struct SessionExecutionContext {
     #[serde(flatten)]
     pub selection: ExecutionSelection,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_mode: Option<crate::agent::AgentMode>,
-    #[serde(default)]
-    pub agent_hidden: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_color: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agent_stack: Vec<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -527,12 +521,7 @@ pub struct SessionExecutionContext {
         default,
         skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
-    pub agent_permission: crate::agent::PermissionConfig,
-    #[serde(
-        default,
-        skip_serializing_if = "crate::agent::AgentRunConfig::is_empty"
-    )]
-    pub agent_run: crate::agent::AgentRunConfig,
+    pub effective_permission: crate::agent::PermissionConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_workspace_root: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -542,15 +531,11 @@ pub struct SessionExecutionContext {
 impl SessionExecutionContext {
     pub fn is_empty(&self) -> bool {
         self.selection.is_empty()
-            && self.agent_mode.is_none()
-            && !self.agent_hidden
-            && self.agent_color.is_none()
             && self.agent_stack.is_empty()
             && self.active_skill_name.is_none()
             && self.system_prompt_override.is_none()
             && self.allowed_tools.is_empty()
-            && self.agent_permission.is_empty()
-            && self.agent_run.is_empty()
+            && self.effective_permission.is_empty()
             && self.effective_workspace_root.is_none()
             && self.task_id.is_none()
     }

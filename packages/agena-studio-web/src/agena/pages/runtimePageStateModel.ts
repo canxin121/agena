@@ -173,7 +173,7 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
   {
     id: 'nav.settings.agents',
     title: 'Open Agent Settings',
-    description: 'Inspect runtime agent profiles, default selection, and visibility controls.',
+    description: 'Inspect runtime agent profiles and default provider/model settings.',
     section: 'settings',
     tab: 'agents',
     slash: '/settings-agents',
@@ -183,7 +183,7 @@ export const sectionTabNavigationItems: SectionTabNavigationItem[] = [
   {
     id: 'nav.settings.plugins',
     title: 'Open Plugin Settings',
-    description: 'Control plugin loading and the default tool description mode.',
+    description: 'Manage plugin entries and the default tool description mode.',
     section: 'settings',
     tab: 'plugins',
     slash: '/settings-plugins',

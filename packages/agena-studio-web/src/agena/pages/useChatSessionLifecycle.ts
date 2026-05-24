@@ -143,8 +143,8 @@ export function useChatSessionLifecycle(
 
     if (!input.selectedProviderId.value && providerData.length === 1) {
       input.selectedProviderId.value = providerData[0]?.provider_id || ''
-      input.selectedAdapterId.value = providerData[0]?.default_adapter || ''
-      input.selectedModelId.value = providerData[0]?.default_model || ''
+      input.selectedAdapterId.value = providerData[0]?.defaults.adapter || ''
+      input.selectedModelId.value = providerData[0]?.defaults.model || ''
     }
 
     const routeSlash = readChatRouteSlash(input.route.query.slash)

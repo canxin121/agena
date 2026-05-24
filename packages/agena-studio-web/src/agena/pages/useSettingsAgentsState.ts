@@ -59,13 +59,19 @@ function readPermissionSummary(
 }
 
 function readDefaultSummary(agent: RuntimeStatus['operator']['agents']['agents'][number]): string {
-  const defaults = agent.default || {}
+  const defaults = agent.defaults || {}
   const parts = [
     defaults.provider ? `provider=${defaults.provider}` : null,
     defaults.adapter ? `adapter=${defaults.adapter}` : null,
     defaults.model ? `model=${defaults.model}` : null,
+    defaults.thinking_mode ? `thinking=${defaults.thinking_mode}` : null,
+    defaults.speed_mode ? `speed=${defaults.speed_mode}` : null,
+    defaults.verbosity ? `verbosity=${defaults.verbosity}` : null,
+    defaults.parallel_tool_calls != null
+      ? `parallel_tools=${defaults.parallel_tool_calls ? 'on' : 'off'}`
+      : null,
   ].filter(Boolean)
-  return parts.length ? parts.join(' · ') : 'inherits runtime model defaults'
+  return parts.length ? parts.join(' · ') : 'inherits runtime defaults'
 }
 
 function buildAgentCard(
@@ -111,8 +117,8 @@ export function useSettingsAgentsState(input: SettingsAgentsStateInput, deps: Se
     input.actionMessage.value = ''
     try {
       await deps.patchSettings({
-        path: 'default',
-        changes: { agent: trimmed },
+        path: 'agents',
+        changes: { default: trimmed },
         validate: true,
         reload: true,
       })

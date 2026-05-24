@@ -5,8 +5,8 @@ use agena::config::{
 use agena_api::{
     queries::{ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams},
     resource::{
-        ProviderAdapterModelsResponse, ProviderAdapterSummaryResource, ProviderModelsResponse,
-        ProviderSummaryResource,
+        ProviderAdapterModelsResponse, ProviderAdapterSummaryResource, ProviderDefaultsResource,
+        ProviderModelsResponse, ProviderSummaryResource,
     },
 };
 
@@ -51,8 +51,10 @@ pub fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource>
                     .unwrap_or_default();
 
                 ProviderSummaryResource {
-                    default_adapter: provider.default_adapter().map(ToString::to_string),
-                    default_model: provider.default_model().to_string(),
+                    defaults: ProviderDefaultsResource {
+                        adapter: provider.default_adapter().map(ToString::to_string),
+                        model: provider.default_model().to_string(),
+                    },
                     adapters,
                     provider_id,
                 }

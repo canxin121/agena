@@ -12,10 +12,14 @@ export type ProviderAdapterSummaryResource = {
   configured_model_count: number
 }
 
+export type ProviderDefaultsResource = {
+  adapter?: string | null
+  model: string
+}
+
 export type ProviderSummaryResource = {
   provider_id: string
-  default_adapter?: string | null
-  default_model: string
+  defaults: ProviderDefaultsResource
   adapters?: ProviderAdapterSummaryResource[]
 }
 

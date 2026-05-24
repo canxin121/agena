@@ -13,7 +13,6 @@ members = [
     "crates/agena-client",
     "crates/agena-keyring-store",
     "crates/agena-lsp",
-    "crates/agena-otel",
     "crates/agena-mcp-client",
     "crates/agena-mcp-server",
     "crates/agena-marketplace-server",
@@ -45,7 +44,6 @@ agena-lsp = { path = "crates/agena-lsp" }
 agena-macros = { path = "crates/agena-macros" }
 agena-mcp-client = { path = "crates/agena-mcp-client" }
 agena-mcp-server = { path = "crates/agena-mcp-server" }
-agena-otel = { path = "crates/agena-otel" }
 agena-plugin-host = { path = "crates/agena-plugin-host" }
 agena-plugin-marketplace = { path = "crates/agena-plugin-marketplace" }
 agena-plugin-sdk = { path = "crates/agena-plugin-sdk" }
@@ -157,9 +155,6 @@ mime_guess = "2.0.5"
 merge = "0.2.0"
 mockito = "1.7.2"
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest", "rustls-tls"] }
-opentelemetry = "0.31.0"
-opentelemetry-otlp = { version = "0.31.1", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
-opentelemetry_sdk = "0.31.0"
 path-clean = "1.0.1"
 ratatui = "0.30.0"
 regex = "1.12.3"
@@ -171,7 +166,6 @@ strum = "0.28.0"
 sys-locale = "0.3.2"
 textwrap = "0.16.2"
 toml_edit = "0.25.11"
-tracing-opentelemetry = "0.32.1"
 unic-langid = "0.9.6"
 unicode-segmentation = "1.13.2"
 unicode-width = "0.2.2"

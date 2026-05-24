@@ -990,7 +990,6 @@ struct DiagnosticsOutput {
     arch: String,
     current_dir: String,
     config: DiagnosticsConfigOutput,
-    telemetry: DiagnosticsTelemetryOutput,
     environment: DiagnosticsEnvironmentOutput,
 }
 
@@ -1107,22 +1106,11 @@ struct DiagnosticsConfigOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct DiagnosticsTelemetryOutput {
-    enabled: bool,
-    service_name: String,
-    otlp_endpoint_set: bool,
-    header_count: usize,
-}
-
-#[derive(Debug, Serialize)]
 struct DiagnosticsEnvironmentOutput {
     agena_config_set: bool,
     agena_database_url_set: bool,
     agena_database_path_set: bool,
     agena_adapter_log_set: bool,
-    agena_telemetry_enabled_set: bool,
-    agena_otel_endpoint_set: bool,
-    otel_exporter_otlp_traces_endpoint_set: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1149,8 +1137,14 @@ struct ProviderListOutput {
 #[derive(Debug, Serialize)]
 struct ProviderSummary {
     provider_id: String,
-    default_adapter: Option<String>,
-    default_model: String,
+    defaults: ProviderDefaultsSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct ProviderDefaultsSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    adapter: Option<String>,
+    model: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -2571,7 +2565,6 @@ impl AgenaCli {
     {
         let resolution = loader.load(&self.load_request())?;
         let config = &resolution.config;
-        let telemetry = &config.telemetry;
         render_serialized(
             args.format,
             &DiagnosticsOutput {
@@ -2593,24 +2586,11 @@ impl AgenaCli {
                     provider_count: config.providers.len(),
                     plugin_count: config.plugins.list.len(),
                 },
-                telemetry: DiagnosticsTelemetryOutput {
-                    enabled: telemetry.enabled,
-                    service_name: telemetry.service_name.clone(),
-                    otlp_endpoint_set: telemetry.otlp_endpoint.is_some(),
-                    header_count: telemetry.headers.len(),
-                },
                 environment: DiagnosticsEnvironmentOutput {
                     agena_config_set: std::env::var_os("AGENA_CONFIG").is_some(),
                     agena_database_url_set: std::env::var_os("AGENA_DATABASE_URL").is_some(),
                     agena_database_path_set: std::env::var_os("AGENA_DATABASE_PATH").is_some(),
                     agena_adapter_log_set: std::env::var_os("AGENA_ADAPTER_LOG").is_some(),
-                    agena_telemetry_enabled_set: std::env::var_os("AGENA_TELEMETRY_ENABLED")
-                        .is_some(),
-                    agena_otel_endpoint_set: std::env::var_os("AGENA_OTEL_ENDPOINT").is_some(),
-                    otel_exporter_otlp_traces_endpoint_set: std::env::var_os(
-                        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-                    )
-                    .is_some(),
                 },
             },
         )
@@ -2803,10 +2783,10 @@ impl AgenaCli {
                         registry
                             .get(provider_id.as_str())
                             .map(|provider| ProviderSummary {
-                                default_adapter: provider
-                                    .default_adapter()
-                                    .map(ToString::to_string),
-                                default_model: provider.default_model().to_string(),
+                                defaults: ProviderDefaultsSummary {
+                                    adapter: provider.default_adapter().map(ToString::to_string),
+                                    model: provider.default_model().to_string(),
+                                },
                                 provider_id,
                             })
                     })
@@ -2851,16 +2831,10 @@ impl AgenaCli {
         agents.sort_by(|left, right| left.name.cmp(&right.name));
         let default_agent = resolution
             .config
-            .default
-            .agent
+            .default_agent
             .clone()
             .filter(|name| agents.iter().any(|entry| entry.name == *name))
-            .or_else(|| {
-                agents
-                    .iter()
-                    .map(|entry| entry.name.clone())
-                    .next()
-            })
+            .or_else(|| agents.iter().map(|entry| entry.name.clone()).next())
             .unwrap_or_else(|| "none".to_string());
         let total_count = agents.len();
 

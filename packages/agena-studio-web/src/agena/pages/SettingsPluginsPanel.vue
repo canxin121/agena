@@ -6,7 +6,6 @@ const props = defineProps<{
   actionError: string
   actionMessage: string
   defaultMode: ToolDescriptionMode
-  enabled: boolean
   load: () => void | Promise<void>
   modeOptions: Array<{ label: string; value: ToolDescriptionMode; description: string }>
   summaryFacts: Array<{ label: string; value: string }>
@@ -14,7 +13,6 @@ const props = defineProps<{
   pluginEntrySummary: (entry: SettingsPluginEntrySnapshot) => string
   setDefaultToolDescriptionMode: (mode: ToolDescriptionMode) => void | Promise<void>
   togglePluginEntryDisabled: (entry: SettingsPluginEntrySnapshot) => void | Promise<void>
-  togglePluginsEnabled: () => void | Promise<void>
 }>()
 </script>
 
@@ -30,7 +28,7 @@ const props = defineProps<{
       </div>
 
       <p class="muted">
-        These settings control global plugin loading and the model-visible tool description mode.
+        These settings control the model-visible tool description mode and the runtime plugin entries.
       </p>
 
       <p v-if="props.actionMessage" class="muted">{{ props.actionMessage }}</p>
@@ -50,12 +48,6 @@ const props = defineProps<{
           <p class="settings-panel-kicker">Controls</p>
           <h3 class="settings-panel-title">Tool Presentation</h3>
         </div>
-      </div>
-
-      <div class="button-row" style="flex-wrap: wrap">
-        <button class="button primary" @click="props.togglePluginsEnabled">
-          {{ props.enabled ? 'Disable Plugins' : 'Enable Plugins' }}
-        </button>
       </div>
 
       <div class="list" style="margin-top: 16px">

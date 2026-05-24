@@ -8,7 +8,6 @@ rust-version.workspace = true
 agena-mcp-client = { workspace = true }
 agena-mcp-server = { workspace = true }
 agena-lsp = { workspace = true }
-agena-otel = { workspace = true }
 agena-keyring-store = { workspace = true }
 agena-macros = { workspace = true }
 agena-scheduler = { workspace = true }

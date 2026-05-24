@@ -42,7 +42,7 @@ const emit = defineEmits<{
           id="provider-select"
           :value="props.selectedProviderId"
           class="select"
-          @change="
+          @input="
             (emit('update:selectedProviderId', ($event.target as HTMLSelectElement).value),
             emit('update:selectedAdapterId', props.providerDefaultAdapter(($event.target as HTMLSelectElement).value)),
             emit('update:selectedModelId', props.providerDefaultModel(($event.target as HTMLSelectElement).value)),
@@ -64,7 +64,7 @@ const emit = defineEmits<{
           id="adapter-id"
           :value="props.selectedAdapterId"
           class="select"
-          @change="
+          @input="
             (emit('update:selectedAdapterId', ($event.target as HTMLSelectElement).value),
             emit('update:selectedThinkingMode', ''),
             emit('update:selectedSpeedMode', ''),
@@ -88,7 +88,7 @@ const emit = defineEmits<{
           id="model-id"
           :value="props.selectedModelId"
           class="select"
-          @change="
+          @input="
             (emit('update:selectedModelId', ($event.target as HTMLSelectElement).value),
             emit('update:selectedThinkingMode', ''),
             emit('update:selectedSpeedMode', ''),
@@ -113,7 +113,7 @@ const emit = defineEmits<{
           :value="props.selectedThinkingMode"
           class="select"
           :disabled="props.modelThinkingModeOptions().length === 0"
-          @change="emit('update:selectedThinkingMode', ($event.target as HTMLSelectElement).value)"
+          @input="emit('update:selectedThinkingMode', ($event.target as HTMLSelectElement).value)"
         >
           <option value="">Default</option>
           <option
@@ -132,7 +132,7 @@ const emit = defineEmits<{
           :value="props.selectedSpeedMode"
           class="select"
           :disabled="props.modelSpeedModeOptions().length === 0"
-          @change="emit('update:selectedSpeedMode', ($event.target as HTMLSelectElement).value)"
+          @input="emit('update:selectedSpeedMode', ($event.target as HTMLSelectElement).value)"
         >
           <option value="">Default</option>
           <option v-for="speedMode in props.modelSpeedModeOptions()" :key="speedMode.id" :value="speedMode.id">
@@ -147,7 +147,7 @@ const emit = defineEmits<{
           :value="props.selectedVerbosity"
           class="select"
           :disabled="props.modelVerbosityOptions().length === 0"
-          @change="emit('update:selectedVerbosity', ($event.target as HTMLSelectElement).value)"
+          @input="emit('update:selectedVerbosity', ($event.target as HTMLSelectElement).value)"
         >
           <option value="">Default</option>
           <option v-for="verbosity in props.modelVerbosityOptions()" :key="verbosity.id" :value="verbosity.id">
@@ -162,7 +162,7 @@ const emit = defineEmits<{
           :value="props.selectedParallelToolCalls"
           class="select"
           :disabled="props.modelParallelToolCallsOptions().length === 0"
-          @change="emit('update:selectedParallelToolCalls', ($event.target as HTMLSelectElement).value)"
+          @input="emit('update:selectedParallelToolCalls', ($event.target as HTMLSelectElement).value)"
         >
           <option value="">Default</option>
           <option v-for="option in props.modelParallelToolCallsOptions()" :key="option.id" :value="option.id">

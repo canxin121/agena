@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import type {
   AuthProvider,
   DomainEventRecord,
+  ConfigSettingsReadResponse,
   ModelCatalogEntry,
   PermissionRuleResource,
   PluginInspect,
@@ -35,6 +36,7 @@ export type RuntimeSectionLoadActionsInput = {
   loadPluginDetails: (pluginId: string) => Promise<void>
   loadSessionExecution: (sessionId: number) => Promise<void>
   loading: Ref<boolean>
+  permissionConfig: Ref<ConfigSettingsReadResponse | null>
   permissionRules: Ref<PermissionRuleResource[]>
   permissionSearch: Ref<string>
   pluginLogs: Ref<PluginLogEntry[]>
@@ -116,6 +118,7 @@ export function useRuntimeSectionLoadActions(
   async function loadSettingsSection() {
     const data = await deps.loadSettingsSectionData(input.permissionSearch.value)
     input.authProviders.value = data.authProviders
+    input.permissionConfig.value = data.permissionConfig
     input.runtime.value = data.runtime
     input.catalogEntries.value = []
     input.providers.value = data.providers

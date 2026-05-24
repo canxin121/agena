@@ -319,7 +319,23 @@ fn render_two_pane_workbench(
         let mut heights = Vec::with_capacity(1 + right_section_heights.len());
         heights.push(left_panel_height);
         heights.extend(right_section_heights.iter().copied());
-        let areas = top_aligned_vertical_areas(rows[0], &heights);
+        let areas = match surface {
+            SurfaceMode::Overlay => top_aligned_vertical_areas(rows[0], &heights),
+            SurfaceMode::Route => split_vertical_sections(
+                rows[0],
+                &heights
+                    .iter()
+                    .enumerate()
+                    .map(|(index, height)| {
+                        if index == 0 {
+                            VerticalSectionSize::Flexible(*height)
+                        } else {
+                            VerticalSectionSize::Fixed(*height)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        };
         (areas[0], areas[1..].to_vec())
     } else {
         let content = Layout::default()
@@ -334,10 +350,28 @@ fn render_two_pane_workbench(
                 ],
             })
             .split(rows[0]);
-        (
-            top_aligned_panel_rect(content[0], left_panel_height),
-            top_aligned_vertical_areas(content[1], &right_section_heights),
-        )
+        let list_area = match surface {
+            SurfaceMode::Overlay => top_aligned_panel_rect(content[0], left_panel_height),
+            SurfaceMode::Route => content[0],
+        };
+        let section_areas = match surface {
+            SurfaceMode::Overlay => top_aligned_vertical_areas(content[1], &right_section_heights),
+            SurfaceMode::Route => split_vertical_sections(
+                content[1],
+                &right_section_heights
+                    .iter()
+                    .enumerate()
+                    .map(|(index, height)| {
+                        if index + 1 == right_section_heights.len() {
+                            VerticalSectionSize::Flexible(*height)
+                        } else {
+                            VerticalSectionSize::Fixed(*height)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        };
+        (list_area, section_areas)
     };
     render_list_panel_state(frame, list_area, &spec.left_panel_state);
 
@@ -518,11 +552,25 @@ fn render_sectioned_workbench(
         .constraints([Constraint::Length(spec.nav_panel_width), Constraint::Min(1)])
         .split(rows[0]);
 
-    let nav_area = top_aligned_panel_rect(content[0], nav_height);
+    let nav_area = match surface {
+        SurfaceMode::Overlay => top_aligned_panel_rect(content[0], nav_height),
+        SurfaceMode::Route => content[0],
+    };
     render_list_panel_state(frame, nav_area, &spec.nav_panel_state);
 
-    let right_areas =
-        top_aligned_vertical_areas(content[1], &[section_height, items_height, detail_height]);
+    let right_areas = match surface {
+        SurfaceMode::Overlay => {
+            top_aligned_vertical_areas(content[1], &[section_height, items_height, detail_height])
+        }
+        SurfaceMode::Route => split_vertical_sections(
+            content[1],
+            &[
+                VerticalSectionSize::Fixed(section_height),
+                VerticalSectionSize::Flexible(items_height),
+                VerticalSectionSize::Fixed(detail_height),
+            ],
+        ),
+    };
     render_text_panel(
         frame,
         right_areas[0],

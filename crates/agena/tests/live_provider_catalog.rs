@@ -599,8 +599,10 @@ fn stats_report(stats: &AdapterMatchStats) -> String {
 
 fn cxits_provider_patch() -> JsonValue {
     json!({
-        "default_adapter": "openai",
-        "default_model": "gpt-4.1-mini",
+        "defaults": {
+            "adapter": "openai",
+            "model": "gpt-4.1-mini"
+        },
         "auth": {
             "mode": "api",
             "base_url": "https://api.cxits.cn",
@@ -627,8 +629,10 @@ fn cxits_provider_patch() -> JsonValue {
 
 fn opencode_public_provider_patch() -> JsonValue {
     json!({
-        "default_adapter": "openai",
-        "default_model": "deepseek-v4-flash-free",
+        "defaults": {
+            "adapter": "openai",
+            "model": "deepseek-v4-flash-free"
+        },
         "auth": {
             "mode": "api",
             "base_url": "https://opencode.ai/zen",

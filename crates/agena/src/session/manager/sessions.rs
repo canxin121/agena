@@ -269,6 +269,38 @@ impl SessionManager {
         })
     }
 
+    pub async fn set_session_permission(
+        &self,
+        session_id: i64,
+        permission: crate::agent::PermissionConfig,
+    ) -> Result<Session, AppError> {
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        session.runtime.execution.selection.permission = permission;
+        let agent_permission = session
+            .runtime
+            .execution
+            .selection
+            .agent
+            .as_deref()
+            .map(|agent_name| {
+                state
+                    .tool_executor
+                    .subagent_registry()
+                    .require(agent_name)
+                    .map(|profile| profile.frontmatter.permission.clone())
+                    .map_err(|error| AppError::Config(error.to_string()))
+            })
+            .transpose()?;
+        session.runtime.execution.effective_permission =
+            self.resolve_effective_session_permission(&session, &state, agent_permission.as_ref());
+        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+            .await
+    }
+
     pub async fn is_run_active(&self, session_id: i64) -> bool {
         self.run_registry.is_active(session_id).await
     }

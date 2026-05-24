@@ -1,9 +1,9 @@
 use std::str::FromStr;
 
 use super::{
-    ConfigError, RawConfig, RawDefaultConfig, RawProviderHttpConfig, RawRequestRetryConfig,
-    RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawStreamReplayConfig, RawTracingConfig,
-    RawUiConfig, parse_numeric,
+    ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig,
+    RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
+    RawStreamReplayConfig, RawTracingConfig, RawUiConfig, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,14 +12,8 @@ pub enum ConfigOverride {
     TracingDatabase(String),
     TracingAdapter(String),
     UiLocale(String),
-    DefaultProvider(String),
-    DefaultAdapter(String),
-    DefaultModel(String),
-    DefaultThinkingMode(String),
-    DefaultSpeedMode(String),
-    DefaultVerbosity(String),
-    DefaultParallelToolCalls(bool),
-    DefaultAgent(String),
+    ProvidersDefault(String),
+    AgentsDefault(String),
     ProviderHttpTimeoutSecs(u64),
     ProviderConnectTimeoutSecs(u64),
     RequestRetryMaxRetries(u32),
@@ -28,9 +22,61 @@ pub enum ConfigOverride {
     StreamReplayMaxRetriesAfterOutput(u32),
     StreamReplayMaxTrackedEvents(usize),
     ModelCatalogCacheMaxAgeSecs(u64),
-    ProviderDefaultModel {
+    ProviderDefaultsProvider {
         provider_id: String,
         value: String,
+    },
+    ProviderDefaultsAdapter {
+        provider_id: String,
+        value: String,
+    },
+    ProviderDefaultsModel {
+        provider_id: String,
+        value: String,
+    },
+    ProviderDefaultsThinkingMode {
+        provider_id: String,
+        value: String,
+    },
+    ProviderDefaultsSpeedMode {
+        provider_id: String,
+        value: String,
+    },
+    ProviderDefaultsVerbosity {
+        provider_id: String,
+        value: String,
+    },
+    ProviderDefaultsParallelToolCalls {
+        provider_id: String,
+        value: bool,
+    },
+    AgentDefaultsProvider {
+        agent_name: String,
+        value: String,
+    },
+    AgentDefaultsAdapter {
+        agent_name: String,
+        value: String,
+    },
+    AgentDefaultsModel {
+        agent_name: String,
+        value: String,
+    },
+    AgentDefaultsThinkingMode {
+        agent_name: String,
+        value: String,
+    },
+    AgentDefaultsSpeedMode {
+        agent_name: String,
+        value: String,
+    },
+    AgentDefaultsVerbosity {
+        agent_name: String,
+        value: String,
+    },
+    AgentDefaultsParallelToolCalls {
+        agent_name: String,
+        value: bool,
     },
     ProviderAuthBaseUrl {
         provider_id: String,
@@ -68,50 +114,38 @@ impl FromStr for ConfigOverride {
         match key {
             "mode" => Err(ConfigError::UnsupportedModeConfig { field: "mode" }),
             "tracing.filter" => Ok(Self::TracingFilter(raw_value.to_owned())),
-            "tracing.database" | "tracing.database_level" => {
-                Ok(Self::TracingDatabase(raw_value.to_owned()))
-            }
+            "tracing.database" => Ok(Self::TracingDatabase(raw_value.to_owned())),
             "tracing.adapter" => Ok(Self::TracingAdapter(raw_value.to_owned())),
             "ui.locale" => Ok(Self::UiLocale(raw_value.to_owned())),
-            "default.provider" => Ok(Self::DefaultProvider(raw_value.to_owned())),
-            "default.adapter" => Ok(Self::DefaultAdapter(raw_value.to_owned())),
-            "default.model" => Ok(Self::DefaultModel(raw_value.to_owned())),
-            "default.thinking_mode" | "default.think" => {
-                Ok(Self::DefaultThinkingMode(raw_value.to_owned()))
+            "providers.default" => Ok(Self::ProvidersDefault(raw_value.to_owned())),
+            "agents.default" => Ok(Self::AgentsDefault(raw_value.to_owned())),
+            _ if key.starts_with("providers.") => parse_provider_override(key, raw_value),
+            _ if key.starts_with("agents.") => parse_agent_override(key, raw_value),
+            "runtime.providers.http.timeout_secs" => {
+                Ok(Self::ProviderHttpTimeoutSecs(parse_numeric(raw_value, key)?))
             }
-            "default.speed_mode" | "default.speed" => {
-                Ok(Self::DefaultSpeedMode(raw_value.to_owned()))
+            "runtime.providers.http.connect_timeout_secs" => {
+                Ok(Self::ProviderConnectTimeoutSecs(parse_numeric(raw_value, key)?))
             }
-            "default.verbosity" => Ok(Self::DefaultVerbosity(raw_value.to_owned())),
-            "default.parallel_tool_calls" => {
-                Ok(Self::DefaultParallelToolCalls(parse_bool(key, raw_value)?))
-            }
-            "default.agent" => Ok(Self::DefaultAgent(raw_value.to_owned())),
-            "runtime.provider_http.timeout_secs" => Ok(Self::ProviderHttpTimeoutSecs(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.provider_http.connect_timeout_secs" => Ok(Self::ProviderConnectTimeoutSecs(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.request_retry.max_retries" => {
+            "runtime.providers.retry.max_retries" => {
                 Ok(Self::RequestRetryMaxRetries(parse_numeric(raw_value, key)?))
             }
-            "runtime.request_retry.base_delay_ms" => Ok(Self::RequestRetryBaseDelayMs(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.request_retry.max_delay_ms" => {
+            "runtime.providers.retry.base_delay_ms" => {
+                Ok(Self::RequestRetryBaseDelayMs(parse_numeric(raw_value, key)?))
+            }
+            "runtime.providers.retry.max_delay_ms" => {
                 Ok(Self::RequestRetryMaxDelayMs(parse_numeric(raw_value, key)?))
             }
-            "runtime.stream_replay.max_retries_after_output" => Ok(
+            "runtime.providers.stream_replay.max_retries_after_output" => Ok(
                 Self::StreamReplayMaxRetriesAfterOutput(parse_numeric(raw_value, key)?),
             ),
-            "runtime.stream_replay.max_tracked_events" => Ok(Self::StreamReplayMaxTrackedEvents(
-                parse_numeric(raw_value, key)?,
-            )),
-            "runtime.model_catalog.cache_max_age_secs" => Ok(Self::ModelCatalogCacheMaxAgeSecs(
-                parse_numeric(raw_value, key)?,
-            )),
-            _ => parse_provider_override(key, raw_value),
+            "runtime.providers.stream_replay.max_tracked_events" => Ok(
+                Self::StreamReplayMaxTrackedEvents(parse_numeric(raw_value, key)?),
+            ),
+            "runtime.model_catalog.cache_max_age_secs" => {
+                Ok(Self::ModelCatalogCacheMaxAgeSecs(parse_numeric(raw_value, key)?))
+            }
+            _ => Err(ConfigError::InvalidOverride(key.to_owned())),
         }
     }
 }
@@ -140,59 +174,19 @@ impl ConfigOverride {
             Self::UiLocale(locale) => {
                 config.ui.get_or_insert_with(RawUiConfig::default).locale = Some(locale.clone());
             }
-            Self::DefaultProvider(value) => {
-                config
-                    .default
-                    .get_or_insert_with(RawDefaultConfig::default)
-                    .provider = Some(value.clone());
+            Self::ProvidersDefault(value) => {
+                config.providers.default = Some(value.clone());
             }
-            Self::DefaultAdapter(value) => {
-                config
-                    .default
-                    .get_or_insert_with(RawDefaultConfig::default)
-                    .adapter = Some(value.clone());
-            }
-            Self::DefaultModel(value) => {
-                config
-                    .default
-                    .get_or_insert_with(RawDefaultConfig::default)
-                    .model = Some(value.clone());
-            }
-            Self::DefaultThinkingMode(value) => {
-                config
-                    .default
-                    .get_or_insert_with(RawDefaultConfig::default)
-                    .thinking_mode = Some(value.clone());
-            }
-            Self::DefaultSpeedMode(value) => {
-                config
-                    .default
-                    .get_or_insert_with(RawDefaultConfig::default)
-                    .speed_mode = Some(value.clone());
-            }
-            Self::DefaultVerbosity(value) => {
-                config
-                    .default
-                    .get_or_insert_with(RawDefaultConfig::default)
-                    .verbosity = Some(value.clone());
-            }
-            Self::DefaultParallelToolCalls(value) => {
-                config
-                    .default
-                    .get_or_insert_with(RawDefaultConfig::default)
-                    .parallel_tool_calls = Some(*value);
-            }
-            Self::DefaultAgent(value) => {
-                config
-                    .default
-                    .get_or_insert_with(RawDefaultConfig::default)
-                    .agent = Some(value.clone());
+            Self::AgentsDefault(value) => {
+                config.agents.default = Some(value.clone());
             }
             Self::ProviderHttpTimeoutSecs(value) => {
                 config
                     .runtime
                     .get_or_insert_with(RawRuntimeConfig::default)
-                    .provider_http
+                    .providers
+                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                    .http
                     .get_or_insert_with(RawProviderHttpConfig::default)
                     .timeout_secs = Some(*value);
             }
@@ -200,7 +194,9 @@ impl ConfigOverride {
                 config
                     .runtime
                     .get_or_insert_with(RawRuntimeConfig::default)
-                    .provider_http
+                    .providers
+                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                    .http
                     .get_or_insert_with(RawProviderHttpConfig::default)
                     .connect_timeout_secs = Some(*value);
             }
@@ -208,7 +204,9 @@ impl ConfigOverride {
                 config
                     .runtime
                     .get_or_insert_with(RawRuntimeConfig::default)
-                    .request_retry
+                    .providers
+                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                    .retry
                     .get_or_insert_with(RawRequestRetryConfig::default)
                     .max_retries = Some(*value);
             }
@@ -216,7 +214,9 @@ impl ConfigOverride {
                 config
                     .runtime
                     .get_or_insert_with(RawRuntimeConfig::default)
-                    .request_retry
+                    .providers
+                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                    .retry
                     .get_or_insert_with(RawRequestRetryConfig::default)
                     .base_delay_ms = Some(*value);
             }
@@ -224,7 +224,9 @@ impl ConfigOverride {
                 config
                     .runtime
                     .get_or_insert_with(RawRuntimeConfig::default)
-                    .request_retry
+                    .providers
+                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
+                    .retry
                     .get_or_insert_with(RawRequestRetryConfig::default)
                     .max_delay_ms = Some(*value);
             }
@@ -232,6 +234,8 @@ impl ConfigOverride {
                 config
                     .runtime
                     .get_or_insert_with(RawRuntimeConfig::default)
+                    .providers
+                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
                     .stream_replay
                     .get_or_insert_with(RawStreamReplayConfig::default)
                     .max_retries_after_output = Some(*value);
@@ -240,6 +244,8 @@ impl ConfigOverride {
                 config
                     .runtime
                     .get_or_insert_with(RawRuntimeConfig::default)
+                    .providers
+                    .get_or_insert_with(RawRuntimeProvidersConfig::default)
                     .stream_replay
                     .get_or_insert_with(RawStreamReplayConfig::default)
                     .max_tracked_events = Some(*value);
@@ -252,15 +258,142 @@ impl ConfigOverride {
                     .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
                     .cache_max_age_secs = Some(*value);
             }
-            Self::ProviderDefaultModel { provider_id, value } => {
+            Self::ProviderDefaultsProvider { provider_id, value } => {
                 config
+                    .providers
                     .providers
                     .entry(provider_id.clone())
                     .or_default()
-                    .default_model = Some(value.clone());
+                    .defaults
+                    .get_or_insert_with(Default::default)
+                    .provider = Some(value.clone());
+            }
+            Self::ProviderDefaultsAdapter { provider_id, value } => {
+                config
+                    .providers
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .defaults
+                    .get_or_insert_with(Default::default)
+                    .adapter = Some(value.clone());
+            }
+            Self::ProviderDefaultsModel { provider_id, value } => {
+                config
+                    .providers
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .defaults
+                    .get_or_insert_with(Default::default)
+                    .model = Some(value.clone());
+            }
+            Self::ProviderDefaultsThinkingMode { provider_id, value } => {
+                config
+                    .providers
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .defaults
+                    .get_or_insert_with(Default::default)
+                    .thinking_mode = Some(value.clone());
+            }
+            Self::ProviderDefaultsSpeedMode { provider_id, value } => {
+                config
+                    .providers
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .defaults
+                    .get_or_insert_with(Default::default)
+                    .speed_mode = Some(value.clone());
+            }
+            Self::ProviderDefaultsVerbosity { provider_id, value } => {
+                config
+                    .providers
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .defaults
+                    .get_or_insert_with(Default::default)
+                    .verbosity = Some(value.clone());
+            }
+            Self::ProviderDefaultsParallelToolCalls { provider_id, value } => {
+                config
+                    .providers
+                    .providers
+                    .entry(provider_id.clone())
+                    .or_default()
+                    .defaults
+                    .get_or_insert_with(Default::default)
+                    .parallel_tool_calls = Some(*value);
+            }
+            Self::AgentDefaultsProvider { agent_name, value } => {
+                config
+                    .agents
+                    .agents
+                    .entry(agent_name.clone())
+                    .or_default()
+                    .defaults
+                    .provider = Some(value.clone());
+            }
+            Self::AgentDefaultsAdapter { agent_name, value } => {
+                config
+                    .agents
+                    .agents
+                    .entry(agent_name.clone())
+                    .or_default()
+                    .defaults
+                    .adapter = Some(value.clone());
+            }
+            Self::AgentDefaultsModel { agent_name, value } => {
+                config
+                    .agents
+                    .agents
+                    .entry(agent_name.clone())
+                    .or_default()
+                    .defaults
+                    .model = Some(value.clone());
+            }
+            Self::AgentDefaultsThinkingMode { agent_name, value } => {
+                config
+                    .agents
+                    .agents
+                    .entry(agent_name.clone())
+                    .or_default()
+                    .defaults
+                    .thinking_mode = Some(value.clone());
+            }
+            Self::AgentDefaultsSpeedMode { agent_name, value } => {
+                config
+                    .agents
+                    .agents
+                    .entry(agent_name.clone())
+                    .or_default()
+                    .defaults
+                    .speed_mode = Some(value.clone());
+            }
+            Self::AgentDefaultsVerbosity { agent_name, value } => {
+                config
+                    .agents
+                    .agents
+                    .entry(agent_name.clone())
+                    .or_default()
+                    .defaults
+                    .verbosity = Some(value.clone());
+            }
+            Self::AgentDefaultsParallelToolCalls { agent_name, value } => {
+                config
+                    .agents
+                    .agents
+                    .entry(agent_name.clone())
+                    .or_default()
+                    .defaults
+                    .parallel_tool_calls = Some(*value);
             }
             Self::ProviderAuthBaseUrl { provider_id, value } => {
                 config
+                    .providers
                     .providers
                     .entry(provider_id.clone())
                     .or_default()
@@ -274,6 +407,7 @@ impl ConfigOverride {
                 value,
             } => {
                 let auth = config
+                    .providers
                     .providers
                     .entry(provider_id.clone())
                     .or_default()
@@ -290,6 +424,7 @@ impl ConfigOverride {
             Self::ProviderAuthApiKey { provider_id, value } => {
                 config
                     .providers
+                    .providers
                     .entry(provider_id.clone())
                     .or_default()
                     .auth
@@ -299,6 +434,7 @@ impl ConfigOverride {
             Self::ProviderAuthApiKeyEnv { provider_id, value } => {
                 config
                     .providers
+                    .providers
                     .entry(provider_id.clone())
                     .or_default()
                     .auth
@@ -307,6 +443,7 @@ impl ConfigOverride {
             }
             Self::ProviderEnabled { provider_id, value } => {
                 config
+                    .providers
                     .providers
                     .entry(provider_id.clone())
                     .or_default()
@@ -327,11 +464,32 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
     let value = raw_value.to_owned();
 
     match field {
-        "default_model" => Ok(ConfigOverride::ProviderDefaultModel { provider_id, value }),
         "enabled" => Ok(ConfigOverride::ProviderEnabled {
             provider_id,
             value: parse_bool(key, raw_value)?,
         }),
+        _ if field.starts_with("defaults.") => {
+            let name = field.trim_start_matches("defaults.").trim();
+            match name {
+                "provider" => Ok(ConfigOverride::ProviderDefaultsProvider { provider_id, value }),
+                "adapter" => Ok(ConfigOverride::ProviderDefaultsAdapter { provider_id, value }),
+                "model" => Ok(ConfigOverride::ProviderDefaultsModel { provider_id, value }),
+                "thinking_mode" => Ok(ConfigOverride::ProviderDefaultsThinkingMode {
+                    provider_id,
+                    value,
+                }),
+                "speed_mode" => Ok(ConfigOverride::ProviderDefaultsSpeedMode {
+                    provider_id,
+                    value,
+                }),
+                "verbosity" => Ok(ConfigOverride::ProviderDefaultsVerbosity { provider_id, value }),
+                "parallel_tool_calls" => Ok(ConfigOverride::ProviderDefaultsParallelToolCalls {
+                    provider_id,
+                    value: parse_bool(key, raw_value)?,
+                }),
+                _ => Err(ConfigError::InvalidOverride(key.to_owned())),
+            }
+        }
         "base_url" | "api_key" | "api_key_env" => Err(ConfigError::InvalidOverride(format!(
             "{key} is no longer supported; use providers.{provider_id}.auth.{field}"
         ))),
@@ -362,6 +520,40 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
                 _ => Err(ConfigError::InvalidOverride(key.to_owned())),
             }
         }
+    }
+}
+
+fn parse_agent_override(key: &str, raw_value: &str) -> Result<ConfigOverride, ConfigError> {
+    let Some(rest) = key.strip_prefix("agents.") else {
+        return Err(ConfigError::InvalidOverride(key.to_owned()));
+    };
+    let (agent_name, field) = rest
+        .split_once('.')
+        .ok_or_else(|| ConfigError::InvalidOverride(key.to_owned()))?;
+    let agent_name = agent_name.trim().to_owned();
+    let value = raw_value.to_owned();
+
+    match field {
+        _ if field.starts_with("defaults.") => {
+            let name = field.trim_start_matches("defaults.").trim();
+            match name {
+                "provider" => Ok(ConfigOverride::AgentDefaultsProvider { agent_name, value }),
+                "adapter" => Ok(ConfigOverride::AgentDefaultsAdapter { agent_name, value }),
+                "model" => Ok(ConfigOverride::AgentDefaultsModel { agent_name, value }),
+                "thinking_mode" => Ok(ConfigOverride::AgentDefaultsThinkingMode {
+                    agent_name,
+                    value,
+                }),
+                "speed_mode" => Ok(ConfigOverride::AgentDefaultsSpeedMode { agent_name, value }),
+                "verbosity" => Ok(ConfigOverride::AgentDefaultsVerbosity { agent_name, value }),
+                "parallel_tool_calls" => Ok(ConfigOverride::AgentDefaultsParallelToolCalls {
+                    agent_name,
+                    value: parse_bool(key, raw_value)?,
+                }),
+                _ => Err(ConfigError::InvalidOverride(key.to_owned())),
+            }
+        }
+        _ => Err(ConfigError::InvalidOverride(key.to_owned())),
     }
 }
 

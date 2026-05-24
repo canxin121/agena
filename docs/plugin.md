@@ -259,11 +259,10 @@ Static plugin options override：
 ```toml
 [plugins.list."agena.web"]
 kind = "static"
-options = { }
 timeouts = { tool_invoke = "45s" }
 ```
 
-`PluginHostBuilder::register_static` 会把已注册 static plugin 加入 load list。需要给 static plugin 设置 `options` 或 `timeouts` 时，显式写对应 `[plugins.list.<id>]`。
+`PluginHostBuilder::register_static` 会把已注册 static plugin 加入 load list。需要给 static plugin 设置 `timeouts` 时，显式写对应 `[plugins.list.<id>]`。内建能力的实际配置源应使用顶层 `memory`、`mcp`、`lsp`、`web`。
 
 ## `[plugins]` 字段
 
@@ -694,7 +693,7 @@ host.ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url)).
 Tool 权限配置分为 tag、tool name 和 tool-specific rules：
 
 ```toml
-[permission.entries.tags]
+[permission.tools.tags]
 filesystem_read = "allow"
 filesystem_write = "ask"
 network = "ask"
@@ -702,7 +701,7 @@ internet = "ask"
 task = "ask"
 shell = "ask"
 
-[permission.entries.names]
+[permission.tools.names]
 shell = "ask"
 fs = "ask"
 "my-plugin.echo" = "allow"
@@ -712,13 +711,10 @@ fs = "ask"
 
 ## MCP
 
-MCP server 本身配置在 `agena.mcp` static plugin options，并通过 `agena.mcp` plugin tools 对模型暴露。
+MCP server 本身直接配置在顶层 `mcp`，并通过 `agena.mcp` plugin tools 对模型暴露。
 
 ```toml
-[plugins.list."agena.mcp"]
-kind = "static"
-
-[plugins.list."agena.mcp".options.servers.filesystem]
+[mcp.servers.filesystem]
 transport = "stdio"
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
@@ -727,7 +723,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
 Remote HTTP:
 
 ```toml
-[plugins.list."agena.mcp".options.servers.remote]
+[mcp.servers.remote]
 transport = "http"
 url = "https://mcp.example.com"
 headers = { }
@@ -736,7 +732,7 @@ auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
 
 Runtime build 时：
 
-1. 从 `plugins.list["agena.mcp"].options` 读取 MCP server config。
+1. 从顶层 `mcp` 读取 MCP server config。
 2. 构建 `McpConnectionManager`。
 3. 注册 `agena.mcp` static plugin。
 4. `agena.mcp` 从 MCP manager 读取 tool/resource/prompt capabilities。

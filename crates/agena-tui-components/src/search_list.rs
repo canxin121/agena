@@ -57,6 +57,7 @@ pub struct SearchListOverlay<TItem, TCustom, TMeta, TInput> {
 #[derive(Debug, Clone, Copy)]
 pub struct SearchListOverlayConfig {
     pub target_width: u16,
+    pub input_enabled: bool,
     pub search_enabled: bool,
     pub custom_value_enabled: bool,
     pub fill_selected_into_input: bool,
@@ -292,7 +293,7 @@ where
     }
 
     pub fn fill_input_from_selected(&mut self) -> bool {
-        if !self.config.fill_selected_into_input {
+        if !self.config.input_enabled || !self.config.fill_selected_into_input {
             return false;
         }
         let Some(row) = self.selected_row() else {
@@ -350,6 +351,9 @@ where
         }
         if self.handle_navigation_key(key, page_size) {
             return SearchInputKeyResult::Navigated;
+        }
+        if !self.config.input_enabled {
+            return SearchInputKeyResult::Edited { changed: false };
         }
 
         let before = self.input.text().to_string();
@@ -449,7 +453,11 @@ fn render_search_list_overlay<TItem, TCustom, TMeta, F>(
 {
     let content_width = surface.content_width(area, dialog.config.target_width);
     let prompt_height = optional_overlay_text_height(dialog.prompt.as_str(), content_width, 1, 2);
-    let input_height = editor_input_panel_height(&dialog.input, false);
+    let input_height = if dialog.config.input_enabled {
+        editor_input_panel_height(&dialog.input, false)
+    } else {
+        0
+    };
     let footer_height = optional_overlay_text_height(dialog.footer.as_str(), content_width, 1, 2);
     let list_height = match panel_content {
         SearchListPanelContent::Empty { message } => search_list_empty_panel_height(
@@ -464,8 +472,13 @@ fn render_search_list_overlay<TItem, TCustom, TMeta, F>(
     if prompt_height > 0 {
         section_sizes.push(VerticalSectionSize::Fixed(prompt_height));
     }
-    section_sizes.push(VerticalSectionSize::Fixed(input_height));
-    section_sizes.push(VerticalSectionSize::Fixed(list_height));
+    if dialog.config.input_enabled {
+        section_sizes.push(VerticalSectionSize::Fixed(input_height));
+    }
+    section_sizes.push(match surface {
+        SurfaceMode::Overlay => VerticalSectionSize::Fixed(list_height),
+        SurfaceMode::Route => VerticalSectionSize::Flexible(list_height),
+    });
     if footer_height > 0 {
         section_sizes.push(VerticalSectionSize::Fixed(footer_height));
     }
@@ -490,17 +503,21 @@ fn render_search_list_overlay<TItem, TCustom, TMeta, F>(
         section_index += 1;
     }
 
-    let input_area = sections[section_index];
-    section_index += 1;
-    let result = render_editor_panel(
-        frame,
-        input_area,
-        &EditorPanelSpec {
-            title: None,
-            borders: Borders::ALL,
-        },
-        &dialog.input,
-    );
+    let input_result = if dialog.config.input_enabled {
+        let input_area = sections[section_index];
+        section_index += 1;
+        Some(render_editor_panel(
+            frame,
+            input_area,
+            &EditorPanelSpec {
+                title: None,
+                borders: Borders::ALL,
+            },
+            &dialog.input,
+        ))
+    } else {
+        None
+    };
 
     let list_area = sections[section_index];
     section_index += 1;
@@ -530,7 +547,9 @@ fn render_search_list_overlay<TItem, TCustom, TMeta, F>(
         );
     }
 
-    frame.set_cursor_position(result.cursor);
+    if let Some(result) = input_result {
+        frame.set_cursor_position(result.cursor);
+    }
 }
 
 pub fn render_search_list_dialog<TItem, TCustom, TMeta, F>(
@@ -699,6 +718,7 @@ mod tests {
     fn test_config() -> SearchListOverlayConfig {
         SearchListOverlayConfig {
             target_width: 80,
+            input_enabled: true,
             search_enabled: true,
             custom_value_enabled: false,
             fill_selected_into_input: false,
@@ -777,6 +797,37 @@ mod tests {
             SearchInputKeyResult::Edited { changed: true }
         );
         assert_eq!(overlay.input.text(), "a");
+    }
+
+    #[test]
+    fn search_list_overlay_can_disable_input_without_blocking_navigation() {
+        let mut overlay = SearchListOverlay::<PathBuf, SearchListNoCustom, (), TestInput>::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            TestInput::default(),
+            SearchListOverlayConfig {
+                input_enabled: false,
+                ..test_config()
+            },
+            None,
+            (),
+        );
+        overlay.items = vec![PathBuf::from("one"), PathBuf::from("two")];
+
+        assert_eq!(
+            overlay.handle_filter_input_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10),
+            SearchInputKeyResult::Navigated
+        );
+        assert_eq!(overlay.selected, 1);
+
+        assert_eq!(
+            overlay
+                .handle_filter_input_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE), 10),
+            SearchInputKeyResult::Edited { changed: false }
+        );
+        assert_eq!(overlay.input.text(), "");
     }
 
     #[test]

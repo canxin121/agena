@@ -437,8 +437,16 @@ fn build_provider(
     let provider: Arc<dyn ModelRuntime> = Arc::new(
         MultiAdapterProvider::new(
             provider_id,
-            resolved.default_adapter.clone(),
-            resolved.default_model.clone(),
+            resolved
+                .defaults
+                .adapter
+                .clone()
+                .expect("resolved provider default adapter"),
+            resolved
+                .defaults
+                .model
+                .clone()
+                .expect("resolved provider default model"),
             adapters,
             routes,
         )
@@ -1072,13 +1080,15 @@ fn resolve_adapter_default_models(
         .filter(|(_, adapter)| adapter.enabled)
         .map(|(adapter_id, _)| adapter_id)
     {
-        if resolved.default_model.trim().is_empty() {
-            return Err(ConfigError::InvalidProviderConfig {
+        let default_model = resolved
+            .defaults
+            .model
+            .clone()
+            .ok_or_else(|| ConfigError::InvalidProviderConfig {
                 provider_id: provider_id.to_owned(),
-                message: format!("provider default_model is empty for adapter `{adapter_id}`"),
-            });
-        }
-        defaults.insert(adapter_id.clone(), resolved.default_model.clone());
+                message: format!("provider defaults.model is missing for adapter `{adapter_id}`"),
+            })?;
+        defaults.insert(adapter_id.clone(), default_model);
     }
 
     Ok(defaults)

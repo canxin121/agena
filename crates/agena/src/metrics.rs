@@ -2,7 +2,7 @@
 //!
 //! These are not a real meter provider — they are atomic counters that
 //! `agena-api-server`'s `/metrics` endpoint reads to expose Prometheus
-//! samples. When `agena-otel` grows a meter API this module should be
+//! samples. When a real metrics backend is wired up this module should be
 //! deleted in favour of proper instruments.
 //!
 //! Callers bump the counters at the points where the events happen

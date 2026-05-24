@@ -72,7 +72,8 @@ use agena_api::{
     resource::{
         MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        ProviderAdapterSummaryResource, ProviderSummaryResource, RunOptions,
+        ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderSummaryResource,
+        RunOptions,
         SessionExecutionResource, SessionResource, WorkspaceResource,
     },
 };
@@ -879,8 +880,8 @@ impl ProviderConfigDraft {
                 service_key_env,
             },
             credential_drafts,
-            default_adapter: provider.default_adapter.clone(),
-            default_model: provider.default_model.clone(),
+            default_adapter: provider.defaults.adapter.clone().unwrap_or_default(),
+            default_model: provider.defaults.model.clone().unwrap_or_default(),
         };
         draft.normalize_shape();
         draft
@@ -895,8 +896,11 @@ impl ProviderConfigDraft {
     ) -> std::result::Result<ProviderOverlay, ProviderStudioSaveError> {
         Ok(ProviderOverlay {
             enabled: Some(true),
-            default_adapter: include_defaults.then(|| default_adapter.to_owned()),
-            default_model: include_defaults.then(|| default_model.to_owned()),
+            defaults: include_defaults.then(|| agena::config::ProviderDefaultsOverlay {
+                adapter: Some(default_adapter.to_owned()),
+                model: Some(default_model.to_owned()),
+                ..Default::default()
+            }),
             auth: Some(self.to_auth_overlay_for_save()?),
             adapters,
         })
@@ -1197,10 +1201,10 @@ impl ProviderConfigDraft {
         &self,
         adapter_ids: &std::collections::BTreeSet<String>,
     ) -> Result<()> {
-        let default_adapter = required_trimmed(self.default_adapter.as_str(), "default_adapter")?;
+        let default_adapter = required_trimmed(self.default_adapter.as_str(), "defaults.adapter")?;
         if !self.auth_kind.supports_adapter(default_adapter) {
             return Err(anyhow!(
-                "auth {} does not support default_adapter `{default_adapter}`; expected one of {}",
+                "auth {} does not support defaults.adapter `{default_adapter}`; expected one of {}",
                 self.auth_kind.label(),
                 supported_provider_draft_adapter_list(&self.auth_kind),
             ));
@@ -1770,8 +1774,10 @@ impl Backend {
                 registry
                     .get(provider_id.as_str())
                     .map(|provider| ProviderSummaryResource {
-                        default_adapter: provider.default_adapter().map(ToString::to_string),
-                        default_model: provider.default_model().to_string(),
+                        defaults: ProviderDefaultsResource {
+                            adapter: provider.default_adapter().map(ToString::to_string),
+                            model: provider.default_model().to_string(),
+                        },
                         adapters: Vec::new(),
                         provider_id,
                     })
@@ -1801,9 +1807,8 @@ impl Backend {
         let configured = snapshot
             .config_resolution()
             .config
-            .default
-            .agent
-            .as_deref()
+            .default_agent
+            .clone()
             .unwrap_or_default()
             .trim()
             .to_owned();
@@ -1853,8 +1858,10 @@ impl Backend {
             .iter()
             .map(|(provider_id, provider)| ProviderSummaryResource {
                 provider_id: provider_id.clone(),
-                default_adapter: Some(provider.default_adapter.clone()),
-                default_model: provider.default_model.clone(),
+                defaults: ProviderDefaultsResource {
+                    adapter: provider.defaults.adapter.clone(),
+                    model: provider.defaults.model.clone().unwrap_or_default(),
+                },
                 adapters: provider
                     .adapters
                     .iter()
@@ -1877,97 +1884,6 @@ impl Backend {
             .collect::<Vec<_>>();
         providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
         providers
-    }
-
-    pub fn default_adapter_options(&self) -> Vec<ProviderAdapterSummaryResource> {
-        let snapshot = self.runtime.current_snapshot();
-        let config = &snapshot.config_resolution().config;
-        let Some(provider_id) = config.default.provider.as_deref() else {
-            return Vec::new();
-        };
-        let Some(provider) = config.providers.get(provider_id) else {
-            return Vec::new();
-        };
-        if !provider.enabled {
-            return Vec::new();
-        }
-
-        let mut adapters = provider
-            .adapters
-            .iter()
-            .filter(|(_, adapter)| adapter.enabled)
-            .map(|(adapter_id, _)| ProviderAdapterSummaryResource {
-                adapter_id: adapter_id.clone(),
-                enabled: true,
-                configured_model_count: provider
-                    .models
-                    .iter()
-                    .filter(|(route, model)| {
-                        model.enabled
-                            && route
-                                .split_once('/')
-                                .map(|(route_adapter_id, _)| route_adapter_id == adapter_id)
-                                .unwrap_or(false)
-                    })
-                    .count(),
-            })
-            .collect::<Vec<_>>();
-        adapters.sort_by(|left, right| left.adapter_id.cmp(&right.adapter_id));
-        adapters
-    }
-
-    pub fn default_model_options(&self) -> Vec<ProviderModel> {
-        let snapshot = self.runtime.current_snapshot();
-        let config = &snapshot.config_resolution().config;
-        let Some(provider_id) = config.default.provider.as_deref() else {
-            return Vec::new();
-        };
-        let Some(provider) = config.providers.get(provider_id) else {
-            return Vec::new();
-        };
-        if !provider.enabled {
-            return Vec::new();
-        }
-        let adapter_id = config
-            .default
-            .adapter
-            .as_deref()
-            .unwrap_or(provider.default_adapter.as_str());
-        if !provider
-            .adapters
-            .get(adapter_id)
-            .is_some_and(|adapter| adapter.enabled)
-        {
-            return Vec::new();
-        }
-
-        let mut models = provider
-            .models
-            .iter()
-            .filter_map(|(route, configured)| {
-                if !configured.enabled {
-                    return None;
-                }
-                let (route_adapter_id, model_id) = route.split_once('/')?;
-                if route_adapter_id != adapter_id {
-                    return None;
-                }
-                let mut model =
-                    ProviderModel::new(provider_id, model_id).with_adapter_id(adapter_id);
-                if let Some(display_name) = configured
-                    .definition
-                    .display_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    model = model.with_display_name(display_name);
-                }
-                Some(model)
-            })
-            .collect::<Vec<_>>();
-        models.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
-        models
     }
 
     pub fn config_path(&self) -> PathBuf {
@@ -2512,12 +2428,11 @@ impl Backend {
 
         provider_object.insert("enabled".to_owned(), JsonValue::Bool(true));
         provider_object.insert(
-            "default_adapter".to_owned(),
-            JsonValue::String(default_adapter.clone()),
-        );
-        provider_object.insert(
-            "default_model".to_owned(),
-            JsonValue::String(default_model.clone()),
+            "defaults".to_owned(),
+            json!({
+                "adapter": default_adapter,
+                "model": default_model,
+            }),
         );
         provider_object.insert(
             "auth".to_owned(),
@@ -2801,12 +2716,11 @@ impl Backend {
         );
         if include_defaults {
             provider_patch.insert(
-                "default_adapter".to_owned(),
-                JsonValue::String(default_adapter.to_owned()),
-            );
-            provider_patch.insert(
-                "default_model".to_owned(),
-                JsonValue::String(default_model.to_owned()),
+                "defaults".to_owned(),
+                json!({
+                    "adapter": default_adapter,
+                    "model": default_model,
+                }),
             );
         }
         self.patch_provider_settings(provider_id, JsonValue::Object(provider_patch))

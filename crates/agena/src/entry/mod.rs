@@ -188,7 +188,6 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
         );
     }
     let config = crate::plugin::PluginsConfig {
-        enabled: true,
         timeouts: Default::default(),
         list,
         trusted_keys: Default::default(),
@@ -2474,7 +2473,6 @@ mod tests {
             },
         );
         let config = PluginsConfig {
-            enabled: true,
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),
@@ -2541,7 +2539,6 @@ mod tests {
             );
         }
         let config = PluginsConfig {
-            enabled: true,
             timeouts: Default::default(),
             list,
             trusted_keys: Default::default(),

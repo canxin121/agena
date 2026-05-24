@@ -187,44 +187,22 @@ pub async fn run_with_load_request(
         .as_ref()
         .map(|resolution| resolution.config.tracing.clone())
         .unwrap_or_else(TracingConfig::default);
-    let telemetry = resolution
-        .as_ref()
-        .map(|resolution| resolution.config.telemetry.clone())
-        .unwrap_or_default();
     let log_writer = resolve_tui_log_writer(&args)?;
 
     let initial_filter = tracing_config::env_filter(&tracing).unwrap_or_else(|_| {
         tracing_config::env_filter(&TracingConfig::default())
             .expect("default tracing filter should parse")
     });
-    if let Some(telemetry) = agena_otel::build_layer(&telemetry)
-        .map_err(|error| agena::AppError::Config(error.to_string()))?
-    {
-        let telemetry_layer = telemetry.layer();
-        let _telemetry_guard = telemetry.guard;
-        tracing_subscriber::registry()
-            .with(initial_filter)
-            .with(telemetry_layer)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_writer(log_writer.clone())
-                    .with_ansi(log_writer.ansi_enabled())
-                    .with_target(false)
-                    .compact(),
-            )
-            .init();
-    } else {
-        tracing_subscriber::registry()
-            .with(initial_filter)
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_writer(log_writer.clone())
-                    .with_ansi(log_writer.ansi_enabled())
-                    .with_target(false)
-                    .compact(),
-            )
-            .init();
-    }
+    tracing_subscriber::registry()
+        .with(initial_filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(log_writer.clone())
+                .with_ansi(log_writer.ansi_enabled())
+                .with_target(false)
+                .compact(),
+        )
+        .init();
 
     run_embedded(load_request, args).await
 }

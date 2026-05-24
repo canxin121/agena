@@ -12,7 +12,7 @@ use tokio::process::Command;
 use crate::git2_utils;
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct GitFailureTelemetry {
+pub(crate) struct GitFailureDetails {
     pub code: &'static str,
     pub category: &'static str,
     pub retryable: bool,
@@ -386,12 +386,12 @@ pub(crate) fn classify_git_failure(
     code: i32,
     stdout: &str,
     stderr: &str,
-) -> Option<GitFailureTelemetry> {
+) -> Option<GitFailureDetails> {
     if code == 0 {
         return None;
     }
     if is_not_git_repo(stderr, stdout) {
-        return Some(GitFailureTelemetry {
+        return Some(GitFailureDetails {
             code: "not_git_repo",
             category: "not_found",
             retryable: false,
@@ -402,56 +402,56 @@ pub(crate) fn classify_git_failure(
     let err = redact_git_output(&truncate_for_payload(stderr, 16_000));
     let combined = format!("{}\n{}", out, err).to_ascii_lowercase();
 
-    let mut telemetry = GitFailureTelemetry {
+    let mut details = GitFailureDetails {
         code: "git_failed",
         category: "unknown",
         retryable: false,
     };
 
     if code == 124 {
-        telemetry.code = "git_timeout";
-        telemetry.category = "timeout";
-        telemetry.retryable = true;
-        return Some(telemetry);
+        details.code = "git_timeout";
+        details.category = "timeout";
+        details.retryable = true;
+        return Some(details);
     }
 
     if combined.contains("nothing to commit") {
-        telemetry.code = "nothing_to_commit";
-        telemetry.category = "validation";
+        details.code = "nothing_to_commit";
+        details.category = "validation";
     } else if combined.contains("patch failed")
         || combined.contains("patch does not apply")
         || combined.contains("failed to apply")
     {
-        telemetry.code = "git_patch_conflict";
-        telemetry.category = "conflict";
+        details.code = "git_patch_conflict";
+        details.category = "conflict";
     } else if combined.contains("corrupt patch")
         || combined.contains("malformed patch")
         || combined.contains("unrecognized input") && combined.contains("patch")
     {
-        telemetry.code = "git_patch_invalid";
-        telemetry.category = "validation";
+        details.code = "git_patch_invalid";
+        details.category = "validation";
     } else if combined.contains("another git process seems to be running")
         || combined.contains("index.lock")
         || combined.contains("unable to create '") && combined.contains(".lock")
     {
-        telemetry.code = "git_lock";
-        telemetry.category = "conflict";
-        telemetry.retryable = true;
+        details.code = "git_lock";
+        details.category = "conflict";
+        details.retryable = true;
     } else if combined.contains("merge_head")
         || combined.contains("you have not concluded your merge")
         || combined.contains("merging is not possible")
         || combined.contains("unmerged files")
     {
-        telemetry.code = "merge_in_progress";
-        telemetry.category = "conflict";
+        details.code = "merge_in_progress";
+        details.category = "conflict";
     } else if combined.contains("waiting for your editor to close")
         || combined.contains("terminal is dumb")
         || (combined.contains("error") && combined.contains("editor"))
         || combined.contains("could not launch editor")
         || combined.contains("please supply the message")
     {
-        telemetry.code = "git_interactive_required";
-        telemetry.category = "interactive";
+        details.code = "git_interactive_required";
+        details.category = "interactive";
     } else if combined.contains("hook")
         && (combined.contains("pre-commit")
             || combined.contains("commit-msg")
@@ -464,8 +464,8 @@ pub(crate) fn classify_git_failure(
             || combined.contains("hook declined")
             || combined.contains("aborted"))
     {
-        telemetry.code = "git_hook_failed";
-        telemetry.category = "validation";
+        details.code = "git_hook_failed";
+        details.category = "validation";
     } else if (combined.contains("ssh-keygen") && combined.contains("enter passphrase"))
         || (combined.contains("load key") && combined.contains("enter passphrase"))
         || combined.contains("signing failed: agent refused operation")
@@ -474,23 +474,23 @@ pub(crate) fn classify_git_failure(
             && combined.contains("key")
             && combined.contains("passphrase"))
     {
-        telemetry.code = "git_signing_interactive_required";
-        telemetry.category = "interactive";
+        details.code = "git_signing_interactive_required";
+        details.category = "interactive";
     } else if combined.contains("gpg failed to sign the data")
         || combined.contains("error: gpg failed to sign")
         || (combined.contains("signing") && combined.contains("failed"))
     {
-        telemetry.code = "gpg_sign_failed";
-        telemetry.category = "auth";
+        details.code = "gpg_sign_failed";
+        details.category = "auth";
     } else if combined.contains("no pinentry")
         || combined.contains("pinentry") && combined.contains("not found")
         || combined.contains("inappropriate ioctl for device")
     {
-        telemetry.code = "gpg_pinentry";
-        telemetry.category = "interactive";
+        details.code = "gpg_pinentry";
+        details.category = "interactive";
     } else if combined.contains("no secret key") {
-        telemetry.code = "gpg_no_secret_key";
-        telemetry.category = "auth";
+        details.code = "gpg_no_secret_key";
+        details.category = "auth";
     } else if combined.contains("authentication failed")
         || combined.contains("http basic: access denied")
         || combined.contains("could not read username")
@@ -503,68 +503,68 @@ pub(crate) fn classify_git_failure(
         || (combined.contains("remote:") && combined.contains("invalid username or password"))
         || (combined.contains("remote:") && combined.contains("two-factor"))
     {
-        telemetry.code = "git_auth_required";
-        telemetry.category = "auth";
+        details.code = "git_auth_required";
+        details.category = "auth";
     } else if combined.contains("saml")
         || (combined.contains("sso") && combined.contains("organization"))
         || combined.contains("resource protected")
         || combined.contains("must authorize")
         || (combined.contains("remote:") && combined.contains("sso"))
     {
-        telemetry.code = "git_auth_sso_required";
-        telemetry.category = "auth";
+        details.code = "git_auth_sso_required";
+        details.category = "auth";
     } else if combined.contains("permission denied (publickey") {
-        telemetry.code = "git_ssh_auth_failed";
-        telemetry.category = "auth";
+        details.code = "git_ssh_auth_failed";
+        details.category = "auth";
     } else if combined.contains("could not resolve host")
         || combined.contains("failed to connect")
         || combined.contains("connection timed out")
         || combined.contains("network is unreachable")
         || combined.contains("name or service not known")
     {
-        telemetry.code = "git_network_error";
-        telemetry.category = "network";
-        telemetry.retryable = true;
+        details.code = "git_network_error";
+        details.category = "network";
+        details.retryable = true;
     } else if combined.contains("ssl certificate problem")
         || combined.contains("server certificate verification failed")
         || (combined.contains("certificate")
             && combined.contains("verify")
             && combined.contains("failed"))
     {
-        telemetry.code = "git_tls_error";
-        telemetry.category = "network";
+        details.code = "git_tls_error";
+        details.category = "network";
     } else if combined.contains("has no upstream branch")
         || combined.contains("set the remote as upstream")
         || combined.contains("no upstream configured")
         || (combined.contains("set-upstream") && combined.contains("fatal"))
     {
-        telemetry.code = "git_no_upstream";
-        telemetry.category = "validation";
+        details.code = "git_no_upstream";
+        details.category = "validation";
     } else if combined.contains("no such remote")
         || (combined.contains("does not appear to be a git repository")
             && combined.contains("fatal"))
         || combined.contains("could not find remote ref")
     {
-        telemetry.code = "git_remote_not_found";
-        telemetry.category = "not_found";
+        details.code = "git_remote_not_found";
+        details.category = "not_found";
     } else if combined.contains("non-fast-forward")
         || (combined.contains("rejected") && combined.contains("fetch first"))
         || (combined.contains("rejected") && combined.contains("non-fast-forward"))
         || (combined.contains("failed to push") && combined.contains("updates were rejected"))
     {
-        telemetry.code = "git_push_rejected";
-        telemetry.category = "conflict";
+        details.code = "git_push_rejected";
+        details.category = "conflict";
     } else if combined.contains("repository not found") {
-        telemetry.code = "git_repo_not_found";
-        telemetry.category = "not_found";
+        details.code = "git_repo_not_found";
+        details.category = "not_found";
     } else if combined.contains("detected dubious ownership in repository at")
         || (combined.contains("safe.directory") && combined.contains("git config --global"))
     {
-        telemetry.code = "git_unsafe_repository";
-        telemetry.category = "safety";
+        details.code = "git_unsafe_repository";
+        details.category = "safety";
     }
 
-    Some(telemetry)
+    Some(details)
 }
 
 pub(crate) fn normalize_directory_path(value: &str) -> String {

@@ -1,50 +1,45 @@
 {
   "tracing": {
     "filter": "info",
-    "database_level": "error"
-  },
-  "telemetry": {
-    "enabled": false,
-    "service_name": "agena"
-  },
-  "default": {
-    "provider": "openai",
-    "adapter": "openai",
-    "model": "gpt-5.5",
-    "agent": "build"
+    "database": "error"
   },
   "runtime": {
-    "provider_http": {
-      "timeout_secs": 120,
-      "connect_timeout_secs": 15
-    },
-    "request_retry": {
-      "max_retries": 5,
-      "base_delay_ms": 250,
-      "max_delay_ms": 2000
-    },
-    "stream_replay": {
-      "max_retries_after_output": 5,
-      "max_tracked_events": 2048
+    "providers": {
+      "http": {
+        "timeout_secs": 120,
+        "connect_timeout_secs": 15
+      },
+      "retry": {
+        "max_retries": 5,
+        "base_delay_ms": 250,
+        "max_delay_ms": 2000
+      },
+      "stream_replay": {
+        "max_retries_after_output": 5,
+        "max_tracked_events": 2048
+      }
     },
     "reload": {
       "enabled": true,
       "poll_interval_secs": 2
     },
-    "janitor": {
-      "enabled": true,
-      "interval_secs": 30
-    },
-    "session_cache": {
-      "max_sessions": 128,
-      "ttl_secs": 900,
-      "max_bytes": 67108864
-    },
     "model_catalog": {
       "cache_max_age_secs": 604800
     }
   },
+  "session": {
+    "maintenance": {
+      "enabled": true,
+      "interval_secs": 30
+    },
+    "cache": {
+      "max_sessions": 128,
+      "ttl_secs": 900,
+      "max_bytes": 67108864
+    }
+  },
   "agents": {
+    "default": "plan",
     "plan": {
       "description": "Read-only planning agent",
       "prompt": "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable.",
@@ -59,11 +54,10 @@
             "write": "ask"
           }
         },
-        "entries": {
+        "tools": {
           "names": {
-            "enter_plan_mode": "allow",
-            "exit_plan_mode": "allow",
-            "todo_write": "allow"
+            "plan": "allow",
+            "todo": "allow"
           }
         }
       }
@@ -105,7 +99,7 @@
         "[::1]:3000": "ask"
       }
     },
-    "entries": {
+    "tools": {
       "tags": {
         "filesystem_read": "allow",
         "filesystem_write": "ask",
@@ -120,24 +114,29 @@
       }
     }
   },
-  "plugins": {
-    "enabled": true,
-    "list": {
-      "agena.memory": {
-        "kind": "static",
-        "options": {
-          "project_instructions": {
-            "enabled": true,
-            "include_global": true
-          }
-        }
-      }
+  "memory": {
+    "project_instructions": {
+      "enabled": true,
+      "include_global": true
+    },
+    "search": {
+      "url": "http://127.0.0.1:7700",
+      "api_key": "optional-meili-key",
+      "index_prefix": "agena_memory"
+    },
+    "retrieval": {
+      "enabled": true,
+      "limit": 3,
+      "min_query_chars": 8
     }
   },
   "providers": {
+    "default": "openai",
     "openai": {
-      "default_adapter": "openai",
-      "default_model": "gpt-5.5",
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-5.5"
+      },
       "auth": {
         "mode": "api",
         "base_url": "https://api.openai.com",
@@ -152,8 +151,10 @@
       }
     },
     "openai_chatgpt": {
-      "default_adapter": "openai",
-      "default_model": "gpt-5.3-codex",
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-5.3-codex"
+      },
       "auth": {
         "mode": "credential",
         "issuer": "openai_chatgpt",
@@ -174,8 +175,10 @@
       }
     },
     "atomgit": {
-      "default_adapter": "openai",
-      "default_model": "Kimi-K2-Instruct",
+      "defaults": {
+        "adapter": "openai",
+        "model": "Kimi-K2-Instruct"
+      },
       "auth": {
         "mode": "credential",
         "issuer": "atomgit",
@@ -200,8 +203,10 @@
       }
     },
     "github-copilot": {
-      "default_adapter": "openai",
-      "default_model": "gpt-4o-mini",
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4o-mini"
+      },
       "auth": {
         "mode": "credential",
         "issuer": "github_copilot",
@@ -229,8 +234,10 @@
       }
     },
     "ollama": {
-      "default_adapter": "ollama",
-      "default_model": "qwen3:14b",
+      "defaults": {
+        "adapter": "ollama",
+        "model": "qwen3:14b"
+      },
       "adapters": {
         "ollama": {
           "enabled": true,
@@ -239,8 +246,10 @@
       }
     },
     "gitlab": {
-      "default_adapter": "gitlab",
-      "default_model": "claude-sonnet-4-5",
+      "defaults": {
+        "adapter": "gitlab",
+        "model": "claude-sonnet-4-5"
+      },
       "auth": {
         "mode": "credential",
         "issuer": "gitlab",
@@ -261,8 +270,10 @@
       }
     },
     "shared-gateway": {
-      "default_adapter": "openai",
-      "default_model": "gpt-4.1-mini",
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4.1-mini"
+      },
       "auth": {
         "mode": "api",
         "base_url": "https://api.cxits.cn/",
@@ -295,8 +306,10 @@
       }
     },
     "google-vertex": {
-      "default_adapter": "openai",
-      "default_model": "google/gemini-2.5-flash",
+      "defaults": {
+        "adapter": "openai",
+        "model": "google/gemini-2.5-flash"
+      },
       "auth": {
         "mode": "api",
         "base_url": "https://us-central1-aiplatform.googleapis.com",

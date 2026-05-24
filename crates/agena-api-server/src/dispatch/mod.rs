@@ -189,9 +189,9 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     let session_cache = snapshot.session_manager().map(|manager| {
         let stats = manager.cache_stats();
         RuntimeSessionCacheResource {
-            max_sessions: resolution.config.runtime.session_cache.max_sessions,
-            ttl_secs: resolution.config.runtime.session_cache.ttl_secs,
-            max_bytes: resolution.config.runtime.session_cache.max_bytes,
+            max_sessions: resolution.config.session.cache.max_sessions,
+            ttl_secs: resolution.config.session.cache.ttl_secs,
+            max_bytes: resolution.config.session.cache.max_bytes,
             entry_count: stats.entry_count,
             total_bytes: stats.total_bytes,
             hits: stats.hits,
@@ -327,19 +327,10 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         let default_agent = resolution
             .config
-            .default
-            .agent
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .map(ToOwned::to_owned)
+            .default_agent
+            .clone()
             .filter(|name| entries.iter().any(|entry| entry.name == *name))
-            .or_else(|| {
-                entries
-                    .iter()
-                    .map(|entry| entry.name.clone())
-                    .next()
-            })
+            .or_else(|| entries.iter().map(|entry| entry.name.clone()).next())
             .unwrap_or_else(|| "none".to_string());
         let total_count = entries.len();
         RuntimeAgentsResource {
@@ -351,10 +342,14 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
                     name: entry.name,
                     description: entry.description,
                     permission: entry.permission,
-                    default: agena_api::resource::RuntimeAgentDefaultResource {
-                        provider: entry.default.provider,
-                        adapter: entry.default.adapter,
-                        model: entry.default.model,
+                    defaults: agena_api::resource::RuntimeAgentSelectionResource {
+                        provider: entry.defaults.provider,
+                        adapter: entry.defaults.adapter,
+                        model: entry.defaults.model,
+                        thinking_mode: entry.defaults.thinking_mode,
+                        speed_mode: entry.defaults.speed_mode,
+                        verbosity: entry.defaults.verbosity,
+                        parallel_tool_calls: entry.defaults.parallel_tool_calls,
                     },
                     scope: entry.scope,
                     source_path: entry.source_path.map(|path| path.display().to_string()),
@@ -402,9 +397,9 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             enabled: snapshot.reload_enabled(),
             interval_secs: snapshot.reload_poll_interval().as_secs(),
         },
-        janitor: RuntimeTaskResource {
-            enabled: snapshot.janitor_enabled(),
-            interval_secs: snapshot.janitor_interval().as_secs(),
+        session_maintenance: RuntimeTaskResource {
+            enabled: snapshot.session_maintenance_enabled(),
+            interval_secs: snapshot.session_maintenance_interval().as_secs(),
         },
         session_cache,
         model_catalog: Some(model_catalog),

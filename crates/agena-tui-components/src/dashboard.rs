@@ -273,13 +273,29 @@ pub fn render_dashboard_workbench(
                 Constraint::Min(lead_panel.min_right_width),
             ])
             .split(rows[0]);
-        let lead_area = top_aligned_panel_rect(content[0], lead_panel.panel.resolve_height());
+        let lead_area = match surface {
+            SurfaceMode::Overlay => {
+                top_aligned_panel_rect(content[0], lead_panel.panel.resolve_height())
+            }
+            SurfaceMode::Route => content[0],
+        };
         render_dashboard_list_panel(frame, lead_area, &lead_panel.panel);
         content[1]
     } else {
         rows[0]
     };
-    let right_rows = top_aligned_vertical_areas(right_area, &[top_panel_height, bottom_height]);
+    let right_rows = match surface {
+        SurfaceMode::Overlay => {
+            top_aligned_vertical_areas(right_area, &[top_panel_height, bottom_height])
+        }
+        SurfaceMode::Route => split_vertical_sections(
+            right_area,
+            &[
+                VerticalSectionSize::Fixed(top_panel_height),
+                VerticalSectionSize::Flexible(bottom_height),
+            ],
+        ),
+    };
     render_text_panel(
         frame,
         right_rows[0],
@@ -319,10 +335,13 @@ pub fn render_dashboard_workbench(
     let (left_area, right_area) = if stacked {
         (split[0], split[1])
     } else {
-        (
-            top_aligned_panel_rect(split[0], left_height),
-            top_aligned_panel_rect(split[1], right_height),
-        )
+        match surface {
+            SurfaceMode::Overlay => (
+                top_aligned_panel_rect(split[0], left_height),
+                top_aligned_panel_rect(split[1], right_height),
+            ),
+            SurfaceMode::Route => (split[0], split[1]),
+        }
     };
     render_dashboard_list_panel(frame, left_area, &spec.bottom_panels.left);
     render_dashboard_list_panel(frame, right_area, &spec.bottom_panels.right);

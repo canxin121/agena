@@ -13,7 +13,6 @@ path = "src/main.rs"
 [dependencies]
 agena = { workspace = true }
 agena-api-server = { workspace = true, features = ["jsonrpc"] }
-agena-otel = { workspace = true }
 agena-tui = { path = "../agena-tui" }
 async-trait = { workspace = true }
 clap = { workspace = true }

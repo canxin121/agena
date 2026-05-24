@@ -55,7 +55,7 @@ const props = defineProps<{
               <div class="muted mono">source={{ agent.sourcePath || 'runtime built-in / config' }}</div>
               <div class="muted mono">{{ agent.detailFacts.join(' · ') }}</div>
               <div class="muted mono">permission={{ agent.permissionSummary }}</div>
-              <div class="muted mono">default={{ agent.defaultSummary }}</div>
+              <div class="muted mono">defaults={{ agent.defaultSummary }}</div>
             </div>
             <div class="button-row" style="flex-wrap: wrap">
               <button class="button primary" :disabled="agent.isDefault" @click="props.setDefaultAgent(agent.name)">

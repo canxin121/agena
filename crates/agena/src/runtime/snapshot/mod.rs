@@ -123,7 +123,7 @@ struct RuntimeTaskPolicy {
 struct RuntimeMaintenance {
     watch_paths: Vec<PathBuf>,
     reload: RuntimeTaskPolicy,
-    janitor: RuntimeTaskPolicy,
+    session_maintenance: RuntimeTaskPolicy,
 }
 
 impl RuntimeMaintenance {
@@ -134,9 +134,11 @@ impl RuntimeMaintenance {
                 enabled: resolution.config.runtime.reload.enabled,
                 interval: Duration::from_secs(resolution.config.runtime.reload.poll_interval_secs),
             },
-            janitor: RuntimeTaskPolicy {
-                enabled: resolution.config.runtime.janitor.enabled,
-                interval: Duration::from_secs(resolution.config.runtime.janitor.interval_secs),
+            session_maintenance: RuntimeTaskPolicy {
+                enabled: resolution.config.session.maintenance.enabled,
+                interval: Duration::from_secs(
+                    resolution.config.session.maintenance.interval_secs,
+                ),
             },
         }
     }
@@ -410,7 +412,7 @@ impl RuntimeSnapshot {
     pub fn resolve_default_model(&self) -> Result<Option<ModelRef>, AppError> {
         self.services
             .providers
-            .resolve_default_model_selection(&self.resolution.config.default)
+            .resolve_default_model_selection(&self.resolution.config.default_selection)
     }
 
     pub async fn resolve_model(
@@ -467,12 +469,12 @@ impl RuntimeSnapshot {
         self.maintenance.reload.interval
     }
 
-    pub fn janitor_enabled(&self) -> bool {
-        self.maintenance.janitor.enabled
+    pub fn session_maintenance_enabled(&self) -> bool {
+        self.maintenance.session_maintenance.enabled
     }
 
-    pub fn janitor_interval(&self) -> Duration {
-        self.maintenance.janitor.interval
+    pub fn session_maintenance_interval(&self) -> Duration {
+        self.maintenance.session_maintenance.interval
     }
 }
 

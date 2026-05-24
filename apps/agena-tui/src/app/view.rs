@@ -4,26 +4,35 @@ use agena_tui_components::{
     DashboardLeadPanelSpec, DashboardListPanelHeight, DashboardListPanelState,
     DashboardSplitPanelsSpec, DashboardTextPanelHeight, DashboardTextSection,
     DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec, DecisionDialogSpec,
-    DetailTextDialogSpec, DetailTextLine, DetailTextSpec, EditorPreviewDialogSpec,
-    EditorPreviewHelpSpec, HeaderBodyFooterTextSurfaceSpec, LineTextDialogSpec,
+    DetailTextDialogSpec, DetailTextLine, DetailTextSpec, EditorDialogSpec,
+    EditorPreviewDialogSpec, EditorPreviewHelpSpec, FramedSurfaceSpec,
+    HeaderBodyFooterTextSurfaceSpec, HeaderRowSpec, LineTextDialogSpec, ListPanelSpec,
     ListWorkbenchDialogSpec, ListWorkbenchPanelState, QuerySuggestionPopupSpec,
-    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
-    SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState,
-    SectionedWorkbenchDialogSpec, SuggestionPopupItem, SuggestionPopupSpec, SurfaceMode,
-    TextDialogLine, VerticalSectionSize, WorkbenchTextSection, WrappedTextSpec,
-    adaptive_modal_width, build_accented_two_line_list_item, build_detail_two_line_list_item,
-    build_wrapped_text_lines, inset_rect, join_inline_segments, layout_composer_surface,
+    QuestionFlowCustomInputSpec,
+    QuestionFlowDialogMode, QuestionFlowDialogSpec, SearchListDialogSpec, SearchPanelsDialogSpec,
+    SearchPanelsDialogState, SectionedWorkbenchDialogSpec, SuggestionPopupItem,
+    SuggestionPopupSpec, SurfaceMode, TextDialogLine, TextPanelSpec, VerticalSectionSize,
+    WorkbenchTextSection, WrappedTextSpec, render_framed_surface, render_list_panel,
+    render_text_panel,
+    adaptive_detail_split, adaptive_modal_width, build_accented_two_line_list_item,
+    build_detail_two_line_list_item, build_wrapped_text_lines, inset_rect, join_inline_segments,
+    layout_composer_surface,
     layout_header_body_footer_surface, pane_header_height, render_composer_editor_surface,
-    render_dashboard_workbench_dialog, render_decision_dialog, render_editor_preview_dialog,
-    render_header_body_footer_text_surface, render_line_text_dialog, render_list_workbench_dialog,
-    render_overlay_line_input_dialog, render_query_suggestion_popup, render_question_flow_dialog,
-    render_search_list_dialog, render_search_panels_dialog, render_sectioned_workbench_dialog,
-    render_suggestion_popup, render_wrapped_text, split_vertical_sections, truncate_display_text,
+    render_dashboard_workbench_dialog, render_decision_dialog, render_editor_dialog,
+    render_editor_preview_dialog, render_header_body_footer_text_surface, render_header_row,
+    render_line_text_dialog, render_list_workbench_dialog, render_overlay_line_input_dialog,
+    render_query_suggestion_popup, render_question_flow_dialog, render_search_list_dialog,
+    render_search_panels_dialog, render_sectioned_workbench_dialog, render_suggestion_popup,
+    render_wrapped_text,
+    split_vertical_sections, truncate_display_text,
 };
 use ratatui::{
-    layout::Alignment,
+    layout::{Alignment, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
     widgets::{Borders, ListItem, Paragraph, Wrap},
 };
+use unicode_width::UnicodeWidthStr;
 
 impl App {
     pub(super) fn draw(&mut self, frame: &mut Frame) {
@@ -783,13 +792,8 @@ impl App {
             Route::AgentStudio(dialog) => {
                 self.render_agent_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
-            Route::AgentPermissionStudio(dialog) => {
-                self.render_agent_permission_studio_overlay(
-                    frame,
-                    area,
-                    dialog,
-                    SurfaceMode::Route,
-                );
+            Route::PermissionStudio(dialog) => {
+                self.render_permission_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
             Route::PermissionRuleStudio(dialog) => {
                 self.render_permission_rule_studio_overlay(frame, area, dialog, SurfaceMode::Route);
@@ -1753,116 +1757,345 @@ impl App {
         render_list_workbench_dialog(frame, area, surface, &spec);
     }
 
-    fn render_agent_permission_studio_overlay(
+    fn render_permission_studio_overlay(
         &self,
         frame: &mut Frame,
         area: Rect,
-        dialog: &AgentPermissionStudioOverlay,
+        dialog: &PermissionStudioOverlay,
         surface: SurfaceMode,
     ) {
-        let title_summary = format!(
-            "{} · {}",
-            dialog.profile.scope.as_str(),
-            if dialog.editable {
-                ui_text::t(&self.i18n, "value-editable")
-            } else {
-                ui_text::t(&self.i18n, "value-read-only")
-            }
+        let framed = render_framed_surface(
+            frame,
+            area,
+            surface,
+            &FramedSurfaceSpec {
+                title: sanitize_display_text(dialog.title.as_str()).into(),
+                target_width: 140,
+                target_height: area.height,
+            },
         );
-        let overview_body = build_detail_text(
-            vec![
-                DetailTextLine::labeled(
-                    ui_text::t(&self.i18n, "overlay-agent-overview-name"),
-                    sanitize_display_text(dialog.profile.name.as_str()),
-                    Style::default().fg(Color::DarkGray),
-                    Style::default(),
-                ),
-                DetailTextLine::labeled(
-                    ui_text::t(&self.i18n, "overlay-agent-overview-source"),
-                    sanitize_display_text(agent_profile_source_label_localized(
-                        &self.i18n,
-                        &dialog.profile,
-                    )),
-                    Style::default().fg(Color::DarkGray),
-                    Style::default(),
-                ),
-                DetailTextLine::labeled(
-                    ui_text::t(&self.i18n, "overlay-agent-overview-permission"),
-                    sanitize_display_text(agent_permission_summary(
-                        &self.i18n,
-                        &dialog.profile.frontmatter.permission,
-                    )),
-                    Style::default().fg(Color::DarkGray),
-                    Style::default(),
-                ),
-            ],
-            &DetailTextSpec::with_label_width(14),
-        );
-        let selected_item = dialog.workbench.list.selected_item();
-        let detail_body = selected_item
-            .map(|item| {
-                agent_permission_studio_item_detail_text(
-                    &self.i18n,
-                    &dialog.profile,
-                    item,
-                    dialog.editable,
-                )
-            })
-            .unwrap_or_else(|| {
-                Text::from(ui_text::t(
-                    &self.i18n,
-                    "overlay-agent-permission-empty-detail",
-                ))
-            });
+        if framed.inner.width == 0 || framed.inner.height == 0 {
+            return;
+        }
 
-        let list_items = dialog
-            .workbench
-            .list
+        let header_height = if framed.inner.height >= 4 { 2 } else { 1 };
+        let footer_height = if framed.inner.height >= 3 { 1 } else { 0 };
+        let body_height = framed
+            .inner
+            .height
+            .saturating_sub(header_height)
+            .saturating_sub(footer_height);
+        let sections = split_vertical_sections(
+            framed.inner,
+            &[
+                VerticalSectionSize::Fixed(header_height),
+                VerticalSectionSize::Flexible(body_height.max(1)),
+                VerticalSectionSize::Fixed(footer_height),
+            ],
+        );
+        let header_area = sections.first().copied().unwrap_or(framed.inner);
+        let body_area = sections.get(1).copied().unwrap_or(framed.inner);
+        let footer_area = sections.get(2).copied().unwrap_or(Rect {
+            x: framed.inner.x,
+            y: framed.inner.y.saturating_add(framed.inner.height.saturating_sub(1)),
+            width: framed.inner.width,
+            height: 1,
+        });
+
+        render_header_row(
+            frame,
+            header_area,
+            &HeaderRowSpec {
+                left: sanitize_display_text(dialog.title_context.as_str()).into(),
+                right: Some(
+                    sanitize_display_text(format!(
+                        "{} · {} · {}",
+                        dialog.source_label.as_str(),
+                        dialog.scope_label.as_str(),
+                        if dialog.editable {
+                            ui_text::t(&self.i18n, "value-editable")
+                        } else {
+                            ui_text::t(&self.i18n, "value-read-only")
+                        }
+                    ))
+                    .into(),
+                ),
+                left_style: Style::default()
+                    .fg(self.theme_color("accent", Color::Cyan))
+                    .add_modifier(Modifier::BOLD),
+                right_style: Style::default().fg(Color::DarkGray),
+            },
+        );
+
+        let body_constraints = adaptive_detail_split(body_area.width, 26, 40);
+        let body_sections = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(body_constraints)
+            .split(body_area);
+        let nav_area = body_sections.first().copied().unwrap_or(body_area);
+        let table_area = body_sections.get(1).copied().unwrap_or(body_area);
+
+        let nav_items = dialog
+            .nav
             .items
             .iter()
             .map(|item| {
                 build_accented_two_line_list_item(
-                    sanitize_display_text(item.label.as_str()).into(),
-                    Some(sanitize_display_text(item.value.as_str()).into()),
-                    Some(sanitize_display_text(item.detail.as_str()).into()),
+                    sanitize_display_text(
+                        format!("{}{}", "  ".repeat(item.level), item.label.as_str()),
+                    )
+                    .into(),
+                    None,
+                    None,
                 )
             })
             .collect::<Vec<_>>();
-        let spec = ListWorkbenchDialogSpec::new(
-            sanitize_display_text(dialog.workbench.title.as_str()).into(),
-            sanitize_display_text(dialog.workbench.footer.as_str()).into(),
-            132,
-            34,
-            ListWorkbenchPanelState::items(
-                BoundedListPanelHeight {
-                    lines_per_item: 2,
-                    min_body_height: 6,
-                    max_body_height: 16,
+        let nav_spec = ListPanelSpec::new(
+            Some(ui_text::t(&self.i18n, "overlay-permission-studio-nav").into()),
+            nav_items.as_slice(),
+            Some(dialog.nav.selected),
+            if dialog.pane_focus == PermissionStudioPaneFocus::Navigation {
+                selection_highlight_style()
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            },
+            ">> ".into(),
+        );
+        render_list_panel(frame, nav_area, &nav_spec);
+
+        let Some(selected_section) = dialog.state.selected_section() else {
+            let empty_text = Text::from(ui_text::t(&self.i18n, "overlay-settings-empty-section"));
+            render_text_panel(
+                frame,
+                table_area,
+                &TextPanelSpec {
+                    title: Some(ui_text::t(&self.i18n, "overlay-workbench-overview").into()),
+                    body: &empty_text,
+                    wrap: true,
+                    scroll: None,
+                    alignment: None,
                 },
-                Some(ui_text::t(&self.i18n, "overlay-agent-permission-sections").into()),
-                list_items.as_slice(),
-                (!dialog.workbench.list.items.is_empty()).then_some(dialog.workbench.list.selected),
-                selection_highlight_style(),
-                ">> ".into(),
+            );
+            if footer_area.height > 0 {
+                self.render_permission_studio_footer_row(frame, footer_area, dialog);
+            }
+            return;
+        };
+        let table_text = self.permission_studio_table_text(dialog, selected_section, table_area.width);
+        render_text_panel(
+            frame,
+            table_area,
+            &TextPanelSpec {
+                title: Some(sanitize_display_text(selected_section.label.as_str()).into()),
+                body: &table_text,
+                wrap: false,
+                scroll: None,
+                alignment: None,
+            },
+        );
+
+        if footer_area.height > 0 {
+            self.render_permission_studio_footer_row(frame, footer_area, dialog);
+        }
+
+        if let Some(editor) = dialog.editor.as_ref() {
+            render_editor_dialog(
+                frame,
+                area,
+                SurfaceMode::Overlay,
+                &EditorDialogSpec {
+                    title: editor.title.clone().into(),
+                    prompt: editor.prompt.clone().into(),
+                    footer: editor.footer.clone().into(),
+                    target_width: if editor.multiline { 96 } else { 78 },
+                    multiline: editor.multiline,
+                    prompt_height_bounds: (1, 3),
+                    footer_height_bounds: (1, 2),
+                },
+                &editor.input,
+            );
+        }
+    }
+
+    fn permission_studio_table_text(
+        &self,
+        dialog: &PermissionStudioOverlay,
+        section: &PermissionStudioSection,
+        width: u16,
+    ) -> Text<'static> {
+        let (left_header, right_header) = Self::permission_studio_table_headers(section.id);
+        let width = width.max(24);
+        let left_width = width.saturating_mul(45).saturating_div(100).clamp(12, width - 12);
+        let right_width = width.saturating_sub(left_width).saturating_sub(3).max(8);
+        let mut lines = Vec::new();
+        let header_style = Style::default()
+            .fg(self.theme_color("accent", Color::Cyan))
+            .add_modifier(Modifier::BOLD);
+        let row_style = Style::default();
+        let selected_style = selection_highlight_style();
+        let selected_index = dialog.state.selected_item_index();
+        let selected_focus = dialog.state.focus() == PermissionStudioFocus::Items;
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                Self::pad_permission_studio_cell(left_header.as_str(), left_width as usize),
+                header_style,
             ),
-            vec![
-                WorkbenchTextSection::new(
-                    ui_text::t(&self.i18n, "overlay-workbench-overview").into(),
-                    overview_body,
-                    2,
-                    5,
+            Span::raw(" | "),
+            Span::styled(
+                Self::pad_permission_studio_cell(right_header.as_str(), right_width as usize),
+                header_style,
+            ),
+        ]));
+        lines.push(Line::from(vec![
+            Span::styled(
+                "-".repeat(left_width as usize),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw("-+-"),
+            Span::styled(
+                "-".repeat(right_width as usize),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+
+        if section.items.is_empty() {
+            lines.push(Line::from(Span::styled(
+                ui_text::t(&self.i18n, "overlay-settings-empty-items"),
+                Style::default().fg(Color::DarkGray),
+            )));
+            return Text::from(lines);
+        }
+
+        for (index, item) in section.items.iter().enumerate() {
+            let is_selected = selected_focus && index == selected_index;
+            let style = if is_selected {
+                selected_style
+            } else {
+                row_style
+            };
+            let marker = if is_selected { "> " } else { "  " };
+            let left = truncate_display_text(item.label.as_str(), left_width as usize);
+            let right = truncate_display_text(item.value.as_str(), right_width as usize);
+            lines.push(Line::from(vec![
+                Span::styled(
+                    Self::pad_permission_studio_cell(
+                        format!("{marker}{left}").as_str(),
+                        left_width as usize,
+                    ),
+                    style,
                 ),
-                WorkbenchTextSection::new(
-                    ui_text::t(&self.i18n, "overlay-workbench-details").into(),
-                    detail_body,
-                    4,
-                    12,
+                Span::raw(" | "),
+                Span::styled(
+                    Self::pad_permission_studio_cell(right.as_str(), right_width as usize),
+                    style,
                 ),
+            ]));
+        }
+
+        Text::from(lines)
+    }
+
+    fn render_permission_studio_footer_row(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        dialog: &PermissionStudioOverlay,
+    ) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+
+        let Some(section) = dialog.state.selected_section() else {
+            return;
+        };
+        let buttons = self.permission_studio_footer_buttons(dialog, section.id);
+        if buttons.is_empty() {
+            return;
+        }
+
+        let spans = buttons
+            .into_iter()
+            .enumerate()
+            .fold(Vec::new(), |mut acc, (index, (label, style))| {
+                if index > 0 {
+                    acc.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                }
+                acc.push(Span::styled(format!("[ {label} ]"), style));
+                acc
+            });
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
+            area,
+        );
+    }
+
+    fn permission_studio_table_headers(
+        section_id: PermissionStudioSectionId,
+    ) -> (String, String) {
+        match section_id {
+            PermissionStudioSectionId::PathDefaults => {
+                ("Setting".to_string(), "Value".to_string())
+            }
+            PermissionStudioSectionId::PathRules => ("Path".to_string(), "Access".to_string()),
+            PermissionStudioSectionId::NetworkZones => ("Zone".to_string(), "Connect".to_string()),
+            PermissionStudioSectionId::NetworkRules => ("Domain".to_string(), "Connect".to_string()),
+            PermissionStudioSectionId::EntryTags => ("Tag".to_string(), "Access".to_string()),
+            PermissionStudioSectionId::EntryNames => ("Name".to_string(), "Access".to_string()),
+            PermissionStudioSectionId::EntryCommandRules => {
+                ("Entry".to_string(), "Access".to_string())
+            }
+            PermissionStudioSectionId::RootPath
+            | PermissionStudioSectionId::RootNetwork
+            | PermissionStudioSectionId::RootEntries => {
+                ("Item".to_string(), "Summary".to_string())
+            }
+        }
+    }
+
+    fn pad_permission_studio_cell(text: &str, width: usize) -> String {
+        let truncated = truncate_display_text(text, width);
+        let used = UnicodeWidthStr::width(truncated.as_str());
+        if used >= width {
+            truncated
+        } else {
+            format!("{truncated}{:width$}", "", width = width - used)
+        }
+    }
+
+    fn permission_studio_footer_buttons(
+        &self,
+        dialog: &PermissionStudioOverlay,
+        section_id: PermissionStudioSectionId,
+    ) -> Vec<(String, Style)> {
+        if !dialog.editable {
+            return Vec::new();
+        }
+        let accent = Style::default()
+            .fg(self.theme_color("accent", Color::Cyan))
+            .add_modifier(Modifier::BOLD);
+        let danger = Style::default()
+            .fg(self.theme_color("danger", Color::Red))
+            .add_modifier(Modifier::BOLD);
+        match section_id {
+            PermissionStudioSectionId::PathDefaults
+            | PermissionStudioSectionId::NetworkZones
+            | PermissionStudioSectionId::RootPath
+            | PermissionStudioSectionId::RootNetwork
+            | PermissionStudioSectionId::RootEntries => {
+                Vec::new()
+            }
+            PermissionStudioSectionId::PathRules
+            | PermissionStudioSectionId::NetworkRules
+            | PermissionStudioSectionId::EntryTags
+            | PermissionStudioSectionId::EntryNames
+            | PermissionStudioSectionId::EntryCommandRules => vec![
+                (ui_text::t(&self.i18n, "value-add"), accent),
+                (ui_text::t(&self.i18n, "value-edit"), accent),
+                (ui_text::t(&self.i18n, "value-duplicate"), accent),
+                (ui_text::t(&self.i18n, "value-delete"), danger),
             ],
-        )
-        .with_summary(sanitize_display_text(title_summary.as_str()).into());
-        let spec = spec.with_optional_overlay_source(dialog.workbench.editor.as_ref());
-        render_list_workbench_dialog(frame, area, surface, &spec);
+        }
     }
 
     fn render_permission_rule_studio_overlay(

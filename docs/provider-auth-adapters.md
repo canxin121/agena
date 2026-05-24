@@ -7,7 +7,7 @@
 当前配置结构是：
 
 ```text
-default
+execution
 ├── provider
 ├── adapter
 ├── model
@@ -15,8 +15,9 @@ default
 
 provider
 ├── enabled
-├── default_adapter
-├── default_model
+├── defaults
+│   ├── adapter
+│   └── model
 ├── auth
 └── adapters
     └── <adapter>
@@ -31,7 +32,7 @@ provider
 对应 TOML：
 
 ```toml
-[default]
+[execution]
 provider = "openai"
 adapter = "openai"
 model = "gpt-5"
@@ -54,9 +55,9 @@ enabled = true
 
 关键约束：
 
-- 全局默认 provider/adapter/model/agent 写在 `[default]`
-- `providers.<id>.default_adapter` 和 `providers.<id>.default_model` 是 provider-local 默认选择；`default_model` 必须是真实上游 model id
-- adapter 不再有 `default_model`
+- 全局默认 provider/adapter/model/agent 写在 `[execution]`
+- `providers.<id>.defaults.adapter` 和 `providers.<id>.defaults.model` 是 provider-local 默认选择；`defaults.model` 必须是真实上游 model id
+- adapter 不再有自己的默认模型字段
 - model key 就是真实上游 model id，不再有 `target_model`
 - provider / adapter / model 三层都支持 `enabled`
 - 运行时模型选择由 `provider_id`、`adapter_id`、`model_id` 三个字段共同决定，不使用三段字符串编码
@@ -139,8 +140,8 @@ CLI、HTTP API、Studio、session 持久化、model ref 都围绕 `provider_id` 
 
 运行时选择模型时始终拆成三个字段：
 
-- 全局默认字段：`[default] provider = "openai"`, `adapter = "openai"`, `model = "gpt-5"`
-- provider-local 默认选择：`default_adapter = "openai"`, `default_model = "gpt-5"`
+- 全局默认字段：`[execution] provider = "openai"`, `adapter = "openai"`, `model = "gpt-5"`
+- provider-local 默认选择：`defaults.adapter = "openai"`, `defaults.model = "gpt-5"`
 - 真实包含 `/` 的模型名保留在 `model`/`model_id` 字段里，例如 `model = "google/gemini-2.5-flash"`
 
 内部不再把 visible model id 编码成 `"<adapter>/<model>"` 或 `"<provider>/<adapter>/<model>"` 这样的特殊字符串；`model_id` 里的 `/` 只是模型名本身的一部分。
@@ -152,8 +153,8 @@ CLI、HTTP API、Studio、session 持久化、model ref 都围绕 `provider_id` 
 ```toml
 [providers.shared]
 enabled = true
-default_adapter = "openai"
-default_model = "gpt-4.1-mini"
+defaults.adapter = "openai"
+defaults.model = "gpt-4.1-mini"
 
 [providers.shared.adapters.openai]
 enabled = true
@@ -304,15 +305,15 @@ auth 决定身份来源；adapter 决定协议。
 ### OpenAI API
 
 ```toml
-[default]
+[execution]
 provider = "openai"
 adapter = "openai"
 model = "gpt-5"
 agent = "build"
 
 [providers.openai]
-default_adapter = "openai"
-default_model = "gpt-5"
+defaults.adapter = "openai"
+defaults.model = "gpt-5"
 
 [providers.openai.auth]
 mode = "api"
@@ -330,8 +331,8 @@ enabled = true
 
 ```toml
 [providers.chatgpt]
-default_adapter = "openai"
-default_model = "gpt-5.3-codex"
+defaults.adapter = "openai"
+defaults.model = "gpt-5.3-codex"
 
 [providers.chatgpt.auth]
 mode = "credential"
@@ -350,8 +351,8 @@ enabled = true
 
 ```toml
 [providers."github-copilot"]
-default_adapter = "openai"
-default_model = "gpt-4o-mini"
+defaults.adapter = "openai"
+defaults.model = "gpt-4o-mini"
 
 [providers."github-copilot".auth]
 mode = "credential"
@@ -369,8 +370,8 @@ enabled = true
 
 ```toml
 [providers.atomgit]
-default_adapter = "openai"
-default_model = "Kimi-K2-Instruct"
+defaults.adapter = "openai"
+defaults.model = "Kimi-K2-Instruct"
 
 [providers.atomgit.auth]
 mode = "credential"
@@ -395,8 +396,8 @@ AtomGit 的默认模型列表流程会对齐 AtomCode：先按 `Max -> Pro -> Li
 
 ```toml
 [providers."github-copilot-claude"]
-default_adapter = "anthropic"
-default_model = "claude-sonnet-4"
+defaults.adapter = "anthropic"
+defaults.model = "claude-sonnet-4"
 
 [providers."github-copilot-claude".auth]
 mode = "credential"
@@ -417,8 +418,8 @@ enabled = true
 
 ```toml
 [providers.shared]
-default_adapter = "openai"
-default_model = "gpt-4.1-mini"
+defaults.adapter = "openai"
+defaults.model = "gpt-4.1-mini"
 
 [providers.shared.auth]
 mode = "api"
@@ -456,8 +457,8 @@ enabled = true
 
 ```toml
 [providers.provider_gateway]
-default_adapter = "openai"
-default_model = "gpt-4.1-mini"
+defaults.adapter = "openai"
+defaults.model = "gpt-4.1-mini"
 
 [providers.provider_gateway.auth]
 mode = "api"
@@ -498,8 +499,8 @@ enabled = true
 
 ```toml
 [providers.bedrock]
-default_adapter = "amazon_bedrock"
-default_model = "anthropic.claude-3-7-sonnet-20250219-v1:0"
+defaults.adapter = "amazon_bedrock"
+defaults.model = "anthropic.claude-3-7-sonnet-20250219-v1:0"
 
 [providers.bedrock.auth]
 mode = "bedrock_sigv4"
@@ -522,5 +523,5 @@ enabled = true
 - auth 只管身份与认证
 - adapter 是协议实现
 - model key 是真实上游模型名
-- provider 默认模型由 `default_adapter` 和 `default_model` 分别指定
+- provider 默认模型由 `defaults.adapter` 和 `defaults.model` 分别指定
 - 外部运行请求也应分别传 `provider_id`、`adapter_id`、`model_id`

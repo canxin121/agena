@@ -10,8 +10,8 @@ use ratatui::{
 use crate::{
     Editor, EditorPanelSpec, FramedSurfaceSpec,
     layout::{
-        SurfaceMode, editor_input_panel_height, framed_overlay_height, list_panel_height,
-        top_aligned_vertical_areas,
+        SurfaceMode, VerticalSectionSize, editor_input_panel_height, framed_overlay_height,
+        list_panel_height, split_vertical_sections, top_aligned_vertical_areas,
     },
     panels::{ListPanelSpec, TextPanelSpec, render_list_panel, render_text_panel},
     render_editor_panel, render_framed_surface,
@@ -171,7 +171,23 @@ pub fn render_stacked_dialog(
             target_height: framed_overlay_height(content_height),
         },
     );
-    let section_areas = top_aligned_vertical_areas(frame_surface.inner, heights.as_slice());
+    let section_areas = match surface {
+        SurfaceMode::Overlay => top_aligned_vertical_areas(frame_surface.inner, heights.as_slice()),
+        SurfaceMode::Route => split_vertical_sections(
+            frame_surface.inner,
+            &heights
+                .iter()
+                .enumerate()
+                .map(|(index, height)| {
+                    if index + 1 == heights.len() {
+                        VerticalSectionSize::Flexible(*height)
+                    } else {
+                        VerticalSectionSize::Fixed(*height)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ),
+    };
 
     let mut cursor = None;
     for (section, section_area) in spec.sections.iter().zip(section_areas) {

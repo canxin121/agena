@@ -2,31 +2,8 @@
   "tracing": {
     "filter": "info"
   },
-  "auth": {
-    "store_backend": "auto"
-  },
-  "default": {
-    "provider": "anthropic",
-    "adapter": "anthropic",
-    "model": "claude-sonnet-4-6",
-    "agent": "build"
-  },
-  "providers": {
-    "anthropic": {
-      "auth": {
-        "mode": "api",
-        "base_url": "https://api.anthropic.com",
-        "api_key_env": "ANTHROPIC_API_KEY"
-      },
-      "adapters": {
-        "anthropic": {
-          "enabled": true
-        }
-      }
-    }
-  },
-  "runtime": {},
   "agents": {
+    "default": "plan",
     "plan": {
       "description": "Read-only planning agent",
       "prompt": "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable.",
@@ -41,16 +18,35 @@
             "write": "ask"
           }
         },
-        "entries": {
+        "tools": {
           "names": {
-            "enter_plan_mode": "allow",
-            "exit_plan_mode": "allow",
-            "todo_write": "allow"
+            "plan": "allow",
+            "todo": "allow"
           }
         }
       }
     }
   },
+  "providers": {
+    "default": "anthropic",
+    "anthropic": {
+      "defaults": {
+        "adapter": "anthropic",
+        "model": "claude-sonnet-4-6"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.anthropic.com",
+        "api_key_env": "ANTHROPIC_API_KEY"
+      },
+      "adapters": {
+        "anthropic": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "runtime": {},
   "permission": {
     "path": {
       "workspace": {
@@ -70,7 +66,7 @@
         "github.com": "allow"
       }
     },
-    "entries": {
+    "tools": {
       "tags": {
         "filesystem_read": "allow",
         "filesystem_write": "ask",

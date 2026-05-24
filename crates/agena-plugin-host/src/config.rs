@@ -12,8 +12,6 @@ pub use crate::quota::QuotaConfig;
 /// Top-level `[plugins]` config block, parsed from agena's config layer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginsConfig {
-    #[serde(default = "default_enabled")]
-    pub enabled: bool,
     #[serde(default)]
     pub timeouts: TimeoutsConfig,
     #[serde(default)]
@@ -39,7 +37,6 @@ pub struct PluginsConfig {
 impl Default for PluginsConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
             timeouts: TimeoutsConfig::default(),
             list: BTreeMap::new(),
             default_quota: QuotaConfig::default(),
@@ -108,10 +105,6 @@ pub struct PluginSignature {
     pub key_id: String,
     /// Hex-encoded raw signature bytes (64 bytes for ed25519).
     pub signature: String,
-}
-
-fn default_enabled() -> bool {
-    true
 }
 
 /// One entry under `[plugins.list.<id>]`. The `kind` discriminator selects

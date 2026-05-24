@@ -1293,18 +1293,32 @@ pub enum AgentToolPermissionRules {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostAgentDefaultModelConfig {
+pub struct HostAgentSelectionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
-impl HostAgentDefaultModelConfig {
+impl HostAgentSelectionConfig {
     pub fn is_empty(&self) -> bool {
-        self.provider.is_none() && self.adapter.is_none() && self.model.is_none()
+        self.provider.is_none()
+            && self.adapter.is_none()
+            && self.model.is_none()
+            && self.thinking_mode.is_none()
+            && self.speed_mode.is_none()
+            && self.verbosity.is_none()
+            && self.parallel_tool_calls.is_none()
     }
 }
 
@@ -1317,10 +1331,9 @@ pub struct HostAgentDescriptor {
     pub permission: AgentPermissionConfig,
     #[serde(
         default,
-        rename = "default",
-        skip_serializing_if = "HostAgentDefaultModelConfig::is_empty"
+        skip_serializing_if = "HostAgentSelectionConfig::is_empty"
     )]
-    pub default: HostAgentDefaultModelConfig,
+    pub defaults: HostAgentSelectionConfig,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub scope: String,

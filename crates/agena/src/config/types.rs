@@ -52,9 +52,11 @@ impl ConfigResolution {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ResolvedConfig {
-    pub default: DefaultConfig,
+    #[serde(skip_serializing)]
+    pub default_selection: ExecutionSelection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_agent: Option<String>,
     pub tracing: TracingConfig,
-    pub telemetry: agena_otel::TelemetryConfig,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
@@ -81,21 +83,25 @@ pub struct ResolvedConfig {
 impl ResolvedConfig {
     pub fn provider_http_client_config(&self) -> ProviderHttpClientConfig {
         ProviderHttpClientConfig {
-            timeout: Duration::from_secs(self.runtime.provider_http.timeout_secs),
-            connect_timeout: Duration::from_secs(self.runtime.provider_http.connect_timeout_secs),
+            timeout: Duration::from_secs(self.runtime.providers.http.timeout_secs),
+            connect_timeout: Duration::from_secs(self.runtime.providers.http.connect_timeout_secs),
         }
     }
 
     pub fn provider_runtime_config(&self) -> ProviderRuntimeConfig {
         ProviderRuntimeConfig {
             request_retry: ProviderRequestRetryConfig {
-                max_retries: self.runtime.request_retry.max_retries,
-                base_delay: Duration::from_millis(self.runtime.request_retry.base_delay_ms),
-                max_delay: Duration::from_millis(self.runtime.request_retry.max_delay_ms),
+                max_retries: self.runtime.providers.retry.max_retries,
+                base_delay: Duration::from_millis(self.runtime.providers.retry.base_delay_ms),
+                max_delay: Duration::from_millis(self.runtime.providers.retry.max_delay_ms),
             },
             stream_replay: ProviderStreamReplayConfig {
-                max_retries_after_output: self.runtime.stream_replay.max_retries_after_output,
-                max_tracked_events: self.runtime.stream_replay.max_tracked_events,
+                max_retries_after_output: self
+                    .runtime
+                    .providers
+                    .stream_replay
+                    .max_retries_after_output,
+                max_tracked_events: self.runtime.providers.stream_replay.max_tracked_events,
             },
         }
     }
@@ -126,8 +132,6 @@ impl ResolvedConfig {
         }
     }
 }
-
-pub type DefaultConfig = ExecutionSelection;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TracingConfig {
@@ -191,19 +195,24 @@ pub struct UiConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuntimeConfig {
-    pub provider_http: ProviderHttpConfig,
-    pub request_retry: RequestRetryConfig,
-    pub stream_replay: StreamReplayConfig,
+    pub providers: RuntimeProvidersConfig,
     pub model_catalog: RuntimeModelCatalogConfig,
     pub reload: RuntimeReloadConfig,
-    pub janitor: RuntimeJanitorConfig,
-    pub session_cache: SessionCacheConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RuntimeProvidersConfig {
+    pub http: ProviderHttpConfig,
+    pub retry: RequestRetryConfig,
+    pub stream_replay: StreamReplayConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SessionConfig {
     pub compaction: SessionCompactionConfig,
+    pub cache: SessionCacheConfig,
+    pub maintenance: SessionMaintenanceConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,13 +262,15 @@ pub struct RuntimeReloadConfig {
     pub poll_interval_secs: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RuntimeJanitorConfig {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SessionMaintenanceConfig {
     pub enabled: bool,
     pub interval_secs: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct SessionCacheConfig {
     pub max_sessions: usize,
     pub ttl_secs: u64,
@@ -281,10 +292,9 @@ pub struct AgentConfig {
     pub permission: crate::agent::PermissionConfig,
     #[serde(
         default,
-        rename = "default",
-        skip_serializing_if = "crate::agents::AgentDefaultModelConfig::is_empty"
+        skip_serializing_if = "crate::agents::AgentSelectionConfig::is_empty"
     )]
-    pub default: crate::agents::AgentDefaultModelConfig,
+    pub defaults: crate::agents::AgentSelectionConfig,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
 }
@@ -296,6 +306,8 @@ pub use agena_plugin_host::PluginsConfig as PluginConfig;
 #[derive(Default)]
 pub struct MemoryConfig {
     pub project_instructions: ProjectInstructionsConfig,
+    pub search: MemorySearchConfig,
+    pub retrieval: MemoryRetrievalConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
@@ -314,16 +326,54 @@ impl Default for ProjectInstructionsConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemorySearchConfig {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    pub index_prefix: String,
+}
+
+impl Default for MemorySearchConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            api_key: None,
+            index_prefix: "agena_memory".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemoryRetrievalConfig {
+    pub enabled: bool,
+    pub limit: u32,
+    pub min_query_chars: u32,
+}
+
+impl Default for MemoryRetrievalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            limit: 3,
+            min_query_chars: 8,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderConfig {
     pub enabled: bool,
-    pub default_adapter: String,
-    pub default_model: String,
+    pub defaults: ProviderDefaultsConfig,
     pub auth: ProviderAuthConfig,
     pub adapters: BTreeMap<String, ResolvedProviderAdapterConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ResolvedProviderModelConfig>,
 }
+
+pub type ProviderDefaultsConfig = crate::agents::AgentSelectionConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]

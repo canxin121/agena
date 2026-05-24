@@ -355,7 +355,7 @@ Settings API 操作当前 runtime 使用的 `config.json`。读接口可以读 r
 | DELETE | `/api/v1/settings`           | 删除一个 TOML path。query: `path`、`dry_run`、`validate`、`reload`         |
 | POST   | `/api/v1/settings/validate`  | 校验当前 `config.json` 能否被 runtime 加载；body 可为空                     |
 
-Path 使用点分语法。带点的 table key 用引号包起来，例如 `plugins.list."agena.mcp".options.servers.filesystem`。
+Path 使用点分语法。带点的 table key 用引号包起来，例如 `mcp.servers.filesystem`。
 
 `source=effective` 读取已经应用默认值、文件、环境变量和 CLI override 后的 resolved config，path 根节点是 resolved config 本身，例如 `runtime.reload.enabled`。`source=file` 读取原始 `config.json`，不会补默认值。
 
@@ -375,11 +375,9 @@ Path 使用点分语法。带点的 table key 用引号包起来，例如 `plugi
 
 ```json
 {
-  "path": "plugins.list.\"agena.web\".options.search",
+  "path": "web.search",
   "changes": {
-    "backend": "brave",
-    "api_key_env": "BRAVE_SEARCH_API_KEY",
-    "old_key": null
+    "api_key": "..."
   },
   "validate": true,
   "reload": true
@@ -583,8 +581,10 @@ Provider summary:
 ```json
 {
   "provider_id": "anthropic",
-  "default_adapter": "anthropic",
-  "default_model": "claude-sonnet-4-6",
+  "defaults": {
+    "adapter": "anthropic",
+    "model": "claude-sonnet-4-6"
+  },
   "adapters": [
     {
       "adapter_id": "anthropic",
@@ -726,7 +726,7 @@ Model catalog list response:
 }
 ```
 
-`items` 只包含官方 catalog 条目。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[default]`。官方 catalog 主要来自公开 online sources，再叠加 live provider model lists；catalog 会把 thinking 和 speed modes 保留在同一个 model entry 下，不会展开成新的模型 id。
+`items` 只包含官方 catalog 条目。Model catalog 不再保存 default model；默认 provider/adapter/model/agent 应写入配置文件的 `[execution]`。官方 catalog 主要来自公开 online sources，再叠加 live provider model lists；catalog 会把 thinking 和 speed modes 保留在同一个 model entry 下，不会展开成新的模型 id。
 
 ### Workspaces
 

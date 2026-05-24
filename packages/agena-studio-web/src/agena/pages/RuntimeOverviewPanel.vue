@@ -340,8 +340,8 @@ onBeforeUnmount(() => {
             }}s)
           </div>
           <div>
-            <strong>Janitor:</strong> {{ props.runtime.janitor.enabled ? 'enabled' : 'disabled' }} ({{
-              props.runtime.janitor.interval_secs
+            <strong>Session Maintenance:</strong> {{ props.runtime.session_maintenance.enabled ? 'enabled' : 'disabled' }} ({{
+              props.runtime.session_maintenance.interval_secs
             }}s)
           </div>
           <div><strong>Watch Paths:</strong></div>
@@ -428,8 +428,8 @@ onBeforeUnmount(() => {
                 <div>
                   <strong>{{ provider.provider_id }}</strong>
                 </div>
-                <div class="muted">Default adapter: {{ provider.default_adapter || 'auto' }}</div>
-                <div class="muted">Default model: {{ provider.default_model || 'unset' }}</div>
+                <div class="muted">Default adapter: {{ provider.defaults.adapter || 'auto' }}</div>
+                <div class="muted">Default model: {{ provider.defaults.model || 'unset' }}</div>
               </div>
             </div>
           </div>

@@ -49,7 +49,6 @@ crates/
   agena-mcp-client/
   agena-mcp-server/
   agena-marketplace-server/
-  agena-otel/
   agena-plugin-host/
   agena-plugin-marketplace/
   agena-plugin-sdk/
@@ -175,8 +174,7 @@ The resolved config builds:
 
 - provider registry.
 - plugin host.
-- MCP/LSP static plugin options and runtime registries.
-- web static plugin options.
+- MCP/LSP/web runtime registries and built-in capability config.
 - session manager config.
 - agent permission defaults.
 
@@ -461,7 +459,7 @@ AGENA_DATABASE_PATH
 Runtime starts two long-running tasks:
 
 - reload task: watches config-related paths and rebuilds snapshot when modified.
-- janitor task: periodic maintenance for runtime/session resources.
+- session maintenance task: periodic maintenance for session cache and related runtime/session resources.
 
 Reload policy is controlled by:
 
@@ -471,10 +469,10 @@ enabled = true
 poll_interval_secs = 2
 ```
 
-Janitor policy:
+Session maintenance policy:
 
 ```toml
-[runtime.janitor]
+[session.maintenance]
 enabled = true
 interval_secs = 30
 ```

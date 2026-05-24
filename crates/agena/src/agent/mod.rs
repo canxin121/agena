@@ -18,11 +18,7 @@ pub struct PermissionConfig {
     pub path: Option<PathPermissionConfig>,
     #[serde(default, skip_serializing_if = "network_permission_is_empty")]
     pub network: Option<NetworkPermissionConfig>,
-    #[serde(
-        default,
-        rename = "entries",
-        skip_serializing_if = "tool_permission_is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "tool_permission_is_empty")]
     pub tools: Option<ToolPermissionConfig>,
 }
 

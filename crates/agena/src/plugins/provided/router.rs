@@ -331,7 +331,7 @@ pub(crate) fn permission_networks_for(
             Ok(vec![NetworkRequest::connect(payload.url)])
         }
         "web_search" => Ok(vec![NetworkRequest::connect(
-            "https://html.duckduckgo.com/html/",
+            "https://api.search.brave.com/res/v1/web/search",
         )]),
         _ => Ok(Vec::new()),
     }

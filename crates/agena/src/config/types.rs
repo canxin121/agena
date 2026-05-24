@@ -312,14 +312,14 @@ pub struct AgentConfig {
 pub use agena_plugin_host::PluginsConfig as PluginConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 #[derive(Default)]
 pub struct MemoryConfig {
     pub project_instructions: ProjectInstructionsConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ProjectInstructionsConfig {
     pub enabled: bool,
     pub include_global: bool,
@@ -797,7 +797,7 @@ impl From<OpenAiBackendConfig> for OpenAiBackend {
 // ─────────────────────────── MCP ────────────────────────────────────
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct McpConfig {
     /// Map of `<server_name> -> <transport spec>`.
     pub servers: BTreeMap<String, McpServerConfig>,
@@ -831,7 +831,7 @@ pub struct LspServerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(tag = "transport", rename_all = "snake_case")]
+#[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
 pub enum McpServerConfig {
     /// Spawn a child process and exchange newline-delimited JSON over
     /// its stdin/stdout (the typical MCP server style).
@@ -844,23 +844,8 @@ pub enum McpServerConfig {
         #[serde(default)]
         cwd: Option<PathBuf>,
     },
-    /// Connect to an HTTP-based MCP server.  `mode = "sse"` uses the
-    /// legacy long-lived GET /sse channel; `mode = "streamable_http"` uses
-    /// the current spec where every POST may stream frames in its
-    /// response body.
+    /// Connect to a streamable HTTP MCP server.
     Http {
-        url: String,
-        #[serde(default = "default_http_mode")]
-        mode: McpHttpMode,
-        #[serde(default)]
-        headers: BTreeMap<String, String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        auth: Option<McpHttpAuthConfig>,
-    },
-    /// Connect to a WebSocket-based MCP server and exchange JSON-RPC
-    /// messages over text frames.
-    #[serde(alias = "websocket")]
-    Ws {
         url: String,
         #[serde(default)]
         headers: BTreeMap<String, String>,
@@ -870,7 +855,7 @@ pub enum McpServerConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum McpHttpAuthConfig {
     /// Static `Authorization: Bearer <token>`.
     Bearer { token: String },
@@ -882,129 +867,92 @@ pub enum McpHttpAuthConfig {
     Custom { headers: BTreeMap<String, String> },
 }
 
-fn default_http_mode() -> McpHttpMode {
-    McpHttpMode::StreamableHttp
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum McpHttpMode {
-    Sse,
-    StreamableHttp,
-}
-
 // ─────────────────────────── Web tools ──────────────────────────────
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct WebToolsConfig {
     pub fetch_enabled: bool,
     pub search: WebSearchConfig,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct WebSearchConfig {
-    pub backend: WebSearchBackendKind,
-    /// Reads from `tavily_api_key`, `exa_api_key`, `brave_api_key` —
-    /// when missing, the tool falls back to the corresponding env var.
-    pub tavily_api_key: Option<String>,
-    pub exa_api_key: Option<String>,
-    pub brave_api_key: Option<String>,
+    /// Reads from `api_key` and falls back to `BRAVE_API_KEY`.
+    pub api_key: Option<String>,
 }
 
 impl fmt::Debug for WebSearchConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WebSearchConfig")
-            .field("backend", &self.backend)
-            .field("tavily_api_key", &redacted(self.tavily_api_key.as_deref()))
-            .field("exa_api_key", &redacted(self.exa_api_key.as_deref()))
-            .field("brave_api_key", &redacted(self.brave_api_key.as_deref()))
+            .field("api_key", &redacted(self.api_key.as_deref()))
             .finish()
     }
 }
 
 impl Default for WebSearchConfig {
     fn default() -> Self {
-        Self {
-            backend: WebSearchBackendKind::DuckDuckGoHtml,
-            tavily_api_key: None,
-            exa_api_key: None,
-            brave_api_key: None,
-        }
+        Self { api_key: None }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WebSearchBackendKind {
-    Tavily,
-    Exa,
-    Brave,
-    DuckDuckGoHtml,
-}
-
-/// Resolved variant used at runtime — bundles each backend with the
-/// credentials it actually needs.
 #[derive(Clone, PartialEq, Eq)]
-pub enum WebSearchBackend {
-    Tavily { api_key: String },
-    Exa { api_key: String },
-    Brave { api_key: String },
-    DuckDuckGoHtml,
+pub struct WebSearchBackend {
+    pub api_key: String,
 }
 
 impl fmt::Debug for WebSearchBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Tavily { api_key } => f
-                .debug_struct("Tavily")
-                .field("api_key", &redacted(Some(api_key)))
-                .finish(),
-            Self::Exa { api_key } => f
-                .debug_struct("Exa")
-                .field("api_key", &redacted(Some(api_key)))
-                .finish(),
-            Self::Brave { api_key } => f
-                .debug_struct("Brave")
-                .field("api_key", &redacted(Some(api_key)))
-                .finish(),
-            Self::DuckDuckGoHtml => f.debug_struct("DuckDuckGoHtml").finish(),
-        }
+        f.debug_struct("WebSearchBackend")
+            .field("api_key", &redacted(Some(self.api_key.as_str())))
+            .finish()
     }
 }
 
 impl WebSearchBackend {
     pub fn name(&self) -> &'static str {
-        match self {
-            Self::Tavily { .. } => "tavily",
-            Self::Exa { .. } => "exa",
-            Self::Brave { .. } => "brave",
-            Self::DuckDuckGoHtml => "duckduckgo_html",
-        }
+        "brave"
     }
 }
 
 impl WebSearchConfig {
-    /// Materialize the resolved backend, reading API keys from config or
-    /// falling back to the conventional env var.
+    /// Materialize the resolved backend, reading the API key from config or
+    /// falling back to `BRAVE_API_KEY`.
     pub fn resolve(&self) -> WebSearchBackend {
-        fn pick(cfg: &Option<String>, env_key: &str) -> String {
-            cfg.clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| std::env::var(env_key).unwrap_or_default())
-        }
-        match self.backend {
-            WebSearchBackendKind::Tavily => WebSearchBackend::Tavily {
-                api_key: pick(&self.tavily_api_key, "TAVILY_API_KEY"),
-            },
-            WebSearchBackendKind::Exa => WebSearchBackend::Exa {
-                api_key: pick(&self.exa_api_key, "EXA_API_KEY"),
-            },
-            WebSearchBackendKind::Brave => WebSearchBackend::Brave {
-                api_key: pick(&self.brave_api_key, "BRAVE_API_KEY"),
-            },
-            WebSearchBackendKind::DuckDuckGoHtml => WebSearchBackend::DuckDuckGoHtml,
-        }
+        let api_key = self
+            .api_key
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| std::env::var("BRAVE_API_KEY").unwrap_or_default());
+        WebSearchBackend { api_key }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{McpServerConfig, WebSearchConfig};
+
+    #[test]
+    fn mcp_http_config_rejects_removed_mode_field() {
+        let err = serde_json::from_value::<McpServerConfig>(json!({
+            "transport": "http",
+            "url": "https://example.com/mcp",
+            "mode": "sse"
+        }))
+        .expect_err("removed MCP http mode should be rejected");
+        assert!(err.to_string().contains("unknown field `mode`"));
+    }
+
+    #[test]
+    fn web_search_config_rejects_removed_backend_field() {
+        let err = serde_json::from_value::<WebSearchConfig>(json!({
+            "backend": "exa",
+            "api_key": "test"
+        }))
+        .expect_err("removed web search backend should be rejected");
+        assert!(err.to_string().contains("unknown field `backend`"));
     }
 }

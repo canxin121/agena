@@ -154,9 +154,7 @@ pub(super) fn build_lsp_registry(
 pub(super) async fn build_mcp_manager(
     config: &crate::config::McpConfig,
 ) -> Arc<agena_mcp_client::McpConnectionManager> {
-    use agena_mcp_client::{
-        FileTokenStore, HttpTransportMode, McpConnectionManager, ServerSpec, TokenStore,
-    };
+    use agena_mcp_client::{FileTokenStore, McpConnectionManager, ServerSpec, TokenStore};
 
     let mut manager = McpConnectionManager::new(
         crate::provider::CODEX_MCP_CLIENT_NAME,
@@ -195,41 +193,18 @@ pub(super) async fn build_mcp_manager(
                 env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
                 cwd: cwd.clone(),
             },
-            crate::config::McpServerConfig::Http {
-                url,
-                mode,
-                headers,
-                auth,
-            } => {
+            crate::config::McpServerConfig::Http { url, headers, auth } => {
                 let Some(parsed) = parse_mcp_server_url(name.as_str(), url.as_str()) else {
                     continue;
-                };
-                let mode = match mode {
-                    crate::config::McpHttpMode::Sse => HttpTransportMode::Sse,
-                    crate::config::McpHttpMode::StreamableHttp => HttpTransportMode::StreamableHttp,
                 };
                 let auth = map_mcp_auth(auth.as_ref());
                 ServerSpec::Http {
                     url: parsed,
-                    mode,
                     headers: headers
                         .iter()
                         .map(|(k, v)| (k.clone(), v.clone()))
                         .collect(),
                     auth,
-                }
-            }
-            crate::config::McpServerConfig::Ws { url, headers, auth } => {
-                let Some(parsed) = parse_mcp_server_url(name.as_str(), url.as_str()) else {
-                    continue;
-                };
-                ServerSpec::Ws {
-                    url: parsed,
-                    headers: headers
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                    auth: map_mcp_auth(auth.as_ref()),
                 }
             }
         };

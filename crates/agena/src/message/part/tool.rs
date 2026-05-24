@@ -153,6 +153,7 @@ pub struct TaskToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ToolSearchToolInput {
     #[serde(default)]
     pub query: String,
@@ -338,6 +339,7 @@ pub struct AgentSwitchToolInput {
 pub struct AgentRestoreToolInput {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(deny_unknown_fields)]
 pub struct WorkflowPromptToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<String>,

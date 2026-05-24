@@ -91,6 +91,12 @@ const catalogSearchLimit = ref(50)
 const catalogSearchTotal = ref(props.catalogEntries.length)
 const catalogSearchOrigins = ref<string[]>([])
 const catalogResolvedModelIds = reactive<Record<string, boolean>>({})
+type ProviderCreateNativeToolsProfile =
+  | 'disabled'
+  | 'openai_hosted_defaults'
+  | 'anthropic_hosted_defaults'
+  | 'gemini_hosted_defaults'
+const providerCreateNativeToolsTouched = ref(false)
 const providerCreateDraft = reactive({
   provider_id: '',
   auth_mode: 'api' as 'api' | 'none',
@@ -100,6 +106,7 @@ const providerCreateDraft = reactive({
   adapter_id: 'openai',
   model_id: '',
   catalog_model_id: '',
+  native_tools_profile: 'disabled' as ProviderCreateNativeToolsProfile,
 })
 
 const connectedCount = computed(
@@ -173,6 +180,123 @@ function optionalText(value: string) {
   return normalized || undefined
 }
 
+function providerCreateBaseUrlHost(value: string) {
+  const normalized = String(value || '').trim()
+  if (!normalized) return ''
+  try {
+    return new URL(normalized).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
+}
+
+function suggestProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsProfile | null {
+  if (providerCreateDraft.auth_mode !== 'api') return null
+  const host = providerCreateBaseUrlHost(providerCreateDraft.base_url)
+  const adapterId = String(providerCreateDraft.adapter_id || '').trim()
+  if (host === 'api.openai.com' && adapterId === 'openai') return 'openai_hosted_defaults'
+  if ((host === 'api.anthropic.com' || host === 'api-staging.anthropic.com') && adapterId === 'anthropic') {
+    return 'anthropic_hosted_defaults'
+  }
+  if (host === 'generativelanguage.googleapis.com' && adapterId === 'gemini') {
+    return 'gemini_hosted_defaults'
+  }
+  return null
+}
+
+const providerCreateNativeToolsOptions = computed(() => {
+  const options: Array<{ value: ProviderCreateNativeToolsProfile; label: string; detail: string }> = [
+    {
+      value: 'disabled',
+      label: 'disabled',
+      detail: 'Write providers.<id>.native_tools.enabled = false.',
+    },
+  ]
+  const suggested = suggestProviderCreateNativeToolsProfile()
+  if (suggested === 'openai_hosted_defaults') {
+    options.push({
+      value: suggested,
+      label: 'openai hosted defaults',
+      detail: 'Write explicit hosted routes for web_search, file_search, code_execution, and image_generation.',
+    })
+  } else if (suggested === 'anthropic_hosted_defaults') {
+    options.push({
+      value: suggested,
+      label: 'anthropic hosted defaults',
+      detail: 'Write an explicit hosted route for web_search.',
+    })
+  } else if (suggested === 'gemini_hosted_defaults') {
+    options.push({
+      value: suggested,
+      label: 'gemini hosted defaults',
+      detail: 'Write explicit hosted routes for web_search, url_context, and code_execution.',
+    })
+  }
+  return options
+})
+
+const providerCreateNativeToolsDetail = computed(
+  () =>
+    providerCreateNativeToolsOptions.value.find((option) => option.value === providerCreateDraft.native_tools_profile)
+      ?.detail || 'Remote native tools are written explicitly into providers.<id>.native_tools.',
+)
+
+watchEffect(() => {
+  const suggested = suggestProviderCreateNativeToolsProfile() ?? 'disabled'
+  const allowed = new Set(providerCreateNativeToolsOptions.value.map((option) => option.value))
+  if (!allowed.has(providerCreateDraft.native_tools_profile)) {
+    providerCreateDraft.native_tools_profile = suggested
+    return
+  }
+  if (!providerCreateNativeToolsTouched.value) {
+    providerCreateDraft.native_tools_profile = suggested
+  }
+})
+
+function onProviderCreateNativeToolsProfileChange() {
+  providerCreateNativeToolsTouched.value = true
+}
+
+function buildProviderCreateNativeToolsPatch(profile: ProviderCreateNativeToolsProfile) {
+  if (profile === 'disabled') {
+    return { enabled: false }
+  }
+  if (profile === 'openai_hosted_defaults') {
+    return {
+      enabled: true,
+      routes: {
+        web_search: 'provider_hosted',
+        file_search: 'provider_hosted',
+        code_execution: 'provider_hosted',
+        image_generation: 'provider_hosted',
+      },
+    }
+  }
+  if (profile === 'anthropic_hosted_defaults') {
+    return {
+      enabled: true,
+      routes: {
+        web_search: 'provider_hosted',
+      },
+    }
+  }
+  return {
+    enabled: true,
+    routes: {
+      web_search: 'provider_hosted',
+      url_context: 'provider_hosted',
+      code_execution: 'provider_hosted',
+    },
+  }
+}
+
+function providerNativeToolLabel(value: string) {
+  return String(value || '')
+    .split('_')
+    .filter(Boolean)
+    .join(' ')
+}
+
 function isSharedGatewayModelListAdapter(adapterId: string) {
   return SHARED_GATEWAY_MODEL_LIST_ADAPTERS.includes(adapterId as (typeof SHARED_GATEWAY_MODEL_LIST_ADAPTERS)[number])
 }
@@ -180,9 +304,7 @@ function isSharedGatewayModelListAdapter(adapterId: string) {
 function adapterModelListOptionsForSavedProvider(providerId: string): string[] {
   const provider = props.providers.find((item) => item.provider_id === providerId)
   const configured = new Set(
-    (provider?.adapters || [])
-      .map((adapter) => String(adapter.adapter_id || '').trim())
-      .filter(Boolean),
+    (provider?.adapters || []).map((adapter) => String(adapter.adapter_id || '').trim()).filter(Boolean),
   )
   const hasSharedGatewayAdapter = [...configured].some((adapterId) => isSharedGatewayModelListAdapter(adapterId))
   if (configured.size === 0 || hasSharedGatewayAdapter) {
@@ -273,7 +395,9 @@ async function listCreateProviderAdapterModels() {
     setConfigError('Listing adapter models requires a base URL.')
     return
   }
-  const adapterIds = [...new Set(draftSelectedAdapterIds.value.map((value) => String(value || '').trim()).filter(Boolean))]
+  const adapterIds = [
+    ...new Set(draftSelectedAdapterIds.value.map((value) => String(value || '').trim()).filter(Boolean)),
+  ]
   if (!adapterIds.length) {
     setConfigError('Listing adapter models requires at least one explicit adapter selection.')
     return
@@ -309,7 +433,11 @@ function useListedCreateModel(adapterId: string, model: ProviderModel) {
 }
 
 async function listExistingProviderAdapterModels(providerId: string) {
-  const adapterIds = [...new Set((savedProviderSelectedAdapterIds[providerId] || []).map((value) => String(value || '').trim()).filter(Boolean))]
+  const adapterIds = [
+    ...new Set(
+      (savedProviderSelectedAdapterIds[providerId] || []).map((value) => String(value || '').trim()).filter(Boolean),
+    ),
+  ]
   if (!adapterIds.length) {
     setConfigError(`Listing adapter models requires at least one explicit adapter selection for ${providerId}.`)
     return
@@ -371,7 +499,11 @@ async function saveListedAdapterModels(providerId: string, adapterModels: Provid
       `Saved ${providerId}/${adapterModels.adapter_id} with ${adapterModels.models.length} listed model(s); ${Object.keys(matchedModels).length} catalog matched.`,
     )
     await props.load()
-    const refreshAdapterIds = [...new Set((savedProviderSelectedAdapterIds[providerId] || []).map((value) => String(value || '').trim()).filter(Boolean))]
+    const refreshAdapterIds = [
+      ...new Set(
+        (savedProviderSelectedAdapterIds[providerId] || []).map((value) => String(value || '').trim()).filter(Boolean),
+      ),
+    ]
     providerAdapterModelLists[providerId] = refreshAdapterIds.length
       ? await listSavedProviderAdapterModels(providerId, { adapterIds: refreshAdapterIds })
       : []
@@ -456,7 +588,8 @@ async function createProvider() {
             ? { api_key_env: optionalText(providerCreateDraft.api_key_env) }
             : {}),
           ...(optionalText(providerCreateDraft.api_key) ? { api_key: optionalText(providerCreateDraft.api_key) } : {}),
-  }
+        }
+  const nativeTools = buildProviderCreateNativeToolsPatch(providerCreateDraft.native_tools_profile)
 
   await ensureCatalogEntriesForModelIds([
     providerCreateDraft.catalog_model_id.trim() || modelId,
@@ -486,6 +619,7 @@ async function createProvider() {
             model: modelId,
           },
           auth,
+          native_tools: nativeTools,
           adapters: adaptersPatch,
         },
       },
@@ -493,7 +627,9 @@ async function createProvider() {
       reload: true,
     })
     const addedAdapterCount = Object.keys(adaptersPatch).length
-    setConfigMessage(`Created provider ${providerId} with ${addedAdapterCount} adapter(s); default ${adapterId}/${modelId}.`)
+    setConfigMessage(
+      `Created provider ${providerId} with ${addedAdapterCount} adapter(s); default ${adapterId}/${modelId}.`,
+    )
     await props.load()
   } catch (err) {
     setConfigError(err instanceof Error ? err.message : String(err))
@@ -633,6 +769,19 @@ onMounted(() => {
             placeholder="gpt-4.1-mini"
           />
         </div>
+        <div class="field">
+          <label class="label" for="provider-create-native-tools">Remote Native Tools</label>
+          <select
+            id="provider-create-native-tools"
+            v-model="providerCreateDraft.native_tools_profile"
+            class="select"
+            @change="onProviderCreateNativeToolsProfileChange"
+          >
+            <option v-for="option in providerCreateNativeToolsOptions" :key="option.value" :value="option.value">
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
         <div class="field full">
           <label class="label" for="provider-create-key">Inline API Key</label>
           <input
@@ -645,7 +794,11 @@ onMounted(() => {
         </div>
       </div>
       <p class="muted" style="margin-top: 12px">
-        Provider auth keeps one base URL and one credential. HTTP adapters derive their own protocol endpoints from that root.
+        Provider auth keeps one base URL and one credential. HTTP adapters derive their own protocol endpoints from that
+        root.
+      </p>
+      <p class="muted" style="margin-top: 8px">
+        {{ providerCreateNativeToolsDetail }}
       </p>
       <div class="field full" style="margin-top: 12px">
         <label class="label">Adapters To List</label>
@@ -709,11 +862,21 @@ onMounted(() => {
               class="badge"
               :class="modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'success' : 'warn'"
             >
-              {{ model.id }} · {{ modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'catalog' : 'unmatched' }}
+              {{ model.id }} ·
+              {{ modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'catalog' : 'unmatched' }}
             </span>
           </div>
-          <p v-if="adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).length" class="muted" style="margin-top: 10px">
-            Unmatched: {{ adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).map((model) => model.id).join(', ') }}
+          <p
+            v-if="adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).length"
+            class="muted"
+            style="margin-top: 10px"
+          >
+            Unmatched:
+            {{
+              adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels)
+                .map((model) => model.id)
+                .join(', ')
+            }}
           </p>
           <p v-else-if="!adapterModels.error" class="muted" style="margin-top: 10px">No models returned.</p>
         </article>
@@ -741,6 +904,19 @@ onMounted(() => {
             </span>
           </div>
         </div>
+        <p
+          v-if="provider.native_tools?.enabled && provider.native_tools.bindings?.length"
+          class="muted"
+          style="margin-top: 10px"
+        >
+          Remote tools:
+          {{
+            provider.native_tools.bindings
+              .map((binding) => `${providerNativeToolLabel(binding.tool)} (${binding.route})`)
+              .join(', ')
+          }}
+        </p>
+        <p v-else-if="provider.native_tools" class="muted" style="margin-top: 10px">Remote tools: disabled</p>
 
         <div class="field full" style="margin-top: 12px">
           <label class="label">Adapters To List</label>
@@ -764,7 +940,11 @@ onMounted(() => {
         <div class="button-row" style="margin-top: 12px">
           <button
             class="button"
-            :disabled="submittingConfig || !!listingSavedProviderIds[provider.provider_id] || !(savedProviderSelectedAdapterIds[provider.provider_id] || []).length"
+            :disabled="
+              submittingConfig ||
+              !!listingSavedProviderIds[provider.provider_id] ||
+              !(savedProviderSelectedAdapterIds[provider.provider_id] || []).length
+            "
             @click="listExistingProviderAdapterModels(provider.provider_id)"
           >
             {{ listingSavedProviderIds[provider.provider_id] ? 'Listing…' : 'List Adapter Models' }}
@@ -827,7 +1007,8 @@ onMounted(() => {
                 class="badge"
                 :class="modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'success' : 'warn'"
               >
-                {{ model.id }} · {{ modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'catalog' : 'unmatched' }}
+                {{ model.id }} ·
+                {{ modelIsCatalogMatched(model.id, model.catalog_model_id || '') ? 'catalog' : 'unmatched' }}
               </span>
             </div>
             <p
@@ -835,7 +1016,12 @@ onMounted(() => {
               class="muted"
               style="margin-top: 10px"
             >
-              Unmatched: {{ adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).map((model) => model.id).join(', ') }}
+              Unmatched:
+              {{
+                adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels)
+                  .map((model) => model.id)
+                  .join(', ')
+              }}
             </p>
             <p v-else-if="!adapterModels.error" class="muted" style="margin-top: 10px">No models returned.</p>
           </article>

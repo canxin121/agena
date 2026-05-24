@@ -762,7 +762,44 @@ pub(super) fn provider_studio_main_field_value(
         ProviderStudioField::EditAuthDetailsAction => {
             provider_studio_auth_details_summary(i18n, dialog)
         }
+        ProviderStudioField::NativeTools => {
+            provider_studio_native_tools_summary(i18n, &dialog.draft)
+        }
         _ => provider_studio_field_value(&dialog.draft, field),
+    }
+}
+
+fn provider_studio_native_tools_summary(i18n: &I18n, draft: &ProviderConfigDraft) -> String {
+    match draft.native_tools_preset {
+        ProviderNativeToolsPreset::Disabled => {
+            ui_text::t(i18n, "provider-native-tools-disabled-label")
+        }
+        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-openai-label")
+        }
+        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-anthropic-label")
+        }
+        ProviderNativeToolsPreset::GeminiHostedDefaults => {
+            ui_text::t(i18n, "provider-native-tools-gemini-label")
+        }
+        ProviderNativeToolsPreset::Custom => {
+            let bindings = draft
+                .effective_native_tools_config()
+                .bindings()
+                .into_iter()
+                .map(|binding| binding.tool.config_key().to_owned())
+                .collect::<Vec<_>>();
+            if bindings.is_empty() {
+                ui_text::t(i18n, "provider-native-tools-custom-label")
+            } else {
+                format!(
+                    "{} · {}",
+                    ui_text::t(i18n, "provider-native-tools-custom-label"),
+                    bindings.join(", ")
+                )
+            }
+        }
     }
 }
 
@@ -1091,6 +1128,7 @@ pub(super) fn provider_studio_visible_fields(
         fields.extend([
             ProviderStudioField::DefaultAdapter,
             ProviderStudioField::DefaultModel,
+            ProviderStudioField::NativeTools,
         ]);
     }
     fields
@@ -1128,6 +1166,7 @@ fn provider_studio_field_label_key(field: ProviderStudioField) -> &'static str {
         ProviderStudioField::ServiceKeyEnv => "provider-field-service-key-env",
         ProviderStudioField::DefaultAdapter => "provider-field-default-adapter",
         ProviderStudioField::DefaultModel => "provider-field-default-model",
+        ProviderStudioField::NativeTools => "provider-field-native-tools",
     }
 }
 
@@ -1203,6 +1242,7 @@ pub(super) fn provider_studio_field_value(
         ProviderStudioField::ServiceKeyEnv => draft.auth.service_key_env.clone(),
         ProviderStudioField::DefaultAdapter => draft.default_adapter.clone(),
         ProviderStudioField::DefaultModel => draft.default_model.clone(),
+        ProviderStudioField::NativeTools => draft.native_tools_preset.token().to_owned(),
     }
 }
 
@@ -1293,7 +1333,9 @@ pub(super) fn provider_studio_field_editable(
             dialog.draft.auth_kind,
             ProviderDraftAuthKind::Credential(Some(issuer)) if issuer.requires_service_key_env()
         ),
-        ProviderStudioField::DefaultAdapter | ProviderStudioField::DefaultModel => true,
+        ProviderStudioField::DefaultAdapter
+        | ProviderStudioField::DefaultModel
+        | ProviderStudioField::NativeTools => true,
     }
 }
 

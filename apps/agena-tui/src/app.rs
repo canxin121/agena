@@ -61,7 +61,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::backend::{
     Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
-    ProviderDraftAdapterRule, ProviderDraftAuthKind, SessionRefresh,
+    ProviderDraftAdapterRule, ProviderDraftAuthKind, ProviderNativeToolsPreset, SessionRefresh,
 };
 use crate::clipboard::{
     normalize_pasted_path, paste_image_to_temp_png, pasted_image_format, set_clipboard_text,
@@ -1267,6 +1267,7 @@ enum ProviderStudioField {
     ServiceKeyEnv,
     DefaultAdapter,
     DefaultModel,
+    NativeTools,
 }
 
 #[derive(Debug, Clone)]
@@ -10442,6 +10443,39 @@ impl App {
             ProviderStudioField::DefaultModel => Some(provider_studio_default_model_choice_items(
                 &self.i18n, dialog,
             )),
+            ProviderStudioField::NativeTools => {
+                let mut items = vec![choice_item(
+                    ProviderNativeToolsPreset::Disabled.token(),
+                    ui_text::t(&self.i18n, "provider-native-tools-disabled-detail"),
+                )];
+                if let Some(preset) = dialog.draft.suggested_native_tools_preset() {
+                    let detail_key = match preset {
+                        ProviderNativeToolsPreset::OpenAiHostedDefaults => {
+                            "provider-native-tools-openai-detail"
+                        }
+                        ProviderNativeToolsPreset::AnthropicHostedDefaults => {
+                            "provider-native-tools-anthropic-detail"
+                        }
+                        ProviderNativeToolsPreset::GeminiHostedDefaults => {
+                            "provider-native-tools-gemini-detail"
+                        }
+                        ProviderNativeToolsPreset::Disabled | ProviderNativeToolsPreset::Custom => {
+                            unreachable!()
+                        }
+                    };
+                    items.push(choice_item(
+                        preset.token(),
+                        ui_text::t(&self.i18n, detail_key),
+                    ));
+                }
+                if dialog.draft.native_tools_preset == ProviderNativeToolsPreset::Custom {
+                    items.push(choice_item(
+                        ProviderNativeToolsPreset::Custom.token(),
+                        ui_text::t(&self.i18n, "provider-native-tools-custom-detail"),
+                    ));
+                }
+                Some(items)
+            }
             _ => None,
         }
     }
@@ -10455,7 +10489,8 @@ impl App {
             | ProviderStudioField::InstanceUrl
             | ProviderStudioField::RedirectUri
             | ProviderStudioField::ApiKeyEnv
-            | ProviderStudioField::ServiceKeyEnv => ChoiceOverlayStyle::SelectOnly,
+            | ProviderStudioField::ServiceKeyEnv
+            | ProviderStudioField::NativeTools => ChoiceOverlayStyle::SelectOnly,
             ProviderStudioField::Region
             | ProviderStudioField::Profile
             | ProviderStudioField::DefaultAdapter
@@ -10944,6 +10979,9 @@ impl App {
                         credential_drafts: Default::default(),
                         default_adapter: String::new(),
                         default_model: String::new(),
+                        native_tools_preset: ProviderNativeToolsPreset::Disabled,
+                        native_tools_custom: Default::default(),
+                        native_tools_touched: false,
                     };
                     draft.normalize_shape();
                     draft
@@ -11651,6 +11689,7 @@ impl App {
             }
             ProviderStudioField::BaseUrl => {
                 dialog.draft.auth.base_url = value;
+                dialog.draft.sync_native_tools_suggestion();
             }
             ProviderStudioField::InstanceUrl => {
                 dialog.draft.auth.instance_url = value;
@@ -11722,6 +11761,15 @@ impl App {
             }
             ProviderStudioField::DefaultModel => {
                 dialog.draft.default_model = value;
+            }
+            ProviderStudioField::NativeTools => {
+                let preset = if value.trim().is_empty() {
+                    ProviderNativeToolsPreset::Disabled
+                } else {
+                    ProviderNativeToolsPreset::parse(value.as_str())
+                        .ok_or_else(|| format!("unsupported native tools preset `{value}`"))?
+                };
+                dialog.draft.set_native_tools_preset(preset);
             }
         }
         Ok(())
@@ -17552,6 +17600,7 @@ fn provider_studio_field_allows_clear(field: ProviderStudioField) -> bool {
             | ProviderStudioField::ServiceKeyEnv
             | ProviderStudioField::DefaultAdapter
             | ProviderStudioField::DefaultModel
+            | ProviderStudioField::NativeTools
     )
 }
 

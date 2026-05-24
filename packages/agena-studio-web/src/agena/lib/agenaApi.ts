@@ -437,6 +437,13 @@ export type ProviderSummary = {
     model: string
   }
   adapters?: ProviderAdapterSummary[]
+  native_tools?: {
+    enabled: boolean
+    bindings?: Array<{
+      tool: string
+      route: string
+    }>
+  } | null
 }
 
 export type ProviderAdapterSummary = {
@@ -887,7 +894,10 @@ export type SessionExecutionResource = {
 }
 
 export function formatSessionExecutionModelLabel(
-  context: Pick<SessionExecutionContextResource, 'model_provider_id' | 'model_adapter_id' | 'model_id'> | null | undefined,
+  context:
+    | Pick<SessionExecutionContextResource, 'model_provider_id' | 'model_adapter_id' | 'model_id'>
+    | null
+    | undefined,
 ): string | null {
   const providerId = String(context?.model_provider_id || '').trim()
   const adapterId = String(context?.model_adapter_id || '').trim()

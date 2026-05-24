@@ -16,7 +16,8 @@ use agena::{
         ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
         ConfigSettingsGetInput, ConfigSettingsPatchInput, ConfigSettingsPathInput,
         ConfigSettingsSetInput, ProcessEnvironment, ProviderAdapterOverlay, ProviderAuthConfig,
-        ProviderAuthMode, ProviderAuthOverlay, ProviderModelOverlay, ProviderOverlay,
+        ProviderAuthMode, ProviderAuthOverlay, ProviderModelOverlay, ProviderNativeToolRoute,
+        ProviderNativeToolsConfig, ProviderNativeToolsOverlay, ProviderOverlay,
         delete_file_setting, draft_atomgit_provider_adapter_models_target,
         draft_gitlab_provider_adapter_models_target, draft_provider_adapter_models_target,
         list_provider_adapter_models_with_config, patch_file_settings,
@@ -57,6 +58,100 @@ fn parse_worktree_payload(payload: Option<serde_json::Value>) -> Result<Worktree
     serde_json::from_value(payload).map_err(|error| anyhow!(error.to_string()))
 }
 
+fn provider_native_tools_summary_resource(
+    provider: &agena::config::ResolvedProviderConfig,
+) -> ProviderNativeToolsSummaryResource {
+    ProviderNativeToolsSummaryResource {
+        enabled: provider.native_tools.enabled,
+        bindings: provider
+            .native_tool_bindings()
+            .into_iter()
+            .map(|binding| ProviderNativeToolBindingResource {
+                tool: binding.tool.config_key().to_owned(),
+                route: serde_json::to_string(&binding.route)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_owned(),
+            })
+            .collect(),
+    }
+}
+
+fn provider_native_tools_config_for_preset(
+    preset: ProviderNativeToolsPreset,
+    custom: &ProviderNativeToolsConfig,
+) -> ProviderNativeToolsConfig {
+    match preset {
+        ProviderNativeToolsPreset::Disabled => ProviderNativeToolsConfig::default(),
+        ProviderNativeToolsPreset::OpenAiHostedDefaults => ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                file_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ProviderNativeToolsPreset::AnthropicHostedDefaults => ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ProviderNativeToolsPreset::GeminiHostedDefaults => ProviderNativeToolsConfig {
+            enabled: true,
+            routes: agena::config::ProviderNativeToolRoutesConfig {
+                web_search: Some(ProviderNativeToolRoute::ProviderHosted),
+                code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
+                url_context: Some(ProviderNativeToolRoute::ProviderHosted),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ProviderNativeToolsPreset::Custom => custom.clone(),
+    }
+}
+
+fn provider_native_tools_preset_from_config(
+    config: &ProviderNativeToolsConfig,
+) -> ProviderNativeToolsPreset {
+    if *config
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::OpenAiHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
+        )
+    {
+        ProviderNativeToolsPreset::OpenAiHostedDefaults
+    } else if *config
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::AnthropicHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
+        )
+    {
+        ProviderNativeToolsPreset::AnthropicHostedDefaults
+    } else if *config
+        == provider_native_tools_config_for_preset(
+            ProviderNativeToolsPreset::GeminiHostedDefaults,
+            &ProviderNativeToolsConfig::default(),
+        )
+    {
+        ProviderNativeToolsPreset::GeminiHostedDefaults
+    } else if config.is_empty() {
+        ProviderNativeToolsPreset::Disabled
+    } else {
+        ProviderNativeToolsPreset::Custom
+    }
+}
+
+fn provider_draft_base_url_host(value: &str) -> Option<String> {
+    let parsed = url::Url::parse(value.trim()).ok()?;
+    parsed.host_str().map(|host| host.to_ascii_lowercase())
+}
+
 use agena_api::{
     commands::{
         Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
@@ -72,8 +167,10 @@ use agena_api::{
     resource::{
         MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderSummaryResource,
-        RunOptions, SessionExecutionResource, SessionResource, WorkspaceResource,
+        ProviderAdapterSummaryResource, ProviderDefaultsResource,
+        ProviderNativeToolBindingResource, ProviderNativeToolsSummaryResource,
+        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
+        WorkspaceResource,
     },
 };
 use agena_api_server::{
@@ -635,6 +732,38 @@ pub struct ProviderDraftAuthDetails {
     pub service_key_env: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderNativeToolsPreset {
+    Disabled,
+    OpenAiHostedDefaults,
+    AnthropicHostedDefaults,
+    GeminiHostedDefaults,
+    Custom,
+}
+
+impl ProviderNativeToolsPreset {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::OpenAiHostedDefaults => "openai_hosted_defaults",
+            Self::AnthropicHostedDefaults => "anthropic_hosted_defaults",
+            Self::GeminiHostedDefaults => "gemini_hosted_defaults",
+            Self::Custom => "custom",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "disabled" => Some(Self::Disabled),
+            "openai_hosted_defaults" => Some(Self::OpenAiHostedDefaults),
+            "anthropic_hosted_defaults" => Some(Self::AnthropicHostedDefaults),
+            "gemini_hosted_defaults" => Some(Self::GeminiHostedDefaults),
+            "custom" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderConfigDraft {
     pub source_provider_id: Option<String>,
@@ -644,6 +773,9 @@ pub struct ProviderConfigDraft {
     pub credential_drafts: ProviderCredentialDraftBundle,
     pub default_adapter: String,
     pub default_model: String,
+    pub native_tools_preset: ProviderNativeToolsPreset,
+    pub native_tools_custom: ProviderNativeToolsConfig,
+    pub native_tools_touched: bool,
 }
 
 impl ProviderConfigDraft {
@@ -656,6 +788,9 @@ impl ProviderConfigDraft {
             credential_drafts: ProviderCredentialDraftBundle::default(),
             default_adapter: String::new(),
             default_model: String::new(),
+            native_tools_preset: ProviderNativeToolsPreset::Disabled,
+            native_tools_custom: ProviderNativeToolsConfig::default(),
+            native_tools_touched: false,
         }
     }
 
@@ -761,6 +896,7 @@ impl ProviderConfigDraft {
         if self.default_adapter.trim().is_empty() {
             self.default_model.clear();
         }
+        self.sync_native_tools_suggestion();
     }
 
     pub fn from_resolved(
@@ -881,6 +1017,9 @@ impl ProviderConfigDraft {
             credential_drafts,
             default_adapter: provider.defaults.adapter.clone().unwrap_or_default(),
             default_model: provider.defaults.model.clone().unwrap_or_default(),
+            native_tools_preset: provider_native_tools_preset_from_config(&provider.native_tools),
+            native_tools_custom: provider.native_tools.clone(),
+            native_tools_touched: true,
         };
         draft.normalize_shape();
         draft
@@ -901,6 +1040,7 @@ impl ProviderConfigDraft {
                 ..Default::default()
             }),
             auth: Some(self.to_auth_overlay_for_save()?),
+            native_tools: Some(self.to_native_tools_overlay_for_save()?),
             adapters,
         })
     }
@@ -983,6 +1123,60 @@ impl ProviderConfigDraft {
             ProviderDraftAuthKind::Credential(_) => Ok(ProviderAuthMode::Credential),
             ProviderDraftAuthKind::BedrockSigv4 => Ok(ProviderAuthMode::BedrockSigv4),
         }
+    }
+
+    fn to_native_tools_overlay_for_save(
+        &self,
+    ) -> std::result::Result<ProviderNativeToolsOverlay, ProviderStudioSaveError> {
+        serde_json::to_value(self.effective_native_tools_config())
+            .map_err(ProviderStudioSaveError::other)
+            .and_then(|value| serde_json::from_value(value).map_err(ProviderStudioSaveError::other))
+    }
+
+    pub fn suggested_native_tools_preset(&self) -> Option<ProviderNativeToolsPreset> {
+        match self.auth_kind {
+            ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt))
+                if self.default_adapter.trim() == "openai" =>
+            {
+                Some(ProviderNativeToolsPreset::OpenAiHostedDefaults)
+            }
+            ProviderDraftAuthKind::Api => {
+                let Some(host) = provider_draft_base_url_host(self.auth.base_url.as_str()) else {
+                    return None;
+                };
+                match (host.as_str(), self.default_adapter.trim()) {
+                    ("api.openai.com", "openai") => {
+                        Some(ProviderNativeToolsPreset::OpenAiHostedDefaults)
+                    }
+                    ("api.anthropic.com" | "api-staging.anthropic.com", "anthropic") => {
+                        Some(ProviderNativeToolsPreset::AnthropicHostedDefaults)
+                    }
+                    ("generativelanguage.googleapis.com", "gemini") => {
+                        Some(ProviderNativeToolsPreset::GeminiHostedDefaults)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn sync_native_tools_suggestion(&mut self) {
+        if self.native_tools_touched {
+            return;
+        }
+        self.native_tools_preset = self
+            .suggested_native_tools_preset()
+            .unwrap_or(ProviderNativeToolsPreset::Disabled);
+    }
+
+    pub fn set_native_tools_preset(&mut self, preset: ProviderNativeToolsPreset) {
+        self.native_tools_preset = preset;
+        self.native_tools_touched = true;
+    }
+
+    pub fn effective_native_tools_config(&self) -> ProviderNativeToolsConfig {
+        provider_native_tools_config_for_preset(self.native_tools_preset, &self.native_tools_custom)
     }
 
     fn oauth_auth_data(&self) -> Result<Option<AuthData>> {
@@ -1770,16 +1964,22 @@ impl Backend {
             .provider_ids()
             .into_iter()
             .filter_map(|provider_id| {
-                registry
-                    .get(provider_id.as_str())
-                    .map(|provider| ProviderSummaryResource {
+                registry.get(provider_id.as_str()).map(|provider| {
+                    let configured = snapshot
+                        .config_resolution()
+                        .config
+                        .providers
+                        .get(provider_id.as_str());
+                    ProviderSummaryResource {
                         defaults: ProviderDefaultsResource {
                             adapter: provider.default_adapter().map(ToString::to_string),
                             model: provider.default_model().to_string(),
                         },
                         adapters: Vec::new(),
+                        native_tools: configured.map(provider_native_tools_summary_resource),
                         provider_id,
-                    })
+                    }
+                })
             })
             .collect::<Vec<_>>();
         providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
@@ -1879,6 +2079,7 @@ impl Backend {
                             .count(),
                     })
                     .collect(),
+                native_tools: Some(provider_native_tools_summary_resource(provider)),
             })
             .collect::<Vec<_>>();
         providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
@@ -2437,6 +2638,11 @@ impl Backend {
             "auth".to_owned(),
             JsonValue::Object(build_provider_auth_patch_value_for_save(&draft)?),
         );
+        provider_object.insert(
+            "native_tools".to_owned(),
+            serde_json::to_value(draft.to_native_tools_overlay_for_save()?)
+                .map_err(ProviderStudioSaveError::other)?,
+        );
         provider_object.insert("adapters".to_owned(), JsonValue::Object(adapters));
         self.set_provider_settings(provider_id, provider_value)
             .await
@@ -2712,6 +2918,11 @@ impl Backend {
             json!({
                 adapter_id: adapter_patch,
             }),
+        );
+        provider_patch.insert(
+            "native_tools".to_owned(),
+            serde_json::to_value(draft.to_native_tools_overlay_for_save()?)
+                .map_err(ProviderStudioSaveError::other)?,
         );
         if include_defaults {
             provider_patch.insert(
@@ -5039,6 +5250,48 @@ mod tests {
                 "base_url": "https://example.com"
             })
         );
+    }
+
+    #[test]
+    fn provider_draft_suggests_official_native_tools_explicitly() {
+        let mut draft = ProviderConfigDraft::new_empty();
+        draft.auth_kind = ProviderDraftAuthKind::Api;
+        draft.auth.base_url = "https://api.openai.com".to_owned();
+        draft.default_adapter = "openai".to_owned();
+        draft.default_model = "gpt-5".to_owned();
+        draft.normalize_shape();
+
+        assert_eq!(
+            draft.native_tools_preset,
+            ProviderNativeToolsPreset::OpenAiHostedDefaults
+        );
+        let config = draft.effective_native_tools_config();
+        assert!(config.enabled);
+        assert_eq!(
+            config.routes.web_search,
+            Some(ProviderNativeToolRoute::ProviderHosted)
+        );
+        assert_eq!(
+            config.routes.file_search,
+            Some(ProviderNativeToolRoute::ProviderHosted)
+        );
+    }
+
+    #[test]
+    fn manual_native_tool_disable_stays_disabled() {
+        let mut draft = ProviderConfigDraft::new_empty();
+        draft.auth_kind = ProviderDraftAuthKind::Api;
+        draft.auth.base_url = "https://api.openai.com".to_owned();
+        draft.default_adapter = "openai".to_owned();
+        draft.default_model = "gpt-5".to_owned();
+        draft.normalize_shape();
+        draft.set_native_tools_preset(ProviderNativeToolsPreset::Disabled);
+
+        draft.auth.base_url = "https://api.openai.com".to_owned();
+        draft.sync_native_tools_suggestion();
+
+        assert_eq!(draft.native_tools_preset, ProviderNativeToolsPreset::Disabled);
+        assert!(!draft.effective_native_tools_config().enabled);
     }
 
     #[tokio::test]

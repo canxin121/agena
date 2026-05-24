@@ -6,7 +6,8 @@ use agena_api::{
     queries::{ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams},
     resource::{
         ProviderAdapterModelsResponse, ProviderAdapterSummaryResource, ProviderDefaultsResource,
-        ProviderModelsResponse, ProviderSummaryResource,
+        ProviderModelsResponse, ProviderNativeToolBindingResource,
+        ProviderNativeToolsSummaryResource, ProviderSummaryResource,
     },
 };
 
@@ -56,6 +57,7 @@ pub fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource>
                         model: provider.default_model().to_string(),
                     },
                     adapters,
+                    native_tools: provider_config.map(provider_native_tools_summary_resource),
                     provider_id,
                 }
             })
@@ -63,6 +65,25 @@ pub fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource>
         .collect::<Vec<_>>();
     providers.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
     providers
+}
+
+fn provider_native_tools_summary_resource(
+    provider: &agena::config::ResolvedProviderConfig,
+) -> ProviderNativeToolsSummaryResource {
+    ProviderNativeToolsSummaryResource {
+        enabled: provider.native_tools.enabled,
+        bindings: provider
+            .native_tool_bindings()
+            .into_iter()
+            .map(|binding| ProviderNativeToolBindingResource {
+                tool: binding.tool.config_key().to_owned(),
+                route: serde_json::to_string(&binding.route)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_owned(),
+            })
+            .collect(),
+    }
 }
 
 pub async fn list_provider_models_response(

@@ -92,7 +92,7 @@ pub(super) fn restore_provider_studio_adapter_selection(
             .iter()
             .position(|candidate| candidate == adapter_id)
     {
-        dialog.selected_adapter = index;
+        dialog.selection.set_left_selected(index);
     }
 }
 
@@ -140,14 +140,16 @@ pub(super) fn provider_studio_selected_adapter_id(
 ) -> Option<String> {
     dialog
         .adapter_candidate_ids
-        .get(dialog.selected_adapter)
+        .get(dialog.selection.left_selected())
         .cloned()
 }
 
 pub(super) fn provider_studio_selected_adapter_models(
     dialog: &ProviderStudioOverlay,
 ) -> Option<&ProviderAdapterModelsResource> {
-    let adapter_id = dialog.adapter_candidate_ids.get(dialog.selected_adapter)?;
+    let adapter_id = dialog
+        .adapter_candidate_ids
+        .get(dialog.selection.left_selected())?;
     dialog
         .adapter_models
         .iter()
@@ -158,7 +160,10 @@ pub(super) fn provider_studio_selected_model_target(
     dialog: &ProviderStudioOverlay,
 ) -> Option<(String, String, Option<ProviderModel>)> {
     let adapter_models = provider_studio_selected_adapter_models(dialog)?;
-    let model = adapter_models.models.get(dialog.selected_model)?.clone();
+    let model = adapter_models
+        .models
+        .get(dialog.selection.right_selected())?
+        .clone();
     Some((
         adapter_models.adapter_id.clone(),
         model.id.to_string(),
@@ -331,28 +336,95 @@ pub(super) fn provider_studio_summary_value(value: &str, max_width: usize) -> Op
     (!value.is_empty()).then(|| truncate_display_width(value, max_width))
 }
 
-pub(super) fn provider_studio_labeled_summary(
-    label: &str,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProviderStudioAuthStatus {
+    Pending,
+    Unset,
+    None,
+    SelectIssuer,
+    Configured,
+    Partial,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderStudioSummaryLabel {
+    Env,
+    Callback,
+    Redirect,
+    Account,
+    Name,
+    User,
+    Email,
+    Profile,
+    Region,
+    Code,
+}
+
+fn provider_studio_summary_label(i18n: &I18n, label: ProviderStudioSummaryLabel) -> String {
+    ui_text::t(
+        i18n,
+        match label {
+            ProviderStudioSummaryLabel::Env => "provider-studio-summary-env",
+            ProviderStudioSummaryLabel::Callback => "provider-studio-summary-callback",
+            ProviderStudioSummaryLabel::Redirect => "provider-studio-summary-redirect",
+            ProviderStudioSummaryLabel::Account => "provider-studio-summary-account",
+            ProviderStudioSummaryLabel::Name => "provider-studio-summary-name",
+            ProviderStudioSummaryLabel::User => "provider-studio-summary-user",
+            ProviderStudioSummaryLabel::Email => "provider-studio-summary-email",
+            ProviderStudioSummaryLabel::Profile => "provider-studio-summary-profile",
+            ProviderStudioSummaryLabel::Region => "provider-studio-summary-region",
+            ProviderStudioSummaryLabel::Code => "provider-studio-summary-code",
+        },
+    )
+}
+
+fn provider_studio_labeled_summary(
+    i18n: &I18n,
+    label: ProviderStudioSummaryLabel,
     value: &str,
     max_width: usize,
 ) -> Option<String> {
-    provider_studio_summary_value(value, max_width).map(|value| format!("{label} {value}"))
+    provider_studio_summary_value(value, max_width)
+        .map(|value| format!("{} {value}", provider_studio_summary_label(i18n, label)))
 }
 
-pub(super) fn provider_studio_status_with_summary(status: &str, summary: Option<String>) -> String {
-    summary
-        .map(|summary| format!("{status}  ·  {summary}"))
-        .unwrap_or_else(|| status.to_owned())
+pub(super) fn provider_studio_status_with_summary(
+    status: String,
+    summary: Option<String>,
+) -> String {
+    let mut parts = vec![status];
+    if let Some(summary) = summary {
+        parts.push(summary);
+    }
+    join_inline_segments(parts)
 }
 
-pub(super) fn provider_studio_browser_continue_summary(prefix: &str, state: &str) -> String {
-    provider_studio_summary_value(state, 20)
-        .map(|state| format!("{prefix}  ·  state {state}"))
-        .unwrap_or_else(|| prefix.to_owned())
+fn provider_studio_state_summary(i18n: &I18n, state: &str, max_width: usize) -> Option<String> {
+    provider_studio_summary_value(state, max_width).map(|state| {
+        i18n.text_args(
+            "provider-studio-summary-state",
+            &crate::fl_args!("state" => state),
+        )
+    })
 }
 
-pub(super) fn provider_studio_start_auth_summary(dialog: &ProviderStudioOverlay) -> String {
-    let status = provider_studio_auth_status_summary(dialog);
+pub(super) fn provider_studio_browser_continue_summary(
+    i18n: &I18n,
+    prefix_key: &str,
+    state: &str,
+) -> String {
+    let mut parts = vec![ui_text::t(i18n, prefix_key)];
+    if let Some(state) = provider_studio_state_summary(i18n, state, 20) {
+        parts.push(state);
+    }
+    join_inline_segments(parts)
+}
+
+pub(super) fn provider_studio_start_auth_summary(
+    i18n: &I18n,
+    dialog: &ProviderStudioOverlay,
+) -> String {
+    let status = provider_studio_auth_status_summary(i18n, dialog);
     match dialog.draft.auth_kind.credential_issuer() {
         Some(CredentialIssuer::OpenaiChatgpt) => dialog
             .draft
@@ -375,12 +447,17 @@ pub(super) fn provider_studio_start_auth_summary(dialog: &ProviderStudioOverlay)
                 {
                     parts.push(url);
                 }
-                if let Some(code) = provider_studio_summary_value(device.user_code.as_str(), 18) {
-                    parts.push(format!("code {code}"));
+                if let Some(code) = provider_studio_labeled_summary(
+                    i18n,
+                    ProviderStudioSummaryLabel::Code,
+                    device.user_code.as_str(),
+                    18,
+                ) {
+                    parts.push(code);
                 }
-                (!parts.is_empty()).then(|| parts.join("  ·  "))
+                (!parts.is_empty()).then(|| join_inline_segments(parts))
             })
-            .unwrap_or_else(|| status.to_owned()),
+            .unwrap_or(status),
         Some(CredentialIssuer::Gitlab) => dialog
             .draft
             .credential_drafts
@@ -397,15 +474,19 @@ pub(super) fn provider_studio_start_auth_summary(dialog: &ProviderStudioOverlay)
             .as_ref()
             .and_then(|session| provider_studio_summary_value(session.authorize_url.as_str(), 56))
             .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status.to_owned(),
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status,
     }
 }
 
-pub(super) fn provider_studio_continue_auth_summary(dialog: &ProviderStudioOverlay) -> String {
-    let status = provider_studio_auth_status_summary(dialog);
+pub(super) fn provider_studio_continue_auth_summary(
+    i18n: &I18n,
+    dialog: &ProviderStudioOverlay,
+) -> String {
+    let status = provider_studio_auth_status_summary(i18n, dialog);
     match dialog.draft.auth_kind.credential_issuer() {
         Some(CredentialIssuer::OpenaiChatgpt) => provider_studio_labeled_summary(
-            "callback",
+            i18n,
+            ProviderStudioSummaryLabel::Callback,
             dialog
                 .draft
                 .credential_drafts
@@ -423,12 +504,13 @@ pub(super) fn provider_studio_continue_auth_summary(dialog: &ProviderStudioOverl
                 .as_ref()
                 .map(|session| {
                     provider_studio_browser_continue_summary(
-                        "paste callback_url",
+                        i18n,
+                        "provider-studio-summary-paste-callback",
                         session.state.as_str(),
                     )
                 })
         })
-        .unwrap_or_else(|| status.to_owned()),
+        .unwrap_or(status),
         Some(CredentialIssuer::GithubCopilot) => dialog
             .draft
             .credential_drafts
@@ -436,15 +518,24 @@ pub(super) fn provider_studio_continue_auth_summary(dialog: &ProviderStudioOverl
             .device
             .as_ref()
             .map(|device| {
-                let mut parts = vec![format!("poll every {}s", device.interval_seconds.max(1))];
-                if let Some(code) = provider_studio_summary_value(device.user_code.as_str(), 18) {
-                    parts.push(format!("code {code}"));
+                let mut parts = vec![i18n.text_args(
+                    "provider-studio-summary-poll-every",
+                    &crate::fl_args!("seconds" => device.interval_seconds.max(1) as i64),
+                )];
+                if let Some(code) = provider_studio_labeled_summary(
+                    i18n,
+                    ProviderStudioSummaryLabel::Code,
+                    device.user_code.as_str(),
+                    18,
+                ) {
+                    parts.push(code);
                 }
-                parts.join("  ·  ")
+                join_inline_segments(parts)
             })
-            .unwrap_or_else(|| status.to_owned()),
+            .unwrap_or(status),
         Some(CredentialIssuer::Gitlab) => provider_studio_labeled_summary(
-            "callback",
+            i18n,
+            ProviderStudioSummaryLabel::Callback,
             dialog.draft.credential_drafts.gitlab.callback_url.as_str(),
             44,
         )
@@ -457,12 +548,13 @@ pub(super) fn provider_studio_continue_auth_summary(dialog: &ProviderStudioOverl
                 .as_ref()
                 .map(|session| {
                     provider_studio_browser_continue_summary(
-                        "paste callback_url",
+                        i18n,
+                        "provider-studio-summary-paste-callback",
                         session.state.as_str(),
                     )
                 })
         })
-        .unwrap_or_else(|| status.to_owned()),
+        .unwrap_or(status),
         Some(CredentialIssuer::AtomGit) => dialog
             .draft
             .credential_drafts
@@ -471,50 +563,69 @@ pub(super) fn provider_studio_continue_auth_summary(dialog: &ProviderStudioOverl
             .as_ref()
             .map(|session| {
                 provider_studio_browser_continue_summary(
-                    "poll browser result",
+                    i18n,
+                    "provider-studio-summary-poll-browser",
                     session.state.as_str(),
                 )
             })
-            .unwrap_or_else(|| status.to_owned()),
-        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status.to_owned(),
+            .unwrap_or(status),
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => status,
     }
 }
 
-pub(super) fn provider_studio_auth_details_hint(draft: &ProviderConfigDraft) -> Option<String> {
+pub(super) fn provider_studio_auth_details_hint(
+    i18n: &I18n,
+    draft: &ProviderConfigDraft,
+) -> Option<String> {
     match draft.auth_kind {
         ProviderDraftAuthKind::Unset
         | ProviderDraftAuthKind::None
         | ProviderDraftAuthKind::Credential(None) => None,
-        ProviderDraftAuthKind::Api => {
-            provider_studio_labeled_summary("env", draft.auth.api_key_env.as_str(), 28)
-                .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48))
-        }
+        ProviderDraftAuthKind::Api => provider_studio_labeled_summary(
+            i18n,
+            ProviderStudioSummaryLabel::Env,
+            draft.auth.api_key_env.as_str(),
+            28,
+        )
+        .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48)),
         ProviderDraftAuthKind::Gitlab => {
             provider_studio_summary_value(draft.auth.instance_url.as_str(), 48).or_else(|| {
-                provider_studio_labeled_summary("env", draft.auth.api_key_env.as_str(), 28)
+                provider_studio_labeled_summary(
+                    i18n,
+                    ProviderStudioSummaryLabel::Env,
+                    draft.auth.api_key_env.as_str(),
+                    28,
+                )
             })
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
             provider_studio_labeled_summary(
-                "account",
+                i18n,
+                ProviderStudioSummaryLabel::Account,
                 draft.credential_drafts.openai_chatgpt.account_id.as_str(),
                 24,
             )
             .or_else(|| {
                 provider_studio_labeled_summary(
-                    "callback",
+                    i18n,
+                    ProviderStudioSummaryLabel::Callback,
                     draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
                     36,
                 )
             })
             .or_else(|| {
                 provider_studio_labeled_summary(
-                    "redirect",
+                    i18n,
+                    ProviderStudioSummaryLabel::Redirect,
                     draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
                     36,
                 )
             })
-            .or_else(|| draft.tokens_present().then(|| "tokens set".to_owned()))
+            .or_else(|| {
+                draft
+                    .tokens_present()
+                    .then(|| ui_text::t(i18n, "provider-studio-summary-tokens-set"))
+            })
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GithubCopilot)) => {
             provider_studio_summary_value(
@@ -525,98 +636,160 @@ pub(super) fn provider_studio_auth_details_hint(draft: &ProviderConfigDraft) -> 
                     .as_str(),
                 32,
             )
-            .or_else(|| draft.tokens_present().then(|| "tokens set".to_owned()))
+            .or_else(|| {
+                draft
+                    .tokens_present()
+                    .then(|| ui_text::t(i18n, "provider-studio-summary-tokens-set"))
+            })
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
             provider_studio_summary_value(draft.auth.instance_url.as_str(), 48)
                 .or_else(|| {
                     provider_studio_labeled_summary(
-                        "callback",
+                        i18n,
+                        ProviderStudioSummaryLabel::Callback,
                         draft.credential_drafts.gitlab.callback_url.as_str(),
                         36,
                     )
                 })
                 .or_else(|| {
                     provider_studio_labeled_summary(
-                        "redirect",
+                        i18n,
+                        ProviderStudioSummaryLabel::Redirect,
                         draft.credential_drafts.gitlab.redirect_uri.as_str(),
                         36,
                     )
                 })
-                .or_else(|| draft.tokens_present().then(|| "tokens set".to_owned()))
+                .or_else(|| {
+                    draft
+                        .tokens_present()
+                        .then(|| ui_text::t(i18n, "provider-studio-summary-tokens-set"))
+                })
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::GoogleAdc)) => {
             provider_studio_summary_value(draft.auth.base_url.as_str(), 48)
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::SapAiCore)) => {
-            provider_studio_labeled_summary("env", draft.auth.service_key_env.as_str(), 28)
-                .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48))
+            provider_studio_labeled_summary(
+                i18n,
+                ProviderStudioSummaryLabel::Env,
+                draft.auth.service_key_env.as_str(),
+                28,
+            )
+            .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48))
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
             provider_studio_labeled_summary(
-                "name",
+                i18n,
+                ProviderStudioSummaryLabel::Name,
                 draft.credential_drafts.atomgit.display_name.as_str(),
                 28,
             )
             .or_else(|| {
                 provider_studio_labeled_summary(
-                    "user",
+                    i18n,
+                    ProviderStudioSummaryLabel::User,
                     draft.credential_drafts.atomgit.username.as_str(),
                     28,
                 )
             })
             .or_else(|| {
                 provider_studio_labeled_summary(
-                    "email",
+                    i18n,
+                    ProviderStudioSummaryLabel::Email,
                     draft.credential_drafts.atomgit.email.as_str(),
                     32,
                 )
             })
             .or_else(|| {
                 provider_studio_labeled_summary(
-                    "account",
+                    i18n,
+                    ProviderStudioSummaryLabel::Account,
                     draft.credential_drafts.atomgit.account_id.as_str(),
                     24,
                 )
             })
-            .or_else(|| draft.tokens_present().then(|| "tokens set".to_owned()))
+            .or_else(|| {
+                draft
+                    .tokens_present()
+                    .then(|| ui_text::t(i18n, "provider-studio-summary-tokens-set"))
+            })
         }
-        ProviderDraftAuthKind::BedrockSigv4 => {
-            provider_studio_labeled_summary("profile", draft.auth.profile.as_str(), 24)
-                .or_else(|| {
-                    provider_studio_labeled_summary("region", draft.auth.region.as_str(), 24)
-                })
-                .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48))
-                .or_else(|| {
-                    (!draft.auth.access_key_id.trim().is_empty()
-                        && !draft.auth.secret_access_key.trim().is_empty())
-                    .then(|| "keys set".to_owned())
-                })
-        }
+        ProviderDraftAuthKind::BedrockSigv4 => provider_studio_labeled_summary(
+            i18n,
+            ProviderStudioSummaryLabel::Profile,
+            draft.auth.profile.as_str(),
+            24,
+        )
+        .or_else(|| {
+            provider_studio_labeled_summary(
+                i18n,
+                ProviderStudioSummaryLabel::Region,
+                draft.auth.region.as_str(),
+                24,
+            )
+        })
+        .or_else(|| provider_studio_summary_value(draft.auth.base_url.as_str(), 48))
+        .or_else(|| {
+            (!draft.auth.access_key_id.trim().is_empty()
+                && !draft.auth.secret_access_key.trim().is_empty())
+            .then(|| ui_text::t(i18n, "provider-studio-summary-keys-set"))
+        }),
     }
 }
 
-pub(super) fn provider_studio_auth_details_summary(dialog: &ProviderStudioOverlay) -> String {
+pub(super) fn provider_studio_auth_details_summary(
+    i18n: &I18n,
+    dialog: &ProviderStudioOverlay,
+) -> String {
     provider_studio_status_with_summary(
-        provider_studio_auth_status_summary(dialog),
-        provider_studio_auth_details_hint(&dialog.draft),
+        provider_studio_auth_status_summary(i18n, dialog),
+        provider_studio_auth_details_hint(i18n, &dialog.draft),
     )
 }
 
 pub(super) fn provider_studio_main_field_value(
+    i18n: &I18n,
     dialog: &ProviderStudioOverlay,
     field: ProviderStudioField,
 ) -> String {
     match field {
-        ProviderStudioField::AuthStatus => provider_studio_auth_status_summary(dialog).to_owned(),
-        ProviderStudioField::StartAuthAction => provider_studio_start_auth_summary(dialog),
-        ProviderStudioField::ContinueAuthAction => provider_studio_continue_auth_summary(dialog),
-        ProviderStudioField::EditAuthDetailsAction => provider_studio_auth_details_summary(dialog),
+        ProviderStudioField::AuthStatus => provider_studio_auth_status_summary(i18n, dialog),
+        ProviderStudioField::StartAuthAction => provider_studio_start_auth_summary(i18n, dialog),
+        ProviderStudioField::ContinueAuthAction => {
+            provider_studio_continue_auth_summary(i18n, dialog)
+        }
+        ProviderStudioField::EditAuthDetailsAction => {
+            provider_studio_auth_details_summary(i18n, dialog)
+        }
         _ => provider_studio_field_value(&dialog.draft, field),
     }
 }
 
-pub(super) fn provider_studio_auth_state_lines(dialog: &ProviderStudioOverlay) -> Vec<String> {
+fn provider_studio_has_pending_auth_state(dialog: &ProviderStudioOverlay) -> bool {
+    match dialog.draft.auth_kind.credential_issuer() {
+        Some(CredentialIssuer::OpenaiChatgpt) => dialog
+            .draft
+            .credential_drafts
+            .openai_chatgpt
+            .browser
+            .is_some(),
+        Some(CredentialIssuer::GithubCopilot) => dialog
+            .draft
+            .credential_drafts
+            .github_copilot
+            .device
+            .is_some(),
+        Some(CredentialIssuer::Gitlab) => dialog.draft.credential_drafts.gitlab.browser.is_some(),
+        Some(CredentialIssuer::AtomGit) => dialog.draft.credential_drafts.atomgit.browser.is_some(),
+        Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => false,
+    }
+}
+
+pub(super) fn provider_studio_auth_state_lines(
+    i18n: &I18n,
+    dialog: &ProviderStudioOverlay,
+) -> Vec<String> {
     match dialog.draft.auth_kind.credential_issuer() {
         Some(CredentialIssuer::OpenaiChatgpt) => dialog
             .draft
@@ -626,14 +799,18 @@ pub(super) fn provider_studio_auth_state_lines(dialog: &ProviderStudioOverlay) -
             .as_ref()
             .map(|session| {
                 vec![
-                    "oauth browser session ready · open the copied authorize URL".to_owned(),
-                    format!(
-                        "authorize {}",
-                        truncate_display_width(session.authorize_url.as_str(), 56)
+                    ui_text::t(i18n, "provider-studio-auth-openai-ready"),
+                    i18n.text_args(
+                        "provider-studio-auth-authorize",
+                        &crate::fl_args!(
+                            "url" => truncate_display_width(session.authorize_url.as_str(), 56)
+                        ),
                     ),
-                    format!(
-                        "paste the final callback URL, then press p  ·  state {}",
-                        truncate_display_width(session.state.as_str(), 24)
+                    i18n.text_args(
+                        "provider-studio-auth-paste-callback",
+                        &crate::fl_args!(
+                            "state" => truncate_display_width(session.state.as_str(), 24)
+                        ),
                     ),
                 ]
             })
@@ -646,15 +823,23 @@ pub(super) fn provider_studio_auth_state_lines(dialog: &ProviderStudioOverlay) -
             .as_ref()
             .map(|device| {
                 vec![
-                    format!(
-                        "device login ready · open the copied verification URL and enter {}",
-                        device.user_code
+                    i18n.text_args(
+                        "provider-studio-auth-copilot-ready",
+                        &crate::fl_args!("code" => device.user_code.clone()),
                     ),
-                    format!(
-                        "verify {}",
-                        truncate_display_width(device.verification_url.as_str(), 56)
+                    i18n.text_args(
+                        "provider-studio-auth-verify",
+                        &crate::fl_args!(
+                            "url" => truncate_display_width(
+                                device.verification_url.as_str(),
+                                56,
+                            )
+                        ),
                     ),
-                    format!("press p to poll  ·  interval {}s", device.interval_seconds),
+                    i18n.text_args(
+                        "provider-studio-auth-poll",
+                        &crate::fl_args!("seconds" => device.interval_seconds as i64),
+                    ),
                 ]
             })
             .unwrap_or_default(),
@@ -666,14 +851,18 @@ pub(super) fn provider_studio_auth_state_lines(dialog: &ProviderStudioOverlay) -
             .as_ref()
             .map(|session| {
                 vec![
-                    "gitlab browser session ready · open the copied authorize URL".to_owned(),
-                    format!(
-                        "authorize {}",
-                        truncate_display_width(session.authorize_url.as_str(), 56)
+                    ui_text::t(i18n, "provider-studio-auth-gitlab-ready"),
+                    i18n.text_args(
+                        "provider-studio-auth-authorize",
+                        &crate::fl_args!(
+                            "url" => truncate_display_width(session.authorize_url.as_str(), 56)
+                        ),
                     ),
-                    format!(
-                        "paste the final callback URL, then press p  ·  state {}",
-                        truncate_display_width(session.state.as_str(), 24)
+                    i18n.text_args(
+                        "provider-studio-auth-paste-callback",
+                        &crate::fl_args!(
+                            "state" => truncate_display_width(session.state.as_str(), 24)
+                        ),
                     ),
                 ]
             })
@@ -686,19 +875,50 @@ pub(super) fn provider_studio_auth_state_lines(dialog: &ProviderStudioOverlay) -
             .as_ref()
             .map(|session| {
                 vec![
-                    "atomgit browser session ready · open the copied authorize URL".to_owned(),
-                    format!(
-                        "authorize {}",
-                        truncate_display_width(session.authorize_url.as_str(), 56)
+                    ui_text::t(i18n, "provider-studio-auth-atomgit-ready"),
+                    i18n.text_args(
+                        "provider-studio-auth-authorize",
+                        &crate::fl_args!(
+                            "url" => truncate_display_width(session.authorize_url.as_str(), 56)
+                        ),
                     ),
-                    format!(
-                        "finish the browser flow, then press p  ·  state {}",
-                        truncate_display_width(session.state.as_str(), 24)
+                    i18n.text_args(
+                        "provider-studio-auth-finish-browser",
+                        &crate::fl_args!(
+                            "state" => truncate_display_width(session.state.as_str(), 24)
+                        ),
                     ),
                 ]
             })
             .unwrap_or_default(),
         Some(CredentialIssuer::GoogleAdc | CredentialIssuer::SapAiCore) | None => Vec::new(),
+    }
+}
+
+pub(super) fn provider_studio_auth_status(
+    dialog: &ProviderStudioOverlay,
+) -> ProviderStudioAuthStatus {
+    if provider_studio_has_pending_auth_state(dialog) {
+        return ProviderStudioAuthStatus::Pending;
+    }
+    let detail_fields = provider_studio_detail_fields(dialog);
+    if detail_fields.is_empty() {
+        return match dialog.draft.auth_kind {
+            ProviderDraftAuthKind::Unset => ProviderStudioAuthStatus::Unset,
+            ProviderDraftAuthKind::None => ProviderStudioAuthStatus::None,
+            ProviderDraftAuthKind::Credential(None) => ProviderStudioAuthStatus::SelectIssuer,
+            ProviderDraftAuthKind::Api
+            | ProviderDraftAuthKind::Gitlab
+            | ProviderDraftAuthKind::Credential(Some(_))
+            | ProviderDraftAuthKind::BedrockSigv4 => ProviderStudioAuthStatus::Unset,
+        };
+    }
+    if provider_studio_auth_is_configured(dialog) {
+        ProviderStudioAuthStatus::Configured
+    } else if provider_studio_has_any_auth_detail_value(&dialog.draft, &detail_fields) {
+        ProviderStudioAuthStatus::Partial
+    } else {
+        ProviderStudioAuthStatus::Unset
     }
 }
 
@@ -830,29 +1050,21 @@ pub(super) fn provider_studio_auth_is_configured(dialog: &ProviderStudioOverlay)
     }
 }
 
-pub(super) fn provider_studio_auth_status_summary(dialog: &ProviderStudioOverlay) -> &'static str {
-    if !provider_studio_auth_state_lines(dialog).is_empty() {
-        return "pending";
-    }
-    let detail_fields = provider_studio_detail_fields(dialog);
-    if detail_fields.is_empty() {
-        return match dialog.draft.auth_kind {
-            ProviderDraftAuthKind::Unset => "unset",
-            ProviderDraftAuthKind::None => "none",
-            ProviderDraftAuthKind::Credential(None) => "select issuer",
-            ProviderDraftAuthKind::Api
-            | ProviderDraftAuthKind::Gitlab
-            | ProviderDraftAuthKind::Credential(Some(_))
-            | ProviderDraftAuthKind::BedrockSigv4 => "unset",
-        };
-    }
-    if provider_studio_auth_is_configured(dialog) {
-        "configured"
-    } else if provider_studio_has_any_auth_detail_value(&dialog.draft, &detail_fields) {
-        "partial"
-    } else {
-        "unset"
-    }
+pub(super) fn provider_studio_auth_status_summary(
+    i18n: &I18n,
+    dialog: &ProviderStudioOverlay,
+) -> String {
+    ui_text::t(
+        i18n,
+        match provider_studio_auth_status(dialog) {
+            ProviderStudioAuthStatus::Pending => "provider-studio-auth-status-pending",
+            ProviderStudioAuthStatus::Unset => "provider-studio-auth-status-unset",
+            ProviderStudioAuthStatus::None => "provider-studio-auth-status-none",
+            ProviderStudioAuthStatus::SelectIssuer => "provider-studio-auth-status-select-issuer",
+            ProviderStudioAuthStatus::Configured => "provider-studio-auth-status-configured",
+            ProviderStudioAuthStatus::Partial => "provider-studio-auth-status-partial",
+        },
+    )
 }
 
 pub(super) fn provider_studio_visible_fields(
@@ -884,56 +1096,61 @@ pub(super) fn provider_studio_visible_fields(
     fields
 }
 
-pub(super) fn provider_studio_field_label(field: ProviderStudioField) -> &'static str {
+fn provider_studio_field_label_key(field: ProviderStudioField) -> &'static str {
     match field {
-        ProviderStudioField::ProviderId => "provider_id",
-        ProviderStudioField::AuthMode => "auth_mode",
-        ProviderStudioField::CredentialIssuer => "credential_issuer",
-        ProviderStudioField::AuthStatus => "auth_status",
-        ProviderStudioField::StartAuthAction => "start_auth",
-        ProviderStudioField::ContinueAuthAction => "continue_auth",
-        ProviderStudioField::EditAuthDetailsAction => "auth_details",
-        ProviderStudioField::BaseUrl => "base_url",
-        ProviderStudioField::InstanceUrl => "instance_url",
-        ProviderStudioField::ApiKeyEnv => "api_key_env",
-        ProviderStudioField::ApiKey => "api_key",
-        ProviderStudioField::RedirectUri => "redirect_uri",
-        ProviderStudioField::CallbackUrl => "callback_url",
-        ProviderStudioField::RefreshToken => "refresh_token",
-        ProviderStudioField::AccessToken => "access_token",
-        ProviderStudioField::ExpiresAtMs => "expires_at_ms",
-        ProviderStudioField::AccountId => "account_id",
-        ProviderStudioField::EnterpriseDomain => "enterprise_domain",
-        ProviderStudioField::Username => "username",
-        ProviderStudioField::DisplayName => "display_name",
-        ProviderStudioField::Email => "email",
-        ProviderStudioField::AvatarUrl => "avatar_url",
-        ProviderStudioField::Region => "region",
-        ProviderStudioField::Profile => "profile",
-        ProviderStudioField::AccessKeyId => "access_key_id",
-        ProviderStudioField::SecretAccessKey => "secret_access_key",
-        ProviderStudioField::SessionToken => "session_token",
-        ProviderStudioField::ServiceKeyEnv => "service_key_env",
-        ProviderStudioField::DefaultAdapter => "default_adapter",
-        ProviderStudioField::DefaultModel => "default_model",
+        ProviderStudioField::ProviderId => "provider-field-provider-id",
+        ProviderStudioField::AuthMode => "provider-field-auth-mode",
+        ProviderStudioField::CredentialIssuer => "provider-field-credential-issuer",
+        ProviderStudioField::AuthStatus => "provider-field-auth-status",
+        ProviderStudioField::StartAuthAction => "provider-field-start-auth",
+        ProviderStudioField::ContinueAuthAction => "provider-field-continue-auth",
+        ProviderStudioField::EditAuthDetailsAction => "provider-field-auth-details",
+        ProviderStudioField::BaseUrl => "provider-field-base-url",
+        ProviderStudioField::InstanceUrl => "provider-field-instance-url",
+        ProviderStudioField::ApiKeyEnv => "provider-field-api-key-env",
+        ProviderStudioField::ApiKey => "provider-field-api-key",
+        ProviderStudioField::RedirectUri => "provider-field-redirect-uri",
+        ProviderStudioField::CallbackUrl => "provider-field-callback-url",
+        ProviderStudioField::RefreshToken => "provider-field-refresh-token",
+        ProviderStudioField::AccessToken => "provider-field-access-token",
+        ProviderStudioField::ExpiresAtMs => "provider-field-expires-at-ms",
+        ProviderStudioField::AccountId => "provider-field-account-id",
+        ProviderStudioField::EnterpriseDomain => "provider-field-enterprise-domain",
+        ProviderStudioField::Username => "provider-field-username",
+        ProviderStudioField::DisplayName => "provider-field-display-name",
+        ProviderStudioField::Email => "provider-field-email",
+        ProviderStudioField::AvatarUrl => "provider-field-avatar-url",
+        ProviderStudioField::Region => "provider-field-region",
+        ProviderStudioField::Profile => "provider-field-profile",
+        ProviderStudioField::AccessKeyId => "provider-field-access-key-id",
+        ProviderStudioField::SecretAccessKey => "provider-field-secret-access-key",
+        ProviderStudioField::SessionToken => "provider-field-session-token",
+        ProviderStudioField::ServiceKeyEnv => "provider-field-service-key-env",
+        ProviderStudioField::DefaultAdapter => "provider-field-default-adapter",
+        ProviderStudioField::DefaultModel => "provider-field-default-model",
     }
+}
+
+pub(super) fn provider_studio_field_label(i18n: &I18n, field: ProviderStudioField) -> String {
+    ui_text::t(i18n, provider_studio_field_label_key(field))
 }
 
 pub(super) fn provider_studio_field_prompt(i18n: &I18n, field: ProviderStudioField) -> String {
     match field {
         ProviderStudioField::AuthMode => {
-            "Update auth_mode (none | api | gitlab_api | credential | bedrock_sigv4)".to_string()
+            ui_text::t(i18n, "overlay-provider-studio-edit-auth-mode-prompt")
         }
-        ProviderStudioField::CredentialIssuer => {
-            "Update credential_issuer (openai_chatgpt | github_copilot | gitlab | google_adc | sap_ai_core | atomgit)".to_string()
-        }
+        ProviderStudioField::CredentialIssuer => ui_text::t(
+            i18n,
+            "overlay-provider-studio-edit-credential-issuer-prompt",
+        ),
         ProviderStudioField::AuthStatus
         | ProviderStudioField::StartAuthAction
         | ProviderStudioField::ContinueAuthAction
         | ProviderStudioField::EditAuthDetailsAction => String::new(),
         _ => i18n.text_args(
             "overlay-provider-studio-edit-prompt",
-            &crate::fl_args!("field" => provider_studio_field_label(field)),
+            &crate::fl_args!("field" => provider_studio_field_label(i18n, field)),
         ),
     }
 }

@@ -1,1 +1,1 @@
-pub(crate) mod meili;
+pub(crate) mod tool_catalog;

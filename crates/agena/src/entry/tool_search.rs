@@ -1,6 +1,7 @@
 use crate::message::ToolSearchToolInput;
 use crate::plugin::registry::PluginEntry as RegistryPluginEntry;
 use crate::plugin::sdk::ToolTag;
+use crate::search::tool_catalog::{ToolCatalogDocument, search_tool_catalog};
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
@@ -51,7 +52,23 @@ pub(crate) fn execute_with_tools(
         ));
     }
 
-    let results = search_catalog(catalog, input.query.as_str(), input.limit);
+    let limit = input
+        .limit
+        .unwrap_or(DEFAULT_LIMIT as u32)
+        .clamp(1, MAX_LIMIT as u32) as usize;
+    let documents = catalog
+        .iter()
+        .map(|tool| {
+            ToolCatalogDocument::new(
+                tool.name.clone(),
+                tool.description.clone(),
+                tool.tags.iter().map(ToString::to_string).collect(),
+                None,
+            )
+        })
+        .collect::<Vec<_>>();
+    let results = search_tool_catalog(&documents, input.query.as_str(), limit)
+        .map_err(|err| ToolError::Plugin(format!("tool_search failed: {err}")))?;
 
     let mut lines = Vec::new();
     if !input.query.trim().is_empty() {
@@ -92,110 +109,9 @@ pub(crate) fn execute_with_tools(
     Ok(ToolPayloadExecution::new(output, view))
 }
 
-fn search_catalog(
-    catalog: &[SearchableTool],
-    query: &str,
-    limit: Option<u32>,
-) -> Vec<SearchableTool> {
-    let trimmed_query = query.trim();
-    if trimmed_query.is_empty() {
-        return Vec::new();
-    }
-
-    let normalized_query = normalize(trimmed_query);
-    let tokens = normalized_tokens(trimmed_query);
-    let limit = limit
-        .unwrap_or(DEFAULT_LIMIT as u32)
-        .clamp(1, MAX_LIMIT as u32) as usize;
-
-    let mut ranked = catalog
-        .iter()
-        .filter_map(|definition| {
-            let score = score_tool(definition, normalized_query.as_str(), tokens.as_slice());
-            (score > 0).then_some((score, definition))
-        })
-        .collect::<Vec<_>>();
-    ranked.sort_by(|(left_score, left_tool), (right_score, right_tool)| {
-        right_score
-            .cmp(left_score)
-            .then_with(|| left_tool.name.cmp(&right_tool.name))
-    });
-
-    ranked
-        .into_iter()
-        .take(limit)
-        .map(|(_, definition)| definition.clone())
-        .collect()
-}
-
-fn score_tool(definition: &SearchableTool, normalized_query: &str, tokens: &[String]) -> i32 {
-    let normalized_name = normalize(definition.name.as_str());
-    let normalized_description = normalize(definition.description.as_str());
-    let normalized_tags = definition
-        .tags
-        .iter()
-        .map(ToString::to_string)
-        .map(normalize)
-        .collect::<Vec<_>>();
-
-    let mut score = 0;
-
-    if normalized_name == normalized_query {
-        score += 100;
-    } else if normalized_name.contains(normalized_query) {
-        score += 45;
-    }
-
-    if normalized_tags
-        .iter()
-        .any(|tag| tag == normalized_query || tag.contains(normalized_query))
-    {
-        score += 24;
-    }
-
-    if normalized_description.contains(normalized_query) {
-        score += 20;
-    }
-
-    for token in tokens {
-        if normalized_name.contains(token) {
-            score += 12;
-        }
-        if normalized_tags.iter().any(|tag| tag.contains(token)) {
-            score += 6;
-        }
-        if normalized_description.contains(token) {
-            score += 5;
-        }
-    }
-
-    score
-}
-
-fn normalize(value: impl AsRef<str>) -> String {
-    value
-        .as_ref()
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['_', '-'], " ")
-}
-
-fn normalized_tokens(value: &str) -> Vec<String> {
-    normalize(value)
-        .split_whitespace()
-        .filter(|token| token.len() >= 2)
-        .map(str::to_string)
-        .collect()
-}
-
-fn tags_summary(definition: &SearchableTool) -> String {
+fn tags_summary(definition: &ToolCatalogDocument) -> String {
     if definition.tags.is_empty() {
         return "untagged".to_string();
     }
-    definition
-        .tags
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ")
+    definition.tags.join(", ")
 }

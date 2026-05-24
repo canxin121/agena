@@ -868,21 +868,12 @@ min_query_chars = 8
 
 ## Workflow Tool Search
 
-```toml
-[plugins.list."agena.workflow"]
-kind = "static"
+`agena.workflow/tools` 的 `search` action 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tool catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。
 
-[plugins.list."agena.workflow".options.tool_search]
-url = "http://127.0.0.1:7700"
-api_key = "optional-meili-key"
-index = "agena_tool_catalog"
-```
+兼容性说明：
 
-`agena.workflow/tools` 的 `search` action 现在直接走 Meilisearch。字段说明：
-
-- `tool_search.url`: Meilisearch 地址；为空时 `tools search` 会报配置缺失。
-- `tool_search.api_key`: 可选 Meilisearch API key。
-- `tool_search.index`: tool catalog 索引名，默认 `agena_tool_catalog`。
+- 旧的 `plugins.list."agena.workflow".options.tool_search` 配置目前仍可保留，用于兼容已有配置文件。
+- 当前版本不会再读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
 
 ## Removed: `agena.hooks`
 

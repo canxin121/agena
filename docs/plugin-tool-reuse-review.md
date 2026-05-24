@@ -54,7 +54,7 @@
 | Web 搜索 | `agena.web` 内置 Tavily/Exa/Brave/DDG | 独立 search MCP / 第三方 server | 先不替换，继续内置 | P2 |
 | Memory/RAG | `agena.memory` 已是文件持久化 + Tantivy 本地检索 + prompt 注入 | Qdrant、LanceDB、mem0 思路 | 适合新增更强 RAG/长期记忆能力，不适合替换当前本地 memory | P2 |
 | MCP 安全 | 当前主要靠权限系统和网络审计 | `mcp-firewall`、`mcp-scan`、`agent-scan` | 适合加在接入层和 CI，不适合塞进 tool body | P2 |
-| Tool discovery | `tool_search` 目前是轻量字符串打分 | Meilisearch | 现阶段不建议引入 | P3 |
+| Tool discovery | `tool_search` 当前是内置 Tantivy 本地检索 | Meilisearch | 保持内置实现，暂不引入外部服务 | P3 |
 | 观测/Eval | 已有 OTEL、事件、trace | Langfuse、Phoenix、Promptfoo | 适合外围集成，不替换 core | P3 |
 | Agent 框架 | 自研 runtime | Rig、Swiftide、LangGraph、LangChain 等 | 只借鉴设计，不直接引入 | P3 |
 
@@ -312,7 +312,7 @@
 
 不适合直接塞进当前 core runtime，除非你们明确要做“长期记忆平台”。
 
-### Tool search 引擎：Meilisearch
+### Tool search 引擎：内置 Tantivy
 
 当前 `tool_search` 是小规模 catalog 搜索。现阶段：
 
@@ -320,7 +320,7 @@
 - catalog 主要由内置 tool、skills、MCP server 组成
 - 查询复杂度不高
 
-引入 Meilisearch 的收益还不够覆盖：
+继续引入 Meilisearch 这类外部索引服务的收益还不够覆盖：
 
 - 新服务依赖
 - 索引同步

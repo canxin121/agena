@@ -52,7 +52,7 @@
 | Skills 格式 | `agena.skills` 扫描 `SKILL.md` / slash command | GitHub Agent Skills、Vercel Skills、AGENTS.md | 保留实现，增强兼容层 | P1 |
 | 代码结构化搜索 | 当前以 `glob`/`grep`/LSP 为主 | `ast-grep`、`tree-sitter` | 适合增强内置 tool | P1 |
 | Web 搜索 | `agena.web` 内置 Tavily/Exa/Brave/DDG | 独立 search MCP / 第三方 server | 先不替换，继续内置 | P2 |
-| Memory/RAG | `agena.memory` 主要是 prompt 注入 | Qdrant、LanceDB、Meilisearch、mem0 思路 | 适合新增能力，不适合直接替换 | P2 |
+| Memory/RAG | `agena.memory` 已是文件持久化 + Tantivy 本地检索 + prompt 注入 | Qdrant、LanceDB、mem0 思路 | 适合新增更强 RAG/长期记忆能力，不适合替换当前本地 memory | P2 |
 | MCP 安全 | 当前主要靠权限系统和网络审计 | `mcp-firewall`、`mcp-scan`、`agent-scan` | 适合加在接入层和 CI，不适合塞进 tool body | P2 |
 | Tool discovery | `tool_search` 目前是轻量字符串打分 | Meilisearch | 现阶段不建议引入 | P3 |
 | 观测/Eval | 已有 OTEL、事件、trace | Langfuse、Phoenix、Promptfoo | 适合外围集成，不替换 core | P3 |
@@ -197,26 +197,24 @@
 - 新增 skill 时，团队更容易复用公开样板
 - 你们不用长期独自维护一套完全私有的 skill 规范
 
-### 6. `agena.memory` 应该从“prompt 注入”演进到“可调用 memory 工具”
+### 6. `agena.memory` 应该继续保留“文件记忆 + 本地检索 + 可调用工具”的单一实现
 
 当前 `agena.memory` 更像是：
 
-- 从磁盘读 `MEMORY.md`
-- 把项目指令和记忆拼进 system prompt
+- 以 workspace 文件作为 durable memory source
+- 通过模型可见 `memory` tool 提供 `search` / `get` / `list` / `write` / `delete`
+- 用进程内 Tantivy 做本地全文检索
+- 把项目指令和相关记忆注入 prompt
 
-这对最小可用产品没问题，但它还不是一个真正的 memory subsystem。
+这条路线对当前产品形态是合理的：没有外部服务依赖，索引和 memory 文件保持同一宿主边界。
 
 建议不要直接引入 mem0、Letta、Graphiti 作为核心依赖。更稳的路线是：
 
-1. 先给 `agena.memory` 增加模型可见 action：
-   - `read`
-   - `write`
-   - `search`
-   - `list`
-2. 先用现有 plugin storage / workspace 文件作为默认后端。
-3. 只有在明确需要跨项目检索、排序和混合搜索时，再引入：
+1. 保持现有 workspace 文件作为唯一 durable source of truth。
+2. 保持本地 Tantivy 作为唯一全文检索实现，不再引入可切换 backend。
+3. 只有在明确需要跨项目向量检索或长期记忆策略时，再考虑叠加：
    - Qdrant / LanceDB 作为向量层
-   - Meilisearch 作为全文/混合检索层
+   - mem0 一类策略层用于提取、排序、更新
 
 适合借鉴的不是依赖本身，而是这些项目的思路：
 

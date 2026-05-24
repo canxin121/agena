@@ -8,23 +8,20 @@ use agena_tui_components::{
     EditorPreviewDialogSpec, EditorPreviewHelpSpec, FramedSurfaceSpec,
     HeaderBodyFooterTextSurfaceSpec, HeaderRowSpec, LineTextDialogSpec, ListPanelSpec,
     ListWorkbenchDialogSpec, ListWorkbenchPanelState, QuerySuggestionPopupSpec,
-    QuestionFlowCustomInputSpec,
-    QuestionFlowDialogMode, QuestionFlowDialogSpec, SearchListDialogSpec, SearchPanelsDialogSpec,
-    SearchPanelsDialogState, SectionedWorkbenchDialogSpec, SuggestionPopupItem,
-    SuggestionPopupSpec, SurfaceMode, TextDialogLine, TextPanelSpec, VerticalSectionSize,
-    WorkbenchTextSection, WrappedTextSpec, render_framed_surface, render_list_panel,
-    render_text_panel,
+    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
+    SearchListDialogSpec, SearchPanelsDialogSpec, SearchPanelsDialogState,
+    SectionedWorkbenchDialogSpec, SuggestionPopupItem, SuggestionPopupSpec, SurfaceMode,
+    TextDialogLine, TextPanelSpec, VerticalSectionSize, WorkbenchTextSection, WrappedTextSpec,
     adaptive_detail_split, adaptive_modal_width, build_accented_two_line_list_item,
     build_detail_two_line_list_item, build_wrapped_text_lines, inset_rect, join_inline_segments,
-    layout_composer_surface,
-    layout_header_body_footer_surface, pane_header_height, render_composer_editor_surface,
-    render_dashboard_workbench_dialog, render_decision_dialog, render_editor_dialog,
-    render_editor_preview_dialog, render_header_body_footer_text_surface, render_header_row,
-    render_line_text_dialog, render_list_workbench_dialog, render_overlay_line_input_dialog,
+    layout_composer_surface, layout_header_body_footer_surface, pane_header_height,
+    render_composer_editor_surface, render_dashboard_workbench_dialog, render_decision_dialog,
+    render_editor_dialog, render_editor_preview_dialog, render_framed_surface,
+    render_header_body_footer_text_surface, render_header_row, render_line_text_dialog,
+    render_list_panel, render_list_workbench_dialog, render_overlay_line_input_dialog,
     render_query_suggestion_popup, render_question_flow_dialog, render_search_list_dialog,
     render_search_panels_dialog, render_sectioned_workbench_dialog, render_suggestion_popup,
-    render_wrapped_text,
-    split_vertical_sections, truncate_display_text,
+    render_text_panel, render_wrapped_text, split_vertical_sections, truncate_display_text,
 };
 use ratatui::{
     layout::{Alignment, Direction, Layout},
@@ -1797,7 +1794,10 @@ impl App {
         let body_area = sections.get(1).copied().unwrap_or(framed.inner);
         let footer_area = sections.get(2).copied().unwrap_or(Rect {
             x: framed.inner.x,
-            y: framed.inner.y.saturating_add(framed.inner.height.saturating_sub(1)),
+            y: framed
+                .inner
+                .y
+                .saturating_add(framed.inner.height.saturating_sub(1)),
             width: framed.inner.width,
             height: 1,
         });
@@ -1841,9 +1841,11 @@ impl App {
             .iter()
             .map(|item| {
                 build_accented_two_line_list_item(
-                    sanitize_display_text(
-                        format!("{}{}", "  ".repeat(item.level), item.label.as_str()),
-                    )
+                    sanitize_display_text(format!(
+                        "{}{}",
+                        "  ".repeat(item.level),
+                        item.label.as_str()
+                    ))
                     .into(),
                     None,
                     None,
@@ -1881,7 +1883,8 @@ impl App {
             }
             return;
         };
-        let table_text = self.permission_studio_table_text(dialog, selected_section, table_area.width);
+        let table_text =
+            self.permission_studio_table_text(dialog, selected_section, table_area.width);
         render_text_panel(
             frame,
             table_area,
@@ -1925,7 +1928,10 @@ impl App {
     ) -> Text<'static> {
         let (left_header, right_header) = Self::permission_studio_table_headers(section.id);
         let width = width.max(24);
-        let left_width = width.saturating_mul(45).saturating_div(100).clamp(12, width - 12);
+        let left_width = width
+            .saturating_mul(45)
+            .saturating_div(100)
+            .clamp(12, width - 12);
         let right_width = width.saturating_sub(left_width).saturating_sub(3).max(8);
         let mut lines = Vec::new();
         let header_style = Style::default()
@@ -2014,32 +2020,31 @@ impl App {
             return;
         }
 
-        let spans = buttons
-            .into_iter()
-            .enumerate()
-            .fold(Vec::new(), |mut acc, (index, (label, style))| {
-                if index > 0 {
-                    acc.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
-                }
-                acc.push(Span::styled(format!("[ {label} ]"), style));
-                acc
-            });
+        let spans =
+            buttons
+                .into_iter()
+                .enumerate()
+                .fold(Vec::new(), |mut acc, (index, (label, style))| {
+                    if index > 0 {
+                        acc.push(Span::styled("  ", Style::default().fg(Color::DarkGray)));
+                    }
+                    acc.push(Span::styled(format!("[ {label} ]"), style));
+                    acc
+                });
         frame.render_widget(
             Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
             area,
         );
     }
 
-    fn permission_studio_table_headers(
-        section_id: PermissionStudioSectionId,
-    ) -> (String, String) {
+    fn permission_studio_table_headers(section_id: PermissionStudioSectionId) -> (String, String) {
         match section_id {
-            PermissionStudioSectionId::PathDefaults => {
-                ("Setting".to_string(), "Value".to_string())
-            }
+            PermissionStudioSectionId::PathDefaults => ("Setting".to_string(), "Value".to_string()),
             PermissionStudioSectionId::PathRules => ("Path".to_string(), "Access".to_string()),
             PermissionStudioSectionId::NetworkZones => ("Zone".to_string(), "Connect".to_string()),
-            PermissionStudioSectionId::NetworkRules => ("Domain".to_string(), "Connect".to_string()),
+            PermissionStudioSectionId::NetworkRules => {
+                ("Domain".to_string(), "Connect".to_string())
+            }
             PermissionStudioSectionId::EntryTags => ("Tag".to_string(), "Access".to_string()),
             PermissionStudioSectionId::EntryNames => ("Name".to_string(), "Access".to_string()),
             PermissionStudioSectionId::EntryCommandRules => {
@@ -2047,9 +2052,7 @@ impl App {
             }
             PermissionStudioSectionId::RootPath
             | PermissionStudioSectionId::RootNetwork
-            | PermissionStudioSectionId::RootEntries => {
-                ("Item".to_string(), "Summary".to_string())
-            }
+            | PermissionStudioSectionId::RootEntries => ("Item".to_string(), "Summary".to_string()),
         }
     }
 
@@ -2082,9 +2085,7 @@ impl App {
             | PermissionStudioSectionId::NetworkZones
             | PermissionStudioSectionId::RootPath
             | PermissionStudioSectionId::RootNetwork
-            | PermissionStudioSectionId::RootEntries => {
-                Vec::new()
-            }
+            | PermissionStudioSectionId::RootEntries => Vec::new(),
             PermissionStudioSectionId::PathRules
             | PermissionStudioSectionId::NetworkRules
             | PermissionStudioSectionId::EntryTags

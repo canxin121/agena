@@ -332,7 +332,7 @@ onBeforeUnmount(() => {
       </section>
 
       <section class="card">
-        <h3>Maintenance</h3>
+        <h3>Runtime Tasks</h3>
         <div v-if="props.runtime" class="stack">
           <div>
             <strong>Reload:</strong> {{ props.runtime.reload.enabled ? 'enabled' : 'disabled' }} ({{
@@ -340,8 +340,8 @@ onBeforeUnmount(() => {
             }}s)
           </div>
           <div>
-            <strong>Session Maintenance:</strong> {{ props.runtime.session_maintenance.enabled ? 'enabled' : 'disabled' }} ({{
-              props.runtime.session_maintenance.interval_secs
+            <strong>Session GC:</strong> {{ props.runtime.session_gc.enabled ? 'enabled' : 'disabled' }} ({{
+              props.runtime.session_gc.interval_secs
             }}s)
           </div>
           <div><strong>Watch Paths:</strong></div>
@@ -350,7 +350,7 @@ onBeforeUnmount(() => {
           </div>
           <div v-else class="muted">No watch paths configured.</div>
         </div>
-        <p v-else class="muted">Loading maintenance state…</p>
+        <p v-else class="muted">Loading runtime tasks…</p>
       </section>
     </div>
 

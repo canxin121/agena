@@ -71,7 +71,7 @@ export type RuntimeStatus = {
     enabled: boolean
     interval_secs: number
   }
-  session_maintenance: {
+  session_gc: {
     enabled: boolean
     interval_secs: number
   }

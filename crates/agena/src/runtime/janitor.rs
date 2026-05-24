@@ -5,13 +5,13 @@ use super::builder::AgenaRuntime;
 pub(crate) async fn run(runtime: AgenaRuntime) {
     loop {
         let snapshot = runtime.current_snapshot();
-        let interval = snapshot.session_maintenance_interval();
+        let interval = snapshot.session_gc_interval();
         if wait_for_tick_or_shutdown(&runtime, interval).await {
             break;
         }
 
         let snapshot = runtime.current_snapshot();
-        if !snapshot.session_maintenance_enabled() {
+        if !snapshot.session_gc_enabled() {
             continue;
         }
 

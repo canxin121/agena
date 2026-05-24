@@ -1,9 +1,10 @@
 use std::str::FromStr;
 
 use super::{
-    ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig,
-    RawRuntimeConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
-    RawStreamReplayConfig, RawTracingConfig, RawUiConfig, parse_numeric,
+    ConfigError, RawConfig, RawProviderHttpConfig, RawRequestRetryConfig, RawRuntimeConfig,
+    RawRuntimeGcConfig, RawRuntimeModelCatalogConfig, RawRuntimeProvidersConfig,
+    RawRuntimeSessionConfig, RawSessionCacheConfig, RawStreamReplayConfig, RawTracingConfig,
+    RawUiConfig, parse_numeric,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +23,11 @@ pub enum ConfigOverride {
     StreamReplayMaxRetriesAfterOutput(u32),
     StreamReplayMaxTrackedEvents(usize),
     ModelCatalogCacheMaxAgeSecs(u64),
+    RuntimeSessionCacheMaxSessions(usize),
+    RuntimeSessionCacheTtlSecs(u64),
+    RuntimeSessionCacheMaxBytes(usize),
+    RuntimeSessionGcEnabled(bool),
+    RuntimeSessionGcIntervalSecs(u64),
     ProviderDefaultsProvider {
         provider_id: String,
         value: String,
@@ -121,18 +127,18 @@ impl FromStr for ConfigOverride {
             "agents.default" => Ok(Self::AgentsDefault(raw_value.to_owned())),
             _ if key.starts_with("providers.") => parse_provider_override(key, raw_value),
             _ if key.starts_with("agents.") => parse_agent_override(key, raw_value),
-            "runtime.providers.http.timeout_secs" => {
-                Ok(Self::ProviderHttpTimeoutSecs(parse_numeric(raw_value, key)?))
-            }
-            "runtime.providers.http.connect_timeout_secs" => {
-                Ok(Self::ProviderConnectTimeoutSecs(parse_numeric(raw_value, key)?))
-            }
+            "runtime.providers.http.timeout_secs" => Ok(Self::ProviderHttpTimeoutSecs(
+                parse_numeric(raw_value, key)?,
+            )),
+            "runtime.providers.http.connect_timeout_secs" => Ok(Self::ProviderConnectTimeoutSecs(
+                parse_numeric(raw_value, key)?,
+            )),
             "runtime.providers.retry.max_retries" => {
                 Ok(Self::RequestRetryMaxRetries(parse_numeric(raw_value, key)?))
             }
-            "runtime.providers.retry.base_delay_ms" => {
-                Ok(Self::RequestRetryBaseDelayMs(parse_numeric(raw_value, key)?))
-            }
+            "runtime.providers.retry.base_delay_ms" => Ok(Self::RequestRetryBaseDelayMs(
+                parse_numeric(raw_value, key)?,
+            )),
             "runtime.providers.retry.max_delay_ms" => {
                 Ok(Self::RequestRetryMaxDelayMs(parse_numeric(raw_value, key)?))
             }
@@ -142,9 +148,24 @@ impl FromStr for ConfigOverride {
             "runtime.providers.stream_replay.max_tracked_events" => Ok(
                 Self::StreamReplayMaxTrackedEvents(parse_numeric(raw_value, key)?),
             ),
-            "runtime.model_catalog.cache_max_age_secs" => {
-                Ok(Self::ModelCatalogCacheMaxAgeSecs(parse_numeric(raw_value, key)?))
+            "runtime.model_catalog.cache_max_age_secs" => Ok(Self::ModelCatalogCacheMaxAgeSecs(
+                parse_numeric(raw_value, key)?,
+            )),
+            "runtime.session.cache.max_sessions" => Ok(Self::RuntimeSessionCacheMaxSessions(
+                parse_numeric(raw_value, key)?,
+            )),
+            "runtime.session.cache.ttl_secs" => Ok(Self::RuntimeSessionCacheTtlSecs(
+                parse_numeric(raw_value, key)?,
+            )),
+            "runtime.session.cache.max_bytes" => Ok(Self::RuntimeSessionCacheMaxBytes(
+                parse_numeric(raw_value, key)?,
+            )),
+            "runtime.session.gc.enabled" => {
+                Ok(Self::RuntimeSessionGcEnabled(parse_bool(key, raw_value)?))
             }
+            "runtime.session.gc.interval_secs" => Ok(Self::RuntimeSessionGcIntervalSecs(
+                parse_numeric(raw_value, key)?,
+            )),
             _ => Err(ConfigError::InvalidOverride(key.to_owned())),
         }
     }
@@ -257,6 +278,56 @@ impl ConfigOverride {
                     .model_catalog
                     .get_or_insert_with(RawRuntimeModelCatalogConfig::default)
                     .cache_max_age_secs = Some(*value);
+            }
+            Self::RuntimeSessionCacheMaxSessions(value) => {
+                config
+                    .runtime
+                    .get_or_insert_with(RawRuntimeConfig::default)
+                    .session
+                    .get_or_insert_with(RawRuntimeSessionConfig::default)
+                    .cache
+                    .get_or_insert_with(RawSessionCacheConfig::default)
+                    .max_sessions = Some(*value);
+            }
+            Self::RuntimeSessionCacheTtlSecs(value) => {
+                config
+                    .runtime
+                    .get_or_insert_with(RawRuntimeConfig::default)
+                    .session
+                    .get_or_insert_with(RawRuntimeSessionConfig::default)
+                    .cache
+                    .get_or_insert_with(RawSessionCacheConfig::default)
+                    .ttl_secs = Some(*value);
+            }
+            Self::RuntimeSessionCacheMaxBytes(value) => {
+                config
+                    .runtime
+                    .get_or_insert_with(RawRuntimeConfig::default)
+                    .session
+                    .get_or_insert_with(RawRuntimeSessionConfig::default)
+                    .cache
+                    .get_or_insert_with(RawSessionCacheConfig::default)
+                    .max_bytes = Some(*value);
+            }
+            Self::RuntimeSessionGcEnabled(value) => {
+                config
+                    .runtime
+                    .get_or_insert_with(RawRuntimeConfig::default)
+                    .session
+                    .get_or_insert_with(RawRuntimeSessionConfig::default)
+                    .gc
+                    .get_or_insert_with(RawRuntimeGcConfig::default)
+                    .enabled = Some(*value);
+            }
+            Self::RuntimeSessionGcIntervalSecs(value) => {
+                config
+                    .runtime
+                    .get_or_insert_with(RawRuntimeConfig::default)
+                    .session
+                    .get_or_insert_with(RawRuntimeSessionConfig::default)
+                    .gc
+                    .get_or_insert_with(RawRuntimeGcConfig::default)
+                    .interval_secs = Some(*value);
             }
             Self::ProviderDefaultsProvider { provider_id, value } => {
                 config
@@ -474,14 +545,12 @@ fn parse_provider_override(key: &str, raw_value: &str) -> Result<ConfigOverride,
                 "provider" => Ok(ConfigOverride::ProviderDefaultsProvider { provider_id, value }),
                 "adapter" => Ok(ConfigOverride::ProviderDefaultsAdapter { provider_id, value }),
                 "model" => Ok(ConfigOverride::ProviderDefaultsModel { provider_id, value }),
-                "thinking_mode" => Ok(ConfigOverride::ProviderDefaultsThinkingMode {
-                    provider_id,
-                    value,
-                }),
-                "speed_mode" => Ok(ConfigOverride::ProviderDefaultsSpeedMode {
-                    provider_id,
-                    value,
-                }),
+                "thinking_mode" => {
+                    Ok(ConfigOverride::ProviderDefaultsThinkingMode { provider_id, value })
+                }
+                "speed_mode" => {
+                    Ok(ConfigOverride::ProviderDefaultsSpeedMode { provider_id, value })
+                }
                 "verbosity" => Ok(ConfigOverride::ProviderDefaultsVerbosity { provider_id, value }),
                 "parallel_tool_calls" => Ok(ConfigOverride::ProviderDefaultsParallelToolCalls {
                     provider_id,
@@ -540,10 +609,9 @@ fn parse_agent_override(key: &str, raw_value: &str) -> Result<ConfigOverride, Co
                 "provider" => Ok(ConfigOverride::AgentDefaultsProvider { agent_name, value }),
                 "adapter" => Ok(ConfigOverride::AgentDefaultsAdapter { agent_name, value }),
                 "model" => Ok(ConfigOverride::AgentDefaultsModel { agent_name, value }),
-                "thinking_mode" => Ok(ConfigOverride::AgentDefaultsThinkingMode {
-                    agent_name,
-                    value,
-                }),
+                "thinking_mode" => {
+                    Ok(ConfigOverride::AgentDefaultsThinkingMode { agent_name, value })
+                }
                 "speed_mode" => Ok(ConfigOverride::AgentDefaultsSpeedMode { agent_name, value }),
                 "verbosity" => Ok(ConfigOverride::AgentDefaultsVerbosity { agent_name, value }),
                 "parallel_tool_calls" => Ok(ConfigOverride::AgentDefaultsParallelToolCalls {

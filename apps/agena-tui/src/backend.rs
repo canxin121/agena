@@ -73,8 +73,7 @@ use agena_api::{
         MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
         ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
         ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderSummaryResource,
-        RunOptions,
-        SessionExecutionResource, SessionResource, WorkspaceResource,
+        RunOptions, SessionExecutionResource, SessionResource, WorkspaceResource,
     },
 };
 use agena_api_server::{

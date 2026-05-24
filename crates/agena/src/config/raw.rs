@@ -10,17 +10,17 @@ use crate::provider::{
 };
 
 use super::{
-    AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError,
-    HttpProviderAdapterConfig, McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig,
-    ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderAdapterOverlay,
-    ProviderApiAuthConfig, ProviderAuthConfig, ProviderAuthMode, ProviderAuthOverlay,
-    ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderGitlabAuthConfig,
+    AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, HttpProviderAdapterConfig,
+    McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig, ProjectInstructionsConfig,
+    ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderApiAuthConfig, ProviderAuthConfig,
+    ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
+    ProviderCredentialAuthConfig, ProviderDefaultsConfig, ProviderGitlabAuthConfig,
     ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
-    ProviderDefaultsConfig, ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay,
-    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
-    ResolvedProviderModelConfig, RuntimeConfig, RuntimeModelCatalogConfig,
-    RuntimeProvidersConfig, SessionCompactionConfig, SessionConfig,
-    SessionMaintenanceConfig, StreamTransportMode, TracingConfig, UiConfig, WebToolsConfig,
+    ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay, ResolvedConfig,
+    ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
+    RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig, RuntimeProvidersConfig,
+    RuntimeSessionConfig, SessionCacheConfig, SessionCompactionConfig, SessionConfig,
+    StreamTransportMode, TracingConfig, UiConfig, WebToolsConfig,
 };
 
 const DEFAULT_LOG_FILTER: &str = "info";
@@ -409,7 +409,8 @@ impl RawConfig {
             .into_iter()
             .map(|(provider_id, raw)| raw.resolve(provider_id, env))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        let default_selection = resolve_default_selection(providers_default.as_deref(), &providers)?;
+        let default_selection =
+            resolve_default_selection(providers_default.as_deref(), &providers)?;
         let default_agent = resolve_default_agent(agents_default.as_deref(), &self.agents.agents)?;
 
         validate_permission_config("permission", &permission)?;
@@ -445,8 +446,9 @@ fn resolve_default_selection(
     explicit_provider: Option<&str>,
     providers: &BTreeMap<String, ResolvedProviderConfig>,
 ) -> Result<crate::execution_prefs::ExecutionSelection, ConfigError> {
-    let provider_id = if let Some(explicit_provider) =
-        explicit_provider.map(str::trim).filter(|value| !value.is_empty())
+    let provider_id = if let Some(explicit_provider) = explicit_provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
         let provider = providers.get(explicit_provider).ok_or_else(|| {
             ConfigError::Validation(format!(
@@ -595,18 +597,11 @@ impl Merge for MemoryConfig {
     fn merge_from(&mut self, overlay: Self) {
         self.project_instructions
             .merge_from(overlay.project_instructions);
-        self.search.merge_from(overlay.search);
         self.retrieval.merge_from(overlay.retrieval);
     }
 }
 
 impl Merge for ProjectInstructionsConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        *self = overlay;
-    }
-}
-
-impl Merge for crate::config::types::MemorySearchConfig {
     fn merge_from(&mut self, overlay: Self) {
         *self = overlay;
     }
@@ -698,6 +693,8 @@ pub(crate) struct RawRuntimeConfig {
     pub(crate) model_catalog: Option<RawRuntimeModelCatalogConfig>,
     #[merge(strategy = option_struct_merge)]
     pub(crate) reload: Option<RawRuntimeReloadConfig>,
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) session: Option<RawRuntimeSessionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -719,6 +716,7 @@ impl RuntimeConfig {
         let stream_replay = providers.stream_replay.unwrap_or_default();
         let model_catalog = raw.model_catalog.unwrap_or_default();
         let reload = raw.reload.unwrap_or_default();
+        let session = raw.session.unwrap_or_default();
 
         let timeout_secs = provider_http.timeout_secs.unwrap_or(120);
         let connect_timeout_secs = provider_http.connect_timeout_secs.unwrap_or(15);
@@ -749,6 +747,8 @@ impl RuntimeConfig {
             ));
         }
 
+        let runtime_session = RuntimeSessionConfig::from_raw(session)?;
+
         Ok(Self {
             providers: RuntimeProvidersConfig {
                 http: super::ProviderHttpConfig {
@@ -776,6 +776,7 @@ impl RuntimeConfig {
                 enabled: reload.enabled.unwrap_or(true),
                 poll_interval_secs: reload_poll_interval_secs,
             },
+            session: runtime_session,
         })
     }
 }
@@ -785,10 +786,6 @@ impl RuntimeConfig {
 pub(crate) struct RawSessionConfig {
     #[merge(strategy = option_struct_merge)]
     pub(crate) compaction: Option<RawSessionCompactionConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) cache: Option<RawSessionCacheConfig>,
-    #[merge(strategy = option_struct_merge)]
-    pub(crate) maintenance: Option<RawSessionMaintenanceConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -803,47 +800,54 @@ pub(crate) struct RawSessionCompactionConfig {
 impl SessionConfig {
     pub(crate) fn from_raw(raw: RawSessionConfig) -> Result<Self, ConfigError> {
         let compaction = raw.compaction.unwrap_or_default();
-        let cache = raw.cache.unwrap_or_default();
-        let maintenance = raw.maintenance.unwrap_or_default();
-        let cache_ttl_secs = cache.ttl_secs.unwrap_or(15 * 60);
-        let cache_max_sessions = cache.max_sessions.unwrap_or(128);
-        let cache_max_bytes = cache.max_bytes.unwrap_or(64 * 1024 * 1024);
-        let maintenance_interval_secs = maintenance.interval_secs.unwrap_or(30);
-
-        if maintenance_interval_secs == 0 {
-            return Err(ConfigError::Validation(
-                "session.maintenance.interval_secs must be greater than 0".to_owned(),
-            ));
-        }
-        if cache_ttl_secs == 0 {
-            return Err(ConfigError::Validation(
-                "session.cache.ttl_secs must be greater than 0".to_owned(),
-            ));
-        }
-        if cache_max_sessions == 0 {
-            return Err(ConfigError::Validation(
-                "session.cache.max_sessions must be greater than 0".to_owned(),
-            ));
-        }
-        if cache_max_bytes == 0 {
-            return Err(ConfigError::Validation(
-                "session.cache.max_bytes must be greater than 0".to_owned(),
-            ));
-        }
-
         Ok(Self {
             compaction: SessionCompactionConfig {
                 auto: compaction.auto.unwrap_or(true),
                 reserved_tokens: compaction.reserved_tokens,
             },
-            cache: super::SessionCacheConfig {
+        })
+    }
+}
+
+impl RuntimeSessionConfig {
+    pub(crate) fn from_raw(raw: RawRuntimeSessionConfig) -> Result<Self, ConfigError> {
+        let cache = raw.cache.unwrap_or_default();
+        let gc = raw.gc.unwrap_or_default();
+        let cache_ttl_secs = cache.ttl_secs.unwrap_or(15 * 60);
+        let cache_max_sessions = cache.max_sessions.unwrap_or(128);
+        let cache_max_bytes = cache.max_bytes.unwrap_or(64 * 1024 * 1024);
+        let gc_interval_secs = gc.interval_secs.unwrap_or(30);
+
+        if gc_interval_secs == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.session.gc.interval_secs must be greater than 0".to_owned(),
+            ));
+        }
+        if cache_ttl_secs == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.session.cache.ttl_secs must be greater than 0".to_owned(),
+            ));
+        }
+        if cache_max_sessions == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.session.cache.max_sessions must be greater than 0".to_owned(),
+            ));
+        }
+        if cache_max_bytes == 0 {
+            return Err(ConfigError::Validation(
+                "runtime.session.cache.max_bytes must be greater than 0".to_owned(),
+            ));
+        }
+
+        Ok(Self {
+            cache: SessionCacheConfig {
                 max_sessions: cache_max_sessions,
                 ttl_secs: cache_ttl_secs,
                 max_bytes: cache_max_bytes,
             },
-            maintenance: SessionMaintenanceConfig {
-                enabled: maintenance.enabled.unwrap_or(true),
-                interval_secs: maintenance_interval_secs,
+            gc: RuntimeGcConfig {
+                enabled: gc.enabled.unwrap_or(true),
+                interval_secs: gc_interval_secs,
             },
         })
     }
@@ -902,11 +906,20 @@ pub(crate) struct RawRuntimeReloadConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
-pub(crate) struct RawSessionMaintenanceConfig {
+pub(crate) struct RawRuntimeGcConfig {
     #[merge(strategy = option_override)]
     pub(crate) enabled: Option<bool>,
     #[merge(strategy = option_override)]
     pub(crate) interval_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct RawRuntimeSessionConfig {
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) cache: Option<RawSessionCacheConfig>,
+    #[merge(strategy = option_struct_merge)]
+    pub(crate) gc: Option<RawRuntimeGcConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -1001,7 +1014,9 @@ impl ProviderOverlay {
         }
 
         let provider_defaults = self.defaults.unwrap_or_default();
-        if let Some(default_provider) = normalize_optional_string(provider_defaults.provider.clone()) {
+        if let Some(default_provider) =
+            normalize_optional_string(provider_defaults.provider.clone())
+        {
             if default_provider.as_str() != provider_id.as_str() {
                 return Err(ConfigError::InvalidProviderConfig {
                     provider_id: provider_id.clone(),
@@ -1886,7 +1901,8 @@ impl_local_merge_via_crate!(
     RawStreamReplayConfig,
     RawRuntimeModelCatalogConfig,
     RawRuntimeReloadConfig,
-    RawSessionMaintenanceConfig,
+    RawRuntimeGcConfig,
+    RawRuntimeSessionConfig,
     RawSessionCacheConfig,
     ProviderProtocolPathsOverlay,
     ProviderAuthOverlay,

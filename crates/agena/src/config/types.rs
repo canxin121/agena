@@ -198,6 +198,7 @@ pub struct RuntimeConfig {
     pub providers: RuntimeProvidersConfig,
     pub model_catalog: RuntimeModelCatalogConfig,
     pub reload: RuntimeReloadConfig,
+    pub session: RuntimeSessionConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -205,31 +206,6 @@ pub struct RuntimeProvidersConfig {
     pub http: ProviderHttpConfig,
     pub retry: RequestRetryConfig,
     pub stream_replay: StreamReplayConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct SessionConfig {
-    pub compaction: SessionCompactionConfig,
-    pub cache: SessionCacheConfig,
-    pub maintenance: SessionMaintenanceConfig,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct SessionCompactionConfig {
-    pub auto: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reserved_tokens: Option<u32>,
-}
-
-impl Default for SessionCompactionConfig {
-    fn default() -> Self {
-        Self {
-            auto: true,
-            reserved_tokens: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -264,7 +240,14 @@ pub struct RuntimeReloadConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
-pub struct SessionMaintenanceConfig {
+pub struct RuntimeSessionConfig {
+    pub cache: SessionCacheConfig,
+    pub gc: RuntimeGcConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct RuntimeGcConfig {
     pub enabled: bool,
     pub interval_secs: u64,
 }
@@ -275,6 +258,29 @@ pub struct SessionCacheConfig {
     pub max_sessions: usize,
     pub ttl_secs: u64,
     pub max_bytes: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SessionConfig {
+    pub compaction: SessionCompactionConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionCompactionConfig {
+    pub auto: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reserved_tokens: Option<u32>,
+}
+
+impl Default for SessionCompactionConfig {
+    fn default() -> Self {
+        Self {
+            auto: true,
+            reserved_tokens: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -306,7 +312,6 @@ pub use agena_plugin_host::PluginsConfig as PluginConfig;
 #[derive(Default)]
 pub struct MemoryConfig {
     pub project_instructions: ProjectInstructionsConfig,
-    pub search: MemorySearchConfig,
     pub retrieval: MemoryRetrievalConfig,
 }
 
@@ -322,25 +327,6 @@ impl Default for ProjectInstructionsConfig {
         Self {
             enabled: true,
             include_global: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct MemorySearchConfig {
-    pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api_key: Option<String>,
-    pub index_prefix: String,
-}
-
-impl Default for MemorySearchConfig {
-    fn default() -> Self {
-        Self {
-            url: String::new(),
-            api_key: None,
-            index_prefix: "agena_memory".to_owned(),
         }
     }
 }

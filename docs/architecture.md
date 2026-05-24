@@ -459,7 +459,7 @@ AGENA_DATABASE_PATH
 Runtime starts two long-running tasks:
 
 - reload task: watches config-related paths and rebuilds snapshot when modified.
-- session maintenance task: periodic maintenance for session cache and related runtime/session resources.
+- session GC task: periodic maintenance for session cache and related runtime/session resources.
 
 Reload policy is controlled by:
 
@@ -469,10 +469,10 @@ enabled = true
 poll_interval_secs = 2
 ```
 
-Session maintenance policy:
+Session GC policy:
 
 ```toml
-[session.maintenance]
+[runtime.session.gc]
 enabled = true
 interval_secs = 30
 ```

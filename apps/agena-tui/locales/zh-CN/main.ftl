@@ -804,6 +804,7 @@ provider-field-session-token = Session Token
 provider-field-service-key-env = Service Key 环境变量
 provider-field-default-adapter = 默认 Adapter
 provider-field-default-model = 默认 Model
+provider-field-native-tools = 远程内置工具
 provider-field-adapter-id = Adapter ID
 provider-field-model-id = Model ID
 
@@ -865,6 +866,16 @@ provider-issuer-gitlab-detail = GitLab OAuth 凭证
 provider-issuer-google-adc-detail = Google Application Default Credentials
 provider-issuer-sap-ai-core-detail = SAP AI Core service key 认证
 provider-issuer-atomgit-detail = AtomGit 凭证
+provider-native-tools-disabled-label = 已禁用
+provider-native-tools-openai-label = OpenAI 托管默认集
+provider-native-tools-anthropic-label = Anthropic 托管默认集
+provider-native-tools-gemini-label = Gemini 托管默认集
+provider-native-tools-custom-label = 自定义配置
+provider-native-tools-disabled-detail = 显式写入 providers.<id>.native_tools.enabled = false。
+provider-native-tools-openai-detail = 显式写入 web_search、file_search、code_execution、image_generation 的 provider_hosted 路由。
+provider-native-tools-anthropic-detail = 显式写入 web_search 的 provider_hosted 路由。
+provider-native-tools-gemini-detail = 显式写入 web_search、url_context、code_execution 的 provider_hosted 路由。
+provider-native-tools-custom-detail = 保留当前已加载的自定义 native tool 配置。
 provider-adapter-rule-none-ollama-detail = Ollama adapter；认证字段保持为空，endpoint 由 adapter 自己决定。
 provider-adapter-rule-api-openai-detail = OpenAI 兼容 HTTP adapter；使用 provider auth 的 base_url，并支持 draft model listing。
 provider-adapter-rule-api-anthropic-detail = Anthropic HTTP adapter；使用 provider auth 的 base_url，并支持 draft model listing。

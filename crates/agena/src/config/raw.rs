@@ -9,13 +9,23 @@ use crate::provider::{
     ProviderStreamReplayConfig, auth::CredentialIssuer,
 };
 
+use super::overlay::{
+    ProviderNativeHarnessBindingsOverlay, ProviderNativeHarnessRefOverlay,
+    ProviderNativeToolRoutesOverlay,
+};
 use super::{
-    AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, HttpProviderAdapterConfig,
-    McpConfig, MemoryConfig, OpenAiApiModeConfig, PluginConfig, ProjectInstructionsConfig,
-    ProviderAdapterDefinition, ProviderAdapterOverlay, ProviderApiAuthConfig, ProviderAuthConfig,
-    ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
-    ProviderCredentialAuthConfig, ProviderDefaultsConfig, ProviderGitlabAuthConfig,
-    ProviderModelDiscoveryConfig, ProviderModelOverlay, ProviderOverlay,
+    AgentConfig, BedrockSigv4AuthConfig, ConfigEnvironment, ConfigError, HarnessViewportConfig,
+    HarnessesConfig, HostedCodeExecutionContainerConfig, HttpProviderAdapterConfig, McpConfig,
+    MemoryConfig, NativeToolUserLocationConfig, OpenAiApiModeConfig, PluginConfig,
+    ProjectInstructionsConfig, ProviderAdapterDefinition, ProviderAdapterOverlay,
+    ProviderApiAuthConfig, ProviderAuthConfig, ProviderAuthMode, ProviderAuthOverlay,
+    ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig, ProviderDefaultsConfig,
+    ProviderGitlabAuthConfig, ProviderHostedCodeExecutionConfig, ProviderHostedFileSearchConfig,
+    ProviderHostedImageGenerationConfig, ProviderHostedToolConfigs, ProviderHostedUrlContextConfig,
+    ProviderHostedWebSearchConfig, ProviderModelDiscoveryConfig, ProviderModelOverlay,
+    ProviderNativeConnectorConfig, ProviderNativeHarnessBindings, ProviderNativeHarnessRef,
+    ProviderNativeToolKind, ProviderNativeToolRoute, ProviderNativeToolRoutesConfig,
+    ProviderNativeToolsConfig, ProviderNativeToolsOverlay, ProviderOverlay,
     ProviderProtocolPathsConfig, ProviderProtocolPathsOverlay, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, ResolvedProviderModelConfig,
     RuntimeConfig, RuntimeGcConfig, RuntimeModelCatalogConfig, RuntimeProvidersConfig,
@@ -198,6 +208,7 @@ pub(crate) struct RawConfig {
     pub(crate) mcp: Option<McpConfig>,
     pub(crate) lsp: Option<crate::config::types::LspConfig>,
     pub(crate) web: Option<WebToolsConfig>,
+    pub(crate) harnesses: Option<HarnessesConfig>,
     pub(crate) providers: RawProvidersConfig,
 }
 
@@ -214,6 +225,7 @@ impl RawConfig {
         merge_option_struct(&mut self.mcp, overlay.mcp);
         merge_option_struct(&mut self.lsp, overlay.lsp);
         merge_option_struct(&mut self.web, overlay.web);
+        merge_option_struct(&mut self.harnesses, overlay.harnesses);
         self.providers.merge_from(overlay.providers);
     }
 
@@ -229,6 +241,7 @@ impl RawConfig {
             && self.mcp.is_none()
             && self.lsp.is_none()
             && self.web.is_none()
+            && self.harnesses.is_none()
             && self.providers.is_empty()
     }
 
@@ -400,14 +413,17 @@ impl RawConfig {
         let mcp: McpConfig = self.mcp.unwrap_or_default();
         let lsp: crate::config::types::LspConfig = self.lsp.unwrap_or_default();
         let web: WebToolsConfig = self.web.unwrap_or_default();
+        let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
         let providers_default = self.providers.default.clone();
         let agents_default = self.agents.default.clone();
+
+        validate_harnesses(&harnesses)?;
 
         let providers = self
             .providers
             .providers
             .into_iter()
-            .map(|(provider_id, raw)| raw.resolve(provider_id, env))
+            .map(|(provider_id, raw)| raw.resolve(provider_id, env, &harnesses, &mcp))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         let default_selection =
             resolve_default_selection(providers_default.as_deref(), &providers)?;
@@ -437,6 +453,7 @@ impl RawConfig {
             mcp,
             lsp,
             web,
+            harnesses,
             providers,
         })
     }
@@ -590,6 +607,20 @@ impl Merge for WebToolsConfig {
         // Whole-struct replace.  WebToolsConfig is small and there's no
         // sensible per-field overlay semantics to preserve.
         *self = overlay;
+    }
+}
+
+impl Merge for HarnessesConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        for (name, config) in overlay.browser {
+            self.browser.insert(name, config);
+        }
+        for (name, config) in overlay.shell {
+            self.shell.insert(name, config);
+        }
+        for (name, config) in overlay.editor {
+            self.editor.insert(name, config);
+        }
     }
 }
 
@@ -975,6 +1006,8 @@ impl ProviderOverlay {
         self,
         provider_id: String,
         _env: &dyn ConfigEnvironment,
+        harnesses: &HarnessesConfig,
+        mcp: &McpConfig,
     ) -> Result<(String, ResolvedProviderConfig), ConfigError> {
         let enabled = self.enabled.unwrap_or(true);
         if self.adapters.is_empty() {
@@ -1028,6 +1061,14 @@ impl ProviderOverlay {
         }
         let auth = resolve_provider_auth(provider_id.as_str(), self.auth, adapters.values())?;
         validate_provider_auth(provider_id.as_str(), &auth, adapters.values())?;
+        let native_tools = resolve_provider_native_tools(
+            provider_id.as_str(),
+            self.native_tools,
+            &auth,
+            adapters.values(),
+            harnesses,
+            mcp,
+        )?;
         let default_adapter = if let Some(default_adapter) = provider_defaults.adapter.clone() {
             default_adapter
         } else {
@@ -1106,11 +1147,366 @@ impl ProviderOverlay {
                     parallel_tool_calls: provider_defaults.parallel_tool_calls,
                 },
                 auth,
+                native_tools,
                 adapters,
                 models,
             },
         ))
     }
+}
+
+fn resolve_provider_native_tools<'a>(
+    provider_id: &str,
+    raw: Option<ProviderNativeToolsOverlay>,
+    _auth: &ProviderAuthConfig,
+    _adapters: impl IntoIterator<Item = &'a ResolvedProviderAdapterConfig>,
+    harnesses: &HarnessesConfig,
+    mcp: &McpConfig,
+) -> Result<ProviderNativeToolsConfig, ConfigError> {
+    let raw = raw.unwrap_or_default();
+    let config = ProviderNativeToolsConfig {
+        enabled: raw.enabled.unwrap_or(false),
+        routes: resolve_provider_native_routes(raw.routes.unwrap_or_default()),
+        hosted: resolve_provider_hosted_tools(raw.hosted.unwrap_or_default()),
+        harness: resolve_provider_native_harness_bindings(
+            provider_id,
+            raw.harness.unwrap_or_default(),
+        )?,
+        connectors: resolve_provider_native_connectors(provider_id, raw.connectors)?,
+    };
+    validate_provider_native_tools(provider_id, &config, harnesses, mcp)?;
+    Ok(config)
+}
+
+fn resolve_provider_native_routes(
+    raw: ProviderNativeToolRoutesOverlay,
+) -> ProviderNativeToolRoutesConfig {
+    ProviderNativeToolRoutesConfig {
+        web_search: raw.web_search,
+        file_search: raw.file_search,
+        code_execution: raw.code_execution,
+        image_generation: raw.image_generation,
+        computer: raw.computer,
+        bash: raw.bash,
+        text_editor: raw.text_editor,
+        url_context: raw.url_context,
+        remote_mcp: raw.remote_mcp,
+    }
+}
+
+fn resolve_provider_hosted_tools(
+    raw: super::overlay::ProviderHostedToolsOverlay,
+) -> ProviderHostedToolConfigs {
+    ProviderHostedToolConfigs {
+        web_search: resolve_provider_hosted_web_search(raw.web_search.unwrap_or_default()),
+        file_search: resolve_provider_hosted_file_search(raw.file_search.unwrap_or_default()),
+        code_execution: resolve_provider_hosted_code_execution(
+            raw.code_execution.unwrap_or_default(),
+        ),
+        image_generation: resolve_provider_hosted_image_generation(
+            raw.image_generation.unwrap_or_default(),
+        ),
+        url_context: resolve_provider_hosted_url_context(raw.url_context.unwrap_or_default()),
+    }
+}
+
+fn resolve_provider_hosted_web_search(
+    raw: super::overlay::ProviderHostedWebSearchOverlay,
+) -> ProviderHostedWebSearchConfig {
+    ProviderHostedWebSearchConfig {
+        allowed_domains: raw.allowed_domains.unwrap_or_default(),
+        blocked_domains: raw.blocked_domains.unwrap_or_default(),
+        freshness: raw.freshness,
+        user_location: resolve_native_tool_user_location(raw.user_location.unwrap_or_default()),
+        max_results: raw.max_results,
+        search_context_size: normalize_optional_string(raw.search_context_size),
+        provider_options: raw.provider_options,
+    }
+}
+
+fn resolve_provider_hosted_file_search(
+    raw: super::overlay::ProviderHostedFileSearchOverlay,
+) -> ProviderHostedFileSearchConfig {
+    ProviderHostedFileSearchConfig {
+        vector_store_ids: raw.vector_store_ids.unwrap_or_default(),
+        max_results: raw.max_results,
+        include_results: raw.include_results,
+        provider_options: raw.provider_options,
+    }
+}
+
+fn resolve_provider_hosted_code_execution(
+    raw: super::overlay::ProviderHostedCodeExecutionOverlay,
+) -> ProviderHostedCodeExecutionConfig {
+    ProviderHostedCodeExecutionConfig {
+        container: resolve_code_execution_container(raw.container.unwrap_or_default()),
+        provider_options: raw.provider_options,
+    }
+}
+
+fn resolve_code_execution_container(
+    raw: super::overlay::HostedCodeExecutionContainerOverlay,
+) -> HostedCodeExecutionContainerConfig {
+    HostedCodeExecutionContainerConfig {
+        kind: normalize_optional_string(raw.kind),
+        id: normalize_optional_string(raw.id),
+        memory_limit: normalize_optional_string(raw.memory_limit),
+        file_ids: raw.file_ids.unwrap_or_default(),
+    }
+}
+
+fn resolve_provider_hosted_image_generation(
+    raw: super::overlay::ProviderHostedImageGenerationOverlay,
+) -> ProviderHostedImageGenerationConfig {
+    ProviderHostedImageGenerationConfig {
+        background: normalize_optional_string(raw.background),
+        size: normalize_optional_string(raw.size),
+        quality: normalize_optional_string(raw.quality),
+        moderation: normalize_optional_string(raw.moderation),
+        provider_options: raw.provider_options,
+    }
+}
+
+fn resolve_provider_hosted_url_context(
+    raw: super::overlay::ProviderHostedUrlContextOverlay,
+) -> ProviderHostedUrlContextConfig {
+    ProviderHostedUrlContextConfig {
+        max_urls: raw.max_urls,
+        provider_options: raw.provider_options,
+    }
+}
+
+fn resolve_native_tool_user_location(
+    raw: super::overlay::NativeToolUserLocationOverlay,
+) -> NativeToolUserLocationConfig {
+    NativeToolUserLocationConfig {
+        country: normalize_optional_string(raw.country),
+        region: normalize_optional_string(raw.region),
+        city: normalize_optional_string(raw.city),
+        timezone: normalize_optional_string(raw.timezone),
+    }
+}
+
+fn resolve_provider_native_harness_bindings(
+    provider_id: &str,
+    raw: ProviderNativeHarnessBindingsOverlay,
+) -> Result<ProviderNativeHarnessBindings, ConfigError> {
+    Ok(ProviderNativeHarnessBindings {
+        computer: resolve_provider_native_harness_ref(
+            provider_id,
+            ProviderNativeToolKind::Computer,
+            raw.computer,
+        )?,
+        bash: resolve_provider_native_harness_ref(
+            provider_id,
+            ProviderNativeToolKind::Bash,
+            raw.bash,
+        )?,
+        text_editor: resolve_provider_native_harness_ref(
+            provider_id,
+            ProviderNativeToolKind::TextEditor,
+            raw.text_editor,
+        )?,
+    })
+}
+
+fn resolve_provider_native_harness_ref(
+    provider_id: &str,
+    tool: ProviderNativeToolKind,
+    raw: Option<ProviderNativeHarnessRefOverlay>,
+) -> Result<Option<ProviderNativeHarnessRef>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let Some(kind) = raw.kind else {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: format!(
+                "provider native tool `{}` harness binding must set `kind`",
+                tool.config_key()
+            ),
+        });
+    };
+    let Some(name) = normalize_optional_string(raw.name) else {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: format!(
+                "provider native tool `{}` harness binding must set non-empty `name`",
+                tool.config_key()
+            ),
+        });
+    };
+    Ok(Some(ProviderNativeHarnessRef { kind, name }))
+}
+
+fn resolve_provider_native_connectors(
+    provider_id: &str,
+    raw: BTreeMap<String, super::overlay::ProviderNativeConnectorOverlay>,
+) -> Result<BTreeMap<String, ProviderNativeConnectorConfig>, ConfigError> {
+    raw.into_iter()
+        .map(|(name, connector)| {
+            let trimmed_name = name.trim().to_owned();
+            if trimmed_name.is_empty() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "provider native tool connector name cannot be empty".to_owned(),
+                });
+            }
+            let Some(server) = normalize_optional_string(connector.server) else {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: format!(
+                        "provider native tool connector `{trimmed_name}` must set non-empty `server`"
+                    ),
+                });
+            };
+            Ok((
+                trimmed_name,
+                ProviderNativeConnectorConfig {
+                    server,
+                    require_approval: connector.require_approval.unwrap_or(true),
+                    tool_filter: connector.tool_filter.unwrap_or_default(),
+                },
+            ))
+        })
+        .collect()
+}
+
+fn validate_provider_native_tools(
+    provider_id: &str,
+    config: &ProviderNativeToolsConfig,
+    harnesses: &HarnessesConfig,
+    mcp: &McpConfig,
+) -> Result<(), ConfigError> {
+    validate_hosted_native_tool_config(provider_id, &config.hosted)?;
+
+    for tool in ProviderNativeToolKind::ALL {
+        if let Some(route) = config.routes.route_for(tool) {
+            if !tool.supports_route(route) {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: format!(
+                        "provider native tool `{}` does not support route `{route:?}`",
+                        tool.config_key()
+                    ),
+                });
+            }
+            if route == ProviderNativeToolRoute::ProviderHarness
+                && config.harness.binding_for(tool).is_none()
+            {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: format!(
+                        "provider native tool `{}` routed to `provider_harness` requires a harness binding",
+                        tool.config_key()
+                    ),
+                });
+            }
+            if route == ProviderNativeToolRoute::ProviderConnector
+                && tool == ProviderNativeToolKind::RemoteMcp
+                && config.connectors.is_empty()
+            {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: "provider native tool `remote_mcp` routed to `provider_connector` requires at least one connector".to_owned(),
+                });
+            }
+        }
+    }
+
+    for tool in [
+        ProviderNativeToolKind::Computer,
+        ProviderNativeToolKind::Bash,
+        ProviderNativeToolKind::TextEditor,
+    ] {
+        if let Some(reference) = config.harness.binding_for(tool) {
+            if !harnesses.contains(reference) {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: format!(
+                        "provider native tool `{}` references missing {:?} harness `{}`",
+                        tool.config_key(),
+                        reference.kind,
+                        reference.name
+                    ),
+                });
+            }
+        }
+    }
+
+    for (name, connector) in &config.connectors {
+        if !mcp.servers.contains_key(connector.server.as_str()) {
+            return Err(ConfigError::InvalidProviderConfig {
+                provider_id: provider_id.to_owned(),
+                message: format!(
+                    "provider native tool connector `{name}` references unknown MCP server `{}`",
+                    connector.server
+                ),
+            });
+        }
+        for tool_name in &connector.tool_filter {
+            if tool_name.trim().is_empty() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: format!(
+                        "provider native tool connector `{name}` contains an empty tool name in `tool_filter`"
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_hosted_native_tool_config(
+    provider_id: &str,
+    hosted: &ProviderHostedToolConfigs,
+) -> Result<(), ConfigError> {
+    validate_non_empty_strings(
+        provider_id,
+        "native_tools.hosted.web_search.allowed_domains",
+        &hosted.web_search.allowed_domains,
+    )?;
+    validate_non_empty_strings(
+        provider_id,
+        "native_tools.hosted.web_search.blocked_domains",
+        &hosted.web_search.blocked_domains,
+    )?;
+    validate_non_empty_strings(
+        provider_id,
+        "native_tools.hosted.file_search.vector_store_ids",
+        &hosted.file_search.vector_store_ids,
+    )?;
+    validate_non_empty_strings(
+        provider_id,
+        "native_tools.hosted.code_execution.container.file_ids",
+        &hosted.code_execution.container.file_ids,
+    )?;
+    if matches!(hosted.web_search.max_results, Some(0)) {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message:
+                "provider native tool `web_search` hosted `max_results` must be greater than 0"
+                    .to_owned(),
+        });
+    }
+    if matches!(hosted.file_search.max_results, Some(0)) {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message:
+                "provider native tool `file_search` hosted `max_results` must be greater than 0"
+                    .to_owned(),
+        });
+    }
+    if matches!(hosted.url_context.max_urls, Some(0)) {
+        return Err(ConfigError::InvalidProviderConfig {
+            provider_id: provider_id.to_owned(),
+            message: "provider native tool `url_context` hosted `max_urls` must be greater than 0"
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -1906,6 +2302,19 @@ impl_local_merge_via_crate!(
     RawSessionCacheConfig,
     ProviderProtocolPathsOverlay,
     ProviderAuthOverlay,
+    super::overlay::ProviderNativeToolRoutesOverlay,
+    super::overlay::NativeToolUserLocationOverlay,
+    super::overlay::ProviderHostedWebSearchOverlay,
+    super::overlay::ProviderHostedFileSearchOverlay,
+    super::overlay::HostedCodeExecutionContainerOverlay,
+    super::overlay::ProviderHostedCodeExecutionOverlay,
+    super::overlay::ProviderHostedImageGenerationOverlay,
+    super::overlay::ProviderHostedUrlContextOverlay,
+    super::overlay::ProviderHostedToolsOverlay,
+    super::overlay::ProviderNativeHarnessRefOverlay,
+    super::overlay::ProviderNativeHarnessBindingsOverlay,
+    super::overlay::ProviderNativeConnectorOverlay,
+    super::overlay::ProviderNativeToolsOverlay,
     ProviderAdapterOverlay,
     ProviderOverlay,
 );
@@ -1977,6 +2386,93 @@ fn validate_permission_config(
     .try_with_permission_config(permission)
     .map(|_| ())
     .map_err(|err| ConfigError::Validation(format!("{label} is invalid: {err}")))
+}
+
+fn validate_harnesses(harnesses: &HarnessesConfig) -> Result<(), ConfigError> {
+    for (name, browser) in &harnesses.browser {
+        validate_harness_name("harnesses.browser", name)?;
+        if browser.driver.trim().is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "harnesses.browser.{name}.driver cannot be empty"
+            )));
+        }
+        validate_non_empty_list(
+            format!("harnesses.browser.{name}.allowed_domains").as_str(),
+            &browser.allowed_domains,
+        )?;
+        validate_viewport(
+            format!("harnesses.browser.{name}.viewport").as_str(),
+            &browser.viewport,
+        )?;
+    }
+
+    for (name, shell) in &harnesses.shell {
+        validate_harness_name("harnesses.shell", name)?;
+        validate_non_empty_list(
+            format!("harnesses.shell.{name}.allow_commands").as_str(),
+            &shell.allow_commands,
+        )?;
+        validate_non_empty_list(
+            format!("harnesses.shell.{name}.deny_commands").as_str(),
+            &shell.deny_commands,
+        )?;
+    }
+
+    for (name, editor) in &harnesses.editor {
+        validate_harness_name("harnesses.editor", name)?;
+        validate_non_empty_list(
+            format!("harnesses.editor.{name}.allowed_extensions").as_str(),
+            &editor.allowed_extensions,
+        )?;
+        if matches!(editor.max_file_bytes, Some(0)) {
+            return Err(ConfigError::Validation(format!(
+                "harnesses.editor.{name}.max_file_bytes must be greater than 0"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_harness_name(scope: &str, name: &str) -> Result<(), ConfigError> {
+    if name.trim().is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "{scope} entry names cannot be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_viewport(label: &str, viewport: &HarnessViewportConfig) -> Result<(), ConfigError> {
+    if viewport.is_empty() {
+        return Ok(());
+    }
+    if viewport.width == 0 || viewport.height == 0 {
+        return Err(ConfigError::Validation(format!(
+            "{label} must set both width and height"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_non_empty_list(label: &str, values: &[String]) -> Result<(), ConfigError> {
+    if values.iter().any(|value| value.trim().is_empty()) {
+        return Err(ConfigError::Validation(format!(
+            "{label} cannot contain empty strings"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_non_empty_strings(
+    provider_id: &str,
+    field: &str,
+    values: &[String],
+) -> Result<(), ConfigError> {
+    validate_non_empty_list(field, values).map_err(|_| ConfigError::InvalidProviderConfig {
+        provider_id: provider_id.to_owned(),
+        message: format!("{field} cannot contain empty strings"),
+    })
 }
 
 fn validate_configured_models(
@@ -2124,4 +2620,304 @@ where
         apply(super::parse_numeric::<T>(value.as_str(), key)?);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[derive(Default)]
+    struct TestEnvironment;
+
+    impl ConfigEnvironment for TestEnvironment {
+        fn var(&self, _key: &str) -> Option<String> {
+            None
+        }
+
+        fn vars(&self) -> Vec<(String, String)> {
+            Vec::new()
+        }
+    }
+
+    fn resolve_config(value: serde_json::Value) -> Result<ResolvedConfig, ConfigError> {
+        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
+        raw.resolve_with_env(&TestEnvironment)
+    }
+
+    #[test]
+    fn resolves_provider_native_tools_and_bindings() {
+        let resolved = resolve_config(json!({
+            "mcp": {
+                "servers": {
+                    "docs": {
+                        "transport": "http",
+                        "url": "https://example.com/mcp"
+                    }
+                }
+            },
+            "harnesses": {
+                "browser": {
+                    "default": {
+                        "driver": "playwright",
+                        "headless": true
+                    }
+                },
+                "shell": {
+                    "default": {
+                        "workspace_only": true
+                    }
+                }
+            },
+            "providers": {
+                "default": "openai",
+                "openai": {
+                    "defaults": {
+                        "adapter": "openai",
+                        "model": "gpt-5"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test"
+                    },
+                    "native_tools": {
+                        "enabled": true,
+                        "routes": {
+                            "web_search": "provider_hosted",
+                            "file_search": "provider_hosted",
+                            "remote_mcp": "provider_connector"
+                        },
+                        "hosted": {
+                            "web_search": {
+                                "allowed_domains": ["example.com"]
+                            },
+                            "file_search": {
+                                "vector_store_ids": ["vs_docs"]
+                            }
+                        },
+                        "connectors": {
+                            "docs": {
+                                "server": "docs",
+                                "tool_filter": ["search"]
+                            }
+                        }
+                    },
+                    "adapters": {
+                        "openai": {
+                            "enabled": true
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("native tool config should resolve");
+
+        let provider = resolved
+            .providers
+            .get("openai")
+            .expect("resolved provider should exist");
+        assert!(provider.native_tools.enabled);
+        assert_eq!(
+            provider.native_tools.routes.web_search,
+            Some(ProviderNativeToolRoute::ProviderHosted)
+        );
+        assert_eq!(
+            provider.native_tools.hosted.file_search.vector_store_ids,
+            vec!["vs_docs".to_owned()]
+        );
+        let bindings = provider.native_tool_bindings();
+        assert!(bindings.iter().any(|binding| {
+            binding.tool == ProviderNativeToolKind::RemoteMcp
+                && binding.route == ProviderNativeToolRoute::ProviderConnector
+                && binding.connector_names == vec!["docs".to_owned()]
+        }));
+        assert_eq!(bindings.len(), 3);
+    }
+
+    #[test]
+    fn rejects_invalid_native_tool_route() {
+        let err = resolve_config(json!({
+            "providers": {
+                "default": "openai",
+                "openai": {
+                    "defaults": {
+                        "adapter": "openai",
+                        "model": "gpt-5"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test"
+                    },
+                    "native_tools": {
+                        "enabled": true,
+                        "routes": {
+                            "file_search": "plugin"
+                        }
+                    },
+                    "adapters": {
+                        "openai": {
+                            "enabled": true
+                        }
+                    }
+                }
+            }
+        }))
+        .expect_err("invalid file_search route should fail");
+
+        assert!(
+            err.to_string()
+                .contains("provider native tool `file_search` does not support route")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_harness_binding_target() {
+        let err = resolve_config(json!({
+            "providers": {
+                "default": "anthropic",
+                "anthropic": {
+                    "defaults": {
+                        "adapter": "anthropic",
+                        "model": "claude-sonnet-4-6"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://api.anthropic.com",
+                        "api_key": "test"
+                    },
+                    "native_tools": {
+                        "enabled": true,
+                        "routes": {
+                            "bash": "provider_harness"
+                        },
+                        "harness": {
+                            "bash": {
+                                "kind": "shell",
+                                "name": "missing"
+                            }
+                        }
+                    },
+                    "adapters": {
+                        "anthropic": {
+                            "enabled": true
+                        }
+                    }
+                }
+            }
+        }))
+        .expect_err("missing harness target should fail");
+
+        assert!(
+            err.to_string()
+                .contains("references missing Shell harness `missing`")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_connector_server() {
+        let err = resolve_config(json!({
+            "providers": {
+                "default": "openai",
+                "openai": {
+                    "defaults": {
+                        "adapter": "openai",
+                        "model": "gpt-5"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test"
+                    },
+                    "native_tools": {
+                        "enabled": true,
+                        "routes": {
+                            "remote_mcp": "provider_connector"
+                        },
+                        "connectors": {
+                            "docs": {
+                                "server": "missing"
+                            }
+                        }
+                    },
+                    "adapters": {
+                        "openai": {
+                            "enabled": true
+                        }
+                    }
+                }
+            }
+        }))
+        .expect_err("missing connector server should fail");
+
+        assert!(
+            err.to_string()
+                .contains("references unknown MCP server `missing`")
+        );
+    }
+
+    #[test]
+    fn official_provider_without_explicit_native_tools_stays_disabled() {
+        let resolved = resolve_config(json!({
+            "providers": {
+                "default": "openai",
+                "openai": {
+                    "defaults": {
+                        "adapter": "openai",
+                        "model": "gpt-5"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://api.openai.com",
+                        "api_key": "test"
+                    },
+                    "adapters": {
+                        "openai": {
+                            "enabled": true
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("official provider should resolve without implicit defaults");
+
+        let provider = resolved.providers.get("openai").expect("provider");
+        assert!(!provider.native_tools.enabled);
+        assert!(provider.native_tool_bindings().is_empty());
+    }
+
+    #[test]
+    fn explicit_disable_keeps_native_tools_off() {
+        let resolved = resolve_config(json!({
+            "providers": {
+                "default": "anthropic",
+                "anthropic": {
+                    "defaults": {
+                        "adapter": "anthropic",
+                        "model": "claude-sonnet-4-6"
+                    },
+                    "auth": {
+                        "mode": "api",
+                        "base_url": "https://api.anthropic.com",
+                        "api_key": "test"
+                    },
+                    "native_tools": {
+                        "enabled": false
+                    },
+                    "adapters": {
+                        "anthropic": {
+                            "enabled": true
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("explicit disable should win");
+
+        let provider = resolved.providers.get("anthropic").expect("provider");
+        assert!(!provider.native_tools.enabled);
+        assert!(provider.native_tool_bindings().is_empty());
+        assert!(provider.native_tools.routes.is_empty());
+    }
 }

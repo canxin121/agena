@@ -131,6 +131,52 @@
       "min_query_chars": 8
     }
   },
+  "mcp": {
+    "servers": {
+      "docs": {
+        "transport": "http",
+        "url": "https://developers.openai.com/mcp",
+        "auth": {
+          "kind": "bearer_from_env",
+          "env": "DOCS_MCP_TOKEN"
+        }
+      }
+    }
+  },
+  "web": {
+    "fetch_enabled": true
+  },
+  "harnesses": {
+    "browser": {
+      "default": {
+        "driver": "playwright",
+        "headless": true,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "allowed_domains": [
+          "example.com",
+          "github.com"
+        ]
+      }
+    },
+    "shell": {
+      "default": {
+        "workspace_only": true,
+        "deny_commands": [
+          "sudo",
+          "rm -rf /"
+        ]
+      }
+    },
+    "editor": {
+      "default": {
+        "workspace_only": true,
+        "max_file_bytes": 262144
+      }
+    }
+  },
   "providers": {
     "default": "openai",
     "openai": {
@@ -143,11 +189,109 @@
         "base_url": "https://api.openai.com",
         "api_key_env": "OPENAI_API_KEY"
       },
+      "native_tools": {
+        "enabled": true,
+        "routes": {
+          "web_search": "provider_hosted",
+          "file_search": "provider_hosted",
+          "code_execution": "provider_hosted",
+          "image_generation": "provider_hosted",
+          "remote_mcp": "provider_connector"
+        },
+        "hosted": {
+          "web_search": {
+            "allowed_domains": [
+              "platform.openai.com",
+              "developers.openai.com"
+            ],
+            "freshness": "cached",
+            "max_results": 8
+          },
+          "file_search": {
+            "vector_store_ids": [
+              "vs_docs_main"
+            ],
+            "max_results": 8,
+            "include_results": true
+          },
+          "code_execution": {
+            "container": {
+              "type": "auto",
+              "memory_limit": "4g",
+              "file_ids": [
+                "file_seed_csv"
+              ]
+            }
+          },
+          "image_generation": {
+            "background": "transparent",
+            "size": "1536x1024",
+            "quality": "high"
+          }
+        },
+        "connectors": {
+          "docs": {
+            "server": "docs",
+            "require_approval": true,
+            "tool_filter": [
+              "search",
+              "read_page"
+            ]
+          }
+        }
+      },
       "adapters": {
         "openai": {
           "enabled": true,
           "api_mode": "auto",
           "stream_mode": "sse"
+        }
+      }
+    },
+    "anthropic": {
+      "defaults": {
+        "adapter": "anthropic",
+        "model": "claude-sonnet-4-6"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.anthropic.com",
+        "api_key_env": "ANTHROPIC_API_KEY"
+      },
+      "native_tools": {
+        "enabled": true,
+        "routes": {
+          "web_search": "provider_hosted",
+          "bash": "provider_harness",
+          "text_editor": "provider_harness",
+          "computer": "provider_harness"
+        },
+        "harness": {
+          "bash": {
+            "kind": "shell",
+            "name": "default"
+          },
+          "text_editor": {
+            "kind": "editor",
+            "name": "default"
+          },
+          "computer": {
+            "kind": "browser",
+            "name": "default"
+          }
+        },
+        "hosted": {
+          "web_search": {
+            "allowed_domains": [
+              "docs.anthropic.com"
+            ],
+            "freshness": "live"
+          }
+        }
+      },
+      "adapters": {
+        "anthropic": {
+          "enabled": true
         }
       }
     },
@@ -323,6 +467,42 @@
         "openai": {
           "enabled": true,
           "capability_family": "gemini"
+        }
+      }
+    },
+    "google-ai": {
+      "defaults": {
+        "adapter": "gemini",
+        "model": "gemini-2.5-pro"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://generativelanguage.googleapis.com",
+        "api_key_env": "GOOGLE_API_KEY"
+      },
+      "native_tools": {
+        "enabled": true,
+        "routes": {
+          "web_search": "provider_hosted",
+          "url_context": "provider_hosted",
+          "code_execution": "provider_hosted"
+        },
+        "hosted": {
+          "web_search": {
+            "freshness": "live",
+            "max_results": 6
+          },
+          "url_context": {
+            "max_urls": 8
+          }
+        }
+      },
+      "adapters": {
+        "gemini": {
+          "enabled": true,
+          "models": {
+            "gemini-2.5-pro": {}
+          }
         }
       }
     }

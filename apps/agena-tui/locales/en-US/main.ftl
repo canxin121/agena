@@ -780,6 +780,7 @@ provider-field-session-token = Session Token
 provider-field-service-key-env = Service Key Env
 provider-field-default-adapter = Default Adapter
 provider-field-default-model = Default Model
+provider-field-native-tools = Remote Native Tools
 provider-field-adapter-id = Adapter ID
 provider-field-model-id = Model ID
 
@@ -841,6 +842,16 @@ provider-issuer-gitlab-detail = GitLab OAuth credentials
 provider-issuer-google-adc-detail = Google Application Default Credentials
 provider-issuer-sap-ai-core-detail = SAP AI Core service key auth
 provider-issuer-atomgit-detail = AtomGit credentials
+provider-native-tools-disabled-label = disabled
+provider-native-tools-openai-label = openai hosted defaults
+provider-native-tools-anthropic-label = anthropic hosted defaults
+provider-native-tools-gemini-label = gemini hosted defaults
+provider-native-tools-custom-label = custom config
+provider-native-tools-disabled-detail = Write providers.<id>.native_tools.enabled = false.
+provider-native-tools-openai-detail = Write explicit hosted routes for web_search, file_search, code_execution, and image_generation.
+provider-native-tools-anthropic-detail = Write an explicit hosted route for web_search.
+provider-native-tools-gemini-detail = Write explicit hosted routes for web_search, url_context, and code_execution.
+provider-native-tools-custom-detail = Keep the currently loaded custom native tool config.
 provider-adapter-rule-none-ollama-detail = Ollama adapter; auth fields stay empty and the endpoint lives on the adapter.
 provider-adapter-rule-api-openai-detail = OpenAI-compatible HTTP adapter; uses provider auth base_url and supports draft model listing.
 provider-adapter-rule-api-anthropic-detail = Anthropic HTTP adapter; uses provider auth base_url and supports draft model listing.

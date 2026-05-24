@@ -19,6 +19,7 @@ agena config validate
 - `[tracing]`: 日志过滤。
 - `[providers.default]`: 全局默认 provider 名称。
 - `[providers.<id>.defaults]`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
+- `[providers.<id>.native_tools]`: provider-native 远程内置 tool 的路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `[runtime]`: provider HTTP、retry、reload、catalog 等运行时基础设施参数。
 - `[runtime.session]`: session cache、session gc。
@@ -26,7 +27,7 @@ agena config validate
 - `[agents.default]`: 全局默认 agent 名称。
 - `[agents.<name>]`: 自定义 agent。
 - `[permission]`: 路径、网络、tool 权限。
-- `[memory]` / `[mcp]` / `[lsp]` / `[web]`: 内建能力的顶层配置。
+- `[memory]` / `[mcp]` / `[lsp]` / `[web]` / `[harnesses]`: 内建能力的顶层配置。
 
 `config.full.json` 展示了更完整的功能面：
 
@@ -123,6 +124,12 @@ providers.<id>.auth.protocol_paths.<adapter>
 providers.<id>.auth.api_key
 providers.<id>.auth.api_key_env
 providers.<id>.enabled
+providers.<id>.native_tools.enabled
+providers.<id>.native_tools.routes.web_search
+providers.<id>.native_tools.hosted.web_search.allowed_domains
+providers.<id>.native_tools.harness.computer.kind
+providers.<id>.native_tools.connectors.<name>.server
+harnesses.browser.<name>.driver
 ```
 
 示例：
@@ -329,6 +336,7 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 - `[providers.default]`：全局默认 provider 名称。
 - `[providers.<id>.defaults]`：provider-local 默认 adapter/model/thinking/speed/verbosity/parallel。
 - `[providers.<id>.auth]`：认证与身份来源。
+- `[providers.<id>.native_tools]`：provider-native remote tool 路由、hosted 默认值、harness 绑定、connector 引用。
 - `[providers.<id>.adapters.<adapter-id>]`：协议实现。
 - `[providers.<id>.adapters.<adapter-id>.models."<model-id>"]`：真实上游模型节点。
 
@@ -413,6 +421,149 @@ OpenAI ChatGPT -> Codex、Google ADC -> Gemini CLI；没有专属身份的 auth
 - `auth.mode = "api"` 是 Agena 面向 Anthropic 官方一方接口的标准方式，使用 Claude Console API Key。
 - `auth.mode = "credential"` 目前只用于 `issuer = "github_copilot"` 的兼容路径。
 - Agena 不提供 Claude.ai / Claude Code 订阅 OAuth 登录。对第三方工具场景，官方当前文档要求使用 Claude Console API Key 或受支持的云提供商认证。
+
+### Provider-native tools
+
+`providers.<id>.native_tools` 是 provider 原生远程内置 tool 的 canonical 配置入口。它和 `[web]`、plugin tool 是两条平行链路：
+
+- plugin tool 继续表示 host-executed function tools。
+- `[web]` 继续表示 Agena 本地 `agena.web` 的 fetch / Brave fallback search。
+- `providers.<id>.native_tools` 表示 provider 自己托管或 provider 规划、host 执行的 native tools。
+
+默认行为不是“一律开启”：
+
+- runtime 解析阶段不会再根据 auth 或 base URL 隐式推导 native tool 默认值。
+- 自定义 OpenAI-compatible / gateway / proxy provider 默认不会自动开启任何 native tool。
+- TUI / Studio Web 在创建 provider 时可以为官方 auth 预填一组显式的 hosted tool routes；保存后它们会直接写进 `providers.<id>.native_tools.*`。
+- `enabled = false` 也是显式配置的一部分，用来明确关闭这一层能力。
+
+结构分四层：
+
+- `enabled`：是否为这个 provider 打开 native tool 系统。
+- `routes`：每个逻辑工具走 `plugin`、`provider_hosted`、`provider_harness`、`provider_connector` 还是 `disabled`。
+- `hosted`：provider-hosted tool 的默认资源和参数。
+- `harness`：provider-harness tool 绑定到哪个顶层 harness。
+- `connectors`：provider 代连远程服务时，引用哪个顶层 MCP server。
+
+当前内置的逻辑工具名：
+
+```text
+web_search
+file_search
+code_execution
+image_generation
+computer
+bash
+text_editor
+url_context
+remote_mcp
+```
+
+route 约束：
+
+- `web_search`：`disabled` / `plugin` / `provider_hosted`
+- `file_search` / `code_execution` / `image_generation` / `url_context`：`disabled` / `provider_hosted`
+- `computer` / `bash` / `text_editor`：`disabled` / `provider_harness`
+- `remote_mcp`：`disabled` / `provider_connector`
+
+当前自动推导的官方默认值：
+
+- OpenAI first-party：`web_search`、`file_search`、`code_execution`、`image_generation`
+- Anthropic first-party：`web_search`
+- Gemini first-party：`web_search`、`url_context`、`code_execution`
+
+这里的 “first-party” 指官方 auth provenance，而不是单纯的 adapter kind。例如同样走 `openai` adapter 的 Copilot、AtomGit、SAP AI Core、任意自建 gateway，都不会自动继承 OpenAI hosted tools。
+
+示例：
+
+```toml
+[providers.openai.native_tools]
+enabled = true
+
+[providers.openai.native_tools.routes]
+web_search = "provider_hosted"
+file_search = "provider_hosted"
+code_execution = "provider_hosted"
+image_generation = "provider_hosted"
+remote_mcp = "provider_connector"
+
+[providers.openai.native_tools.hosted.web_search]
+allowed_domains = ["platform.openai.com", "developers.openai.com"]
+freshness = "cached"
+max_results = 8
+
+[providers.openai.native_tools.hosted.file_search]
+vector_store_ids = ["vs_docs_main"]
+max_results = 8
+include_results = true
+
+[providers.openai.native_tools.hosted.code_execution.container]
+type = "auto"
+memory_limit = "4g"
+file_ids = ["file_seed_csv"]
+
+[providers.openai.native_tools.connectors.docs]
+server = "docs"
+require_approval = true
+tool_filter = ["search", "read_page"]
+```
+
+`hosted.*.provider_options` 是 escape hatch，用于写 provider-specific 原始 JSON；优先只用 canonical 字段。
+
+### Harnesses
+
+`provider_harness` 路由不把执行环境挂在 provider 下，而是引用顶层 `harnesses`。原因是 browser / shell / editor sandbox 属于 host 资产，不属于 provider 账号。
+
+顶层结构：
+
+```toml
+[harnesses.browser.default]
+driver = "playwright"
+headless = true
+viewport = { width = 1280, height = 800 }
+allowed_domains = ["example.com", "github.com"]
+
+[harnesses.shell.default]
+workspace_only = true
+deny_commands = ["sudo", "rm -rf /"]
+
+[harnesses.editor.default]
+workspace_only = true
+max_file_bytes = 262144
+```
+
+provider 侧只保存引用：
+
+```toml
+[providers.anthropic.native_tools]
+enabled = true
+
+[providers.anthropic.native_tools.routes]
+web_search = "provider_hosted"
+bash = "provider_harness"
+text_editor = "provider_harness"
+computer = "provider_harness"
+
+[providers.anthropic.native_tools.harness.bash]
+kind = "shell"
+name = "default"
+
+[providers.anthropic.native_tools.harness.text_editor]
+kind = "editor"
+name = "default"
+
+[providers.anthropic.native_tools.harness.computer]
+kind = "browser"
+name = "default"
+```
+
+配置校验会在加载期拒绝：
+
+- 不支持的 route 组合。
+- `provider_harness` 但未绑定 harness。
+- harness 引用缺失。
+- `provider_connector` 但未配置 connector。
+- connector 指向不存在的 `mcp.servers.<name>`。
 
 常见示例：
 
@@ -1161,6 +1312,13 @@ api_key = "..."
 ```
 
 `fetch_enabled` 控制 `web` 的 `fetch` command。`agena.web` 现在只支持 Brave Search，不再有 backend 选择。
+
+这里的 `[web]` 只影响 Agena 本地内建 `agena.web` plugin：
+
+- `fetch` 直接由本地 runtime 发 HTTP 请求。
+- `search` 目前仍是 Brave fallback backend。
+
+如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `[web]`，而是写在 `providers.<id>.native_tools.*`。
 
 API key 可写在配置里，也可由环境变量提供：
 

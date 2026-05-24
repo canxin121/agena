@@ -10,8 +10,9 @@ use crate::{
 };
 
 use super::types::{
-    OpenAiApiModeConfig, OpenAiBackendConfig, ProviderCapabilityFamilyConfig,
-    ProviderModelDiscoveryConfig, ResolvedProviderModelConfig, StreamTransportMode,
+    NativeToolHarnessKind, OpenAiApiModeConfig, OpenAiBackendConfig,
+    ProviderCapabilityFamilyConfig, ProviderModelDiscoveryConfig, ProviderNativeToolRoute,
+    ResolvedProviderModelConfig, StreamTransportMode,
 };
 
 pub type ProviderModelOverlay = ResolvedProviderModelConfig;
@@ -153,6 +154,195 @@ pub struct ProviderDefaultsOverlay {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
+pub struct ProviderNativeToolRoutesOverlay {
+    #[merge(strategy = option_override)]
+    pub web_search: Option<ProviderNativeToolRoute>,
+    #[merge(strategy = option_override)]
+    pub file_search: Option<ProviderNativeToolRoute>,
+    #[merge(strategy = option_override)]
+    pub code_execution: Option<ProviderNativeToolRoute>,
+    #[merge(strategy = option_override)]
+    pub image_generation: Option<ProviderNativeToolRoute>,
+    #[merge(strategy = option_override)]
+    pub computer: Option<ProviderNativeToolRoute>,
+    #[merge(strategy = option_override)]
+    pub bash: Option<ProviderNativeToolRoute>,
+    #[merge(strategy = option_override)]
+    pub text_editor: Option<ProviderNativeToolRoute>,
+    #[merge(strategy = option_override)]
+    pub url_context: Option<ProviderNativeToolRoute>,
+    #[merge(strategy = option_override)]
+    pub remote_mcp: Option<ProviderNativeToolRoute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct NativeToolUserLocationOverlay {
+    #[merge(strategy = option_override)]
+    pub country: Option<String>,
+    #[merge(strategy = option_override)]
+    pub region: Option<String>,
+    #[merge(strategy = option_override)]
+    pub city: Option<String>,
+    #[merge(strategy = option_override)]
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderHostedWebSearchOverlay {
+    #[merge(strategy = option_override)]
+    pub allowed_domains: Option<Vec<String>>,
+    #[merge(strategy = option_override)]
+    pub blocked_domains: Option<Vec<String>>,
+    #[merge(strategy = option_override)]
+    pub freshness: Option<super::types::NativeToolFreshness>,
+    #[merge(strategy = option_struct_merge)]
+    pub user_location: Option<NativeToolUserLocationOverlay>,
+    #[merge(strategy = option_override)]
+    pub max_results: Option<u32>,
+    #[merge(strategy = option_override)]
+    pub search_context_size: Option<String>,
+    #[merge(strategy = option_override)]
+    pub provider_options: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderHostedFileSearchOverlay {
+    #[merge(strategy = option_override)]
+    pub vector_store_ids: Option<Vec<String>>,
+    #[merge(strategy = option_override)]
+    pub max_results: Option<u32>,
+    #[merge(strategy = option_override)]
+    pub include_results: Option<bool>,
+    #[merge(strategy = option_override)]
+    pub provider_options: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct HostedCodeExecutionContainerOverlay {
+    #[merge(strategy = option_override)]
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    #[merge(strategy = option_override)]
+    pub id: Option<String>,
+    #[merge(strategy = option_override)]
+    pub memory_limit: Option<String>,
+    #[merge(strategy = option_override)]
+    pub file_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderHostedCodeExecutionOverlay {
+    #[merge(strategy = option_struct_merge)]
+    pub container: Option<HostedCodeExecutionContainerOverlay>,
+    #[merge(strategy = option_override)]
+    pub provider_options: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderHostedImageGenerationOverlay {
+    #[merge(strategy = option_override)]
+    pub background: Option<String>,
+    #[merge(strategy = option_override)]
+    pub size: Option<String>,
+    #[merge(strategy = option_override)]
+    pub quality: Option<String>,
+    #[merge(strategy = option_override)]
+    pub moderation: Option<String>,
+    #[merge(strategy = option_override)]
+    pub provider_options: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderHostedUrlContextOverlay {
+    #[merge(strategy = option_override)]
+    pub max_urls: Option<u32>,
+    #[merge(strategy = option_override)]
+    pub provider_options: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderHostedToolsOverlay {
+    #[merge(strategy = option_struct_merge)]
+    pub web_search: Option<ProviderHostedWebSearchOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub file_search: Option<ProviderHostedFileSearchOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub code_execution: Option<ProviderHostedCodeExecutionOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub image_generation: Option<ProviderHostedImageGenerationOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub url_context: Option<ProviderHostedUrlContextOverlay>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderNativeHarnessRefOverlay {
+    #[merge(strategy = option_override)]
+    pub kind: Option<NativeToolHarnessKind>,
+    #[merge(strategy = option_override)]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderNativeHarnessBindingsOverlay {
+    #[merge(strategy = option_struct_merge)]
+    pub computer: Option<ProviderNativeHarnessRefOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub bash: Option<ProviderNativeHarnessRefOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub text_editor: Option<ProviderNativeHarnessRefOverlay>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderNativeConnectorOverlay {
+    #[merge(strategy = option_override)]
+    pub server: Option<String>,
+    #[merge(strategy = option_override)]
+    pub require_approval: Option<bool>,
+    #[merge(strategy = option_override)]
+    pub tool_filter: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderNativeToolsOverlay {
+    #[merge(strategy = option_override)]
+    pub enabled: Option<bool>,
+    #[merge(strategy = option_struct_merge)]
+    pub routes: Option<ProviderNativeToolRoutesOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub hosted: Option<ProviderHostedToolsOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub harness: Option<ProviderNativeHarnessBindingsOverlay>,
+    #[merge(strategy = map_extend)]
+    pub connectors: BTreeMap<String, ProviderNativeConnectorOverlay>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderOverlay {
     #[merge(strategy = option_override)]
     pub enabled: Option<bool>,
@@ -160,6 +350,8 @@ pub struct ProviderOverlay {
     pub defaults: Option<ProviderDefaultsOverlay>,
     #[merge(strategy = option_struct_merge)]
     pub auth: Option<ProviderAuthOverlay>,
+    #[merge(strategy = option_struct_merge)]
+    pub native_tools: Option<ProviderNativeToolsOverlay>,
     #[merge(strategy = map_extend)]
     pub adapters: BTreeMap<String, ProviderAdapterOverlay>,
 }

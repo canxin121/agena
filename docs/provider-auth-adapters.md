@@ -19,6 +19,11 @@ provider
 │   ├── adapter
 │   └── model
 ├── auth
+├── native_tools
+│   ├── routes
+│   ├── hosted
+│   ├── harness
+│   └── connectors
 └── adapters
     └── <adapter>
         ├── enabled
@@ -46,6 +51,12 @@ mode = "api"
 base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 
+[providers.openai.native_tools]
+enabled = true
+
+[providers.openai.native_tools.routes]
+web_search = "provider_hosted"
+
 [providers.openai.adapters.openai]
 enabled = true
 
@@ -60,6 +71,7 @@ enabled = true
 - adapter 不再有自己的默认模型字段
 - model key 就是真实上游 model id，不再有 `target_model`
 - provider / adapter / model 三层都支持 `enabled`
+- provider-native remote tools 的路由和 hosted 默认值写在 `providers.<id>.native_tools`
 - 运行时模型选择由 `provider_id`、`adapter_id`、`model_id` 三个字段共同决定，不使用三段字符串编码
 
 ## 四层职责
@@ -72,6 +84,7 @@ enabled = true
 
 - 稳定的 `provider_id`
 - provider 级 `auth`
+- provider-native tool 路由与 hosted defaults
 - 聚合一个或多个 adapters
 - 暴露 provider 默认模型
 - 对外提供统一的模型命名空间
@@ -92,6 +105,15 @@ CLI、HTTP API、Studio、session 持久化、model ref 都围绕 `provider_id` 
 当一个 auth 网关同时暴露多种协议时，`auth.base_url` 表示共享根路径，`auth.protocol_paths` 显式声明每种协议挂在哪条前缀上。运行时不会再根据 URL 形状做自动推导。
 
 `auth` 不再拆成独立 connection 对象，也不放在 adapter 上。
+
+provider-native hosted tools 默认直接复用这一层 auth；不会再单独引入第二套 OpenAI / Anthropic / Gemini tool secret 配置。
+
+同样因为 provider-native tool 会复用 auth provenance，Agena 的创建界面会把 auth 来源当成“建议配置”的依据：
+
+- first-party official auth 可以在 TUI / Studio Web 里预填一组保守的 hosted native tools
+- 自定义 gateway / compatible auth 默认不预填任何 native tool
+- 保存后这些建议会变成显式的 `providers.<id>.native_tools.*` 配置，而不是 runtime fallback
+- 用户也可以在创建阶段直接改成 `enabled = false`
 
 ### adapter
 

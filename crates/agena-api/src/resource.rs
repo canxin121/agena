@@ -719,6 +719,19 @@ pub struct ProviderAdapterSummaryResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderNativeToolBindingResource {
+    pub tool: String,
+    pub route: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderNativeToolsSummaryResource {
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<ProviderNativeToolBindingResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderDefaultsResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<String>,
@@ -731,6 +744,8 @@ pub struct ProviderSummaryResource {
     pub defaults: ProviderDefaultsResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tools: Option<ProviderNativeToolsSummaryResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

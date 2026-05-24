@@ -12,6 +12,16 @@ export type ProviderAdapterSummaryResource = {
   configured_model_count: number
 }
 
+export type ProviderNativeToolBindingResource = {
+  tool: string
+  route: string
+}
+
+export type ProviderNativeToolsSummaryResource = {
+  enabled: boolean
+  bindings?: ProviderNativeToolBindingResource[]
+}
+
 export type ProviderDefaultsResource = {
   adapter?: string | null
   model: string
@@ -21,6 +31,7 @@ export type ProviderSummaryResource = {
   provider_id: string
   defaults: ProviderDefaultsResource
   adapters?: ProviderAdapterSummaryResource[]
+  native_tools?: ProviderNativeToolsSummaryResource | null
 }
 
 export type ProviderAdapterSummary = ProviderAdapterSummaryResource
@@ -183,16 +194,13 @@ export async function listSavedProviderAdapterModelsResponse(
   request: SavedProviderAdapterModelsRequest,
 ): Promise<ProviderAdapterModelsResponse> {
   const adapterIds = request.adapter_ids.map((adapterId) => String(adapterId || '').trim())
-  return await apiJson<ProviderAdapterModelsResponse>(
-    `/api/v1/providers/${encodeURIComponent(providerId)}/models`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        adapter_ids: adapterIds,
-      }),
-    },
-  )
+  return await apiJson<ProviderAdapterModelsResponse>(`/api/v1/providers/${encodeURIComponent(providerId)}/models`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      adapter_ids: adapterIds,
+    }),
+  })
 }
 
 export async function listDraftProviderAdapterModels(input: {

@@ -6,7 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+crossterm = { workspace = true }
 ratatui = { workspace = true }
+textwrap = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
 
 [lints]
 workspace = true

@@ -1,5 +1,6 @@
 use super::*;
 use agena::message::{ExecutionStatus, FileChangeKind, MessageStatus, OperationBlock, RequestPart};
+use agena_tui_components::{line_plain_text, trim_empty_line_edges};
 use textwrap::{Options as WrapOptions, WordSplitter, wrap};
 use tui_markdown::from_str as markdown_to_text;
 use unicode_segmentation::UnicodeSegmentation;
@@ -126,35 +127,40 @@ pub(super) fn render_transcript_export_markdown(
     } else if let Some(session_id) = session_id {
         ui_text::session_fallback_title(i18n, session_id)
     } else {
-        "Agena Transcript Export".to_string()
+        ui_text::transcript_export_default_title(i18n)
     };
 
     let mut out = vec![format!("# {title}"), String::new()];
     if let Some(session_id) = session_id {
-        out.push(format!("- Session ID: {session_id}"));
+        out.push(ui_text::transcript_export_session_id_line(i18n, session_id));
     }
-    out.push(format!(
-        "- Exported At: {}",
-        Local::now().format("%Y-%m-%d %H:%M:%S %z")
+    out.push(ui_text::transcript_export_exported_at_line(
+        i18n,
+        Local::now(),
     ));
-    out.push(format!("- Messages Loaded: {}", messages.len()));
-    out.push(format!(
-        "- Older Messages Omitted: {}",
-        if has_more_older { "yes" } else { "no" }
+    out.push(ui_text::transcript_export_messages_loaded_line(
+        i18n,
+        messages.len(),
+    ));
+    out.push(ui_text::transcript_export_older_messages_omitted_line(
+        i18n,
+        has_more_older,
     ));
     if let Some(execution) = execution {
         if let Some(parent_id) = execution.session.parent_id {
-            out.push(format!("- Parent Session: #{parent_id}"));
+            out.push(ui_text::transcript_export_parent_session_line(
+                i18n, parent_id,
+            ));
         }
-        out.push(format!(
-            "- Child Sessions: {}",
-            execution.session.child_session_count
+        out.push(ui_text::transcript_export_child_sessions_line(
+            i18n,
+            execution.session.child_session_count,
         ));
     }
     out.push(String::new());
 
     if messages.is_empty() {
-        out.push("_No messages loaded in this session._".to_string());
+        out.push(ui_text::transcript_export_empty_line(i18n));
         return out.join("\n");
     }
 
@@ -421,7 +427,7 @@ fn render_part_node(
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Tool,
-                copy_text: tool_output_copy_text(part, tool),
+                copy_text: tool_output_copy_text(part, tool, i18n),
                 toggleable: true,
                 expanded,
             }
@@ -617,8 +623,8 @@ fn render_tool_execution(
     if let Some(diff) = apply_patch_diff(&tool.details) {
         push_label_value(
             out,
-            "    diff: ",
-            &format!("{} lines", diff.lines().count()),
+            "    ",
+            &ui_text::operation_diff_summary(i18n, diff.lines().count()),
             Style::default().fg(Color::DarkGray),
             width,
         );
@@ -728,7 +734,7 @@ fn render_operation_blocks(
                     push_label_value(
                         out,
                         "      ",
-                        &format!("exit {exit_code}"),
+                        &ui_text::operation_command_exit_line(i18n, *exit_code),
                         Style::default().fg(Color::DarkGray),
                         width,
                     );
@@ -760,10 +766,7 @@ fn render_operation_blocks(
             }
             OperationBlock::Checklist { items } => render_checklist(items, out, width, i18n),
             OperationBlock::SearchResults { query, results } => {
-                let heading = query
-                    .as_deref()
-                    .map(|query| format!("search: {query}"))
-                    .unwrap_or_else(|| "search results".to_string());
+                let heading = ui_text::operation_search_heading(i18n, query.as_deref());
                 push_section_heading(
                     out,
                     &format!("    {heading}"),
@@ -872,11 +875,7 @@ fn render_operation_blocks(
                 push_label_value(
                     out,
                     "    - ",
-                    &format!(
-                        "{} ({})",
-                        title,
-                        ui_text::execution_status_label(i18n, *status)
-                    ),
+                    &ui_text::operation_nested_task_summary(i18n, title, *status),
                     Style::default().fg(Color::DarkGray),
                     width,
                 );
@@ -971,7 +970,7 @@ fn render_permission_request(
 ) {
     push_section_heading(
         out,
-        "  permission",
+        &format!("  {}", ui_text::message_permission_heading(i18n)),
         Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
@@ -1020,8 +1019,12 @@ fn preview_for_part(part: &MessagePart, i18n: &I18n) -> Option<String> {
             let summary = reasoning.preferred_text();
             first_non_empty_preview_line(summary.as_str())
         }
-        PartContent::Operation(tool) => Some(tool_execution_preview(part, tool)),
-        PartContent::Error(error) => Some(format!("{}: {}", error.code, error.message)),
+        PartContent::Operation(tool) => Some(tool_execution_preview(part, tool, i18n)),
+        PartContent::Error(error) => Some(ui_text::message_error_text(
+            i18n,
+            error.code.as_str(),
+            error.message.as_str(),
+        )),
         PartContent::Attachment(attachment) => attachment.attachments.first().map(|item| {
             item.title
                 .as_ref()
@@ -1040,11 +1043,11 @@ fn preview_for_part(part: &MessagePart, i18n: &I18n) -> Option<String> {
     }
 }
 
-fn tool_execution_preview(part: &MessagePart, tool: &OperationPart) -> String {
-    format!(
-        "[tool] {} | {}",
-        tool_execution_status_token(part.status),
-        tool_invocation_label(&tool.invocation)
+fn tool_execution_preview(part: &MessagePart, tool: &OperationPart, i18n: &I18n) -> String {
+    ui_text::message_tool_summary(
+        i18n,
+        part.status,
+        tool_invocation_label(&tool.invocation).as_str(),
     )
 }
 
@@ -1170,13 +1173,13 @@ fn push_limited_markdown(
     }
 }
 
-fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart) -> String {
+fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart, i18n: &I18n) -> String {
     let label = if tool.title.trim().is_empty() {
         tool_invocation_label(&tool.invocation)
     } else {
         tool.title.clone()
     };
-    let mut sections = vec![tool_execution_preview(part, tool), label];
+    let mut sections = vec![tool_execution_preview(part, tool, i18n), label];
     if !tool.model_output.text.trim().is_empty() {
         sections.push(tool.model_output.text.trim().to_string());
     }
@@ -1188,7 +1191,7 @@ fn tool_output_copy_text(part: &MessagePart, tool: &OperationPart) -> String {
     let operation_blocks = tool
         .blocks
         .iter()
-        .map(operation_block_copy_text)
+        .map(|block| operation_block_copy_text(block, i18n))
         .collect::<Vec<_>>();
     if !operation_blocks.is_empty() {
         sections.push(operation_blocks.join("\n\n"));
@@ -1210,33 +1213,15 @@ fn tool_status_key_and_color(status: ExecutionStatus) -> (&'static str, Color) {
     }
 }
 
-fn tool_execution_status_token(status: ExecutionStatus) -> &'static str {
-    match status {
-        ExecutionStatus::Pending => "pending",
-        ExecutionStatus::InProgress => "running",
-        ExecutionStatus::Completed => "completed",
-        ExecutionStatus::Failed => "failed",
-        ExecutionStatus::Cancelled => "cancelled",
-    }
-}
-
 fn tool_execution_collapsed_summary(
     part: &MessagePart,
     tool: &OperationPart,
     i18n: &I18n,
 ) -> String {
-    format_collapsed_tool_summary(
+    ui_text::message_tool_summary(
+        i18n,
         part.status,
         tool_invocation_label(&tool.invocation).as_str(),
-        i18n,
-    )
-}
-
-fn format_collapsed_tool_summary(status: ExecutionStatus, label: &str, i18n: &I18n) -> String {
-    format!(
-        "[tool] {} | {}",
-        ui_text::execution_status_label(i18n, status),
-        label
     )
 }
 
@@ -1253,7 +1238,7 @@ fn transcript_part_content(part: &MessagePart) -> &PartContent {
         .expect("transcript message parts must include full content")
 }
 
-fn operation_block_copy_text(block: &OperationBlock) -> String {
+fn operation_block_copy_text(block: &OperationBlock, i18n: &I18n) -> String {
     match block {
         OperationBlock::Text { text }
         | OperationBlock::Markdown { text }
@@ -1277,14 +1262,19 @@ fn operation_block_copy_text(block: &OperationBlock) -> String {
                 parts.push(stderr.trim().to_string());
             }
             if let Some(exit_code) = exit_code {
-                parts.push(format!("exit {exit_code}"));
+                parts.push(ui_text::operation_command_exit_line(i18n, *exit_code));
             }
             parts.join("\n")
         }
         OperationBlock::SearchResults { query, results } => {
             let mut out = Vec::new();
             if let Some(query) = query {
-                out.push(format!("search: {query}"));
+                out.push(ui_text::operation_search_heading(
+                    i18n,
+                    Some(query.as_str()),
+                ));
+            } else {
+                out.push(ui_text::operation_search_heading(i18n, None));
             }
             for result in results {
                 out.push(result.title.clone());
@@ -1327,9 +1317,10 @@ fn operation_block_copy_text(block: &OperationBlock) -> String {
             task_id,
             title,
             status,
-        } => format!(
-            "{} ({status:?})",
-            title.as_deref().unwrap_or(task_id.as_str())
+        } => ui_text::operation_nested_task_summary(
+            i18n,
+            title.as_deref().unwrap_or(task_id.as_str()),
+            *status,
         ),
         OperationBlock::Json { .. }
         | OperationBlock::Table { .. }
@@ -1347,18 +1338,6 @@ fn push_multiline(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, style: 
     for raw_line in normalized.split('\n') {
         push_wrapped_line(out, prefix, prefix, raw_line, style, width);
     }
-}
-
-fn trim_empty_line_edges(text: &str) -> String {
-    let lines = text.split('\n').collect::<Vec<_>>();
-    let Some(first_non_empty) = lines.iter().position(|line| !line.trim().is_empty()) else {
-        return String::new();
-    };
-    let last_non_empty = lines
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .unwrap_or(first_non_empty);
-    lines[first_non_empty..=last_non_empty].join("\n")
 }
 
 fn push_markdown(out: &mut Vec<RenderedLine>, prefix: &str, text: &str, width: u16) {
@@ -1544,13 +1523,6 @@ fn owned_line(line: &Line<'_>) -> Line<'static> {
             .map(|span| Span::styled(span.content.to_string(), span.style))
             .collect::<Vec<_>>(),
     }
-}
-
-fn line_plain_text(line: &Line<'static>) -> String {
-    line.spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect::<String>()
 }
 
 fn flush_markdown_chunk(
@@ -2219,6 +2191,43 @@ mod tests {
     }
 
     #[test]
+    fn transcript_export_markdown_localizes_metadata_and_empty_state() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let markdown = render_transcript_export_markdown(&i18n, Some(42), "", None, &[], true);
+        let first_line = markdown.lines().next().unwrap_or_default();
+
+        assert!(first_line.contains("会话"));
+        assert!(first_line.contains("42"));
+        assert!(markdown.contains("会话 ID"));
+        assert!(markdown.contains("42"));
+        assert!(markdown.contains("已省略更早消息"));
+        assert!(markdown.contains("是"));
+        assert!(markdown.contains("_当前会话没有已加载消息。_"));
+    }
+
+    #[test]
+    fn operation_block_copy_text_localizes_search_headings() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let text = operation_block_copy_text(
+            &OperationBlock::SearchResults {
+                query: Some("rust".to_string()),
+                results: vec![agena::message::SearchResultItem {
+                    title: "Rust".to_string(),
+                    uri: "https://www.rust-lang.org".to_string(),
+                    snippet: Some("Systems programming language".to_string()),
+                    score: None,
+                }],
+            },
+            &i18n,
+        );
+        let first_line = text.lines().next().unwrap_or_default();
+
+        assert!(first_line.contains("搜索"));
+        assert!(first_line.contains("rust"));
+        assert!(text.contains("https://www.rust-lang.org"));
+    }
+
+    #[test]
     fn render_reasoning_part_does_not_inject_spaces_between_deltas() {
         let part = MessagePart::with_content(
             1,
@@ -2294,7 +2303,7 @@ mod tests {
             1,
             "collapsed tool output should stay on one line"
         );
-        assert!(rendered[0].contains("[tool]"));
+        assert!(rendered[0].contains("tool"));
         assert!(rendered[0].contains("completed"));
         assert!(rendered[0].contains("bash"));
     }
@@ -2348,6 +2357,66 @@ mod tests {
                 .any(|line| line.contains(&format!("line-{}", TOOL_EXPANDED_PREVIEW_LINES + 4))),
             "expected lines beyond the expanded cap to stay hidden"
         );
+    }
+
+    #[test]
+    fn render_tool_execution_localizes_diff_summary() {
+        let invocation = ToolInvocation::new(
+            "apply_patch",
+            serde_json::from_value(json!({ "path": "src/app.rs" }))
+                .expect("valid structured input"),
+        );
+        let details = agena::message::ToolOutput::from_json_payload(Some(&json!({
+            "diff": "line-a\nline-b"
+        })))
+        .expect("valid diff payload");
+        let tool = OperationPart::completed(
+            9,
+            invocation,
+            String::new(),
+            Vec::new(),
+            Vec::new(),
+            details,
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool.clone()),
+        );
+
+        let mut out = Vec::new();
+        render_tool_execution(
+            &part,
+            &tool,
+            &mut out,
+            120,
+            &I18n::resolve(Some("zh-CN"), None),
+            true,
+        );
+
+        let rendered = out
+            .into_iter()
+            .map(|line| sanitize_terminal_text(line.text.as_str()))
+            .collect::<Vec<_>>();
+        assert!(rendered.iter().any(|line| line.contains("diff：2 行")));
+    }
+
+    #[test]
+    fn operation_block_copy_text_localizes_nested_task_status() {
+        let block = OperationBlock::NestedTask {
+            task_id: "sync-index".to_string(),
+            title: Some("同步索引".to_string()),
+            status: ExecutionStatus::Completed,
+        };
+
+        let text = sanitize_terminal_text(
+            operation_block_copy_text(&block, &I18n::resolve(Some("zh-CN"), None)).as_str(),
+        );
+
+        assert_eq!(text, "同步索引（已完成）");
     }
 
     #[test]

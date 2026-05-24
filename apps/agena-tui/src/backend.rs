@@ -129,14 +129,14 @@ pub enum ProviderDraftAuthKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderDraftAdapterRule {
     pub adapter_id: &'static str,
-    pub detail: &'static str,
+    pub detail_key: &'static str,
     pub requires_base_url: bool,
     pub supports_draft_model_listing: bool,
 }
 
 const NONE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
     adapter_id: "ollama",
-    detail: "Ollama adapter; auth fields stay empty and the endpoint lives on the adapter.",
+    detail_key: "provider-adapter-rule-none-ollama-detail",
     requires_base_url: false,
     supports_draft_model_listing: false,
 }];
@@ -144,19 +144,19 @@ const NONE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRu
 const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
     ProviderDraftAdapterRule {
         adapter_id: "openai",
-        detail: "OpenAI-compatible HTTP adapter; uses provider auth base_url and supports draft model listing.",
+        detail_key: "provider-adapter-rule-api-openai-detail",
         requires_base_url: true,
         supports_draft_model_listing: true,
     },
     ProviderDraftAdapterRule {
         adapter_id: "anthropic",
-        detail: "Anthropic HTTP adapter; uses provider auth base_url and supports draft model listing.",
+        detail_key: "provider-adapter-rule-api-anthropic-detail",
         requires_base_url: true,
         supports_draft_model_listing: true,
     },
     ProviderDraftAdapterRule {
         adapter_id: "gemini",
-        detail: "Gemini HTTP adapter; uses provider auth base_url and supports draft model listing.",
+        detail_key: "provider-adapter-rule-api-gemini-detail",
         requires_base_url: true,
         supports_draft_model_listing: true,
     },
@@ -165,13 +165,13 @@ const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
 const GITLAB_AUTH_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
     ProviderDraftAdapterRule {
         adapter_id: "openai",
-        detail: "GitLab gateway routed through the openai adapter.",
+        detail_key: "provider-adapter-rule-gitlab-auth-openai-detail",
         requires_base_url: false,
         supports_draft_model_listing: true,
     },
     ProviderDraftAdapterRule {
         adapter_id: "anthropic",
-        detail: "GitLab gateway routed through the anthropic adapter.",
+        detail_key: "provider-adapter-rule-gitlab-auth-anthropic-detail",
         requires_base_url: false,
         supports_draft_model_listing: true,
     },
@@ -179,7 +179,7 @@ const GITLAB_AUTH_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
 
 const OPENAI_CHATGPT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
     adapter_id: "openai",
-    detail: "OpenAI adapter with chatgpt_codex backend; credentials come from the local OpenAI session.",
+    detail_key: "provider-adapter-rule-openai-chatgpt-openai-detail",
     requires_base_url: false,
     supports_draft_model_listing: false,
 }];
@@ -187,13 +187,13 @@ const OPENAI_CHATGPT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraf
 const GITHUB_COPILOT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
     ProviderDraftAdapterRule {
         adapter_id: "openai",
-        detail: "Copilot token routed through the openai adapter.",
+        detail_key: "provider-adapter-rule-github-copilot-openai-detail",
         requires_base_url: false,
         supports_draft_model_listing: false,
     },
     ProviderDraftAdapterRule {
         adapter_id: "anthropic",
-        detail: "Copilot token routed through the anthropic adapter.",
+        detail_key: "provider-adapter-rule-github-copilot-anthropic-detail",
         requires_base_url: false,
         supports_draft_model_listing: false,
     },
@@ -202,13 +202,13 @@ const GITHUB_COPILOT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
 const GITLAB_CREDENTIAL_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
     ProviderDraftAdapterRule {
         adapter_id: "openai",
-        detail: "GitLab OAuth credential routed through the openai adapter.",
+        detail_key: "provider-adapter-rule-gitlab-credential-openai-detail",
         requires_base_url: false,
         supports_draft_model_listing: false,
     },
     ProviderDraftAdapterRule {
         adapter_id: "anthropic",
-        detail: "GitLab OAuth credential routed through the anthropic adapter.",
+        detail_key: "provider-adapter-rule-gitlab-credential-anthropic-detail",
         requires_base_url: false,
         supports_draft_model_listing: false,
     },
@@ -216,28 +216,28 @@ const GITLAB_CREDENTIAL_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
 
 const GOOGLE_ADC_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
     adapter_id: "openai",
-    detail: "Vertex-style openai adapter with capability_family=gemini; requires provider auth base_url.",
+    detail_key: "provider-adapter-rule-google-adc-openai-detail",
     requires_base_url: true,
     supports_draft_model_listing: false,
 }];
 
 const SAP_AI_CORE_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
     adapter_id: "openai",
-    detail: "SAP AI Core openai adapter; requires provider auth base_url and service_key_env.",
+    detail_key: "provider-adapter-rule-sap-ai-core-openai-detail",
     requires_base_url: true,
     supports_draft_model_listing: false,
 }];
 
 const ATOMGIT_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
     adapter_id: "openai",
-    detail: "AtomGit credential routed through the openai adapter.",
+    detail_key: "provider-adapter-rule-atomgit-openai-detail",
     requires_base_url: false,
     supports_draft_model_listing: true,
 }];
 
 const BEDROCK_SIGV4_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[ProviderDraftAdapterRule {
     adapter_id: "amazon_bedrock",
-    detail: "Amazon Bedrock adapter signed with AWS SigV4.",
+    detail_key: "provider-adapter-rule-bedrock-sigv4-amazon-bedrock-detail",
     requires_base_url: false,
     supports_draft_model_listing: false,
 }];
@@ -493,10 +493,123 @@ impl ProviderCredentialDraftBundle {
 }
 
 #[derive(Debug, Clone)]
+pub enum ProviderDraftAuthMessage {
+    OpenaiBrowserStarted,
+    CopilotDeviceStarted { user_code: String },
+    GitlabBrowserStarted,
+    AtomGitBrowserStarted,
+    OpenaiCredentialCaptured,
+    CopilotPending,
+    CopilotCredentialCaptured,
+    GitlabCredentialCaptured,
+    AtomGitPending,
+    AtomGitCredentialCaptured,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderDraftAuthField {
+    RedirectUri,
+    InstanceUrl,
+    CallbackUrl,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderDraftAuthError {
+    UnsupportedInteractiveLogin,
+    StartBrowserAuthFirst,
+    StartDeviceAuthFirst,
+    RequiredField(ProviderDraftAuthField),
+    Other(String),
+}
+
+impl ProviderDraftAuthError {
+    fn other(error: impl ToString) -> Self {
+        Self::Other(error.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ProviderDraftAuthActionResult {
     pub draft: ProviderConfigDraft,
-    pub message: String,
+    pub message: ProviderDraftAuthMessage,
     pub clipboard_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderStudioSaveResult {
+    ProviderDraftSaved {
+        provider_id: String,
+        default_adapter: String,
+        default_model: String,
+    },
+    AdapterMatchesSaved {
+        provider_id: String,
+        adapter_id: String,
+        listed_model_count: usize,
+        matched_model_count: usize,
+    },
+    ModelSaved {
+        provider_id: String,
+        adapter_id: String,
+        model_id: String,
+    },
+    ConfiguredModelSaved {
+        provider_id: String,
+        adapter_id: String,
+        model_id: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderStudioSaveField {
+    ProviderId,
+    DefaultAdapter,
+    AdapterId,
+    ModelId,
+    AuthMode,
+    CredentialIssuer,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderStudioSaveValidationError {
+    FieldRequired(ProviderStudioSaveField),
+    UnsupportedDefaultAdapter {
+        auth_kind: ProviderDraftAuthKind,
+        adapter: String,
+        supported: String,
+    },
+    UnsupportedAdapters {
+        auth_kind: ProviderDraftAuthKind,
+        adapters: Vec<String>,
+        supported: String,
+    },
+    ApiBaseUrlRequired,
+    GitlabApiKeyOrEnvRequired,
+    CredentialBaseUrlRequired {
+        issuer: CredentialIssuer,
+    },
+    CredentialServiceKeyEnvRequired {
+        issuer: CredentialIssuer,
+    },
+    BedrockKeyPairRequired,
+    SelectAtLeastOneModel,
+}
+
+#[derive(Debug, Clone)]
+pub enum ProviderStudioSaveError {
+    Validation(ProviderStudioSaveValidationError),
+    ExistingProviderSettingsMustBeObject,
+    ProviderAdapterMustBeObject { adapter_id: String },
+    ProviderModelConfigMustBeObject,
+    ConfiguredProviderAdapterSettingsMustBeObject,
+    ConfiguredProviderAdapterModelsMustBeObject,
+    Other(String),
+}
+
+impl ProviderStudioSaveError {
+    fn other(error: impl ToString) -> Self {
+        Self::Other(error.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -773,32 +886,40 @@ impl ProviderConfigDraft {
         draft
     }
 
-    fn to_provider_overlay(
+    fn to_provider_overlay_for_save(
         &self,
         default_adapter: &str,
         default_model: &str,
         adapters: std::collections::BTreeMap<String, ProviderAdapterOverlay>,
         include_defaults: bool,
-    ) -> Result<ProviderOverlay> {
+    ) -> std::result::Result<ProviderOverlay, ProviderStudioSaveError> {
         Ok(ProviderOverlay {
             enabled: Some(true),
             default_adapter: include_defaults.then(|| default_adapter.to_owned()),
             default_model: include_defaults.then(|| default_model.to_owned()),
-            auth: Some(self.to_auth_overlay()?),
+            auth: Some(self.to_auth_overlay_for_save()?),
             adapters,
         })
     }
 
-    fn to_auth_overlay(&self) -> Result<ProviderAuthOverlay> {
-        let credential = self.oauth_auth_data()?;
+    fn to_auth_overlay_for_save(
+        &self,
+    ) -> std::result::Result<ProviderAuthOverlay, ProviderStudioSaveError> {
+        let credential = self
+            .oauth_auth_data()
+            .map_err(ProviderStudioSaveError::other)?;
         let mut overlay = ProviderAuthOverlay {
-            mode: Some(self.to_provider_auth_mode()?),
+            mode: Some(self.to_provider_auth_mode_for_save()?),
             ..ProviderAuthOverlay::default()
         };
 
         match self.auth_kind {
             ProviderDraftAuthKind::Unset => {
-                return Err(anyhow!("provider auth_mode is required before saving"));
+                return Err(ProviderStudioSaveError::Validation(
+                    ProviderStudioSaveValidationError::FieldRequired(
+                        ProviderStudioSaveField::AuthMode,
+                    ),
+                ));
             }
             ProviderDraftAuthKind::None => {}
             ProviderDraftAuthKind::Api => {
@@ -812,10 +933,15 @@ impl ProviderConfigDraft {
                 overlay.api_key = trimmed_owned(self.auth.api_key.as_str());
             }
             ProviderDraftAuthKind::Credential(None) => {
-                return Err(anyhow!("credential_issuer is required before saving"));
+                return Err(ProviderStudioSaveError::Validation(
+                    ProviderStudioSaveValidationError::FieldRequired(
+                        ProviderStudioSaveField::CredentialIssuer,
+                    ),
+                ));
             }
             ProviderDraftAuthKind::Credential(Some(_)) => {
-                let issuer = parse_credential_issuer(self.auth.credential_issuer.as_str())?;
+                let issuer = parse_credential_issuer(self.auth.credential_issuer.as_str())
+                    .map_err(ProviderStudioSaveError::other)?;
                 overlay.issuer = Some(issuer);
                 if issuer == CredentialIssuer::Gitlab {
                     overlay.instance_url = trimmed_owned(self.auth.instance_url.as_str());
@@ -841,11 +967,13 @@ impl ProviderConfigDraft {
         Ok(overlay)
     }
 
-    fn to_provider_auth_mode(&self) -> Result<ProviderAuthMode> {
+    fn to_provider_auth_mode_for_save(
+        &self,
+    ) -> std::result::Result<ProviderAuthMode, ProviderStudioSaveError> {
         match self.auth_kind {
-            ProviderDraftAuthKind::Unset => {
-                Err(anyhow!("provider auth_mode is required before saving"))
-            }
+            ProviderDraftAuthKind::Unset => Err(ProviderStudioSaveError::Validation(
+                ProviderStudioSaveValidationError::FieldRequired(ProviderStudioSaveField::AuthMode),
+            )),
             ProviderDraftAuthKind::None => Ok(ProviderAuthMode::None),
             ProviderDraftAuthKind::Api => Ok(ProviderAuthMode::Api),
             ProviderDraftAuthKind::Gitlab => Ok(ProviderAuthMode::Gitlab),
@@ -1147,6 +1275,99 @@ impl ProviderConfigDraft {
                     return Err(anyhow!(
                         "bedrock_sigv4 requires access_key_id and secret_access_key together"
                     ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_for_adapters_for_save(
+        &self,
+        adapter_ids: &std::collections::BTreeSet<String>,
+    ) -> std::result::Result<(), ProviderStudioSaveValidationError> {
+        let default_adapter = required_provider_save_field(
+            self.default_adapter.as_str(),
+            ProviderStudioSaveField::DefaultAdapter,
+        )?;
+        if !self.auth_kind.supports_adapter(default_adapter) {
+            return Err(
+                ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
+                    auth_kind: self.auth_kind.clone(),
+                    adapter: default_adapter.to_owned(),
+                    supported: supported_provider_draft_adapter_list(&self.auth_kind),
+                },
+            );
+        }
+
+        let incompatible = adapter_ids
+            .iter()
+            .filter(|adapter_id| !self.auth_kind.supports_adapter(adapter_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !incompatible.is_empty() {
+            return Err(ProviderStudioSaveValidationError::UnsupportedAdapters {
+                auth_kind: self.auth_kind.clone(),
+                adapters: incompatible,
+                supported: supported_provider_draft_adapter_list(&self.auth_kind),
+            });
+        }
+
+        match self.auth_kind {
+            ProviderDraftAuthKind::Unset => {
+                return Err(ProviderStudioSaveValidationError::FieldRequired(
+                    ProviderStudioSaveField::AuthMode,
+                ));
+            }
+            ProviderDraftAuthKind::None => {}
+            ProviderDraftAuthKind::Api => {
+                let requires_base_url = adapter_ids.iter().any(|adapter_id| {
+                    self.auth_kind
+                        .adapter_rule(adapter_id.as_str())
+                        .map(|rule| rule.requires_base_url)
+                        .unwrap_or(false)
+                });
+                if requires_base_url && optional_non_empty(self.auth.base_url.as_str()).is_none() {
+                    return Err(ProviderStudioSaveValidationError::ApiBaseUrlRequired);
+                }
+            }
+            ProviderDraftAuthKind::Gitlab => {
+                if optional_non_empty(self.auth.api_key.as_str()).is_none()
+                    && optional_non_empty(self.auth.api_key_env.as_str()).is_none()
+                {
+                    return Err(ProviderStudioSaveValidationError::GitlabApiKeyOrEnvRequired);
+                }
+            }
+            ProviderDraftAuthKind::Credential(None) => {
+                return Err(ProviderStudioSaveValidationError::FieldRequired(
+                    ProviderStudioSaveField::CredentialIssuer,
+                ));
+            }
+            ProviderDraftAuthKind::Credential(Some(issuer)) => {
+                if issuer.uses_http_endpoint()
+                    && optional_non_empty(self.auth.base_url.as_str()).is_none()
+                {
+                    return Err(
+                        ProviderStudioSaveValidationError::CredentialBaseUrlRequired { issuer },
+                    );
+                }
+                if issuer.requires_service_key_env()
+                    && optional_non_empty(self.auth.service_key_env.as_str()).is_none()
+                {
+                    return Err(
+                        ProviderStudioSaveValidationError::CredentialServiceKeyEnvRequired {
+                            issuer,
+                        },
+                    );
+                }
+            }
+            ProviderDraftAuthKind::BedrockSigv4 => {
+                let has_access_key_id =
+                    optional_non_empty(self.auth.access_key_id.as_str()).is_some();
+                let has_secret_access_key =
+                    optional_non_empty(self.auth.secret_access_key.as_str()).is_some();
+                if has_access_key_id ^ has_secret_access_key {
+                    return Err(ProviderStudioSaveValidationError::BedrockKeyPairRequired);
                 }
             }
         }
@@ -1860,14 +2081,14 @@ impl Backend {
     pub async fn start_provider_draft_auth(
         &self,
         draft: ProviderConfigDraft,
-    ) -> Result<ProviderDraftAuthActionResult> {
+    ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
         start_provider_draft_auth(draft).await
     }
 
     pub async fn continue_provider_draft_auth(
         &self,
         draft: ProviderConfigDraft,
-    ) -> Result<ProviderDraftAuthActionResult> {
+    ) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
         continue_provider_draft_auth(draft).await
     }
 
@@ -2181,17 +2402,23 @@ impl Backend {
         adapter_model_lists: &[ProviderAdapterModelsResource],
         selected_adapter_ids: &[String],
         selected_model_keys: &std::collections::BTreeSet<String>,
-    ) -> Result<String> {
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
         let mut draft = draft;
         draft.normalize_shape();
-        let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
         let requested_default_adapter =
             optional_non_empty(draft.default_adapter.as_str()).map(str::to_owned);
         let requested_default_model =
             optional_non_empty(draft.default_model.as_str()).map(str::to_owned);
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, selected_adapter_ids);
-        draft.validate_for_adapters(&effective_adapter_ids)?;
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
 
         let catalog_entries = self.lookup_model_catalog_entries(
             &adapter_model_lists
@@ -2212,11 +2439,12 @@ impl Backend {
             .collect::<std::collections::BTreeSet<_>>();
 
         let mut provider_value = self
-            .read_file_provider_settings(provider_id)?
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?
             .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
         let provider_object = provider_value
             .as_object_mut()
-            .ok_or_else(|| anyhow!("existing provider settings must be a JSON object"))?;
+            .ok_or(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject)?;
         let mut adapters = provider_object
             .remove("adapters")
             .and_then(|value| value.as_object().cloned())
@@ -2231,9 +2459,11 @@ impl Backend {
             let mut adapter_value = adapters
                 .remove(adapter_id)
                 .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
-            let adapter_object = adapter_value
-                .as_object_mut()
-                .ok_or_else(|| anyhow!("provider adapter `{adapter_id}` must be a JSON object"))?;
+            let adapter_object = adapter_value.as_object_mut().ok_or_else(|| {
+                ProviderStudioSaveError::ProviderAdapterMustBeObject {
+                    adapter_id: adapter_id.to_owned(),
+                }
+            })?;
             let configured_models = adapter_models
                 .models
                 .iter()
@@ -2260,7 +2490,7 @@ impl Backend {
             adapters.insert(adapter_id.to_owned(), adapter_value);
         }
 
-        let (default_adapter, default_model) = resolve_provider_defaults_from_value(
+        let (default_adapter, default_model) = resolve_provider_defaults_from_value_for_save(
             &adapters,
             requested_default_adapter.as_deref(),
             requested_default_model.as_deref(),
@@ -2290,7 +2520,8 @@ impl Backend {
                 .expect("default adapter must exist"),
             default_model.as_str(),
             default_model_value,
-        )?;
+        )
+        .map_err(ProviderStudioSaveError::other)?;
 
         provider_object.insert("enabled".to_owned(), JsonValue::Bool(true));
         provider_object.insert(
@@ -2303,28 +2534,41 @@ impl Backend {
         );
         provider_object.insert(
             "auth".to_owned(),
-            JsonValue::Object(build_provider_auth_patch_value(&draft)?),
+            JsonValue::Object(build_provider_auth_patch_value_for_save(&draft)?),
         );
         provider_object.insert("adapters".to_owned(), JsonValue::Object(adapters));
         self.set_provider_settings(provider_id, provider_value)
-            .await?;
-        Ok(format!(
-            "Saved provider {provider_id} with default {default_adapter}/{default_model}."
-        ))
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ProviderDraftSaved {
+            provider_id: provider_id.to_owned(),
+            default_adapter,
+            default_model,
+        })
     }
 
     pub async fn save_provider_adapter_matches(
         &self,
         draft: ProviderConfigDraft,
         adapter_models: ProviderAdapterModelsResource,
-    ) -> Result<String> {
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
         let mut draft = draft;
         draft.normalize_shape();
-        let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
-        let adapter_id = required_trimmed(adapter_models.adapter_id.as_str(), "adapter_id")?;
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id = required_provider_save_field(
+            adapter_models.adapter_id.as_str(),
+            ProviderStudioSaveField::AdapterId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        draft.validate_for_adapters(&effective_adapter_ids)?;
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
         let catalog_entries = self.lookup_model_catalog_entries(
             &adapter_models
                 .models
@@ -2353,7 +2597,7 @@ impl Backend {
                 preferred_catalog_entry_for_provider_model(&catalog_entries, model).is_some()
             })
             .count();
-        let provider_patch = build_provider_patch_value(
+        let provider_patch = build_provider_patch_value_for_save(
             &draft,
             optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id),
             optional_non_empty(draft.default_model.as_str()).unwrap_or("default"),
@@ -2366,11 +2610,14 @@ impl Backend {
             false,
         )?;
         self.patch_provider_settings(provider_id, provider_patch)
-            .await?;
-        Ok(format!(
-            "Saved {provider_id}/{adapter_id} with {} listed model(s); {matched_model_count} catalog matched.",
-            adapter_models.models.len()
-        ))
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::AdapterMatchesSaved {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            listed_model_count: adapter_models.models.len(),
+            matched_model_count,
+        })
     }
 
     pub async fn save_provider_model(
@@ -2380,15 +2627,24 @@ impl Backend {
         model_id: &str,
         provider_model: Option<ProviderModel>,
         set_default: bool,
-    ) -> Result<String> {
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
         let mut draft = draft;
         draft.normalize_shape();
-        let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
-        let adapter_id = required_trimmed(adapter_id, "adapter_id")?;
-        let model_id = required_trimmed(model_id, "model_id")?;
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id =
+            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
+            .map_err(ProviderStudioSaveError::Validation)?;
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        draft.validate_for_adapters(&effective_adapter_ids)?;
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
         let catalog_entries =
             self.lookup_model_catalog_entries(&[catalog_lookup_id_for_model_id(model_id)]);
         let model_value =
@@ -2403,7 +2659,7 @@ impl Backend {
         } else {
             optional_non_empty(draft.default_model.as_str()).unwrap_or(model_id)
         };
-        let provider_patch = build_provider_patch_value(
+        let provider_patch = build_provider_patch_value_for_save(
             &draft,
             default_adapter,
             default_model,
@@ -2418,8 +2674,13 @@ impl Backend {
             set_default || draft.source_provider_id.is_none(),
         )?;
         self.patch_provider_settings(provider_id, provider_patch)
-            .await?;
-        Ok(format!("Saved {provider_id}/{adapter_id}/{model_id}."))
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ModelSaved {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            model_id: model_id.to_owned(),
+        })
     }
 
     pub fn provider_model_draft_value(
@@ -2486,18 +2747,27 @@ impl Backend {
         model_id: &str,
         model_value: JsonValue,
         set_default: bool,
-    ) -> Result<String> {
+    ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
         let mut draft = draft;
         draft.normalize_shape();
-        let provider_id = required_trimmed(draft.provider_id.as_str(), "provider_id")?;
-        let adapter_id = required_trimmed(adapter_id, "adapter_id")?;
-        let model_id = required_trimmed(model_id, "model_id")?;
+        let provider_id = required_provider_save_field(
+            draft.provider_id.as_str(),
+            ProviderStudioSaveField::ProviderId,
+        )
+        .map_err(ProviderStudioSaveError::Validation)?;
+        let adapter_id =
+            required_provider_save_field(adapter_id, ProviderStudioSaveField::AdapterId)
+                .map_err(ProviderStudioSaveError::Validation)?;
+        let model_id = required_provider_save_field(model_id, ProviderStudioSaveField::ModelId)
+            .map_err(ProviderStudioSaveError::Validation)?;
         let JsonValue::Object(_) = &model_value else {
-            return Err(anyhow!("provider model config must be a JSON object"));
+            return Err(ProviderStudioSaveError::ProviderModelConfigMustBeObject);
         };
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
-        draft.validate_for_adapters(&effective_adapter_ids)?;
+        draft
+            .validate_for_adapters_for_save(&effective_adapter_ids)
+            .map_err(ProviderStudioSaveError::Validation)?;
         let default_adapter = if set_default {
             adapter_id
         } else {
@@ -2520,18 +2790,17 @@ impl Backend {
                         source: agena::config::ConfigSettingsSource::File,
                     },
                 )
-                .map_err(|error| anyhow!(error.to_string()))
-                .context("failed to read configured provider adapter")
+                .map_err(ProviderStudioSaveError::other)
                 .map(|response| response.value)
             })
             .transpose()?;
         let adapter_patch =
-            merge_provider_model_adapter_patch(existing_adapter, model_id, model_value)?;
+            merge_provider_model_adapter_patch_for_save(existing_adapter, model_id, model_value)?;
         let mut provider_patch = JsonMap::new();
         provider_patch.insert("enabled".to_owned(), JsonValue::Bool(true));
         provider_patch.insert(
             "auth".to_owned(),
-            JsonValue::Object(build_provider_auth_patch_value(&draft)?),
+            JsonValue::Object(build_provider_auth_patch_value_for_save(&draft)?),
         );
         provider_patch.insert(
             "adapters".to_owned(),
@@ -2550,10 +2819,13 @@ impl Backend {
             );
         }
         self.patch_provider_settings(provider_id, JsonValue::Object(provider_patch))
-            .await?;
-        Ok(format!(
-            "Saved configured model {provider_id}/{adapter_id}/{model_id}."
-        ))
+            .await
+            .map_err(ProviderStudioSaveError::other)?;
+        Ok(ProviderStudioSaveResult::ConfiguredModelSaved {
+            provider_id: provider_id.to_owned(),
+            adapter_id: adapter_id.to_owned(),
+            model_id: model_id.to_owned(),
+        })
     }
 
     async fn list_provider_adapter_models_with_target(
@@ -3844,15 +4116,16 @@ fn update_oauth_tokens_from_response(
 
 async fn start_provider_draft_auth(
     mut draft: ProviderConfigDraft,
-) -> Result<ProviderDraftAuthActionResult> {
+) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
     draft.normalize_shape();
     match draft.auth_kind {
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
-            let redirect_uri = required_trimmed(
+            let redirect_uri = required_provider_auth_field(
                 draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
-                "redirect_uri",
+                ProviderDraftAuthField::RedirectUri,
             )?;
-            let start = start_openai_browser_oauth(redirect_uri)?;
+            let start =
+                start_openai_browser_oauth(redirect_uri).map_err(ProviderDraftAuthError::other)?;
             draft.credential_drafts.openai_chatgpt.callback_url.clear();
             draft.credential_drafts.openai_chatgpt.browser =
                 Some(ProviderBrowserAuthSessionDraft {
@@ -3862,7 +4135,7 @@ async fn start_provider_draft_auth(
                 });
             Ok(ProviderDraftAuthActionResult {
                 draft,
-                message: "OpenAI browser auth started. Open the copied authorize URL, then paste the redirected callback URL and press p.".to_owned(),
+                message: ProviderDraftAuthMessage::OpenaiBrowserStarted,
                 clipboard_text: Some(start.authorize_url),
             })
         }
@@ -3875,7 +4148,9 @@ async fn start_provider_draft_auth(
                     .as_str(),
             )
             .unwrap_or("github.com");
-            let start = start_copilot_device_code(domain).await?;
+            let start = start_copilot_device_code(domain)
+                .await
+                .map_err(ProviderDraftAuthError::other)?;
             draft.credential_drafts.github_copilot.device = Some(ProviderDeviceAuthSessionDraft {
                 verification_url: start.verification_url.clone(),
                 user_code: start.user_code.clone(),
@@ -3884,20 +4159,23 @@ async fn start_provider_draft_auth(
             });
             Ok(ProviderDraftAuthActionResult {
                 draft,
-                message: format!(
-                    "Copilot device login started. Open the copied verification URL, enter code {}, then press p.",
-                    start.user_code
-                ),
+                message: ProviderDraftAuthMessage::CopilotDeviceStarted {
+                    user_code: start.user_code,
+                },
                 clipboard_text: Some(start.verification_url),
             })
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::Gitlab)) => {
-            let instance_url = required_trimmed(draft.auth.instance_url.as_str(), "instance_url")?;
-            let redirect_uri = required_trimmed(
-                draft.credential_drafts.gitlab.redirect_uri.as_str(),
-                "redirect_uri",
+            let instance_url = required_provider_auth_field(
+                draft.auth.instance_url.as_str(),
+                ProviderDraftAuthField::InstanceUrl,
             )?;
-            let start = start_gitlab_oauth(instance_url, redirect_uri)?;
+            let redirect_uri = required_provider_auth_field(
+                draft.credential_drafts.gitlab.redirect_uri.as_str(),
+                ProviderDraftAuthField::RedirectUri,
+            )?;
+            let start = start_gitlab_oauth(instance_url, redirect_uri)
+                .map_err(ProviderDraftAuthError::other)?;
             draft.credential_drafts.gitlab.callback_url.clear();
             draft.credential_drafts.gitlab.browser = Some(ProviderBrowserAuthSessionDraft {
                 authorize_url: start.authorize_url.clone(),
@@ -3906,12 +4184,14 @@ async fn start_provider_draft_auth(
             });
             Ok(ProviderDraftAuthActionResult {
                 draft,
-                message: "GitLab browser auth started. Open the copied authorize URL, then paste the redirected callback URL and press p.".to_owned(),
+                message: ProviderDraftAuthMessage::GitlabBrowserStarted,
                 clipboard_text: Some(start.authorize_url),
             })
         }
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit)) => {
-            let start = start_atomgit_oauth().await?;
+            let start = start_atomgit_oauth()
+                .await
+                .map_err(ProviderDraftAuthError::other)?;
             draft.credential_drafts.atomgit.browser = Some(ProviderBrowserAuthSessionDraft {
                 authorize_url: start.authorize_url.clone(),
                 state: start.state,
@@ -3919,19 +4199,24 @@ async fn start_provider_draft_auth(
             });
             Ok(ProviderDraftAuthActionResult {
                 draft,
-                message: "AtomGit browser auth started. Open the copied authorize URL, complete the login, then press p to poll.".to_owned(),
+                message: ProviderDraftAuthMessage::AtomGitBrowserStarted,
                 clipboard_text: Some(start.authorize_url),
             })
         }
-        _ => Err(anyhow!(
-            "the current auth_mode does not support interactive OAuth login"
-        )),
+        _ => Err(ProviderDraftAuthError::UnsupportedInteractiveLogin),
     }
+}
+
+fn required_provider_auth_field<'a>(
+    value: &'a str,
+    field: ProviderDraftAuthField,
+) -> std::result::Result<&'a str, ProviderDraftAuthError> {
+    optional_non_empty(value).ok_or(ProviderDraftAuthError::RequiredField(field))
 }
 
 async fn continue_provider_draft_auth(
     mut draft: ProviderConfigDraft,
-) -> Result<ProviderDraftAuthActionResult> {
+) -> std::result::Result<ProviderDraftAuthActionResult, ProviderDraftAuthError> {
     draft.normalize_shape();
     match draft.auth_kind {
         ProviderDraftAuthKind::Credential(Some(CredentialIssuer::OpenaiChatgpt)) => {
@@ -3940,22 +4225,24 @@ async fn continue_provider_draft_auth(
                 .openai_chatgpt
                 .browser
                 .clone()
-                .ok_or_else(|| anyhow!("start browser auth first with o"))?;
-            let redirect_uri = required_trimmed(
+                .ok_or(ProviderDraftAuthError::StartBrowserAuthFirst)?;
+            let redirect_uri = required_provider_auth_field(
                 draft.credential_drafts.openai_chatgpt.redirect_uri.as_str(),
-                "redirect_uri",
+                ProviderDraftAuthField::RedirectUri,
             )?;
-            let callback_url = required_trimmed(
+            let callback_url = required_provider_auth_field(
                 draft.credential_drafts.openai_chatgpt.callback_url.as_str(),
-                "callback_url",
+                ProviderDraftAuthField::CallbackUrl,
             )?;
-            let callback = parse_oauth_callback_url(callback_url, Some(session.state.as_str()))?;
+            let callback = parse_oauth_callback_url(callback_url, Some(session.state.as_str()))
+                .map_err(ProviderDraftAuthError::other)?;
             let token = exchange_openai_oauth_code(
                 callback.code.as_str(),
                 session.pkce_verifier.as_str(),
                 redirect_uri,
             )
-            .await?;
+            .await
+            .map_err(ProviderDraftAuthError::other)?;
             update_oauth_tokens_from_response(
                 &mut draft.credential_drafts.openai_chatgpt.tokens,
                 &token,
@@ -3966,7 +4253,7 @@ async fn continue_provider_draft_auth(
             draft.credential_drafts.openai_chatgpt.browser = None;
             Ok(ProviderDraftAuthActionResult {
                 draft,
-                message: "OpenAI OAuth credential captured into the draft.".to_owned(),
+                message: ProviderDraftAuthMessage::OpenaiCredentialCaptured,
                 clipboard_text: None,
             })
         }
@@ -3976,7 +4263,7 @@ async fn continue_provider_draft_auth(
                 .github_copilot
                 .device
                 .clone()
-                .ok_or_else(|| anyhow!("start device auth first with o"))?;
+                .ok_or(ProviderDraftAuthError::StartDeviceAuthFirst)?;
             let domain = optional_non_empty(
                 draft
                     .credential_drafts
@@ -3985,12 +4272,13 @@ async fn continue_provider_draft_auth(
                     .as_str(),
             )
             .unwrap_or("github.com");
-            let Some(token) =
-                poll_copilot_device_code(domain, session.device_code.as_str()).await?
+            let Some(token) = poll_copilot_device_code(domain, session.device_code.as_str())
+                .await
+                .map_err(ProviderDraftAuthError::other)?
             else {
                 return Ok(ProviderDraftAuthActionResult {
                     draft,
-                    message: "Copilot device login is still pending. Complete the browser approval, then press p again.".to_owned(),
+                    message: ProviderDraftAuthMessage::CopilotPending,
                     clipboard_text: None,
                 });
             };
@@ -4001,7 +4289,7 @@ async fn continue_provider_draft_auth(
             draft.credential_drafts.github_copilot.device = None;
             Ok(ProviderDraftAuthActionResult {
                 draft,
-                message: "Copilot OAuth credential captured into the draft.".to_owned(),
+                message: ProviderDraftAuthMessage::CopilotCredentialCaptured,
                 clipboard_text: None,
             })
         }
@@ -4011,30 +4299,35 @@ async fn continue_provider_draft_auth(
                 .gitlab
                 .browser
                 .clone()
-                .ok_or_else(|| anyhow!("start browser auth first with o"))?;
-            let instance_url = required_trimmed(draft.auth.instance_url.as_str(), "instance_url")?;
-            let redirect_uri = required_trimmed(
+                .ok_or(ProviderDraftAuthError::StartBrowserAuthFirst)?;
+            let instance_url = required_provider_auth_field(
+                draft.auth.instance_url.as_str(),
+                ProviderDraftAuthField::InstanceUrl,
+            )?;
+            let redirect_uri = required_provider_auth_field(
                 draft.credential_drafts.gitlab.redirect_uri.as_str(),
-                "redirect_uri",
+                ProviderDraftAuthField::RedirectUri,
             )?;
-            let callback_url = required_trimmed(
+            let callback_url = required_provider_auth_field(
                 draft.credential_drafts.gitlab.callback_url.as_str(),
-                "callback_url",
+                ProviderDraftAuthField::CallbackUrl,
             )?;
-            let callback = parse_oauth_callback_url(callback_url, Some(session.state.as_str()))?;
+            let callback = parse_oauth_callback_url(callback_url, Some(session.state.as_str()))
+                .map_err(ProviderDraftAuthError::other)?;
             let token = exchange_gitlab_oauth_code(
                 instance_url,
                 callback.code.as_str(),
                 session.pkce_verifier.as_str(),
                 redirect_uri,
             )
-            .await?;
+            .await
+            .map_err(ProviderDraftAuthError::other)?;
             update_oauth_tokens_from_response(&mut draft.credential_drafts.gitlab.tokens, &token);
             draft.credential_drafts.gitlab.callback_url.clear();
             draft.credential_drafts.gitlab.browser = None;
             Ok(ProviderDraftAuthActionResult {
                 draft,
-                message: "GitLab OAuth credential captured into the draft.".to_owned(),
+                message: ProviderDraftAuthMessage::GitlabCredentialCaptured,
                 clipboard_text: None,
             })
         }
@@ -4044,16 +4337,21 @@ async fn continue_provider_draft_auth(
                 .atomgit
                 .browser
                 .clone()
-                .ok_or_else(|| anyhow!("start browser auth first with o"))?;
-            if !poll_atomgit_oauth_state(session.state.as_str()).await? {
+                .ok_or(ProviderDraftAuthError::StartBrowserAuthFirst)?;
+            if !poll_atomgit_oauth_state(session.state.as_str())
+                .await
+                .map_err(ProviderDraftAuthError::other)?
+            {
                 return Ok(ProviderDraftAuthActionResult {
                     draft,
-                    message: "AtomGit browser login is still pending. Finish the browser flow, then press p again.".to_owned(),
+                    message: ProviderDraftAuthMessage::AtomGitPending,
                     clipboard_text: None,
                 });
             }
 
-            let token = exchange_atomgit_oauth_state(session.state.as_str()).await?;
+            let token = exchange_atomgit_oauth_state(session.state.as_str())
+                .await
+                .map_err(ProviderDraftAuthError::other)?;
             update_oauth_tokens_from_response(&mut draft.credential_drafts.atomgit.tokens, &token);
             draft.credential_drafts.atomgit.account_id =
                 token.account_id.clone().unwrap_or_default();
@@ -4067,13 +4365,11 @@ async fn continue_provider_draft_auth(
             draft.credential_drafts.atomgit.browser = None;
             Ok(ProviderDraftAuthActionResult {
                 draft,
-                message: "AtomGit OAuth credential captured into the draft.".to_owned(),
+                message: ProviderDraftAuthMessage::AtomGitCredentialCaptured,
                 clipboard_text: None,
             })
         }
-        _ => Err(anyhow!(
-            "the current auth_mode does not support interactive OAuth login"
-        )),
+        _ => Err(ProviderDraftAuthError::UnsupportedInteractiveLogin),
     }
 }
 
@@ -4464,30 +4760,36 @@ fn auth_data_has_access_or_api_key(auth: &AuthData) -> bool {
     }
 }
 
-fn build_provider_patch_value(
+fn build_provider_patch_value_for_save(
     draft: &ProviderConfigDraft,
     default_adapter: &str,
     default_model: &str,
     adapters: JsonValue,
     include_defaults: bool,
-) -> Result<JsonValue> {
+) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
     let adapters = serde_json::from_value::<
         std::collections::BTreeMap<String, ProviderAdapterOverlay>,
     >(adapters)
-    .map_err(api_error)?;
-    let overlay =
-        draft.to_provider_overlay(default_adapter, default_model, adapters, include_defaults)?;
-    serde_json::to_value(overlay).map_err(api_error)
+    .map_err(ProviderStudioSaveError::other)?;
+    let overlay = draft.to_provider_overlay_for_save(
+        default_adapter,
+        default_model,
+        adapters,
+        include_defaults,
+    )?;
+    serde_json::to_value(overlay).map_err(ProviderStudioSaveError::other)
 }
 
-fn build_provider_auth_patch_value(
+fn build_provider_auth_patch_value_for_save(
     draft: &ProviderConfigDraft,
-) -> Result<JsonMap<String, JsonValue>> {
-    serde_json::to_value(draft.to_auth_overlay()?)
-        .map_err(api_error)
+) -> std::result::Result<JsonMap<String, JsonValue>, ProviderStudioSaveError> {
+    serde_json::to_value(draft.to_auth_overlay_for_save()?)
+        .map_err(ProviderStudioSaveError::other)
         .and_then(|value| match value {
             JsonValue::Object(object) => Ok(object),
-            _ => Err(anyhow!("provider auth overlay must serialize as an object")),
+            _ => Err(ProviderStudioSaveError::other(
+                "provider auth overlay must serialize as an object",
+            )),
         })
 }
 
@@ -4512,18 +4814,16 @@ fn provider_settings_path(provider_id: &str) -> String {
     format!("providers.{}", quoted_settings_segment(provider_id))
 }
 
-fn merge_provider_model_adapter_patch(
+fn merge_provider_model_adapter_patch_for_save(
     existing_adapter: Option<JsonValue>,
     model_id: &str,
     model_value: JsonValue,
-) -> Result<JsonValue> {
+) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
     let mut adapter = match existing_adapter {
         Some(JsonValue::Object(object)) => object,
         Some(JsonValue::Null) | None => JsonMap::new(),
         Some(_) => {
-            return Err(anyhow!(
-                "configured provider adapter settings must be a JSON object"
-            ));
+            return Err(ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject);
         }
     };
     adapter.insert("enabled".to_owned(), JsonValue::Bool(true));
@@ -4531,9 +4831,7 @@ fn merge_provider_model_adapter_patch(
         .entry("models".to_owned())
         .or_insert_with(|| JsonValue::Object(JsonMap::new()));
     let Some(models_object) = models.as_object_mut() else {
-        return Err(anyhow!(
-            "configured provider adapter models must be a JSON object"
-        ));
+        return Err(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject);
     };
     models_object.insert(model_id.to_owned(), model_value);
     Ok(JsonValue::Object(adapter))
@@ -4547,11 +4845,11 @@ fn provider_model_selection_contains(
     selected_model_keys.contains(format!("{adapter_id}\u{1f}{model_id}").as_str())
 }
 
-fn resolve_provider_defaults_from_value(
+fn resolve_provider_defaults_from_value_for_save(
     adapters: &JsonMap<String, JsonValue>,
     requested_default_adapter: Option<&str>,
     requested_default_model: Option<&str>,
-) -> Result<(String, String)> {
+) -> std::result::Result<(String, String), ProviderStudioSaveError> {
     if let (Some(default_adapter), Some(default_model)) =
         (requested_default_adapter, requested_default_model)
         && provider_value_contains_model(adapters, default_adapter, default_model)
@@ -4581,9 +4879,16 @@ fn resolve_provider_defaults_from_value(
         }
     }
 
-    Err(anyhow!(
-        "select at least one model before saving the provider"
+    Err(ProviderStudioSaveError::Validation(
+        ProviderStudioSaveValidationError::SelectAtLeastOneModel,
     ))
+}
+
+fn required_provider_save_field<'a>(
+    value: &'a str,
+    field: ProviderStudioSaveField,
+) -> std::result::Result<&'a str, ProviderStudioSaveValidationError> {
+    optional_non_empty(value).ok_or(ProviderStudioSaveValidationError::FieldRequired(field))
 }
 
 fn provider_value_contains_model(
@@ -4798,7 +5103,7 @@ mod tests {
 
     #[test]
     fn merge_provider_model_adapter_patch_preserves_existing_models() {
-        let merged = merge_provider_model_adapter_patch(
+        let merged = merge_provider_model_adapter_patch_for_save(
             Some(json!({
                 "enabled": true,
                 "models": {

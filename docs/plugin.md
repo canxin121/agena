@@ -129,6 +129,7 @@ Runtime build 注册：
 | `agena.fs` | 文件系统读写相关 tools |
 | `agena.shell` | shell exec / monitor 相关 tools |
 | `agena.web` | web search / web fetch tools |
+| `agena.code` | `ast-grep` / `tree-sitter` 驱动的结构化代码搜索 tools |
 | `agena.workflow` | plan mode、todo、worktree 等 workflow tools |
 | `agena.skills` | 扫描 `SKILL.md` 和 slash command，并动态注册 tools |
 | `agena.lsp` | LSP server 观测和 LSP 查询 tools |
@@ -144,7 +145,9 @@ Runtime build 注册：
 | `fs` | `read`, `glob`, `grep`, `apply_patch`, `notebook_edit` |
 | `shell` | `exec`, `monitor_start`, `monitor_list`, `monitor_read`, `monitor_stop` |
 | `web` | `fetch`, `search` |
+| `code` | `search_ast`, `syntax_tree` |
 | `lsp` | `servers`, `definition`, `references`, `hover`, `diagnostics` |
+| `memory` | `search`, `get`, `list`, `write`, `delete` |
 | `settings` | `get`, `list`, `validate`, `set`, `delete`, `patch` |
 | `schedule` | `list`, `create`, `delete`, `wakeup` |
 | `workflow` | `init`, `review`, `security_review` |
@@ -727,17 +730,6 @@ Remote HTTP:
 [plugins.list."agena.mcp".options.servers.remote]
 transport = "http"
 url = "https://mcp.example.com"
-mode = "streamable_http"
-headers = { }
-auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
-```
-
-Remote WebSocket:
-
-```toml
-[plugins.list."agena.mcp".options.servers.browser]
-transport = "ws"
-url = "wss://mcp.example.com/socket"
 headers = { }
 auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
 ```
@@ -751,6 +743,7 @@ Runtime build 时：
 5. 每个 MCP capability 进入 plugin tool registry。
 
 因此，MCP 的权限、catalog、调用、hook、status 都落在 plugin 体系中。
+`agena.mcp` 现在只接受 `stdio` 和 streamable HTTP 两种连接方式；旧的 WebSocket transport 已移除。
 
 ## Plugin Storage 和 Secrets
 

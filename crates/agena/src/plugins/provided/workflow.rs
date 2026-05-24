@@ -2,16 +2,15 @@
 //! todo_write, create_goal, get_goal, update_goal, ask_user, enter_plan_mode,
 //! exit_plan_mode, enter_worktree, exit_worktree).
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
-use crate::entry::{
-    ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user, tool_search,
-};
+use crate::entry::{ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user};
 use crate::message::{
     AgentRestoreToolInput, AgentSwitchToolInput, AskUserToolInput, ClearGoalToolInput,
     CreateGoalToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, ExitPlanModeToolInput,
@@ -29,12 +28,50 @@ use crate::plugin::sdk::host_api::{
     HostTodoWriteRequest, HostUpdateGoalRequest, SpawnSubtaskRequest, ToolDescriptor,
 };
 use crate::plugin::sdk::{
-    HookSubscription, HostCapability, InitContext, InitOutcome, PathAccessSpec, PathKind,
-    PathRequest, Plugin, PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput,
-    ToolInvokeOutput, ToolTag,
+    HookSubscription, HostCapability, InitContext, InitOutcome, NetworkRequest, PathAccessSpec,
+    PathKind, PathRequest, Plugin, PluginManifest, PluginToolDecl, Result as SdkResult,
+    ToolInvokeInput, ToolInvokeOutput, ToolTag,
 };
+use crate::search::meili::MeiliConnection;
 
 pub(crate) const WORKFLOW_PLUGIN_ID: &str = "agena.workflow";
+const DEFAULT_TOOL_SEARCH_LIMIT: usize = 8;
+const MAX_TOOL_SEARCH_LIMIT: usize = 25;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowPluginOptions {
+    tool_search: WorkflowToolSearchOptions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct WorkflowToolSearchOptions {
+    url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    index: String,
+}
+
+impl Default for WorkflowToolSearchOptions {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            api_key: None,
+            index: "agena_tool_catalog".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ToolSearchDocument {
+    id: String,
+    name: String,
+    description: String,
+    tags: Vec<String>,
+    plugin_id: Option<String>,
+    catalog_text: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 struct CompleteGoalToolInput {}
@@ -47,7 +84,7 @@ struct CompleteGoalToolInput {}
     host_capabilities(HostCapability::AgentRegistry),
     concurrency_safe = true
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum WorkflowToolInput {
     #[tool(exec = "init")]
     Init {
@@ -76,7 +113,7 @@ enum WorkflowToolInput {
     host_capabilities(HostCapability::ListTools),
     concurrency_safe = true
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum ToolsToolInput {
     #[tool(exec = "search")]
     Search {
@@ -91,6 +128,7 @@ enum ToolsToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct ToolsHelpInput {
     pub tool: String,
     #[serde(default = "default_include_schema")]
@@ -360,12 +398,16 @@ fn goal_status_label(status: HostGoalStatus) -> &'static str {
 
 pub(crate) struct WorkflowPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
+    options: OnceLock<WorkflowPluginOptions>,
+    tool_search_lock: Mutex<()>,
 }
 
 impl WorkflowPlugin {
     pub(crate) fn new() -> Self {
         Self {
             host: RwLock::new(None),
+            options: OnceLock::new(),
+            tool_search_lock: Mutex::new(()),
         }
     }
 
@@ -457,6 +499,12 @@ impl WorkflowPlugin {
             .ok_or_else(|| PluginError::new("workflow plugin invoked before init"))
     }
 
+    fn options(&self) -> SdkResult<&WorkflowPluginOptions> {
+        self.options
+            .get()
+            .ok_or_else(|| PluginError::new("workflow plugin options unavailable before init"))
+    }
+
     fn host_ask_user_questions(input: &AskUserToolInput) -> Vec<HostAskUserQuestion> {
         input
             .questions
@@ -479,14 +527,26 @@ impl WorkflowPlugin {
             .collect()
     }
 
-    fn searchable_tool_from_descriptor(descriptor: ToolDescriptor) -> tool_search::SearchableTool {
-        tool_search::SearchableTool {
-            name: descriptor.name,
-            description: descriptor
-                .summary
-                .or(descriptor.description)
-                .unwrap_or_default(),
-            tags: descriptor.tags,
+    fn tool_search_document_from_descriptor(descriptor: ToolDescriptor) -> ToolSearchDocument {
+        let name = descriptor.name;
+        let description = descriptor
+            .summary
+            .or(descriptor.description)
+            .unwrap_or_default();
+        let tags = descriptor
+            .tags
+            .into_iter()
+            .map(|tag| tag.to_string())
+            .collect::<Vec<_>>();
+        let plugin_id = descriptor.plugin_id;
+        let catalog_text = format!("{} {} {}", name, description, tags.join(" "));
+        ToolSearchDocument {
+            id: name.clone(),
+            name,
+            description,
+            tags,
+            plugin_id,
+            catalog_text,
         }
     }
 
@@ -810,16 +870,66 @@ impl WorkflowPlugin {
     }
 
     async fn invoke_tool_search(&self, input: &ToolSearchToolInput) -> SdkResult<ToolInvokeOutput> {
+        let query = input.query.trim();
+        if query.is_empty() {
+            return Err(PluginError::invalid_params(
+                "tools search requires a non-empty query",
+            ));
+        }
+        let limit = input
+            .limit
+            .unwrap_or(DEFAULT_TOOL_SEARCH_LIMIT as u32)
+            .clamp(1, MAX_TOOL_SEARCH_LIMIT as u32) as usize;
         let host = self.host()?;
         let catalog = host
             .list_tools()
             .await?
             .into_iter()
-            .map(Self::searchable_tool_from_descriptor)
+            .map(Self::tool_search_document_from_descriptor)
             .collect::<Vec<_>>();
-        let execution = tool_search::execute_with_tools(&catalog, input)
-            .map_err(|err| PluginError::invalid_params(err.to_string()))?;
-        Ok(crate::plugins::provided::router::tool_execution_to_invoke_output(execution))
+        let options = &self.options()?.tool_search;
+        let backend = MeiliConnection::new(options.url.as_str(), options.api_key.as_deref())
+            .map_err(|err| PluginError::new(format!("tool search backend unavailable: {err}")))?;
+        let _guard = self.tool_search_lock.lock().await;
+        backend
+            .replace_documents(options.index.as_str(), Some("id"), &catalog)
+            .await
+            .map_err(|err| PluginError::new(format!("failed to rebuild tool index: {err}")))?;
+        let results = backend
+            .search::<ToolSearchDocument>(options.index.as_str(), query, limit)
+            .await
+            .map_err(|err| PluginError::new(format!("tool search failed: {err}")))?;
+        let names = results
+            .hits
+            .iter()
+            .map(|hit| hit.result.name.clone())
+            .collect::<Vec<_>>();
+        let mut lines = vec![format!(
+            "Found {} tool(s) matching '{}'.",
+            names.len(),
+            query
+        )];
+        for hit in &results.hits {
+            let tool = &hit.result;
+            lines.push(format!(
+                "- {} [{}]: {}",
+                tool.name,
+                tags_summary(tool.tags.as_slice()),
+                tool.description
+            ));
+        }
+        if !names.is_empty() {
+            lines.push(
+                "Call `tools` with action `help` and an exact tool name for detailed usage."
+                    .to_string(),
+            );
+        }
+        let payload = serde_json::json!({ "results": names });
+        Ok(ToolInvokeOutput::text(lines.join("\n"))
+            .with_title("Tool search")
+            .with_payload(payload)
+            .with_metadata("query", query)
+            .with_metadata("matched_tools", results.hits.len().to_string()))
     }
 
     async fn invoke_tool_help(&self, input: &ToolsHelpInput) -> SdkResult<ToolInvokeOutput> {
@@ -907,10 +1017,20 @@ impl Plugin for WorkflowPlugin {
             .hooks(HookSubscription::TOOL_INVOKE | HookSubscription::AGENT_STOP)
             .plugin_capability(HostCapability::AgentRegistry)
             .tools(entries())
+            .options_schema(crate::entry::definition::json_schema_for::<
+                WorkflowPluginOptions,
+            >())
             .build()
     }
 
-    async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+        let options = if ctx.options.is_null() {
+            WorkflowPluginOptions::default()
+        } else {
+            serde_json::from_value(ctx.options)
+                .map_err(|err| PluginError::new(format!("invalid workflow options: {err}")))?
+        };
+        let _ = self.options.set(options);
         *self
             .host
             .write()
@@ -1228,6 +1348,34 @@ impl Plugin for WorkflowPlugin {
             Err(err) => Err(err),
         }
     }
+
+    async fn permission_networks(
+        &self,
+        tool: &str,
+        input: &serde_json::Value,
+    ) -> SdkResult<Vec<NetworkRequest>> {
+        if tool != "tools" {
+            return Ok(Vec::new());
+        }
+        let Ok((action, _)) = ToolsToolInput::resolve_entry("tools", input.clone()) else {
+            return Ok(Vec::new());
+        };
+        if action != "search" {
+            return Ok(Vec::new());
+        }
+        let url = self.options()?.tool_search.url.trim();
+        if url.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(vec![NetworkRequest::connect(url.to_string())])
+    }
+}
+
+fn tags_summary(tags: &[String]) -> String {
+    if tags.is_empty() {
+        return "untagged".to_string();
+    }
+    tags.join(", ")
 }
 
 fn entries() -> Vec<PluginToolDecl> {
@@ -1246,4 +1394,23 @@ fn entries() -> Vec<PluginToolDecl> {
         }),
         WorktreeToolInput::tool_decl(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tools_search_rejects_unknown_fields() {
+        let err = ToolsToolInput::resolve_entry(
+            "tools",
+            serde_json::json!({
+                "action": "search",
+                "query": "memory",
+                "backend": "legacy"
+            }),
+        )
+        .expect_err("tools search should reject unknown fields");
+        assert!(err.to_string().contains("unknown field `backend`"));
+    }
 }

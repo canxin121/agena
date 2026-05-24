@@ -24,14 +24,14 @@ use crate::plugin::sdk::host_api::{
     HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse, HostGetSessionRequest,
     HostGetSessionResponse, HostGoal, HostGoalStatus, HostLspDiagnostic,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostLspServer, HostMcpAddServerRequest, HostMcpHttpMode, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPlanEntry, HostPlanGetRequest, HostPlanGetResponse, HostPlanListResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
+    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPlanEntry, HostPlanGetRequest,
+    HostPlanGetResponse, HostPlanListResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRenameSessionRequest,
+    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
+    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
+    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
     HostStorageDeleteRequest, HostStorageEntry, HostStorageGetRequest, HostStorageGetResponse,
     HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostTodoItem,
@@ -1218,35 +1218,13 @@ impl HostClient for RuntimeHostClient {
             },
             HostMcpServerSpec::Http {
                 url,
-                mode,
                 bearer,
                 headers,
             } => {
                 let url = url::Url::parse(&url)
                     .map_err(|e| PluginError::invalid_params(format!("invalid mcp url: {e}")))?;
                 let auth = bearer.map(agena_mcp_client::HttpAuth::Bearer);
-                let mode = match mode {
-                    HostMcpHttpMode::Sse => agena_mcp_client::HttpTransportMode::Sse,
-                    HostMcpHttpMode::StreamableHttp => {
-                        agena_mcp_client::HttpTransportMode::StreamableHttp
-                    }
-                };
                 agena_mcp_client::ServerSpec::Http {
-                    url,
-                    mode,
-                    headers: headers.into_iter().collect(),
-                    auth,
-                }
-            }
-            HostMcpServerSpec::Ws {
-                url,
-                bearer,
-                headers,
-            } => {
-                let url = url::Url::parse(&url)
-                    .map_err(|e| PluginError::invalid_params(format!("invalid mcp url: {e}")))?;
-                let auth = bearer.map(agena_mcp_client::HttpAuth::Bearer);
-                agena_mcp_client::ServerSpec::Ws {
                     url,
                     headers: headers.into_iter().collect(),
                     auth,

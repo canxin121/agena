@@ -46,6 +46,10 @@ html2md = { workspace = true }
 lru = { workspace = true }
 parking_lot = { workspace = true }
 regex = { workspace = true }
+meilisearch-sdk = { workspace = true }
+ast-grep-core = { workspace = true }
+tree-sitter = { workspace = true }
+tree-sitter-rust = { workspace = true }
 html_escape = { workspace = true }
 indexmap = { workspace = true }
 urlencoding = { workspace = true }

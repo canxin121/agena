@@ -17,6 +17,7 @@ pub mod entry;
 pub mod provider;
 pub mod role;
 pub mod runtime;
+pub(crate) mod search;
 pub mod session;
 pub mod storage;
 pub mod tracing;

@@ -189,7 +189,7 @@ impl McpEntryTarget {
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum McpToolInput {
     #[tool(exec = "list_resources")]
     ListResources {
@@ -219,11 +219,13 @@ enum McpToolInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct McpServerInput {
     server: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct CallToolInput {
     server: String,
     name: String,
@@ -348,12 +350,14 @@ fn maybe_network_tag(entry: PluginToolDecl, has_network_servers: bool) -> Plugin
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ReadResourceInput {
     server: String,
     uri: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(super) struct GetPromptInput {
     server: String,
     name: String,
@@ -748,6 +752,17 @@ mod tests {
             }
         );
         assert!(target_from_invocation("mcp:docs:search", serde_json::json!({})).is_err());
+        assert!(
+            target_from_invocation(
+                "mcp",
+                serde_json::json!({
+                    "action": "tool",
+                    "server": "docs",
+                    "name": "search"
+                })
+            )
+            .is_err()
+        );
     }
 
     #[test]

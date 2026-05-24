@@ -7,7 +7,7 @@ use super::{
     HttpProviderAdapterConfig, OpenAiApiModeConfig, OpenAiBackendConfig, OpenAiProviderOptions,
     ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
     ProviderCredentialAuthConfig, ProviderGitlabAuthConfig, ProviderProtocolPathsConfig,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, StreamTransportMode,
+    ResolvedConfig, ResolvedProviderAdapterConfig, ResolvedProviderConfig, StreamTransportMode,
     list_provider_adapter_models,
 };
 use crate::provider::auth::{AuthData, CredentialIssuer};
@@ -19,6 +19,12 @@ pub struct ProviderAdapterModelsTarget {
     pub provider_id: String,
     pub auth: ProviderAuthConfig,
     pub adapters: BTreeMap<String, ResolvedProviderAdapterConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderAdapterModelsListing {
+    pub provider_id: String,
+    pub adapters: Vec<super::ProviderAdapterModelsResult>,
 }
 
 pub fn draft_provider_adapter_models_target(
@@ -143,19 +149,23 @@ pub fn saved_provider_adapter_models_target(
     })
 }
 
-pub async fn list_provider_adapter_models_for_target(
+pub async fn list_provider_adapter_models_with_config(
+    config: &ResolvedConfig,
     target: &ProviderAdapterModelsTarget,
-    client: reqwest::Client,
     env: &dyn ConfigEnvironment,
-) -> Vec<super::ProviderAdapterModelsResult> {
-    list_provider_adapter_models(
+) -> Result<ProviderAdapterModelsListing, AppError> {
+    let adapters = list_provider_adapter_models(
         target.provider_id.as_str(),
         &target.auth,
         &target.adapters,
-        client,
+        config.build_provider_http_client()?,
         env,
     )
-    .await
+    .await;
+    Ok(ProviderAdapterModelsListing {
+        provider_id: target.provider_id.clone(),
+        adapters,
+    })
 }
 
 fn default_http_adapter_model_list_adapters(

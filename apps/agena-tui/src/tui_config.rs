@@ -44,7 +44,6 @@ struct RawTuiConfig {
     double_esc_window_ms: Option<u64>,
     status_line: RawStatusLineConfig,
     theme: Option<String>,
-    composer_mode: Option<String>,
     transcript: RawTranscriptConfig,
 }
 
@@ -140,14 +139,6 @@ impl TuiConfig {
             .theme
             .map(|theme| theme.trim().to_string())
             .filter(|theme| !theme.is_empty());
-        if let Some(mode) = raw.composer_mode.as_deref() {
-            match mode.trim().to_ascii_lowercase().as_str() {
-                "" | "default" | "vim" | "emacs" => {}
-                other => {
-                    eprintln!("[agena-tui] invalid composer_mode: expected `vim`, got `{other}`")
-                }
-            }
-        }
         Self {
             keybindings,
             double_esc_window_ms: raw.double_esc_window_ms.unwrap_or(600),
@@ -193,19 +184,5 @@ mod tests {
 
         assert!(config.transcript.tool_output_default_expanded);
         assert!(config.transcript.thinking_default_expanded);
-    }
-
-    #[test]
-    fn from_raw_accepts_legacy_composer_mode_but_keeps_defaults() {
-        let config = TuiConfig::from_raw(
-            RawTuiConfig {
-                composer_mode: Some("emacs".to_string()),
-                ..RawTuiConfig::default()
-            },
-            ComposerKeyBindings::default(),
-        );
-
-        assert!(!config.transcript.tool_output_default_expanded);
-        assert!(!config.transcript.thinking_default_expanded);
     }
 }

@@ -16,7 +16,7 @@ impl SessionManager {
     #[tracing::instrument(skip(self, request), fields(session_id = request.session_id))]
     pub async fn compact_session(
         &self,
-        request: SessionCompactRequest,
+        request: SessionExecutionRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         let (control, _steer_rx) = self.run_registry.register(session_id).await;
@@ -40,7 +40,7 @@ impl SessionManager {
 
     async fn compact_session_inner(
         &self,
-        mut request: SessionCompactRequest,
+        mut request: SessionExecutionRequest,
         control: Arc<RunControl>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();

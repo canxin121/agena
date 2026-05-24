@@ -1,11 +1,6 @@
 use super::*;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct PluginStatusListResponse {
-    pub entries: Vec<agena::plugin::status::PluginStatus>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct PluginInspectResponse {
     pub plugin: agena::plugin::PluginInspect,
 }
@@ -16,10 +11,7 @@ pub struct PluginUiCatalogResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct PluginUiInvokeToolRequest {
-    pub tool: String,
-    #[serde(default)]
-    pub plugin_id: Option<String>,
+pub struct PluginUiRequestContext {
     #[serde(default)]
     pub input: Option<serde_json::Value>,
     #[serde(default)]
@@ -27,11 +19,12 @@ pub struct PluginUiInvokeToolRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct PluginUiRunActionRequest {
+pub struct PluginUiInvokeToolRequest {
+    pub tool: String,
     #[serde(default)]
-    pub input: Option<serde_json::Value>,
-    #[serde(default)]
-    pub session_id: Option<i64>,
+    pub plugin_id: Option<String>,
+    #[serde(flatten)]
+    pub context: PluginUiRequestContext,
 }
 
 #[derive(Debug, Clone, Serialize)]

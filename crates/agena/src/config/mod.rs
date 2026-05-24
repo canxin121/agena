@@ -36,25 +36,28 @@ pub use types::{
 };
 
 pub use adapter_models::{
-    HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS, ProviderAdapterModelsTarget,
+    HTTP_ADAPTER_MODEL_LIST_ADAPTER_IDS, ProviderAdapterModelsListing, ProviderAdapterModelsTarget,
     draft_atomgit_provider_adapter_models_target, draft_gitlab_provider_adapter_models_target,
-    draft_provider_adapter_models_target, list_provider_adapter_models_for_target,
+    draft_provider_adapter_models_target, list_provider_adapter_models_with_config,
     saved_provider_adapter_models_target,
 };
 pub use credential_store::{
-    ProviderConfigCredentialStore, provider_auth_data, provider_gitlab_instance_url,
+    ProviderAuthTargetError, ProviderConfigCredentialStore, ProviderDeviceAuthTarget,
+    ProviderOAuthTarget, provider_auth_data, provider_gitlab_instance_url,
     provider_has_gitlab_adapter, provider_supports_api_key_write, provider_supports_atomgit_oauth,
     provider_supports_copilot_device, provider_supports_openai_oauth,
+    resolve_provider_device_auth_target, resolve_provider_oauth_target,
 };
 pub use edit::{
-    ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
-    ConfigSettingsListEntry, ConfigSettingsListInput, ConfigSettingsListResponse,
-    ConfigSettingsPatchInput, ConfigSettingsReadResponse, ConfigSettingsReloadResponse,
-    ConfigSettingsSetInput, ConfigSettingsSource, ConfigSettingsValidateInput,
-    ConfigSettingsValidateResponse, delete_file_setting, delete_file_setting_with_env,
-    format_settings_path, get_json_path, list_file_settings, list_json_path, parse_settings_path,
-    patch_file_settings, patch_file_settings_with_env, read_file_setting, set_file_setting,
-    set_file_setting_with_env, validate_file_settings, validate_file_settings_with_env,
+    ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
+    ConfigSettingsGetInput, ConfigSettingsListEntry, ConfigSettingsListInput,
+    ConfigSettingsListResponse, ConfigSettingsPatchInput, ConfigSettingsPathInput,
+    ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
+    ConfigSettingsSource, ConfigSettingsValidateInput, ConfigSettingsValidateResponse,
+    delete_file_setting, delete_file_setting_with_env, format_settings_path, get_json_path,
+    list_file_settings, list_json_path, parse_settings_path, patch_file_settings,
+    patch_file_settings_with_env, read_file_setting, set_file_setting, set_file_setting_with_env,
+    validate_file_settings, validate_file_settings_with_env,
 };
 pub(crate) use error::parse_numeric;
 pub(crate) use raw::{

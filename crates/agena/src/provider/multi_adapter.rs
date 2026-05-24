@@ -14,10 +14,13 @@ use crate::{
     },
 };
 
-use super::core::remap_stream_event_provider_and_model;
+use super::core::{
+    impl_model_runtime_base_via_adapter_methods, remap_stream_event_provider_and_model,
+};
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ConfiguredModelDefinition,
     ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy,
+    configured_models::apply_configured_modes,
 };
 
 #[derive(Debug, Clone)]
@@ -102,6 +105,40 @@ impl MultiAdapterProvider {
         ))
     }
 
+    fn resolve_route_and_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Result<
+        (
+            AdapterId,
+            ModelId,
+            ConfiguredModelDefinition,
+            Arc<dyn ModelRuntime>,
+        ),
+        AppError,
+    > {
+        let (adapter_id, target_model, definition) = self.resolve_route(adapter_id, model)?;
+        let adapter = self.adapter(adapter_id.as_str())?;
+        Ok((adapter_id, target_model, definition, adapter))
+    }
+
+    fn map_route_and_adapter<T>(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+        map: impl FnOnce(&AdapterId, &ModelId, &ConfiguredModelDefinition, &dyn ModelRuntime) -> T,
+    ) -> Option<T> {
+        let (adapter_id, target_model, definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, model).ok()?;
+        Some(map(
+            &adapter_id,
+            &target_model,
+            &definition,
+            adapter.as_ref(),
+        ))
+    }
+
     fn rewrite_model(
         &self,
         target_model: &ModelId,
@@ -150,8 +187,13 @@ impl ModelRuntime for MultiAdapterProvider {
         Some(&self.default_adapter)
     }
 
-    fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
-        self.model_capabilities_for_adapter(None, model)
+    impl_model_runtime_base_via_adapter_methods! {
+        fn model_capabilities / model_capabilities_for_adapter (&self, model: &ModelId) -> ModelCapabilities;
+        fn model_metadata / model_metadata_for_adapter (&self, model: &ModelId) -> ModelMetadata;
+        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode>;
+        fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
+        fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
+        fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
     }
 
     fn model_capabilities_for_adapter(
@@ -159,20 +201,16 @@ impl ModelRuntime for MultiAdapterProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> ModelCapabilities {
-        self.resolve_route(adapter_id, model)
-            .ok()
-            .and_then(|(adapter_id, target_model, definition)| {
-                self.adapter(adapter_id.as_str()).ok().map(|adapter| {
-                    definition
-                        .capabilities
-                        .apply_to(adapter.model_capabilities(&target_model))
-                })
-            })
-            .unwrap_or_default()
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
-        self.model_metadata_for_adapter(None, model)
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_adapter_id, target_model, definition, adapter| {
+                definition
+                    .capabilities
+                    .apply_to(adapter.model_capabilities(target_model))
+            },
+        )
+        .unwrap_or_default()
     }
 
     fn model_metadata_for_adapter(
@@ -180,20 +218,16 @@ impl ModelRuntime for MultiAdapterProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> ModelMetadata {
-        self.resolve_route(adapter_id, model)
-            .ok()
-            .and_then(|(adapter_id, target_model, definition)| {
-                self.adapter(adapter_id.as_str()).ok().map(|adapter| {
-                    definition
-                        .metadata()
-                        .with_fallbacks_from(&adapter.model_metadata(&target_model))
-                })
-            })
-            .unwrap_or_default()
-    }
-
-    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
-        self.model_thinking_modes_for_adapter(None, model)
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_adapter_id, target_model, definition, adapter| {
+                definition
+                    .metadata()
+                    .with_fallbacks_from(&adapter.model_metadata(target_model))
+            },
+        )
+        .unwrap_or_default()
     }
 
     fn model_thinking_modes_for_adapter(
@@ -201,29 +235,18 @@ impl ModelRuntime for MultiAdapterProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelThinkingMode> {
-        self.resolve_route(adapter_id, model)
-            .ok()
-            .and_then(|(adapter_id, target_model, definition)| {
-                self.adapter(adapter_id.as_str()).ok().map(|adapter| {
-                    let mut modes = adapter.model_thinking_modes(&target_model);
-                    for (name, configured) in &definition.thinking_modes {
-                        match configured.apply_to_mode(modes.get(name)) {
-                            Some(mode) => {
-                                modes.insert(name.clone(), mode);
-                            }
-                            None => {
-                                modes.remove(name);
-                            }
-                        }
-                    }
-                    modes
-                })
-            })
-            .unwrap_or_default()
-    }
-
-    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
-        self.model_speed_modes_for_adapter(None, model)
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_adapter_id, target_model, definition, adapter| {
+                apply_configured_modes(
+                    adapter.model_thinking_modes(target_model),
+                    definition.thinking_modes.iter(),
+                    |configured, existing| configured.apply_to_mode(existing),
+                )
+            },
+        )
+        .unwrap_or_default()
     }
 
     fn model_speed_modes_for_adapter(
@@ -231,25 +254,18 @@ impl ModelRuntime for MultiAdapterProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelSpeedMode> {
-        self.resolve_route(adapter_id, model)
-            .ok()
-            .and_then(|(adapter_id, target_model, definition)| {
-                self.adapter(adapter_id.as_str()).ok().map(|adapter| {
-                    let mut modes = adapter.model_speed_modes(&target_model);
-                    for (name, configured) in &definition.speed_modes {
-                        match configured.apply_to_mode(modes.get(name)) {
-                            Some(mode) => {
-                                modes.insert(name.clone(), mode);
-                            }
-                            None => {
-                                modes.remove(name);
-                            }
-                        }
-                    }
-                    modes
-                })
-            })
-            .unwrap_or_default()
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_adapter_id, target_model, definition, adapter| {
+                apply_configured_modes(
+                    adapter.model_speed_modes(target_model),
+                    definition.speed_modes.iter(),
+                    |configured, existing| configured.apply_to_mode(existing),
+                )
+            },
+        )
+        .unwrap_or_default()
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
@@ -260,27 +276,19 @@ impl ModelRuntime for MultiAdapterProvider {
             .unwrap_or(StreamResumePolicy::Disabled)
     }
 
-    fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
-        self.supports_prompt_continuation_for_adapter(None, model)
-    }
-
     fn supports_prompt_continuation_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> bool {
-        self.resolve_route(adapter_id, model)
-            .ok()
-            .and_then(|(adapter_id, target_model, _)| {
-                self.adapter(adapter_id.as_str())
-                    .ok()
-                    .map(|adapter| adapter.supports_prompt_continuation(&target_model))
-            })
-            .unwrap_or(false)
-    }
-
-    fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
-        self.prompt_cache_shape_for_adapter(None, model)
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_adapter_id, target_model, _definition, adapter| {
+                adapter.supports_prompt_continuation(target_model)
+            },
+        )
+        .unwrap_or(false)
     }
 
     fn prompt_cache_shape_for_adapter(
@@ -288,13 +296,14 @@ impl ModelRuntime for MultiAdapterProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> Option<PromptCacheShape> {
-        self.resolve_route(adapter_id, model)
-            .ok()
-            .and_then(|(adapter_id, target_model, _)| {
-                self.adapter(adapter_id.as_str())
-                    .ok()
-                    .and_then(|adapter| adapter.prompt_cache_shape(&target_model))
-            })
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_adapter_id, target_model, _definition, adapter| {
+                adapter.prompt_cache_shape(target_model)
+            },
+        )
+        .flatten()
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
@@ -373,8 +382,8 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> Result<CompletionResponse, AppError> {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (adapter_id, target_model, _) = self.resolve_route(adapter_id, &visible_model)?;
-        let adapter = self.adapter(adapter_id.as_str())?;
+        let (_adapter_id, target_model, _definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
         request.model = target_model;
         let mut response = adapter.complete(request).await?;
         response.provider_id = ProviderId::new(self.id.clone());
@@ -396,8 +405,8 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> Result<Option<String>, AppError> {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (adapter_id, target_model, _) = self.resolve_route(adapter_id, &visible_model)?;
-        let adapter = self.adapter(adapter_id.as_str())?;
+        let (_adapter_id, target_model, _definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
         request.model = target_model;
         adapter.compact_conversation(request).await
     }
@@ -422,8 +431,8 @@ impl ModelRuntime for MultiAdapterProvider {
     > {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (adapter_id, target_model, _) = self.resolve_route(adapter_id, &visible_model)?;
-        let adapter = self.adapter(adapter_id.as_str())?;
+        let (_adapter_id, target_model, _definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, &visible_model)?;
         request.model = target_model;
         let provider_id = self.id.clone();
         let stream = adapter.complete_stream(request).await?;

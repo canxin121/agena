@@ -19,10 +19,7 @@ pub async fn get_auth_provider(
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
     auth_provider_config(&state, provider_id.as_str())?;
-    Ok(Json(auth_provider_resource_from_state(
-        &state,
-        provider_id.as_str(),
-    )?))
+    auth_provider_json_from_state(&state, provider_id.as_str())
 }
 
 pub async fn set_auth_provider_api_key(
@@ -40,353 +37,185 @@ pub async fn set_auth_provider_api_key(
     auth_manager(&state)
         .set_api_key(provider_id.as_str(), request.api_key)
         .map_err(ServerError::Core)?;
-    reload_runtime_from_config(&state).await?;
-    Ok(Json(auth_provider_resource_from_state(
-        &state,
-        provider_id.as_str(),
-    )?))
+    reload_auth_provider_json_from_state(&state, provider_id.as_str()).await
 }
 
 pub async fn start_openai_browser_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthBrowserStartRequest>,
+    Json(request): Json<AuthRedirectRequest>,
 ) -> Result<Json<AuthBrowserStartResource>, ServerError> {
-    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "openai");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
-        BrowserAuthTarget::OpenAi => {}
-        BrowserAuthTarget::Gitlab { .. } => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support openai browser login"
-            )));
-        }
-        BrowserAuthTarget::AtomGit => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support openai browser login"
-            )));
-        }
-    }
-
+    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "openai")?;
+    target.require_openai_browser(provider_id.as_str())?;
     let start = auth_manager(&state)
         .start_openai_browser_login(request.redirect_uri)
         .map_err(ServerError::Core)?;
-    Ok(Json(AuthBrowserStartResource {
+    Ok(Json(AuthBrowserStartResource::from_start(
         provider_id,
-        instance_url: None,
-        authorize_url: start.authorize_url,
-        state: start.state,
-        pkce_verifier: start.pkce_verifier,
-    }))
+        None,
+        start,
+    )))
 }
 
 pub async fn finish_openai_browser_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthOpenAiBrowserFinishRequest>,
+    Json(request): Json<AuthCodeExchangeRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "openai");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
-        BrowserAuthTarget::OpenAi => {}
-        BrowserAuthTarget::Gitlab { .. } => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support openai browser login"
-            )));
-        }
-        BrowserAuthTarget::AtomGit => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support openai browser login"
-            )));
-        }
-    }
-
-    auth_manager(&state)
-        .finish_openai_browser_login(
+    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "openai")?;
+    target.require_openai_browser(provider_id.as_str())?;
+    let manager = auth_manager(&state);
+    finish_auth_login(
+        &state,
+        provider_id.as_str(),
+        manager.finish_openai_browser_login(
             provider_id.as_str(),
             request.code,
             request.pkce_verifier,
             request.redirect_uri,
-        )
-        .await
-        .map_err(ServerError::Core)?;
-    reload_runtime_from_config(&state).await?;
-    Ok(Json(AuthLoginResultResource {
-        completed: true,
-        provider: Some(auth_provider_resource_from_state(
-            &state,
-            provider_id.as_str(),
-        )?),
-    }))
+        ),
+    )
+    .await
 }
 
 pub async fn start_openai_device_auth(
     State(state): State<AppState>,
-    payload: Option<Json<AuthOpenAiDeviceStartRequest>>,
+    payload: Option<Json<AuthProviderRequest>>,
 ) -> Result<Json<AuthDeviceStartResource>, ServerError> {
     let request = payload.map(|Json(request)| request).unwrap_or_default();
-    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "openai");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_device_auth_target(provider_id.as_str(), &resolved)? {
-        DeviceAuthTarget::OpenAi => {}
-        DeviceAuthTarget::Copilot => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support openai device login"
-            )));
-        }
-    }
-
+    let (provider_id, target) = resolve_device_auth_request(&state, &request, "openai")?;
+    target.require_openai_device(provider_id.as_str())?;
     let start = auth_manager(&state)
         .start_openai_headless_login()
         .await
         .map_err(ServerError::Core)?;
-    Ok(Json(AuthDeviceStartResource {
+    Ok(Json(AuthDeviceStartResource::from_start(
         provider_id,
-        enterprise_domain: None,
-        verification_url: start.verification_url,
-        user_code: start.user_code,
-        device_code: start.device_code,
-        interval_seconds: start.interval_seconds,
-    }))
+        None,
+        start,
+    )))
 }
 
 pub async fn poll_openai_device_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthOpenAiDevicePollRequest>,
+    Json(request): Json<AuthUserCodeDevicePollRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "openai");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_device_auth_target(provider_id.as_str(), &resolved)? {
-        DeviceAuthTarget::OpenAi => {}
-        DeviceAuthTarget::Copilot => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support openai device login"
-            )));
-        }
-    }
-
-    let auth = auth_manager(&state)
-        .poll_openai_headless_login(provider_id.as_str(), request.device_code, request.user_code)
-        .await
-        .map_err(ServerError::Core)?;
-    if auth.is_some() {
-        reload_runtime_from_config(&state).await?;
-    }
-    let provider = if auth.is_some() {
-        Some(auth_provider_resource_from_state(
-            &state,
+    let (provider_id, target) = resolve_device_auth_request(&state, &request.provider, "openai")?;
+    target.require_openai_device(provider_id.as_str())?;
+    let manager = auth_manager(&state);
+    poll_auth_login(
+        &state,
+        provider_id.as_str(),
+        manager.poll_openai_headless_login(
             provider_id.as_str(),
-        )?)
-    } else {
-        None
-    };
-    Ok(Json(AuthLoginResultResource {
-        completed: auth.is_some(),
-        provider,
-    }))
+            request.device_code,
+            request.user_code,
+        ),
+    )
+    .await
 }
 
 pub async fn start_gitlab_browser_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthGitLabBrowserStartRequest>,
+    Json(request): Json<AuthRedirectRequest>,
 ) -> Result<Json<AuthBrowserStartResource>, ServerError> {
-    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "gitlab");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    let instance_url = match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
-        BrowserAuthTarget::Gitlab { instance_url } => instance_url,
-        BrowserAuthTarget::OpenAi => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support gitlab browser login"
-            )));
-        }
-        BrowserAuthTarget::AtomGit => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support gitlab browser login"
-            )));
-        }
-    };
-
+    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "gitlab")?;
+    let instance_url = target.require_gitlab_browser(provider_id.as_str())?;
     let start = auth_manager(&state)
         .start_gitlab_login(instance_url.clone(), request.redirect_uri)
         .map_err(ServerError::Core)?;
-    Ok(Json(AuthBrowserStartResource {
+    Ok(Json(AuthBrowserStartResource::from_start(
         provider_id,
-        instance_url: Some(instance_url),
-        authorize_url: start.authorize_url,
-        state: start.state,
-        pkce_verifier: start.pkce_verifier,
-    }))
+        Some(instance_url),
+        start,
+    )))
 }
 
 pub async fn finish_gitlab_browser_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthGitLabBrowserFinishRequest>,
+    Json(request): Json<AuthCodeExchangeRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "gitlab");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    let instance_url = match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
-        BrowserAuthTarget::Gitlab { instance_url } => instance_url,
-        BrowserAuthTarget::OpenAi => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support gitlab browser login"
-            )));
-        }
-        BrowserAuthTarget::AtomGit => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support gitlab browser login"
-            )));
-        }
-    };
-
-    auth_manager(&state)
-        .finish_gitlab_login(
+    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "gitlab")?;
+    let instance_url = target.require_gitlab_browser(provider_id.as_str())?;
+    let manager = auth_manager(&state);
+    finish_auth_login(
+        &state,
+        provider_id.as_str(),
+        manager.finish_gitlab_login(
             provider_id.as_str(),
             instance_url,
             request.code,
             request.pkce_verifier,
             request.redirect_uri,
-        )
-        .await
-        .map_err(ServerError::Core)?;
-    reload_runtime_from_config(&state).await?;
-    Ok(Json(AuthLoginResultResource {
-        completed: true,
-        provider: Some(auth_provider_resource_from_state(
-            &state,
-            provider_id.as_str(),
-        )?),
-    }))
+        ),
+    )
+    .await
 }
 
 pub async fn start_atomgit_browser_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthAtomGitBrowserStartRequest>,
+    Json(request): Json<AuthProviderRequest>,
 ) -> Result<Json<AuthBrowserStartResource>, ServerError> {
-    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "atomgit");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
-        BrowserAuthTarget::AtomGit => {}
-        BrowserAuthTarget::OpenAi | BrowserAuthTarget::Gitlab { .. } => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support atomgit browser login"
-            )));
-        }
-    }
-
+    let (provider_id, target) = resolve_browser_auth_request(&state, &request, "atomgit")?;
+    target.require_atomgit_browser(provider_id.as_str())?;
     let start = auth_manager(&state)
         .start_atomgit_login()
         .await
         .map_err(ServerError::Core)?;
-    Ok(Json(AuthBrowserStartResource {
+    Ok(Json(AuthBrowserStartResource::from_start(
         provider_id,
-        instance_url: None,
-        authorize_url: start.authorize_url,
-        state: start.state,
-        pkce_verifier: start.pkce_verifier,
-    }))
+        None,
+        start,
+    )))
 }
 
 pub async fn poll_atomgit_browser_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthAtomGitBrowserPollRequest>,
+    Json(request): Json<AuthStatePollRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let provider_id = normalize_requested_provider_id(request.provider_id.as_deref(), "atomgit");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_browser_auth_target(provider_id.as_str(), &resolved)? {
-        BrowserAuthTarget::AtomGit => {}
-        BrowserAuthTarget::OpenAi | BrowserAuthTarget::Gitlab { .. } => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support atomgit browser login"
-            )));
-        }
-    }
-
-    let auth = auth_manager(&state)
-        .poll_atomgit_login(provider_id.as_str(), request.state)
-        .await
-        .map_err(ServerError::Core)?;
-    if auth.is_some() {
-        reload_runtime_from_config(&state).await?;
-    }
-    let provider = if auth.is_some() {
-        Some(auth_provider_resource_from_state(
-            &state,
-            provider_id.as_str(),
-        )?)
-    } else {
-        None
-    };
-    Ok(Json(AuthLoginResultResource {
-        completed: auth.is_some(),
-        provider,
-    }))
+    let (provider_id, target) = resolve_browser_auth_request(&state, &request.provider, "atomgit")?;
+    target.require_atomgit_browser(provider_id.as_str())?;
+    let manager = auth_manager(&state);
+    poll_auth_login(
+        &state,
+        provider_id.as_str(),
+        manager.poll_atomgit_login(provider_id.as_str(), request.state),
+    )
+    .await
 }
 
 pub async fn start_copilot_device_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthCopilotDeviceStartRequest>,
+    Json(request): Json<AuthEnterpriseDeviceRequest>,
 ) -> Result<Json<AuthDeviceStartResource>, ServerError> {
-    let provider_id =
-        normalize_requested_provider_id(request.provider_id.as_deref(), "github-copilot");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_device_auth_target(provider_id.as_str(), &resolved)? {
-        DeviceAuthTarget::Copilot => {}
-        DeviceAuthTarget::OpenAi => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support copilot device login"
-            )));
-        }
-    }
-
+    let (provider_id, target) =
+        resolve_device_auth_request(&state, &request.provider, "github-copilot")?;
+    target.require_copilot_device(provider_id.as_str())?;
     let deployment = copilot_deployment(request.enterprise_domain.as_deref());
     let start = auth_manager(&state)
         .start_copilot_login(deployment)
         .await
         .map_err(ServerError::Core)?;
-    Ok(Json(AuthDeviceStartResource {
+    Ok(Json(AuthDeviceStartResource::from_start(
         provider_id,
-        enterprise_domain: request.enterprise_domain,
-        verification_url: start.verification_url,
-        user_code: start.user_code,
-        device_code: start.device_code,
-        interval_seconds: start.interval_seconds,
-    }))
+        request.enterprise_domain,
+        start,
+    )))
 }
 
 pub async fn poll_copilot_device_auth(
     State(state): State<AppState>,
-    Json(request): Json<AuthCopilotDevicePollRequest>,
+    Json(request): Json<AuthEnterpriseDevicePollRequest>,
 ) -> Result<Json<AuthLoginResultResource>, ServerError> {
-    let provider_id =
-        normalize_requested_provider_id(request.provider_id.as_deref(), "github-copilot");
-    let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_device_auth_target(provider_id.as_str(), &resolved)? {
-        DeviceAuthTarget::Copilot => {}
-        DeviceAuthTarget::OpenAi => {
-            return Err(ServerError::BadRequest(format!(
-                "{provider_id} does not support copilot device login"
-            )));
-        }
-    }
-
+    let (provider_id, target) =
+        resolve_device_auth_request(&state, &request.provider, "github-copilot")?;
+    target.require_copilot_device(provider_id.as_str())?;
     let deployment = copilot_deployment(request.enterprise_domain.as_deref());
-    let auth = auth_manager(&state)
-        .poll_copilot_login(provider_id.as_str(), request.device_code, deployment)
-        .await
-        .map_err(ServerError::Core)?;
-    if auth.is_some() {
-        reload_runtime_from_config(&state).await?;
-    }
-    let provider = if auth.is_some() {
-        Some(auth_provider_resource_from_state(
-            &state,
-            provider_id.as_str(),
-        )?)
-    } else {
-        None
-    };
-    Ok(Json(AuthLoginResultResource {
-        completed: auth.is_some(),
-        provider,
-    }))
+    let manager = auth_manager(&state);
+    poll_auth_login(
+        &state,
+        provider_id.as_str(),
+        manager.poll_copilot_login(provider_id.as_str(), request.device_code, deployment),
+    )
+    .await
 }
 
 pub async fn delete_auth_provider(
@@ -398,11 +227,7 @@ pub async fn delete_auth_provider(
     auth_manager(&state)
         .remove(provider_id.as_str())
         .map_err(ServerError::Core)?;
-    reload_runtime_from_config(&state).await?;
-    Ok(Json(auth_provider_resource_from_state(
-        &state,
-        provider_id.as_str(),
-    )?))
+    reload_auth_provider_json_from_state(&state, provider_id.as_str()).await
 }
 
 pub async fn refresh_auth_provider(
@@ -410,20 +235,24 @@ pub async fn refresh_auth_provider(
     Path(provider_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
     let resolved = auth_provider_config(&state, provider_id.as_str())?;
-    match resolve_refresh_auth_target(provider_id.as_str(), &resolved)? {
-        RefreshAuthTarget::OpenAi => {
+    match resolve_oauth_auth_target(
+        provider_id.as_str(),
+        &resolved,
+        OAuthAuthPurpose::CredentialRefresh,
+    )? {
+        ProviderOAuthTarget::OpenAi => {
             auth_manager(&state)
                 .refresh_openai_login(provider_id.as_str())
                 .await
                 .map_err(ServerError::Core)?;
         }
-        RefreshAuthTarget::Gitlab { instance_url } => {
+        ProviderOAuthTarget::Gitlab { instance_url } => {
             auth_manager(&state)
                 .refresh_gitlab_login(provider_id.as_str(), instance_url)
                 .await
                 .map_err(ServerError::Core)?;
         }
-        RefreshAuthTarget::AtomGit => {
+        ProviderOAuthTarget::AtomGit => {
             auth_manager(&state)
                 .refresh_atomgit_login(provider_id.as_str())
                 .await
@@ -431,11 +260,7 @@ pub async fn refresh_auth_provider(
         }
     }
 
-    reload_runtime_from_config(&state).await?;
-    Ok(Json(auth_provider_resource_from_state(
-        &state,
-        provider_id.as_str(),
-    )?))
+    reload_auth_provider_json_from_state(&state, provider_id.as_str()).await
 }
 
 fn configured_provider_auth_ids(state: &AppState) -> BTreeSet<String> {
@@ -499,6 +324,21 @@ fn auth_provider_resource_from_state(
     auth_provider_resource(true, provider_id.to_owned(), auth.as_ref())
 }
 
+fn auth_provider_json_from_state(
+    state: &AppState,
+    provider_id: &str,
+) -> Result<Json<AuthProviderResource>, ServerError> {
+    Ok(Json(auth_provider_resource_from_state(state, provider_id)?))
+}
+
+async fn reload_auth_provider_json_from_state(
+    state: &AppState,
+    provider_id: &str,
+) -> Result<Json<AuthProviderResource>, ServerError> {
+    reload_runtime_from_config(state).await?;
+    auth_provider_json_from_state(state, provider_id)
+}
+
 fn auth_provider_config(
     state: &AppState,
     provider_id: &str,
@@ -519,12 +359,65 @@ fn auth_provider_config(
     Ok(resolved)
 }
 
-fn normalize_requested_provider_id(requested: Option<&str>, default: &str) -> String {
-    requested
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(default)
-        .to_owned()
+async fn auth_login_result_response(
+    state: &AppState,
+    provider_id: &str,
+    completed: bool,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    if completed {
+        reload_runtime_from_config(state).await?;
+    }
+    let provider = completed
+        .then(|| auth_provider_resource_from_state(state, provider_id))
+        .transpose()?;
+    Ok(Json(AuthLoginResultResource {
+        completed,
+        provider,
+    }))
+}
+
+async fn finish_auth_login<T>(
+    state: &AppState,
+    provider_id: &str,
+    future: impl Future<Output = Result<T, agena::AppError>>,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    future.await.map_err(ServerError::Core)?;
+    auth_login_result_response(state, provider_id, true).await
+}
+
+async fn poll_auth_login<T>(
+    state: &AppState,
+    provider_id: &str,
+    future: impl Future<Output = Result<Option<T>, agena::AppError>>,
+) -> Result<Json<AuthLoginResultResource>, ServerError> {
+    let auth = future.await.map_err(ServerError::Core)?;
+    auth_login_result_response(state, provider_id, auth.is_some()).await
+}
+
+fn resolve_browser_auth_request(
+    state: &AppState,
+    request: &AuthProviderRequest,
+    default_provider_id: &str,
+) -> Result<(String, ProviderOAuthTarget), ServerError> {
+    let provider_id = request.normalized_provider_id(default_provider_id);
+    let resolved = auth_provider_config(state, provider_id.as_str())?;
+    let target = resolve_oauth_auth_target(
+        provider_id.as_str(),
+        &resolved,
+        OAuthAuthPurpose::BrowserLogin,
+    )?;
+    Ok((provider_id, target))
+}
+
+fn resolve_device_auth_request(
+    state: &AppState,
+    request: &AuthProviderRequest,
+    default_provider_id: &str,
+) -> Result<(String, ProviderDeviceAuthTarget), ServerError> {
+    let provider_id = request.normalized_provider_id(default_provider_id);
+    let resolved = auth_provider_config(state, provider_id.as_str())?;
+    let target = resolve_device_auth_target(provider_id.as_str(), &resolved)?;
+    Ok((provider_id, target))
 }
 
 fn normalize_optional_text(value: Option<&str>) -> Option<String> {
@@ -541,90 +434,139 @@ fn copilot_deployment(enterprise_domain: Option<&str>) -> CopilotDeployment {
     }
 }
 
-enum BrowserAuthTarget {
-    OpenAi,
-    Gitlab { instance_url: String },
-    AtomGit,
+trait ProviderOAuthTargetExt {
+    fn require_openai_browser(self, provider_id: &str) -> Result<(), ServerError>;
+    fn require_gitlab_browser(self, provider_id: &str) -> Result<String, ServerError>;
+    fn require_atomgit_browser(self, provider_id: &str) -> Result<(), ServerError>;
 }
 
-enum DeviceAuthTarget {
-    OpenAi,
-    Copilot,
+impl ProviderOAuthTargetExt for ProviderOAuthTarget {
+    fn require_openai_browser(self, provider_id: &str) -> Result<(), ServerError> {
+        match self {
+            Self::OpenAi => Ok(()),
+            Self::Gitlab { .. } | Self::AtomGit => Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support openai browser login"
+            ))),
+        }
+    }
+
+    fn require_gitlab_browser(self, provider_id: &str) -> Result<String, ServerError> {
+        match self {
+            Self::Gitlab { instance_url } => Ok(instance_url),
+            Self::OpenAi | Self::AtomGit => Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support gitlab browser login"
+            ))),
+        }
+    }
+
+    fn require_atomgit_browser(self, provider_id: &str) -> Result<(), ServerError> {
+        match self {
+            Self::AtomGit => Ok(()),
+            Self::OpenAi | Self::Gitlab { .. } => Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support atomgit browser login"
+            ))),
+        }
+    }
 }
 
-enum RefreshAuthTarget {
-    OpenAi,
-    Gitlab { instance_url: String },
-    AtomGit,
+#[derive(Clone, Copy)]
+enum OAuthAuthPurpose {
+    BrowserLogin,
+    CredentialRefresh,
 }
 
-fn resolve_browser_auth_target(
+impl OAuthAuthPurpose {
+    fn unsupported_error(self, provider_id: &str) -> ServerError {
+        match self {
+            Self::BrowserLogin => {
+                ServerError::BadRequest(format!("{provider_id} does not support browser login"))
+            }
+            Self::CredentialRefresh => ServerError::BadRequest(format!(
+                "credential refresh is not supported for provider '{provider_id}'"
+            )),
+        }
+    }
+
+    fn ambiguous_provider_error(self, provider_id: &str) -> ServerError {
+        match self {
+            Self::BrowserLogin => ServerError::BadRequest(format!(
+                "{provider_id} has ambiguous browser auth providers"
+            )),
+            Self::CredentialRefresh => ServerError::BadRequest(format!(
+                "{provider_id} has ambiguous credential refresh handlers"
+            )),
+        }
+    }
+
+    fn ambiguous_gitlab_error(self, provider_id: &str) -> ServerError {
+        match self {
+            Self::BrowserLogin => ServerError::BadRequest(format!(
+                "{provider_id} has ambiguous gitlab browser auth adapters"
+            )),
+            Self::CredentialRefresh => ServerError::BadRequest(format!(
+                "{provider_id} has ambiguous gitlab refresh adapters"
+            )),
+        }
+    }
+}
+
+trait ProviderDeviceAuthTargetExt {
+    fn require_openai_device(self, provider_id: &str) -> Result<(), ServerError>;
+    fn require_copilot_device(self, provider_id: &str) -> Result<(), ServerError>;
+}
+
+impl ProviderDeviceAuthTargetExt for ProviderDeviceAuthTarget {
+    fn require_openai_device(self, provider_id: &str) -> Result<(), ServerError> {
+        match self {
+            Self::OpenAi => Ok(()),
+            Self::Copilot => Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support openai device login"
+            ))),
+        }
+    }
+
+    fn require_copilot_device(self, provider_id: &str) -> Result<(), ServerError> {
+        match self {
+            Self::Copilot => Ok(()),
+            Self::OpenAi => Err(ServerError::BadRequest(format!(
+                "{provider_id} does not support copilot device login"
+            ))),
+        }
+    }
+}
+
+fn resolve_oauth_auth_target(
     provider_id: &str,
     resolved: &ResolvedProviderConfig,
-) -> Result<BrowserAuthTarget, ServerError> {
-    let openai = provider_supports_openai_oauth(resolved);
-    let gitlab = provider_has_gitlab_adapter(resolved);
-    let atomgit = provider_supports_atomgit_oauth(resolved);
-    match (openai, gitlab, atomgit) {
-        (true, false, false) => Ok(BrowserAuthTarget::OpenAi),
-        (false, true, false) => provider_gitlab_instance_url(resolved)
-            .map(|instance_url| BrowserAuthTarget::Gitlab { instance_url })
-            .ok_or_else(|| {
-                ServerError::BadRequest(format!(
-                    "{provider_id} has ambiguous gitlab browser auth adapters"
-                ))
-            }),
-        (false, false, true) => Ok(BrowserAuthTarget::AtomGit),
-        (false, false, false) => Err(ServerError::BadRequest(format!(
-            "{provider_id} does not support browser login"
-        ))),
-        _ => Err(ServerError::BadRequest(format!(
-            "{provider_id} has ambiguous browser auth providers"
-        ))),
+    purpose: OAuthAuthPurpose,
+) -> Result<ProviderOAuthTarget, ServerError> {
+    match resolve_provider_oauth_target(resolved) {
+        Ok(Some(target)) => Ok(target),
+        Ok(None) => Err(purpose.unsupported_error(provider_id)),
+        Err(ProviderAuthTargetError::AmbiguousProvider) => {
+            Err(purpose.ambiguous_provider_error(provider_id))
+        }
+        Err(ProviderAuthTargetError::AmbiguousGitlab) => {
+            Err(purpose.ambiguous_gitlab_error(provider_id))
+        }
     }
 }
 
 fn resolve_device_auth_target(
     provider_id: &str,
     resolved: &ResolvedProviderConfig,
-) -> Result<DeviceAuthTarget, ServerError> {
-    let openai = provider_supports_openai_oauth(resolved);
-    let copilot = provider_supports_copilot_device(resolved);
-    match (openai, copilot) {
-        (true, false) => Ok(DeviceAuthTarget::OpenAi),
-        (false, true) => Ok(DeviceAuthTarget::Copilot),
-        (true, true) => Err(ServerError::BadRequest(format!(
-            "{provider_id} has ambiguous device auth providers"
-        ))),
-        (false, false) => Err(ServerError::BadRequest(format!(
+) -> Result<ProviderDeviceAuthTarget, ServerError> {
+    match resolve_provider_device_auth_target(resolved) {
+        Ok(Some(target)) => Ok(target),
+        Ok(None) => Err(ServerError::BadRequest(format!(
             "{provider_id} does not support device login"
         ))),
-    }
-}
-
-fn resolve_refresh_auth_target(
-    provider_id: &str,
-    resolved: &ResolvedProviderConfig,
-) -> Result<RefreshAuthTarget, ServerError> {
-    let openai = provider_supports_openai_oauth(resolved);
-    let gitlab = provider_has_gitlab_adapter(resolved);
-    let atomgit = provider_supports_atomgit_oauth(resolved);
-    match (openai, gitlab, atomgit) {
-        (true, false, false) => Ok(RefreshAuthTarget::OpenAi),
-        (false, true, false) => provider_gitlab_instance_url(resolved)
-            .map(|instance_url| RefreshAuthTarget::Gitlab { instance_url })
-            .ok_or_else(|| {
-                ServerError::BadRequest(format!(
-                    "{provider_id} has ambiguous gitlab refresh adapters"
-                ))
-            }),
-        (false, false, true) => Ok(RefreshAuthTarget::AtomGit),
-        (false, false, false) => Err(ServerError::BadRequest(format!(
-            "credential refresh is not supported for provider '{provider_id}'"
+        Err(ProviderAuthTargetError::AmbiguousProvider) => Err(ServerError::BadRequest(format!(
+            "{provider_id} has ambiguous device auth providers"
         ))),
-        _ => Err(ServerError::BadRequest(format!(
-            "{provider_id} has ambiguous credential refresh handlers"
-        ))),
+        Err(ProviderAuthTargetError::AmbiguousGitlab) => {
+            unreachable!("gitlab ambiguity is not possible for device auth targets")
+        }
     }
 }
 

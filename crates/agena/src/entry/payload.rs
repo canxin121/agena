@@ -4,12 +4,12 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 
 use crate::message::{
-    ApplyPatchToolInput, AskUserToolInput, AttachmentKind, BashToolInput, CronCreateToolInput,
+    ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
     CronDeleteToolInput, CronListToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
     ExitPlanModeToolInput, ExitWorktreeToolInput, FileChangeEntry, GlobToolInput, GrepToolInput,
     LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
-    MonitorEvent, MonitorStatus, MonitorToolInput, NotebookEditToolInput, PowerShellToolInput,
-    ReadToolInput, ScheduleWakeupToolInput, StructuredObject, TodoItem, TodoWriteToolInput,
+    MonitorEvent, MonitorStatus, MonitorToolInput, NotebookEditToolInput, ReadToolInput,
+    ScheduleWakeupToolInput, ShellCommandInput, StructuredObject, TodoItem, TodoWriteToolInput,
     ToolInvocation, ToolOutput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 
@@ -17,7 +17,7 @@ use crate::message::{
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ToolPayloadInput {
-    Bash(BashToolInput),
+    Bash(ShellCommandInput),
     Read(ReadToolInput),
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
@@ -43,7 +43,7 @@ pub enum ToolPayloadInput {
     LspHover(LspHoverToolInput),
     LspDiagnostics(LspDiagnosticsToolInput),
     NotebookEdit(NotebookEditToolInput),
-    PowerShell(PowerShellToolInput),
+    PowerShell(ShellCommandInput),
 }
 
 impl ToolPayloadInput {
@@ -82,14 +82,14 @@ impl ToolPayloadInput {
     /// Convert into a generic [`ToolInvocation`] carrying this tool's name
     /// and a `StructuredObject` payload.
     pub fn into_invocation(self) -> ToolInvocation {
-        let legacy_name = self.tool_name();
+        let tool_name = self.tool_name();
         let value = serde_json::to_value(&self).unwrap_or(serde_json::Value::Null);
         let mut object = match value {
             serde_json::Value::Object(map) => map,
             _ => serde_json::Map::new(),
         };
         object.remove("tool");
-        let name = match grouped_invocation_for_tool(legacy_name, &mut object) {
+        let name = match grouped_invocation_for_tool(tool_name, &mut object) {
             Some((entry, action)) => {
                 object.insert(
                     "action".to_string(),
@@ -97,7 +97,7 @@ impl ToolPayloadInput {
                 );
                 entry.to_string()
             }
-            None => legacy_name.to_string(),
+            None => tool_name.to_string(),
         };
         let payload =
             StructuredObject::try_from(serde_json::Value::Object(object)).unwrap_or_default();
@@ -392,16 +392,50 @@ fn canonical_tool_payload_name(name: &str) -> &str {
     name.rsplit('/').next().unwrap_or(name)
 }
 
+const DIRECT_GROUPED_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
+    ("read", "fs", "read"),
+    ("glob", "fs", "glob"),
+    ("grep", "fs", "grep"),
+    ("apply_patch", "fs", "apply_patch"),
+    ("notebook_edit", "fs", "notebook_edit"),
+    ("web_fetch", "web", "fetch"),
+    ("web_search", "web", "search"),
+    ("task", "task", "run"),
+    ("tool_search", "tools", "search"),
+    ("todo_write", "todo", "write"),
+    ("ask_user", "user", "request_input"),
+    ("enter_plan_mode", "plan", "enter"),
+    ("exit_plan_mode", "plan", "exit"),
+    ("exit_worktree", "worktree", "exit"),
+    ("cron_create", "schedule", "create"),
+    ("cron_list", "schedule", "list"),
+    ("cron_delete", "schedule", "delete"),
+    ("schedule_wakeup", "schedule", "wakeup"),
+    ("lsp_definition", "lsp", "definition"),
+    ("lsp_references", "lsp", "references"),
+    ("lsp_hover", "lsp", "hover"),
+    ("lsp_diagnostics", "lsp", "diagnostics"),
+];
+
+fn grouped_mapping_for_tool(tool: &str) -> Option<(&'static str, &'static str)> {
+    DIRECT_GROUPED_TOOL_MAPPINGS
+        .iter()
+        .find(|(name, _, _)| *name == tool)
+        .map(|(_, entry, action)| (*entry, *action))
+}
+
+fn tool_name_for_grouped_mapping(entry: &str, action: &str) -> Option<&'static str> {
+    DIRECT_GROUPED_TOOL_MAPPINGS
+        .iter()
+        .find(|(_, mapped_entry, mapped_action)| *mapped_entry == entry && *mapped_action == action)
+        .map(|(tool, _, _)| *tool)
+}
+
 fn grouped_invocation_for_tool(
     tool: &str,
     input: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Option<(&'static str, &'static str)> {
     Some(match tool {
-        "read" => ("fs", "read"),
-        "glob" => ("fs", "glob"),
-        "grep" => ("fs", "grep"),
-        "apply_patch" => ("fs", "apply_patch"),
-        "notebook_edit" => ("fs", "notebook_edit"),
         "bash" => {
             input.insert(
                 "shell".to_string(),
@@ -464,16 +498,7 @@ fn grouped_invocation_for_tool(
             }
             ("worktree", "enter")
         }
-        "exit_worktree" => ("worktree", "exit"),
-        "cron_create" => ("schedule", "create"),
-        "cron_list" => ("schedule", "list"),
-        "cron_delete" => ("schedule", "delete"),
-        "schedule_wakeup" => ("schedule", "wakeup"),
-        "lsp_definition" => ("lsp", "definition"),
-        "lsp_references" => ("lsp", "references"),
-        "lsp_hover" => ("lsp", "hover"),
-        "lsp_diagnostics" => ("lsp", "diagnostics"),
-        _ => return None,
+        _ => grouped_mapping_for_tool(tool)?,
     })
 }
 
@@ -483,11 +508,6 @@ fn grouped_tool_payload_name(
 ) -> Option<&'static str> {
     let action = input.get("action")?.as_str()?.to_string();
     let tool = match (entry, action.as_str()) {
-        ("fs", "read") => "read",
-        ("fs", "glob") => "glob",
-        ("fs", "grep") => "grep",
-        ("fs", "apply_patch") => "apply_patch",
-        ("fs", "notebook_edit") => "notebook_edit",
         ("shell", "exec") => match input.get("shell").and_then(serde_json::Value::as_str) {
             Some("bash") => "bash",
             Some("powershell") => "powershell",
@@ -497,56 +517,39 @@ fn grouped_tool_payload_name(
         ("shell", "monitor_list") => "monitor",
         ("shell", "monitor_read") => "monitor",
         ("shell", "monitor_stop") => "monitor",
-        ("web", "fetch") => "web_fetch",
-        ("web", "search") => "web_search",
-        ("task", "run") => "task",
-        ("tools", "search") => "tool_search",
-        ("todo", "write") => "todo_write",
-        ("user", "request_input") => "ask_user",
-        ("plan", "enter") => "enter_plan_mode",
-        ("plan", "exit") => "exit_plan_mode",
         ("worktree", "enter") => "enter_worktree",
-        ("worktree", "exit") => "exit_worktree",
-        ("schedule", "create") => "cron_create",
-        ("schedule", "list") => "cron_list",
-        ("schedule", "delete") => "cron_delete",
-        ("schedule", "wakeup") => "schedule_wakeup",
-        ("lsp", "definition") => "lsp_definition",
-        ("lsp", "references") => "lsp_references",
-        ("lsp", "hover") => "lsp_hover",
-        ("lsp", "diagnostics") => "lsp_diagnostics",
-        _ => return None,
+        _ => tool_name_for_grouped_mapping(entry, action.as_str())?,
     };
     input.remove("action");
-    match (entry, action.as_str()) {
-        ("shell", "exec") => {
+    match tool {
+        "bash" | "powershell" => {
             input.remove("shell");
         }
-        ("shell", "monitor_start") => {
+        "monitor" if action == "monitor_start" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("start".to_string()),
             );
         }
-        ("shell", "monitor_list") => {
+        "monitor" if action == "monitor_list" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("list".to_string()),
             );
         }
-        ("shell", "monitor_read") => {
+        "monitor" if action == "monitor_read" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("read".to_string()),
             );
         }
-        ("shell", "monitor_stop") => {
+        "monitor" if action == "monitor_stop" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("stop".to_string()),
             );
         }
-        ("worktree", "enter") => match input
+        "enter_worktree" => match input
             .get("target")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
@@ -561,7 +564,7 @@ fn grouped_tool_payload_name(
             }
             _ => {}
         },
-        ("worktree", "exit") => {
+        "exit_worktree" => {
             if let Some(exit_action) = input.remove("exit_action") {
                 input.insert("action".to_string(), exit_action);
             }

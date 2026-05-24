@@ -173,11 +173,11 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         )
         .map_err(app_backend_error)?;
         let session = manager
-            .submit_user_message(SessionUserMessageRequest {
-                session_id: params.session_id,
+            .submit_user_message(SessionUserMessageRequest::new(
+                params.session_id,
                 options,
-                parts: vec![PartContent::text(params.prompt)],
-            })
+                vec![PartContent::text(params.prompt)],
+            ))
             .await
             .map_err(app_backend_error)?;
         Ok(SubmitMessageResult {
@@ -199,17 +199,17 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         let options = resolve_permission_continue_options(&self.runtime, &session)
             .map_err(app_backend_error)?;
         let session = manager
-            .reply_permission(SessionPermissionReplyRequest {
-                session_id: params.session_id,
+            .reply_permission(SessionPermissionReplyRequest::new(
+                params.session_id,
                 options,
-                reply: PermissionReply {
+                PermissionReply {
                     request_id: params.request_id,
                     kind: app_permission_reply_kind(params.decision, params.remember),
                     reason: params.reason,
                     scope: params.remember.map(app_permission_scope),
                 },
-                operator: Some("app_server".to_string()),
-            })
+                Some("app_server".to_string()),
+            ))
             .await
             .map_err(app_backend_error)?;
         Ok(PermissionReplyResult {

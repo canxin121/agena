@@ -1,4 +1,5 @@
 use super::*;
+use agena::provider::auth::{DeviceCodeStart, OAuthAuthorizeStart};
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,77 +41,66 @@ pub struct AuthApiKeyWriteRequest {
     pub api_key: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct AuthBrowserStartRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
-    pub redirect_uri: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AuthOpenAiBrowserFinishRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
-    pub code: String,
-    pub pkce_verifier: String,
-    pub redirect_uri: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AuthGitLabBrowserStartRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
-    pub redirect_uri: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct AuthGitLabBrowserFinishRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
-    pub code: String,
-    pub pkce_verifier: String,
-    pub redirect_uri: String,
-}
-
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct AuthAtomGitBrowserStartRequest {
+pub struct AuthProviderRequest {
     #[serde(default)]
     pub provider_id: Option<String>,
 }
 
+impl AuthProviderRequest {
+    pub fn normalized_provider_id(&self, default: &str) -> String {
+        self.provider_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(default)
+            .to_owned()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
-pub struct AuthAtomGitBrowserPollRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
+pub struct AuthRedirectRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthCodeExchangeRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
+    pub code: String,
+    pub pkce_verifier: String,
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthStatePollRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
     pub state: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct AuthOpenAiDeviceStartRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
-pub struct AuthOpenAiDevicePollRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
+pub struct AuthUserCodeDevicePollRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
     pub device_code: String,
     pub user_code: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct AuthCopilotDeviceStartRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
+pub struct AuthEnterpriseDeviceRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
     #[serde(default)]
     pub enterprise_domain: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct AuthCopilotDevicePollRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
+pub struct AuthEnterpriseDevicePollRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
     pub device_code: String,
     #[serde(default)]
     pub enterprise_domain: Option<String>,
@@ -126,6 +116,22 @@ pub struct AuthBrowserStartResource {
     pub pkce_verifier: String,
 }
 
+impl AuthBrowserStartResource {
+    pub fn from_start(
+        provider_id: String,
+        instance_url: Option<String>,
+        start: OAuthAuthorizeStart,
+    ) -> Self {
+        Self {
+            provider_id,
+            instance_url,
+            authorize_url: start.authorize_url,
+            state: start.state,
+            pkce_verifier: start.pkce_verifier,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthDeviceStartResource {
     pub provider_id: String,
@@ -135,6 +141,23 @@ pub struct AuthDeviceStartResource {
     pub user_code: String,
     pub device_code: String,
     pub interval_seconds: u64,
+}
+
+impl AuthDeviceStartResource {
+    pub fn from_start(
+        provider_id: String,
+        enterprise_domain: Option<String>,
+        start: DeviceCodeStart,
+    ) -> Self {
+        Self {
+            provider_id,
+            enterprise_domain,
+            verification_url: start.verification_url,
+            user_code: start.user_code,
+            device_code: start.device_code,
+            interval_seconds: start.interval_seconds,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

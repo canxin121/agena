@@ -1,48 +1,26 @@
-use std::sync::OnceLock;
-
-use oauth2::{
-    AuthUrl, AuthorizationCode, ClientId, CsrfToken, EndpointSet, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse, TokenUrl, basic::BasicClient,
-};
 use serde::Deserialize;
 
-use crate::error::{AppError, ProviderErrorKind};
+use crate::error::AppError;
 
 use super::super::{DeviceCodeStart, OAuthAuthorizeStart, OAuthTokenResponse};
 use super::shared::{
-    OPENAI_CLIENT_ID, OPENAI_ISSUER, extract_openai_account_id, parse_device_auth_interval,
+    OPENAI_CLIENT_ID, OPENAI_ISSUER, ensure_http_success, exchange_oauth_code,
+    expires_at_ms_from_seconds, extract_openai_account_id, oauth_authorize_start, oauth_client,
+    oauth_http_client, parse_device_auth_interval, refresh_oauth_token,
 };
-
-type OpenAiOAuthClient = BasicClient<
-    EndpointSet,
-    oauth2::EndpointNotSet,
-    oauth2::EndpointNotSet,
-    oauth2::EndpointNotSet,
-    EndpointSet,
->;
 
 pub fn start_openai_browser_oauth(redirect_uri: &str) -> Result<OAuthAuthorizeStart, AppError> {
     let client = openai_oauth_client(Some(redirect_uri))?;
 
-    let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-    let mut request = client
-        .authorize_url(CsrfToken::new_random)
-        .add_scope(Scope::new("openid".to_owned()))
-        .add_scope(Scope::new("profile".to_owned()))
-        .add_scope(Scope::new("email".to_owned()))
-        .add_scope(Scope::new("offline_access".to_owned()))
-        .set_pkce_challenge(challenge);
-
-    request = request.add_extra_param("id_token_add_organizations", "true");
-    request = request.add_extra_param("codex_cli_simplified_flow", "true");
-    request = request.add_extra_param("originator", crate::provider::CODEX_ORIGINATOR);
-
-    let (url, state) = request.url();
-    Ok(OAuthAuthorizeStart {
-        authorize_url: url.to_string(),
-        state: state.secret().to_owned(),
-        pkce_verifier: verifier.secret().to_owned(),
-    })
+    Ok(oauth_authorize_start(
+        &client,
+        &["openid", "profile", "email", "offline_access"],
+        &[
+            ("id_token_add_organizations", "true"),
+            ("codex_cli_simplified_flow", "true"),
+            ("originator", crate::provider::CODEX_ORIGINATOR),
+        ],
+    ))
 }
 
 pub async fn exchange_openai_oauth_code(
@@ -52,30 +30,15 @@ pub async fn exchange_openai_oauth_code(
 ) -> Result<OAuthTokenResponse, AppError> {
     let client = openai_oauth_client(Some(redirect_uri))?;
 
-    let token = client
-        .exchange_code(AuthorizationCode::new(code.to_owned()))
-        .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.to_owned()))
-        .request_async(oauth_http_client())
-        .await
-        .map_err(|error| {
-            AppError::Provider(format!("openai oauth token exchange failed: {error}"))
-        })?;
-
-    let expires_at_ms = token
-        .expires_in()
-        .map(|duration| chrono::Utc::now().timestamp_millis() + duration.as_millis() as i64)
-        .unwrap_or(0);
-
-    Ok(OAuthTokenResponse {
-        refresh: token
-            .refresh_token()
-            .map(|value| value.secret().to_owned())
-            .unwrap_or_default(),
-        access: token.access_token().secret().to_owned(),
-        expires_at_ms,
-        account_id: extract_openai_account_id(token.access_token().secret()),
-        user: None,
-    })
+    exchange_oauth_code(
+        client,
+        code,
+        pkce_verifier,
+        oauth_http_client(true),
+        "openai oauth token exchange failed",
+        extract_openai_account_id,
+    )
+    .await
 }
 
 pub async fn refresh_openai_token(refresh_token: &str) -> Result<OAuthTokenResponse, AppError> {
@@ -88,29 +51,14 @@ pub async fn refresh_openai_token(refresh_token: &str) -> Result<OAuthTokenRespo
 
     let client = openai_oauth_client(None)?;
 
-    let token = client
-        .exchange_refresh_token(&oauth2::RefreshToken::new(refresh_token.to_owned()))
-        .request_async(oauth_http_client())
-        .await
-        .map_err(|error| {
-            AppError::Provider(format!("openai oauth token refresh failed: {error}"))
-        })?;
-
-    let expires_at_ms = token
-        .expires_in()
-        .map(|duration| chrono::Utc::now().timestamp_millis() + duration.as_millis() as i64)
-        .unwrap_or(0);
-
-    Ok(OAuthTokenResponse {
-        refresh: token
-            .refresh_token()
-            .map(|value| value.secret().to_owned())
-            .unwrap_or_else(|| refresh_token.to_owned()),
-        access: token.access_token().secret().to_owned(),
-        expires_at_ms,
-        account_id: extract_openai_account_id(token.access_token().secret()),
-        user: None,
-    })
+    refresh_oauth_token(
+        client,
+        refresh_token,
+        oauth_http_client(true),
+        "openai oauth token refresh failed",
+        extract_openai_account_id,
+    )
+    .await
 }
 
 pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, AppError> {
@@ -135,21 +83,7 @@ pub async fn start_openai_headless_device_code() -> Result<DeviceCodeStart, AppE
         .send()
         .await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<empty>".to_owned());
-        return Err(AppError::HttpStatus {
-            provider: "openai".to_owned(),
-            status,
-            body,
-            kind: ProviderErrorKind::ApiError,
-            retryable: false,
-        });
-    }
-
+    let response = ensure_http_success("openai", None, response).await?;
     let data: DeviceCodeResponse = response.json().await?;
     Ok(DeviceCodeStart {
         verification_url: format!("{OPENAI_ISSUER}/codex/device"),
@@ -198,21 +132,7 @@ pub async fn poll_openai_headless_device_code(
         return Ok(None);
     }
 
-    if !poll_response.status().is_success() {
-        let status = poll_response.status();
-        let body = poll_response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<empty>".to_owned());
-        return Err(AppError::HttpStatus {
-            provider: "openai".to_owned(),
-            status,
-            body,
-            kind: ProviderErrorKind::ApiError,
-            retryable: false,
-        });
-    }
-
+    let poll_response = ensure_http_success("openai", None, poll_response).await?;
     let poll_data: DevicePollResponse = poll_response.json().await?;
 
     let encoded_form = {
@@ -242,68 +162,28 @@ pub async fn poll_openai_headless_device_code(
         .send()
         .await?;
 
-    if !token_response.status().is_success() {
-        let status = token_response.status();
-        let body = token_response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<empty>".to_owned());
-        return Err(AppError::HttpStatus {
-            provider: "openai".to_owned(),
-            status,
-            body,
-            kind: ProviderErrorKind::ApiError,
-            retryable: false,
-        });
-    }
-
+    let token_response = ensure_http_success("openai", None, token_response).await?;
     let token_data: TokenResponseBody = token_response.json().await?;
     let refresh_token = token_data.refresh_token.ok_or_else(|| {
         AppError::Provider("openai device oauth response missing refresh_token".to_owned())
     })?;
 
-    let expires_at_ms = token_data
-        .expires_in
-        .map(|seconds| chrono::Utc::now().timestamp_millis() + seconds as i64 * 1000)
-        .unwrap_or(0);
-
     Ok(Some(OAuthTokenResponse {
         refresh: refresh_token,
         access: token_data.access_token.clone(),
-        expires_at_ms,
+        expires_at_ms: expires_at_ms_from_seconds(token_data.expires_in),
         account_id: extract_openai_account_id(token_data.access_token.as_str()),
         user: None,
     }))
 }
 
-fn openai_oauth_client(redirect_uri: Option<&str>) -> Result<OpenAiOAuthClient, AppError> {
-    let client = BasicClient::new(ClientId::new(OPENAI_CLIENT_ID.to_owned()))
-        .set_auth_uri(
-            AuthUrl::new(format!("{OPENAI_ISSUER}/oauth/authorize"))
-                .map_err(|error| AppError::Config(format!("invalid openai auth url: {error}")))?,
-        )
-        .set_token_uri(
-            TokenUrl::new(format!("{OPENAI_ISSUER}/oauth/token"))
-                .map_err(|error| AppError::Config(format!("invalid openai token url: {error}")))?,
-        );
-
-    if let Some(redirect_uri) = redirect_uri {
-        Ok(client.set_redirect_uri(
-            RedirectUrl::new(redirect_uri.to_owned())
-                .map_err(|error| AppError::Config(format!("invalid redirect uri: {error}")))?,
-        ))
-    } else {
-        Ok(client)
-    }
-}
-
-fn oauth_http_client() -> &'static oauth2::reqwest::Client {
-    static CLIENT: OnceLock<oauth2::reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        oauth2::reqwest::ClientBuilder::new()
-            .redirect(oauth2::reqwest::redirect::Policy::none())
-            .user_agent(crate::provider::CODEX_USER_AGENT)
-            .build()
-            .expect("oauth reqwest client should build")
-    })
+fn openai_oauth_client(redirect_uri: Option<&str>) -> Result<super::shared::OAuthClient, AppError> {
+    oauth_client(
+        "openai",
+        OPENAI_CLIENT_ID,
+        None,
+        format!("{OPENAI_ISSUER}/oauth/authorize"),
+        format!("{OPENAI_ISSUER}/oauth/token"),
+        redirect_uri,
+    )
 }

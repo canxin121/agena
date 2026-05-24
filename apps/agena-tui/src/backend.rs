@@ -13,13 +13,14 @@ use agena::permission::PermissionScope;
 use agena::{
     agents::AgentDescriptor,
     config::{
-        ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
-        ConfigSettingsPatchInput, ConfigSettingsSetInput, ProcessEnvironment,
-        ProviderAdapterOverlay, ProviderAuthConfig, ProviderAuthMode, ProviderAuthOverlay,
-        ProviderModelOverlay, ProviderOverlay, delete_file_setting,
-        draft_atomgit_provider_adapter_models_target, draft_gitlab_provider_adapter_models_target,
-        draft_provider_adapter_models_target, list_provider_adapter_models_for_target,
-        patch_file_settings, provider_model_overlay_from_catalog_definition, read_file_setting,
+        ConfigSettingsDeleteInput, ConfigSettingsEditOptions, ConfigSettingsEditResponse,
+        ConfigSettingsGetInput, ConfigSettingsPatchInput, ConfigSettingsPathInput,
+        ConfigSettingsSetInput, ProcessEnvironment, ProviderAdapterOverlay, ProviderAuthConfig,
+        ProviderAuthMode, ProviderAuthOverlay, ProviderModelOverlay, ProviderOverlay,
+        delete_file_setting, draft_atomgit_provider_adapter_models_target,
+        draft_gitlab_provider_adapter_models_target, draft_provider_adapter_models_target,
+        list_provider_adapter_models_with_config, patch_file_settings,
+        provider_model_overlay_from_catalog_definition, read_file_setting,
         saved_provider_adapter_models_target, set_file_setting,
     },
     event::{DomainEvent, EventKind},
@@ -646,7 +647,6 @@ impl ProviderConfigDraft {
         provider_id: &str,
         provider: &agena::config::ResolvedProviderConfig,
     ) -> Self {
-        let uses_legacy_gitlab_adapter = provider.adapters.contains_key("gitlab");
         let mut credential_drafts = ProviderCredentialDraftBundle::default();
         let (
             auth_kind,
@@ -662,27 +662,20 @@ impl ProviderConfigDraft {
             session_token,
             service_key_env,
         ) = match &provider.auth {
-            ProviderAuthConfig::Api(api) => {
-                let auth_kind = if uses_legacy_gitlab_adapter {
-                    ProviderDraftAuthKind::Gitlab
-                } else {
-                    ProviderDraftAuthKind::Api
-                };
-                (
-                    auth_kind,
-                    api.base_url.clone().unwrap_or_default(),
-                    String::new(),
-                    api.api_key_env.clone().unwrap_or_default(),
-                    api.api_key.clone().unwrap_or_default(),
-                    credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                    String::new(),
-                )
-            }
+            ProviderAuthConfig::Api(api) => (
+                ProviderDraftAuthKind::Api,
+                api.base_url.clone().unwrap_or_default(),
+                String::new(),
+                api.api_key_env.clone().unwrap_or_default(),
+                api.api_key.clone().unwrap_or_default(),
+                credential_issuer_label(CredentialIssuer::OpenaiChatgpt).to_owned(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+                String::new(),
+            ),
             ProviderAuthConfig::Gitlab(config) => (
                 ProviderDraftAuthKind::Gitlab,
                 String::new(),
@@ -1786,9 +1779,11 @@ impl Backend {
             ConfigSettingsSetInput {
                 path: path.trim().to_owned(),
                 value,
-                dry_run: false,
-                validate: true,
-                reload: true,
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
             },
         )
         .map_err(|error| anyhow!(error.to_string()))
@@ -1823,9 +1818,11 @@ impl Backend {
             config_path,
             ConfigSettingsDeleteInput {
                 path: path.trim().to_owned(),
-                dry_run: false,
-                validate: true,
-                reload: true,
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
             },
         )
         .map_err(|error| anyhow!(error.to_string()))
@@ -2436,7 +2433,7 @@ impl Backend {
             let configured = read_file_setting(
                 self.runtime.config_resolution().meta.config_path.clone(),
                 ConfigSettingsGetInput {
-                    path: Some(path),
+                    target: ConfigSettingsPathInput { path: Some(path) },
                     source: agena::config::ConfigSettingsSource::File,
                 },
             )
@@ -2465,7 +2462,9 @@ impl Backend {
         let configured = read_file_setting(
             self.runtime.config_resolution().meta.config_path.clone(),
             ConfigSettingsGetInput {
-                path: Some(provider_settings_path(provider_id)),
+                target: ConfigSettingsPathInput {
+                    path: Some(provider_settings_path(provider_id)),
+                },
                 source: agena::config::ConfigSettingsSource::File,
             },
         )
@@ -2516,7 +2515,9 @@ impl Backend {
                 read_file_setting(
                     self.runtime.config_resolution().meta.config_path.clone(),
                     ConfigSettingsGetInput {
-                        path: Some(provider_adapter_settings_path(provider_id, adapter_id)),
+                        target: ConfigSettingsPathInput {
+                            path: Some(provider_adapter_settings_path(provider_id, adapter_id)),
+                        },
                         source: agena::config::ConfigSettingsSource::File,
                     },
                 )
@@ -2560,18 +2561,21 @@ impl Backend {
         &self,
         target: agena::config::ProviderAdapterModelsTarget,
     ) -> Result<ProviderAdapterModelsResponse> {
-        let client = agena::provider::ProviderRegistry::build_http_client(
-            self.runtime
-                .config_resolution()
-                .config
-                .provider_http_client_config(),
+        let resolution = self.runtime.config_resolution();
+        let adapter_models = list_provider_adapter_models_with_config(
+            &resolution.config,
+            &target,
+            &ProcessEnvironment,
         )
-        .context("failed to build provider adapter models http client")?;
-        let adapter_models =
-            list_provider_adapter_models_for_target(&target, client, &ProcessEnvironment).await;
+        .await
+        .context("failed to list provider adapter models")?;
         Ok(ProviderAdapterModelsResponse {
-            provider_id: target.provider_id,
-            adapters: adapter_models.into_iter().map(Into::into).collect(),
+            provider_id: adapter_models.provider_id,
+            adapters: adapter_models
+                .adapters
+                .into_iter()
+                .map(Into::into)
+                .collect(),
         })
     }
 
@@ -2584,13 +2588,17 @@ impl Backend {
         let response = patch_file_settings(
             config_path,
             ConfigSettingsPatchInput {
-                path: Some("providers".to_owned()),
+                target: ConfigSettingsPathInput {
+                    path: Some("providers".to_owned()),
+                },
                 changes: json!({
                     provider_id: provider_patch,
                 }),
-                dry_run: false,
-                validate: true,
-                reload: true,
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
             },
         )
         .map_err(|error| anyhow!("failed to patch provider settings: {error}"))?;
@@ -2615,9 +2623,11 @@ impl Backend {
             ConfigSettingsSetInput {
                 path: format!("providers.{}", quoted_settings_segment(provider_id)),
                 value: provider_value,
-                dry_run: false,
-                validate: true,
-                reload: true,
+                options: ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
             },
         )
         .map_err(|error| anyhow!("failed to save provider settings: {error}"))?;
@@ -4321,68 +4331,37 @@ fn catalog_entry_to_catalog_definition(
 fn sanitized_catalog_capability_patch(
     patch: &agena::provider::ModelCapabilityPatch,
 ) -> agena::provider::ModelCapabilityPatch {
-    use agena::provider::{
-        FeatureCapabilityPatch, FeatureCapabilityPatchBody, InputCapabilityPatch,
-        InputCapabilityPatchBody,
-    };
-
     let mut patch = patch.clone();
-
-    match patch.input.take() {
-        Some(InputCapabilityPatch::Supported(mut supported)) => {
-            dedupe_vec(&mut supported);
-            patch.input =
-                (!supported.is_empty()).then_some(InputCapabilityPatch::Supported(supported));
-        }
-        Some(InputCapabilityPatch::Patch(mut values)) => {
-            dedupe_vec(&mut values.supported);
-            dedupe_vec(&mut values.unsupported);
-            values
-                .unsupported
-                .retain(|value| !values.supported.contains(value));
-            patch.input = if values.unsupported.is_empty() {
-                (!values.supported.is_empty())
-                    .then_some(InputCapabilityPatch::Supported(values.supported))
-            } else if values.supported.is_empty() {
-                Some(InputCapabilityPatch::Patch(InputCapabilityPatchBody {
-                    supported: Vec::new(),
-                    unsupported: values.unsupported,
-                }))
-            } else {
-                Some(InputCapabilityPatch::Patch(values))
-            };
-        }
-        None => {}
-    }
-
-    match patch.features.take() {
-        Some(FeatureCapabilityPatch::Supported(mut supported)) => {
-            dedupe_vec(&mut supported);
-            patch.features =
-                (!supported.is_empty()).then_some(FeatureCapabilityPatch::Supported(supported));
-        }
-        Some(FeatureCapabilityPatch::Patch(mut values)) => {
-            dedupe_vec(&mut values.supported);
-            dedupe_vec(&mut values.unsupported);
-            values
-                .unsupported
-                .retain(|value| !values.supported.contains(value));
-            patch.features = if values.unsupported.is_empty() {
-                (!values.supported.is_empty())
-                    .then_some(FeatureCapabilityPatch::Supported(values.supported))
-            } else if values.supported.is_empty() {
-                Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
-                    supported: Vec::new(),
-                    unsupported: values.unsupported,
-                }))
-            } else {
-                Some(FeatureCapabilityPatch::Patch(values))
-            };
-        }
-        None => {}
-    }
+    patch.input = sanitize_selection_patch(patch.input.take());
+    patch.features = sanitize_selection_patch(patch.features.take());
 
     patch
+}
+
+fn sanitize_selection_patch<T: Clone + PartialEq>(
+    patch: Option<agena::provider::CapabilitySelectionPatch<T>>,
+) -> Option<agena::provider::CapabilitySelectionPatch<T>> {
+    let patch = patch?;
+    match patch {
+        agena::provider::CapabilitySelectionPatch::Supported(mut supported) => {
+            dedupe_vec(&mut supported);
+            agena::provider::CapabilitySelectionPatch::optional_from_supported_unsupported(
+                supported,
+                Vec::new(),
+            )
+        }
+        agena::provider::CapabilitySelectionPatch::Patch(mut values) => {
+            dedupe_vec(&mut values.supported);
+            dedupe_vec(&mut values.unsupported);
+            values
+                .unsupported
+                .retain(|value| !values.supported.contains(value));
+            agena::provider::CapabilitySelectionPatch::optional_from_supported_unsupported(
+                values.supported,
+                values.unsupported,
+            )
+        }
+    }
 }
 
 fn provider_model_to_provider_model_overlay(model: &ProviderModel) -> ProviderModelOverlay {

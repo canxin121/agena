@@ -1,14 +1,15 @@
 //! Handler for the `monitor` tool — translates `MonitorToolInput`
 //! into calls on the registry attached to the executor.
 
-use std::collections::HashMap;
-
 use crate::message::{
     MonitorEvent, MonitorStatus, MonitorStream, MonitorSummary, MonitorToolInput,
 };
 
 use super::monitor::{
     MonitorError, MonitorRead, MonitorStart, MonitorStopOutcome, ReadParams, StartParams,
+};
+use super::shell_tools::{
+    inherited_environment, resolve_workdir, validate_declared_filesystem_effects,
 };
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
@@ -23,38 +24,27 @@ pub(crate) fn execute(
     match input {
         MonitorToolInput::Start {
             command,
-            description,
-            workdir,
-            filesystem_effects,
-            network_effects,
-            timeout_ms,
             persistent,
             include_pattern,
             max_buffered_lines,
             capture_stderr,
         } => {
-            if filesystem_effects.is_empty()
-                && let Some(reason) = super::bash::filesystem_command_reason(command)
-            {
-                return Err(ToolError::InvalidInput(format!(
-                    "monitor filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
-                )));
-            }
-            let cwd = workdir
-                .as_deref()
-                .map(|w| executor.resolve_target_path(w))
-                .unwrap_or_else(|| executor.workspace_root().to_path_buf());
-            executor.ensure_read_permission(&cwd)?;
-            executor.ensure_filesystem_effects_permission(filesystem_effects, &cwd)?;
-            executor.ensure_network_effects_permission(network_effects)?;
+            validate_declared_filesystem_effects(
+                "monitor",
+                command.command.as_str(),
+                &command.filesystem_effects,
+            )?;
+            let cwd = resolve_workdir(executor, command.workdir.as_deref())?;
+            executor.ensure_filesystem_effects_permission(&command.filesystem_effects, &cwd)?;
+            executor.ensure_network_effects_permission(&command.network_effects)?;
 
             let env = inherited_environment();
             let started = registry
                 .start(StartParams {
-                    command: command.clone(),
-                    description: description.clone(),
+                    command: command.command.clone(),
+                    description: command.description.clone(),
                     workdir: cwd,
-                    timeout_ms: *timeout_ms,
+                    timeout_ms: command.timeout_ms,
                     persistent: *persistent,
                     include_pattern: include_pattern.clone(),
                     max_buffered_lines: *max_buffered_lines,
@@ -100,10 +90,6 @@ fn into_tool_error(err: MonitorError) -> ToolError {
             ToolError::InvalidInput(err.to_string())
         }
     }
-}
-
-fn inherited_environment() -> HashMap<String, String> {
-    std::env::vars().collect()
 }
 
 pub(crate) fn render_start(started: MonitorStart) -> ToolPayloadExecution {

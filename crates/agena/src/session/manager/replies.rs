@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::model::SessionPartRef;
 
 #[derive(Debug, Clone)]
 pub(super) struct AggregatedPermissionRequest {
@@ -18,6 +19,75 @@ pub(super) enum AggregatedPermissionOutcome {
     Allow,
     Request(Box<AggregatedPermissionRequest>),
     Deny { reason: String },
+}
+
+enum PendingReplyLookup<P> {
+    Pending(P),
+    Duplicate,
+}
+
+fn pending_reply_not_found_error(request_kind: &str, request_id: &str) -> AppError {
+    AppError::Internal(format!(
+        "pending {request_kind} request not found: {request_id}"
+    ))
+}
+
+fn pending_reply_payload_missing_error(request_kind: &str, request_id: &str) -> AppError {
+    AppError::Internal(format!(
+        "pending {request_kind} request payload missing: {request_id}"
+    ))
+}
+
+fn pending_reply_part_missing_error(request_kind: &str, request_id: &str) -> AppError {
+    AppError::Internal(format!(
+        "pending {request_kind} part not found: {request_id}"
+    ))
+}
+
+fn pending_tool_part_not_found_error(part_ref: &SessionPartRef) -> AppError {
+    AppError::Internal(format!(
+        "pending tool part not found: message={}, part={}",
+        part_ref.message_id, part_ref.part_id
+    ))
+}
+
+fn assistant_message_for_part(
+    session: &Session,
+    part_ref: &SessionPartRef,
+) -> Result<Message, AppError> {
+    session
+        .messages
+        .get(part_ref.message_index)
+        .cloned()
+        .ok_or_else(|| pending_tool_part_not_found_error(part_ref))
+}
+
+fn update_resolved_tool_message(
+    session: &mut Session,
+    resolved: &ResolvedPendingTool,
+    update: impl FnOnce(&mut MessagePart),
+) -> Result<Message, AppError> {
+    {
+        let tool_part = session
+            .part_mut(&resolved.pending.part)
+            .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
+        update(tool_part);
+    }
+    assistant_message_for_part(session, &resolved.pending.part)
+}
+
+fn append_resolved_message_part(
+    session: &mut Session,
+    resolved: &ResolvedPendingTool,
+    part: MessagePart,
+) -> Result<Message, AppError> {
+    session
+        .messages
+        .get_mut(resolved.pending.part.message_index)
+        .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?
+        .parts
+        .push(part);
+    assistant_message_for_part(session, &resolved.pending.part)
 }
 
 fn push_unique_permission_action(actions: &mut Vec<PermissionAction>, action: PermissionAction) {
@@ -41,71 +111,190 @@ fn mode_request_override_for_adapter(
 }
 
 impl SessionManager {
+    fn lookup_pending_reply<P>(
+        &self,
+        session: &Session,
+        session_id: i64,
+        request_id: &str,
+        request_kind: &str,
+        find_pending: impl FnOnce(&Session, &str) -> Option<P>,
+        has_replied: impl FnOnce(&Session, &str) -> bool,
+    ) -> Result<PendingReplyLookup<P>, AppError> {
+        match find_pending(session, request_id) {
+            Some(pending) => Ok(PendingReplyLookup::Pending(pending)),
+            None if has_replied(session, request_id)
+                || session.has_finished_operation(request_id) =>
+            {
+                tracing::debug!(
+                    target: "agena::session::reply",
+                    session_id,
+                    request_kind,
+                    request_id = %request_id,
+                    "ignoring duplicate reply for completed request"
+                );
+                Ok(PendingReplyLookup::Duplicate)
+            }
+            None => Err(pending_reply_not_found_error(request_kind, request_id)),
+        }
+    }
+
+    fn clone_pending_reply_request<P, T>(
+        &self,
+        session: &Session,
+        pending: &P,
+        request_id: &str,
+        request_kind: &str,
+        request: impl FnOnce(&Session, &P) -> Option<T>,
+    ) -> Result<T, AppError> {
+        request(session, pending)
+            .ok_or_else(|| pending_reply_payload_missing_error(request_kind, request_id))
+    }
+
+    fn complete_reply_request_part(
+        &self,
+        session: &mut Session,
+        request_part: &SessionPartRef,
+        request_id: &str,
+        request_kind: &str,
+        content: PartContent,
+    ) -> Result<(), AppError> {
+        let part = session
+            .part_mut(request_part)
+            .ok_or_else(|| pending_reply_part_missing_error(request_kind, request_id))?;
+        part.set_content(content);
+        part.status = ExecutionStatus::Completed;
+        Ok(())
+    }
+
+    async fn load_reply_session(
+        &self,
+        session_id: i64,
+        options: &mut SessionRunOptions,
+    ) -> Result<(Arc<SessionManagerState>, Session), AppError> {
+        let state = self.execution_state();
+        let session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let session = self
+            .apply_requested_agent_profile(session, options, state.clone())
+            .await?;
+        Ok((state, session))
+    }
+
+    async fn continue_reply_session(
+        &self,
+        mut session: Session,
+        session_id: i64,
+        options: SessionRunOptions,
+        run_source: RunSource,
+        state: Arc<SessionManagerState>,
+        task_error_context: &str,
+    ) -> Result<Session, AppError> {
+        let options = self.apply_execution_context_to_run_options(&session, options)?;
+        if self.apply_run_selection_to_session(&mut session, &options) {
+            session = self
+                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .await?;
+        }
+
+        let manager = self.background_handle();
+        tokio::task::spawn(async move {
+            manager
+                .run_until_stable_for(session_id, session, &options, run_source, state)
+                .await
+        })
+        .await
+        .map_err(|err| AppError::Internal(format!("{task_error_context}: {err}")))?
+    }
+
+    async fn persist_tool_completion(
+        &self,
+        session: Session,
+        assistant_message: Message,
+        resolved: &ResolvedPendingTool,
+        persisted_rules: Vec<PersistedPermissionRule>,
+        output: TranscriptToolOutput,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let tool_call_id = tool_call_id_for(resolved);
+        let completed_part = assistant_message
+            .parts
+            .iter()
+            .find(|part| {
+                part.kind == crate::message::PartKind::Operation
+                    && part.operation_id.as_deref() == Some(tool_call_id.as_str())
+            })
+            .cloned();
+        let session = self
+            .persist_session_changes_with_rules(
+                session,
+                vec![assistant_message.clone()],
+                Vec::new(),
+                persisted_rules,
+                state.clone(),
+            )
+            .await?;
+        let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
+            message_id: HistoryMessageId(assistant_message.id),
+            call_id: tool_call_id,
+            run_id: HistoryRunId::new(),
+            tool_name: resolved.invocation.name.clone().into(),
+            part: completed_part,
+            output,
+            completed_at: Utc::now(),
+        })];
+        self.store
+            .append_history_items(session, events, state.cache_policy())
+            .await
+    }
+
     pub async fn reply_permission(
         &self,
         mut request: SessionPermissionReplyRequest,
     ) -> Result<Session, AppError> {
-        let reply_lock = self.reply_session_lock(request.session_id).await;
+        let request_id = request.request.reply.request_id.clone();
+        let reply_lock = self.reply_session_lock(request.request.session_id).await;
         let _reply_guard = reply_lock.lock().await;
-        let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(request.session_id, state.cache_policy())
+        let (state, mut session) = self
+            .load_reply_session(request.request.session_id, &mut request.request.options)
             .await?;
-        session = self
-            .apply_requested_agent_profile(session, &mut request.options, state.clone())
-            .await?;
-        let pending = match session
-            .find_pending_permission_by_request_id(request.reply.request_id.as_str())
-        {
-            Some(pending) => pending,
-            None if session.has_replied_permission_request(request.reply.request_id.as_str())
-                || session.has_finished_operation(request.reply.request_id.as_str()) =>
-            {
-                tracing::debug!(
-                    target: "agena::session::reply",
-                    session_id = request.session_id,
-                    request_id = %request.reply.request_id,
-                    "ignoring duplicate permission reply for completed request"
-                );
-                return Ok(session);
-            }
-            None => {
-                return Err(AppError::Internal(format!(
-                    "pending permission request not found: {}",
-                    request.reply.request_id
-                )));
-            }
+        let pending = match self.lookup_pending_reply(
+            &session,
+            request.request.session_id,
+            request_id.as_str(),
+            "permission",
+            Session::find_pending_permission_by_request_id,
+            Session::has_replied_permission_request,
+        )? {
+            PendingReplyLookup::Pending(pending) => pending,
+            PendingReplyLookup::Duplicate => return Ok(session),
         };
 
-        let permission_request = session
-            .pending_permission_request(&pending)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending permission request payload missing: {}",
-                    request.reply.request_id
-                ))
-            })?;
+        let permission_request = self.clone_pending_reply_request(
+            &session,
+            &pending,
+            request_id.as_str(),
+            "permission",
+            |session, pending| session.pending_permission_request(pending).cloned(),
+        )?;
         let reply_reason = request
+            .request
             .reply
             .reason
             .clone()
             .unwrap_or_else(|| permission_request.reason.clone());
 
-        {
-            let permission_part = session.part_mut(&pending.request).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending permission part not found: {}",
-                    request.reply.request_id
-                ))
-            })?;
-            permission_part.set_content(PartContent::permission_request(
-                PermissionRequestPart::pending(permission_request.clone())
-                    .with_reply(request.reply.clone()),
-            ));
-            permission_part.status = ExecutionStatus::Completed;
-        }
+        self.complete_reply_request_part(
+            &mut session,
+            &pending.request,
+            request_id.as_str(),
+            "permission",
+            PartContent::request(RequestPart::Permission(
+                InteractiveRequestPart::pending(permission_request.clone())
+                    .with_reply(request.request.reply.clone()),
+            )),
+        )?;
 
         let persisted_actions = if permission_request.requested_actions.is_empty() {
             vec![permission_request.action.clone()]
@@ -114,28 +303,28 @@ impl SessionManager {
         };
         let persisted_rules = persisted_rules_for_reply(
             &self.store,
-            request.session_id,
+            request.request.session_id,
             persisted_actions.as_slice(),
-            &request.reply,
+            &request.request.reply,
             request.operator.as_deref(),
         )
         .await?;
         self.publisher
             .publish(
-                crate::event::PublishContext::for_session(request.session_id),
+                crate::event::PublishContext::for_session(request.request.session_id),
                 EventKind::PermissionReplied(PermissionRepliedEvent {
-                    session_id: request.session_id,
-                    request_id: request.reply.request_id.clone(),
-                    kind: request.reply.kind,
-                    reason: request.reply.reason.clone(),
-                    scope: request.reply.scope.map(permission_scope_label),
+                    session_id: request.request.session_id,
+                    request_id: request.request.reply.request_id.clone(),
+                    kind: request.request.reply.kind,
+                    reason: request.request.reply.reason.clone(),
+                    scope: request.request.reply.scope.map(permission_scope_label),
                     ts_ms: Utc::now().timestamp_millis(),
                 }),
             )
             .await
             .map_err(|err| AppError::Internal(format!("publish permission reply failed: {err}")))?;
 
-        match request.reply.kind {
+        match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
                 match self.execute_pending_tool_after_approval(
@@ -185,91 +374,58 @@ impl SessionManager {
             }
         }
 
-        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
-        if self.apply_run_selection_to_session(&mut session, &options) {
-            session = self
-                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
-                .await?;
-        }
-
-        let manager = self.background_handle();
-        let session_id = request.session_id;
-        tokio::task::spawn(async move {
-            manager
-                .run_until_stable_for(
-                    session_id,
-                    session,
-                    &options,
-                    RunSource::PermissionReply,
-                    state,
-                )
-                .await
-        })
+        self.continue_reply_session(
+            session,
+            request.request.session_id,
+            request.request.options,
+            RunSource::PermissionReply,
+            state,
+            "permission continuation task failed",
+        )
         .await
-        .map_err(|err| AppError::Internal(format!("permission continuation task failed: {err}")))?
     }
 
     pub async fn reply_user_input(
         &self,
-        mut request: SessionUserInputReplyRequest,
+        mut request: SessionExecutionReplyRequest<UserInputReply>,
     ) -> Result<Session, AppError> {
+        let request_id = request.reply.request_id.clone();
         let reply_lock = self.reply_session_lock(request.session_id).await;
         let _reply_guard = reply_lock.lock().await;
-        let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(request.session_id, state.cache_policy())
+        let (state, mut session) = self
+            .load_reply_session(request.session_id, &mut request.options)
             .await?;
-        session = self
-            .apply_requested_agent_profile(session, &mut request.options, state.clone())
-            .await?;
-        let pending = match session
-            .find_pending_user_input_by_request_id(request.reply.request_id.as_str())
-        {
-            Some(pending) => pending,
-            None if session.has_replied_user_input_request(request.reply.request_id.as_str())
-                || session.has_finished_operation(request.reply.request_id.as_str()) =>
-            {
-                tracing::debug!(
-                    target: "agena::session::reply",
-                    session_id = request.session_id,
-                    request_id = %request.reply.request_id,
-                    "ignoring duplicate user input reply for completed request"
-                );
-                return Ok(session);
-            }
-            None => {
-                return Err(AppError::Internal(format!(
-                    "pending user input request not found: {}",
-                    request.reply.request_id
-                )));
-            }
+        let pending = match self.lookup_pending_reply(
+            &session,
+            request.session_id,
+            request_id.as_str(),
+            "user input",
+            Session::find_pending_user_input_by_request_id,
+            Session::has_replied_user_input_request,
+        )? {
+            PendingReplyLookup::Pending(pending) => pending,
+            PendingReplyLookup::Duplicate => return Ok(session),
         };
 
-        let user_input_request = session
-            .pending_user_input_request(&pending)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending user input request payload missing: {}",
-                    request.reply.request_id
-                ))
-            })?;
-        {
-            let input_part = session.part_mut(&pending.request).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending user input part not found: {}",
-                    request.reply.request_id
-                ))
-            })?;
-            input_part.set_content(PartContent::user_input_request(
-                UserInputRequestPart::pending(user_input_request.clone())
+        let user_input_request = self.clone_pending_reply_request(
+            &session,
+            &pending,
+            request_id.as_str(),
+            "user input",
+            |session, pending| session.pending_user_input_request(pending).cloned(),
+        )?;
+        self.complete_reply_request_part(
+            &mut session,
+            &pending.request,
+            request_id.as_str(),
+            "user input",
+            PartContent::request(RequestPart::UserInput(
+                InteractiveRequestPart::pending(user_input_request.clone())
                     .with_reply(request.reply.clone()),
-            ));
-            input_part.status = ExecutionStatus::Completed;
-        }
+            )),
+        )?;
 
-        let is_host_request = request.reply.request_id.starts_with("host-input:");
+        let is_host_request = request_id.starts_with("host-input:");
         if is_host_request {
             let response = host_user_input_response(&user_input_request, &request.reply)?;
             let tool_part_ref = session
@@ -294,7 +450,7 @@ impl SessionManager {
                 .host_user_input_waiters
                 .lock()
                 .await
-                .remove(request.reply.request_id.as_str())
+                .remove(request_id.as_str())
             {
                 let _ = waiter.response.send(response);
                 return Ok(session);
@@ -302,7 +458,7 @@ impl SessionManager {
             tracing::info!(
                 target: "agena::session::reply",
                 session_id = request.session_id,
-                request_id = %request.reply.request_id,
+                request_id = %request_id,
                 "host user input waiter missing; resuming by replaying the pending tool"
             );
             session = self
@@ -327,28 +483,15 @@ impl SessionManager {
             }
         }
 
-        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
-        if self.apply_run_selection_to_session(&mut session, &options) {
-            session = self
-                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
-                .await?;
-        }
-
-        let manager = self.background_handle();
-        let session_id = request.session_id;
-        tokio::task::spawn(async move {
-            manager
-                .run_until_stable_for(
-                    session_id,
-                    session,
-                    &options,
-                    RunSource::UserInputReply,
-                    state,
-                )
-                .await
-        })
+        self.continue_reply_session(
+            session,
+            request.session_id,
+            request.options,
+            RunSource::UserInputReply,
+            state,
+            "user input continuation task failed",
+        )
         .await
-        .map_err(|err| AppError::Internal(format!("user input continuation task failed: {err}")))?
     }
 
     /// Convenience wrapper that registers a fresh `RunControl` for
@@ -1816,35 +1959,29 @@ impl SessionManager {
             created_at: Utc::now(),
         };
 
-        {
-            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool part not found: message={}, part={}",
-                    resolved.pending.part.message_id, resolved.pending.part.part_id
-                ))
+        let _assistant_message =
+            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+                tool_part.set_content(PartContent::Operation(OperationPart::pending(
+                    resolved.call_id,
+                    resolved.invocation.clone(),
+                    format!("Awaiting permission: {reason}"),
+                    resolved.lifecycle.clone(),
+                )));
+                tool_part.status = ExecutionStatus::Pending;
+                tool_part.summary = Some(reason.clone());
             })?;
-            tool_part.set_content(PartContent::Operation(OperationPart::pending(
-                resolved.call_id,
-                resolved.invocation.clone(),
-                format!("Awaiting permission: {reason}"),
-                resolved.lifecycle.clone(),
-            )));
-            tool_part.status = ExecutionStatus::Pending;
-            tool_part.summary = Some(reason.clone());
-        }
 
         let permission_part_id = self.store.reserve_part_id().await?;
-        let permission_part = build_permission_part(
-            permission_part_id,
-            resolved.pending.part.message_id,
-            resolved.operation_id.as_str(),
-            PermissionRequestPart::pending(request.clone()),
-        );
-        session.messages[resolved.pending.part.message_index]
-            .parts
-            .push(permission_part.clone());
-
-        let assistant_message = session.messages[resolved.pending.part.message_index].clone();
+        let assistant_message = append_resolved_message_part(
+            &mut session,
+            &resolved,
+            build_request_part(
+                permission_part_id,
+                resolved.pending.part.message_id,
+                resolved.operation_id.as_str(),
+                RequestPart::Permission(InteractiveRequestPart::pending(request.clone())),
+            ),
+        )?;
         self.publisher
             .publish(
                 crate::event::PublishContext::for_session(session.id),
@@ -1905,39 +2042,33 @@ impl SessionManager {
             created_at: Utc::now(),
         };
 
-        {
-            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool part not found: message={}, part={}",
-                    resolved.pending.part.message_id, resolved.pending.part.part_id
-                ))
+        let _assistant_message =
+            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+                tool_part.set_content(PartContent::Operation(OperationPart::pending(
+                    resolved.call_id,
+                    resolved.invocation.clone(),
+                    ask_user_title(&request),
+                    resolved.lifecycle.clone(),
+                )));
+                tool_part.status = ExecutionStatus::Pending;
+                tool_part.summary = Some(match request.questions.len() {
+                    0 => "Ask user".to_string(),
+                    1 => "Waiting for answer".to_string(),
+                    count => format!("Waiting for {count} answers"),
+                });
             })?;
-            tool_part.set_content(PartContent::Operation(OperationPart::pending(
-                resolved.call_id,
-                resolved.invocation.clone(),
-                ask_user_title(&request),
-                resolved.lifecycle.clone(),
-            )));
-            tool_part.status = ExecutionStatus::Pending;
-            tool_part.summary = Some(match request.questions.len() {
-                0 => "Ask user".to_string(),
-                1 => "Waiting for answer".to_string(),
-                count => format!("Waiting for {count} answers"),
-            });
-        }
 
         let input_part_id = self.store.reserve_part_id().await?;
-        let input_part = build_user_input_part(
-            input_part_id,
-            resolved.pending.part.message_id,
-            resolved.operation_id.as_str(),
-            UserInputRequestPart::pending(request.clone()),
-        );
-        session.messages[resolved.pending.part.message_index]
-            .parts
-            .push(input_part.clone());
-
-        let assistant_message = session.messages[resolved.pending.part.message_index].clone();
+        let assistant_message = append_resolved_message_part(
+            &mut session,
+            &resolved,
+            build_request_part(
+                input_part_id,
+                resolved.pending.part.message_id,
+                resolved.operation_id.as_str(),
+                RequestPart::UserInput(InteractiveRequestPart::pending(request.clone())),
+            ),
+        )?;
         self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
             .await
     }
@@ -2075,61 +2206,31 @@ impl SessionManager {
         );
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
 
-        {
-            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool part not found: message={}, part={}",
-                    resolved.pending.part.message_id, resolved.pending.part.part_id
-                ))
+        let assistant_message =
+            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+                tool_part.set_content(PartContent::Operation(OperationPart::completed(
+                    resolved.call_id,
+                    resolved.invocation.clone(),
+                    output_text.clone(),
+                    blocks.clone(),
+                    execution.view.attachments.clone(),
+                    tool_output.clone(),
+                    lifecycle.clone(),
+                )));
+                tool_part.status = ExecutionStatus::Completed;
             })?;
-            tool_part.set_content(PartContent::Operation(OperationPart::completed(
-                resolved.call_id,
-                resolved.invocation.clone(),
-                output_text.clone(),
-                blocks.clone(),
-                execution.view.attachments.clone(),
-                tool_output.clone(),
-                lifecycle.clone(),
-            )));
-            tool_part.status = ExecutionStatus::Completed;
-        }
 
-        let assistant_message = session.messages[resolved.pending.part.message_index].clone();
-        let tool_call_id = tool_call_id_for(&resolved);
-        let completed_part = assistant_message
-            .parts
-            .iter()
-            .find(|part| {
-                part.kind == crate::message::PartKind::Operation
-                    && part.operation_id.as_deref() == Some(tool_call_id.as_str())
-            })
-            .cloned();
-        let tool_output_event = TranscriptToolOutput::Text {
-            text: execution.view.output_text.clone(),
-        };
-        let session = self
-            .persist_session_changes_with_rules(
-                session,
-                vec![assistant_message.clone()],
-                Vec::new(),
-                persisted_rules,
-                state.clone(),
-            )
-            .await?;
-        let now = Utc::now();
-        let run_id = HistoryRunId::new();
-        let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
-            message_id: HistoryMessageId(assistant_message.id),
-            call_id: tool_call_id,
-            run_id,
-            tool_name: resolved.invocation.name.clone().into(),
-            part: completed_part,
-            output: tool_output_event,
-            completed_at: now,
-        })];
-        self.store
-            .append_history_items(session, events, state.cache_policy())
-            .await
+        self.persist_tool_completion(
+            session,
+            assistant_message,
+            &resolved,
+            persisted_rules,
+            TranscriptToolOutput::Text {
+                text: execution.view.output_text.clone(),
+            },
+            state,
+        )
+        .await
     }
 
     async fn apply_tool_failure(
@@ -2170,59 +2271,30 @@ impl SessionManager {
             &reason,
         );
 
-        {
-            let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool part not found: message={}, part={}",
-                    resolved.pending.part.message_id, resolved.pending.part.part_id
-                ))
+        let assistant_message =
+            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+                tool_part.set_content(PartContent::Operation(OperationPart::failed(
+                    resolved.call_id,
+                    resolved.invocation.clone(),
+                    reason.clone(),
+                    reason.clone(),
+                    blocks.clone(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                    lifecycle.clone(),
+                )));
+                tool_part.status = ExecutionStatus::Failed;
             })?;
-            tool_part.set_content(PartContent::Operation(OperationPart::failed(
-                resolved.call_id,
-                resolved.invocation.clone(),
-                reason.clone(),
-                reason.clone(),
-                blocks.clone(),
-                Vec::new(),
-                ToolOutput::default(),
-                lifecycle.clone(),
-            )));
-            tool_part.status = ExecutionStatus::Failed;
-        }
 
-        let assistant_message = session.messages[resolved.pending.part.message_index].clone();
-        let tool_call_id = tool_call_id_for(&resolved);
-        let completed_part = assistant_message
-            .parts
-            .iter()
-            .find(|part| {
-                part.kind == crate::message::PartKind::Operation
-                    && part.operation_id.as_deref() == Some(tool_call_id.as_str())
-            })
-            .cloned();
-        let session = self
-            .persist_session_changes_with_rules(
-                session,
-                vec![assistant_message.clone()],
-                Vec::new(),
-                persisted_rules,
-                state.clone(),
-            )
-            .await?;
-        let now = Utc::now();
-        let run_id = HistoryRunId::new();
-        let events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
-            message_id: HistoryMessageId(assistant_message.id),
-            call_id: tool_call_id,
-            run_id,
-            tool_name: resolved.invocation.name.clone().into(),
-            part: completed_part,
-            output: TranscriptToolOutput::Error { message: reason },
-            completed_at: now,
-        })];
-        self.store
-            .append_history_items(session, events, state.cache_policy())
-            .await
+        self.persist_tool_completion(
+            session,
+            assistant_message,
+            &resolved,
+            persisted_rules,
+            TranscriptToolOutput::Error { message: reason },
+            state,
+        )
+        .await
     }
 
     pub(super) async fn persist_session_changes(
@@ -2693,21 +2765,7 @@ impl SessionManager {
     ) -> Result<SessionRunOptions, AppError> {
         let model = self.model_from_session_or_default(session, &state)?;
 
-        self.apply_execution_context_to_run_options(
-            session,
-            SessionRunOptions {
-                model,
-                thinking_mode: None,
-                speed_mode: None,
-                verbosity: None,
-                thinking: None,
-                request_override: Default::default(),
-                system: None,
-                temperature: None,
-                max_output_tokens: None,
-                agent_profile: None,
-            },
-        )
+        self.apply_execution_context_to_run_options(session, SessionRunOptions::new(model))
     }
 
     pub(super) async fn clear_session_agent_profile(
@@ -3135,23 +3193,18 @@ impl SessionManager {
         } else {
             base_model
         };
-        Ok(SessionRunOptions {
-            model,
-            thinking_mode: None,
-            speed_mode: None,
-            verbosity: None,
-            thinking: None,
-            request_override: Default::default(),
-            system: child.runtime.execution.system_prompt_override.clone(),
-            temperature: child
-                .runtime
-                .execution
-                .agent_run
-                .temperature
-                .map(|value| value.0),
-            max_output_tokens: child.runtime.execution.agent_run.max_output_tokens,
-            agent_profile: child.runtime.execution.selection.agent.clone(),
-        })
+        Ok(SessionRunOptions::new(model)
+            .with_system(child.runtime.execution.system_prompt_override.clone())
+            .with_temperature(
+                child
+                    .runtime
+                    .execution
+                    .agent_run
+                    .temperature
+                    .map(|value| value.0),
+            )
+            .with_max_output_tokens(child.runtime.execution.agent_run.max_output_tokens)
+            .with_agent_profile(child.runtime.execution.selection.agent.clone()))
     }
 
     fn resolve_requested_session_model_ref(

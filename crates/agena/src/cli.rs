@@ -29,8 +29,10 @@ use crate::{
     agent::Agent,
     config::{
         ConfigEnvironment, ConfigLoader, ConfigOutputFormat, ConfigOverride, LoadConfigRequest,
-        ProcessEnvironment, ProviderAuthConfig, ProviderConfigCredentialStore, TracingConfig,
-        provider_gitlab_instance_url,
+        ProcessEnvironment, ProviderAuthConfig, ProviderAuthTargetError,
+        ProviderConfigCredentialStore, ProviderDeviceAuthTarget, ProviderOAuthTarget,
+        ResolvedProviderConfig, TracingConfig, resolve_provider_device_auth_target,
+        resolve_provider_oauth_target,
     },
     db::{
         crud::{permission_rule as permission_rule_crud, workspace as workspace_crud},
@@ -46,12 +48,15 @@ use crate::{
     },
     provider::{
         ModelCapabilities, ModelMetadata, ProviderModel,
-        auth::{AuthData, AuthManager, CopilotDeployment, wait_for_oauth_callback},
+        auth::{
+            AuthData, AuthManager, CopilotDeployment, DeviceCodeStart, OAuthAuthorizeStart,
+            OAuthCallback, wait_for_oauth_callback,
+        },
     },
     role::Role,
     runtime::{AgenaRuntime, TracingFilterReloadHandle},
     session::{
-        RunStatus, Session, SessionContinueRequest, SessionCreateRequest, SessionForkRequest,
+        RunStatus, Session, SessionCreateRequest, SessionExecutionRequest, SessionForkRequest,
         SessionListRequest, SessionManager, SessionRunOptions, SessionSummary,
         SessionUserMessageRequest, UsagePeriod, UsageStatsQuery,
     },
@@ -499,7 +504,7 @@ pub struct SessionsCommand {
 
 #[derive(Debug, Clone, Args)]
 pub struct AppServerArgs {
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = AppServerTransport::Stdio)]
     pub transport: AppServerTransport,
@@ -512,7 +517,7 @@ pub enum AppServerTransport {
 
 #[derive(Debug, Clone, Args)]
 pub struct McpServerArgs {
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
 }
 
@@ -696,7 +701,7 @@ pub struct SessionListArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct MemoryListArgs {
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long, value_enum, default_value_t = ConfigOutputFormat::Json)]
     pub format: ConfigOutputFormat,
@@ -704,14 +709,14 @@ pub struct MemoryListArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct MemoryForgetArgs {
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     pub name: String,
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct MemoryEditArgs {
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     pub name: Option<String>,
 }
@@ -752,7 +757,7 @@ pub struct ContinueArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ApplyArgs {
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long)]
     pub json: bool,
@@ -768,7 +773,7 @@ pub struct DebugSessionArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ExecArgs {
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long)]
     pub agent: Option<String>,
@@ -789,7 +794,7 @@ pub struct TuiArgs {
     pub database_url: Option<String>,
     #[arg(long, env = "AGENA_DATABASE_PATH")]
     pub database_path: Option<PathBuf>,
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long)]
     pub session: Option<i64>,
@@ -807,7 +812,7 @@ pub struct TuiArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct ReviewArgs {
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
     #[arg(long, default_value = "main")]
     pub base: String,
@@ -1581,87 +1586,66 @@ impl AgenaCli {
         }
 
         if args.browser {
-            match &resolved.auth {
-                ProviderAuthConfig::Credential(config)
-                    if matches!(
-                        config.issuer,
-                        crate::provider::auth::CredentialIssuer::OpenaiChatgpt
-                    ) =>
-                {
-                    let redirect_uri = format!("http://localhost:{}/auth/callback", args.port);
+            let timeout = Duration::from_secs(args.timeout_secs);
+            match resolve_login_oauth_target(provider_id.as_str(), resolved)? {
+                ProviderOAuthTarget::OpenAi => {
+                    let redirect_uri = browser_login_redirect_uri(args.port);
                     let start = manager.start_openai_browser_login(redirect_uri.clone())?;
-                    println!("open this URL to continue: {}", start.authorize_url);
-                    io::stdout().flush()?;
-                    let callback = wait_for_oauth_callback(
+                    let pkce_verifier = start.pkce_verifier.clone();
+                    let callback_provider_id = provider_id.clone();
+                    complete_browser_callback_login(
                         args.port,
-                        start.state.as_str(),
-                        Duration::from_secs(args.timeout_secs),
-                    )?;
-                    manager
-                        .finish_openai_browser_login(
-                            provider_id.as_str(),
-                            callback.code,
-                            start.pkce_verifier,
-                            redirect_uri,
-                        )
-                        .await?;
+                        timeout,
+                        &start,
+                        |callback| async move {
+                            manager
+                                .finish_openai_browser_login(
+                                    callback_provider_id.as_str(),
+                                    callback.code,
+                                    pkce_verifier,
+                                    redirect_uri,
+                                )
+                                .await?;
+                            Ok(())
+                        },
+                    )
+                    .await?;
                 }
-                ProviderAuthConfig::Credential(config)
-                    if matches!(
-                        config.issuer,
-                        crate::provider::auth::CredentialIssuer::Gitlab
-                    ) =>
-                {
-                    let instance_url = provider_gitlab_instance_url(resolved).ok_or_else(|| {
-                        AppError::Config(format!(
-                            "{provider_id} has ambiguous gitlab browser auth adapters"
-                        ))
-                    })?;
-                    let redirect_uri = format!("http://localhost:{}/auth/callback", args.port);
+                ProviderOAuthTarget::Gitlab { instance_url } => {
+                    let redirect_uri = browser_login_redirect_uri(args.port);
                     let start =
                         manager.start_gitlab_login(instance_url.clone(), redirect_uri.clone())?;
-                    println!("open this URL to continue: {}", start.authorize_url);
-                    io::stdout().flush()?;
-                    let callback = wait_for_oauth_callback(
+                    let pkce_verifier = start.pkce_verifier.clone();
+                    let callback_provider_id = provider_id.clone();
+                    complete_browser_callback_login(
                         args.port,
-                        start.state.as_str(),
-                        Duration::from_secs(args.timeout_secs),
-                    )?;
-                    manager
-                        .finish_gitlab_login(
-                            provider_id.as_str(),
-                            instance_url,
-                            callback.code,
-                            start.pkce_verifier,
-                            redirect_uri,
-                        )
-                        .await?;
+                        timeout,
+                        &start,
+                        |callback| async move {
+                            manager
+                                .finish_gitlab_login(
+                                    callback_provider_id.as_str(),
+                                    instance_url,
+                                    callback.code,
+                                    pkce_verifier,
+                                    redirect_uri,
+                                )
+                                .await?;
+                            Ok(())
+                        },
+                    )
+                    .await?;
                 }
-                ProviderAuthConfig::Credential(config)
-                    if matches!(
-                        config.issuer,
-                        crate::provider::auth::CredentialIssuer::AtomGit
-                    ) =>
-                {
+                ProviderOAuthTarget::AtomGit => {
                     let start = manager.start_atomgit_login().await?;
-                    println!("open this URL to continue: {}", start.authorize_url);
-                    io::stdout().flush()?;
-                    let auth = poll_until(
-                        Duration::from_secs(args.timeout_secs),
+                    complete_polled_login(
+                        timeout,
                         Duration::from_secs(2),
+                        "atomgit browser login timed out",
+                        || prompt_browser_login(start.authorize_url.as_str()),
                         || manager.poll_atomgit_login(provider_id.as_str(), start.state.clone()),
                     )
                     .await?;
-                    if auth.is_none() {
-                        return Err(AppError::Config(
-                            "atomgit browser login timed out".to_owned(),
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(AppError::Config(format!(
-                        "{provider_id} does not support browser login"
-                    )));
                 }
             }
             println!("logged in: {provider_id}");
@@ -1669,76 +1653,46 @@ impl AgenaCli {
         }
 
         if args.device {
-            match &resolved.auth {
-                ProviderAuthConfig::Credential(config)
-                    if matches!(
-                        config.issuer,
-                        crate::provider::auth::CredentialIssuer::OpenaiChatgpt
-                    ) =>
-                {
+            let timeout = Duration::from_secs(args.timeout_secs);
+            match resolve_login_device_target(provider_id.as_str(), resolved)? {
+                ProviderDeviceAuthTarget::OpenAi => {
                     let start = manager.start_openai_headless_login().await?;
-                    println!("open this URL: {}", start.verification_url);
-                    println!("enter code: {}", start.user_code);
-                    io::stdout().flush()?;
-                    let auth = poll_until(
-                        Duration::from_secs(args.timeout_secs),
+                    let device_code = start.device_code.clone();
+                    let user_code = start.user_code.clone();
+                    complete_polled_login(
+                        timeout,
                         Duration::from_secs(start.interval_seconds.max(1)),
+                        "openai device login timed out",
+                        || prompt_device_login(&start),
                         || {
                             manager.poll_openai_headless_login(
                                 provider_id.as_str(),
-                                start.device_code.clone(),
-                                start.user_code.clone(),
+                                device_code.clone(),
+                                user_code.clone(),
                             )
                         },
                     )
                     .await?;
-                    if auth.is_none() {
-                        return Err(AppError::Config("openai device login timed out".to_owned()));
-                    }
                 }
-                ProviderAuthConfig::Credential(config)
-                    if matches!(
-                        config.issuer,
-                        crate::provider::auth::CredentialIssuer::GithubCopilot
-                    ) =>
-                {
-                    let deployment = match args
-                        .enterprise_domain
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                    {
-                        Some(domain) => CopilotDeployment::Enterprise {
-                            domain: domain.to_owned(),
-                        },
-                        None => CopilotDeployment::GitHubCom,
-                    };
+                ProviderDeviceAuthTarget::Copilot => {
+                    let deployment =
+                        copilot_deployment_from_domain(args.enterprise_domain.as_deref());
                     let start = manager.start_copilot_login(deployment.clone()).await?;
-                    println!("open this URL: {}", start.verification_url);
-                    println!("enter code: {}", start.user_code);
-                    io::stdout().flush()?;
-                    let auth = poll_until(
-                        Duration::from_secs(args.timeout_secs),
+                    let device_code = start.device_code.clone();
+                    complete_polled_login(
+                        timeout,
                         Duration::from_secs(start.interval_seconds.max(1)),
+                        "copilot device login timed out",
+                        || prompt_device_login(&start),
                         || {
                             manager.poll_copilot_login(
                                 provider_id.as_str(),
-                                start.device_code.clone(),
+                                device_code.clone(),
                                 deployment.clone(),
                             )
                         },
                     )
                     .await?;
-                    if auth.is_none() {
-                        return Err(AppError::Config(
-                            "copilot device login timed out".to_owned(),
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(AppError::Config(format!(
-                        "{provider_id} does not support device login"
-                    )));
                 }
             }
             println!("logged in: {provider_id}");
@@ -2165,10 +2119,7 @@ impl AgenaCli {
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned);
             manager
-                .continue_session(SessionContinueRequest {
-                    session_id,
-                    options,
-                })
+                .continue_session(SessionExecutionRequest::new(session_id, options))
                 .await?
         } else {
             manager.get_session(session_id).await?
@@ -2362,17 +2313,17 @@ impl AgenaCli {
             .ok_or_else(session_storage_error)?;
         let session_id = selected_session_id(&manager, args.session_id, args.last).await?;
         let session = manager
-            .reply_permission(crate::session::SessionPermissionReplyRequest {
+            .reply_permission(crate::session::SessionPermissionReplyRequest::new(
                 session_id,
-                options: resolve_run_options(&runtime, None, None, None, None)?,
-                reply: PermissionReply {
+                resolve_run_options(&runtime, None, None, None, None)?,
+                PermissionReply {
                     request_id: args.request_id,
                     kind: permission_reply_kind_from_arg(args.kind),
                     reason: args.reason,
                     scope: args.scope.map(permission_scope_from_arg),
                 },
-                operator: Some("cli".to_string()),
-            })
+                Some("cli".to_string()),
+            ))
             .await?;
         let latest_event_seq = latest_event_seq(&manager, session.id).await?;
         render_serialized(
@@ -2566,10 +2517,7 @@ impl AgenaCli {
         let session = manager.get_session(session_id).await?;
         let options = resolve_continue_options(&runtime, &session, &args)?;
         let session = manager
-            .continue_session(SessionContinueRequest {
-                session_id,
-                options,
-            })
+            .continue_session(SessionExecutionRequest::new(session_id, options))
             .await?;
         let latest_event_seq = latest_event_seq(&manager, session.id).await?;
         render_serialized(
@@ -2730,11 +2678,11 @@ impl AgenaCli {
             })
             .await?;
         let session = manager
-            .submit_user_message(SessionUserMessageRequest {
-                session_id: created.id,
+            .submit_user_message(SessionUserMessageRequest::new(
+                created.id,
                 options,
-                parts: vec![PartContent::text(prompt)],
-            })
+                vec![PartContent::text(prompt)],
+            ))
             .await?;
         if session.runtime.run.status == RunStatus::Blocked {
             return Err(AppError::Config(
@@ -3599,6 +3547,106 @@ fn auth_summary(provider_id: String, auth: AuthData) -> AuthSummary {
 
 fn normalize_login_provider(provider_id: &str) -> String {
     provider_id.trim_end_matches('/').to_owned()
+}
+
+fn browser_login_redirect_uri(port: u16) -> String {
+    format!("http://localhost:{port}/auth/callback")
+}
+
+fn resolve_login_oauth_target(
+    provider_id: &str,
+    resolved: &ResolvedProviderConfig,
+) -> Result<ProviderOAuthTarget, AppError> {
+    match resolve_provider_oauth_target(resolved) {
+        Ok(Some(target)) => Ok(target),
+        Ok(None) => Err(AppError::Config(format!(
+            "{provider_id} does not support browser login"
+        ))),
+        Err(ProviderAuthTargetError::AmbiguousProvider) => Err(AppError::Config(format!(
+            "{provider_id} has ambiguous browser auth providers"
+        ))),
+        Err(ProviderAuthTargetError::AmbiguousGitlab) => Err(AppError::Config(format!(
+            "{provider_id} has ambiguous gitlab browser auth adapters"
+        ))),
+    }
+}
+
+fn resolve_login_device_target(
+    provider_id: &str,
+    resolved: &ResolvedProviderConfig,
+) -> Result<ProviderDeviceAuthTarget, AppError> {
+    match resolve_provider_device_auth_target(resolved) {
+        Ok(Some(target)) => Ok(target),
+        Ok(None) => Err(AppError::Config(format!(
+            "{provider_id} does not support device login"
+        ))),
+        Err(ProviderAuthTargetError::AmbiguousProvider) => Err(AppError::Config(format!(
+            "{provider_id} has ambiguous device auth providers"
+        ))),
+        Err(ProviderAuthTargetError::AmbiguousGitlab) => {
+            unreachable!("gitlab ambiguity is not possible for device auth targets")
+        }
+    }
+}
+
+fn prompt_browser_login(authorize_url: &str) -> Result<(), AppError> {
+    println!("open this URL to continue: {authorize_url}");
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn prompt_device_login(start: &DeviceCodeStart) -> Result<(), AppError> {
+    println!("open this URL: {}", start.verification_url);
+    println!("enter code: {}", start.user_code);
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn copilot_deployment_from_domain(enterprise_domain: Option<&str>) -> CopilotDeployment {
+    match enterprise_domain
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(domain) => CopilotDeployment::Enterprise {
+            domain: domain.to_owned(),
+        },
+        None => CopilotDeployment::GitHubCom,
+    }
+}
+
+async fn complete_browser_callback_login<F, Fut>(
+    port: u16,
+    timeout: Duration,
+    start: &OAuthAuthorizeStart,
+    finish: F,
+) -> Result<(), AppError>
+where
+    F: FnOnce(OAuthCallback) -> Fut,
+    Fut: std::future::Future<Output = Result<(), AppError>>,
+{
+    prompt_browser_login(start.authorize_url.as_str())?;
+    let callback = wait_for_oauth_callback(port, start.state.as_str(), timeout)?;
+    finish(callback).await
+}
+
+async fn complete_polled_login<T, F, Fut, P>(
+    timeout: Duration,
+    interval: Duration,
+    timeout_message: &str,
+    prompt: P,
+    poll: F,
+) -> Result<(), AppError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Option<T>, AppError>>,
+    P: FnOnce() -> Result<(), AppError>,
+{
+    prompt()?;
+    if poll_until(timeout, interval, poll).await?.is_some() {
+        Ok(())
+    } else {
+        Err(AppError::Config(timeout_message.to_owned()))
+    }
 }
 
 async fn list_all_session_summaries(

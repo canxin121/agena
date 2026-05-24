@@ -42,179 +42,71 @@ fn normalize_non_empty(
     Ok(trimmed.to_owned())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct ProviderId(String);
+macro_rules! define_string_identifier {
+    ($name:ident, $field:literal, $expect_message:literal) => {
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(String);
 
-impl ProviderId {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self::try_new(value).expect("provider id cannot be empty")
-    }
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Self {
+                Self::try_new(value).expect($expect_message)
+            }
 
-    pub fn try_new(value: impl Into<String>) -> Result<Self, IdentifierError> {
-        Ok(Self(normalize_non_empty(value, "provider id")?))
-    }
+            pub fn try_new(value: impl Into<String>) -> Result<Self, IdentifierError> {
+                Ok(Self(normalize_non_empty(value, $field)?))
+            }
 
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
+            pub fn as_str(&self) -> &str {
+                self.0.as_str()
+            }
+        }
+
+        impl Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        impl FromStr for $name {
+            type Err = IdentifierError;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                Self::try_new(value)
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = IdentifierError;
+
+            fn try_from(value: String) -> Result<Self, Self::Error> {
+                Self::try_new(value)
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+    };
 }
 
-impl Borrow<str> for ProviderId {
-    fn borrow(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl AsRef<str> for ProviderId {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl fmt::Display for ProviderId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for ProviderId {
-    type Err = IdentifierError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_new(value)
-    }
-}
-
-impl TryFrom<String> for ProviderId {
-    type Error = IdentifierError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_new(value)
-    }
-}
-
-impl From<ProviderId> for String {
-    fn from(value: ProviderId) -> Self {
-        value.0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct AdapterId(String);
-
-impl AdapterId {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self::try_new(value).expect("adapter id cannot be empty")
-    }
-
-    pub fn try_new(value: impl Into<String>) -> Result<Self, IdentifierError> {
-        Ok(Self(normalize_non_empty(value, "adapter id")?))
-    }
-
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl Borrow<str> for AdapterId {
-    fn borrow(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl AsRef<str> for AdapterId {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl fmt::Display for AdapterId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for AdapterId {
-    type Err = IdentifierError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_new(value)
-    }
-}
-
-impl TryFrom<String> for AdapterId {
-    type Error = IdentifierError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_new(value)
-    }
-}
-
-impl From<AdapterId> for String {
-    fn from(value: AdapterId) -> Self {
-        value.0
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct ModelId(String);
-
-impl ModelId {
-    pub fn new(value: impl Into<String>) -> Self {
-        Self::try_new(value).expect("model id cannot be empty")
-    }
-
-    pub fn try_new(value: impl Into<String>) -> Result<Self, IdentifierError> {
-        Ok(Self(normalize_non_empty(value, "model id")?))
-    }
-
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl Borrow<str> for ModelId {
-    fn borrow(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl AsRef<str> for ModelId {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl fmt::Display for ModelId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl FromStr for ModelId {
-    type Err = IdentifierError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        Self::try_new(value)
-    }
-}
-
-impl TryFrom<String> for ModelId {
-    type Error = IdentifierError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::try_new(value)
-    }
-}
-
-impl From<ModelId> for String {
-    fn from(value: ModelId) -> Self {
-        value.0
-    }
-}
+define_string_identifier!(ProviderId, "provider id", "provider id cannot be empty");
+define_string_identifier!(AdapterId, "adapter id", "adapter id cannot be empty");
+define_string_identifier!(ModelId, "model id", "model id cannot be empty");
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelRef {
@@ -999,131 +891,96 @@ impl ModelSpeedModeRequestOverride {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ModelThinkingMode {
-    pub display_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<ThinkingRequest>,
-    #[serde(
-        default,
-        skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
-    )]
-    pub request_override: ModelSpeedModeRequestOverride,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
+macro_rules! define_model_mode {
+    (
+        $name:ident,
+        fields { $($extra_fields:tt)* },
+        init { $($extra_init:tt)* },
+        methods { $($extra_methods:tt)* }
+    ) => {
+        #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+        pub struct $name {
+            pub display_name: Option<String>,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub description: Option<String>,
+            $($extra_fields)*
+            #[serde(
+                default,
+                skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
+            )]
+            pub request_override: ModelSpeedModeRequestOverride,
+            #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+            pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
+        }
+
+        impl $name {
+            pub fn new() -> Self {
+                Self {
+                    display_name: None,
+                    description: None,
+                    $($extra_init)*
+                    request_override: ModelSpeedModeRequestOverride::default(),
+                    adapter_overrides: BTreeMap::new(),
+                }
+            }
+
+            pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
+                self.display_name = Some(display_name.into());
+                self
+            }
+
+            pub fn with_description(mut self, description: impl Into<String>) -> Self {
+                self.description = Some(description.into());
+                self
+            }
+
+            pub fn with_request_override(
+                mut self,
+                request_override: ModelSpeedModeRequestOverride,
+            ) -> Self {
+                self.request_override = request_override;
+                self
+            }
+
+            pub fn with_adapter_override(
+                mut self,
+                adapter_id: impl Into<String>,
+                request_override: ModelSpeedModeRequestOverride,
+            ) -> Self {
+                self.adapter_overrides
+                    .insert(adapter_id.into(), request_override);
+                self
+            }
+
+            $($extra_methods)*
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    };
 }
 
-impl ModelThinkingMode {
-    pub fn new() -> Self {
-        Self {
-            display_name: None,
-            description: None,
-            thinking: None,
-            request_override: ModelSpeedModeRequestOverride::default(),
-            adapter_overrides: BTreeMap::new(),
+define_model_mode!(
+    ModelThinkingMode,
+    fields {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub thinking: Option<ThinkingRequest>,
+    },
+    init {
+        thinking: None,
+    },
+    methods {
+        pub fn with_thinking(mut self, thinking: ThinkingRequest) -> Self {
+            self.thinking = Some(thinking);
+            self
         }
     }
+);
 
-    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
-        self.display_name = Some(display_name.into());
-        self
-    }
-
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    pub fn with_thinking(mut self, thinking: ThinkingRequest) -> Self {
-        self.thinking = Some(thinking);
-        self
-    }
-
-    pub fn with_request_override(
-        mut self,
-        request_override: ModelSpeedModeRequestOverride,
-    ) -> Self {
-        self.request_override = request_override;
-        self
-    }
-
-    pub fn with_adapter_override(
-        mut self,
-        adapter_id: impl Into<String>,
-        request_override: ModelSpeedModeRequestOverride,
-    ) -> Self {
-        self.adapter_overrides
-            .insert(adapter_id.into(), request_override);
-        self
-    }
-}
-
-impl Default for ModelThinkingMode {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ModelSpeedMode {
-    pub display_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
-    )]
-    pub request_override: ModelSpeedModeRequestOverride,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
-}
-
-impl ModelSpeedMode {
-    pub fn new() -> Self {
-        Self {
-            display_name: None,
-            description: None,
-            request_override: ModelSpeedModeRequestOverride::default(),
-            adapter_overrides: BTreeMap::new(),
-        }
-    }
-
-    pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
-        self.display_name = Some(display_name.into());
-        self
-    }
-
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
-    }
-
-    pub fn with_request_override(
-        mut self,
-        request_override: ModelSpeedModeRequestOverride,
-    ) -> Self {
-        self.request_override = request_override;
-        self
-    }
-
-    pub fn with_adapter_override(
-        mut self,
-        adapter_id: impl Into<String>,
-        request_override: ModelSpeedModeRequestOverride,
-    ) -> Self {
-        self.adapter_overrides
-            .insert(adapter_id.into(), request_override);
-        self
-    }
-}
-
-impl Default for ModelSpeedMode {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+define_model_mode!(ModelSpeedMode, fields {}, init {}, methods {});
 
 fn merge_json_patch_maps(
     target: &mut BTreeMap<String, serde_json::Value>,

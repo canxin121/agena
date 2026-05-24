@@ -1,13 +1,13 @@
 use super::*;
 
 pub async fn list_plugins(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(PluginStatusListResponse {
-        entries: state
+    Ok(entries_json(
+        state
             .runtime()
             .current_snapshot()
             .plugin_manager()
             .plugin_statuses(),
-    }))
+    ))
 }
 
 pub async fn get_plugin_ui_catalog(
@@ -30,8 +30,11 @@ pub async fn invoke_plugin_ui_tool(
         &state,
         request.plugin_id.as_deref(),
         request.tool.as_str(),
-        request.input.unwrap_or_else(|| serde_json::json!({})),
-        request.session_id,
+        request
+            .context
+            .input
+            .unwrap_or_else(|| serde_json::json!({})),
+        request.context.session_id,
     )?;
     Ok(Json(response))
 }
@@ -52,7 +55,7 @@ pub async fn get_plugin(
 pub async fn run_plugin_ui_action(
     State(state): State<AppState>,
     Path((plugin_id, action_id)): Path<(String, String)>,
-    Json(request): Json<PluginUiRunActionRequest>,
+    Json(request): Json<PluginUiRequestContext>,
 ) -> Result<impl IntoResponse, ServerError> {
     let host = state.runtime().current_snapshot().plugin_manager();
     let action = host

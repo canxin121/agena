@@ -189,6 +189,10 @@ impl ModelRuntime for GitlabRoutedAdapter {
 }
 
 impl ResolvedConfig {
+    pub fn build_provider_http_client(&self) -> Result<reqwest::Client, AppError> {
+        ProviderRegistry::build_http_client(self.provider_http_client_config())
+    }
+
     pub fn build_provider_registry(&self) -> Result<ProviderRegistry, ConfigError> {
         self.build_provider_registry_with_env(&ProcessEnvironment)
     }
@@ -212,7 +216,7 @@ impl ResolvedConfig {
         catalog: Option<&ModelCatalogSnapshot>,
         env: &dyn ConfigEnvironment,
     ) -> Result<ProviderRegistry, ConfigError> {
-        let client = ProviderRegistry::build_http_client(self.provider_http_client_config())?;
+        let client = self.build_provider_http_client()?;
         let mut registry = ProviderRegistry::with_runtime_config(self.provider_runtime_config());
 
         for (provider_id, resolved) in &self.providers {

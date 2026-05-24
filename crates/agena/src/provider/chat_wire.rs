@@ -323,19 +323,15 @@ pub(crate) struct ChatFunctionCallWire {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChatUsage {
-    #[serde(default, alias = "input_tokens")]
+    #[serde(default)]
     pub prompt_tokens: Option<u64>,
-    #[serde(default, alias = "output_tokens")]
+    #[serde(default)]
     pub completion_tokens: Option<u64>,
-    /// Reasoning-token breakdown. Chat Completions calls this
-    /// `completion_tokens_details`; the Responses API calls it
-    /// `output_tokens_details`. Accept both.
-    #[serde(default, alias = "completion_tokens_details")]
+    /// Reasoning-token breakdown returned as `output_tokens_details`.
+    #[serde(default)]
     pub output_tokens_details: Option<ChatOutputTokensDetails>,
-    /// Cached-prompt breakdown. Chat Completions calls this
-    /// `prompt_tokens_details`; the Responses API calls it
-    /// `input_tokens_details`. Accept both.
-    #[serde(default, alias = "prompt_tokens_details")]
+    /// Cached-prompt breakdown returned as `input_tokens_details`.
+    #[serde(default)]
     pub input_tokens_details: Option<ChatInputTokensDetails>,
 }
 
@@ -475,10 +471,49 @@ pub(crate) fn parse_chat_tool_calls(
         .collect()
 }
 
-pub(crate) fn parse_completion_response(
+pub(crate) fn parse_required_chat_tool_calls(
+    provider_id: &str,
+    calls: Option<&Vec<ChatToolCallWire>>,
+) -> Result<Vec<CompletionToolCall>, AppError> {
+    calls
+        .into_iter()
+        .flatten()
+        .map(|call| {
+            let id = utils::normalize_optional_text(call.id.clone()).ok_or_else(|| {
+                AppError::Provider(format!(
+                    "{provider_id} returned tool_call without id in completion response"
+                ))
+            })?;
+
+            let function = call.function.as_ref().ok_or_else(|| {
+                AppError::Provider(format!(
+                    "{provider_id} returned tool_call without function payload"
+                ))
+            })?;
+
+            let name = utils::normalize_optional_text(function.name.clone()).ok_or_else(|| {
+                AppError::Provider(format!(
+                    "{provider_id} returned tool_call without function.name"
+                ))
+            })?;
+
+            Ok(CompletionToolCall::Function {
+                id,
+                name,
+                arguments_json: function.arguments.clone().unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn parse_completion_response_with_tool_parser(
     provider_id: &str,
     default_model: &str,
     payload: ChatCompletionResponse,
+    parse_tool_calls: impl FnOnce(
+        &str,
+        Option<&Vec<ChatToolCallWire>>,
+    ) -> Result<Vec<CompletionToolCall>, AppError>,
 ) -> Result<CompletionResponse, AppError> {
     let reasoning_text = payload
         .choices
@@ -516,7 +551,7 @@ pub(crate) fn parse_completion_response(
             .and_then(|c| c.finish_reason.as_deref()),
     );
 
-    let tool_calls = parse_chat_tool_calls(
+    let tool_calls = parse_tool_calls(
         provider_id,
         payload
             .choices
@@ -548,6 +583,32 @@ pub(crate) fn parse_completion_response(
         usage,
         provider_metadata: utils::response_id_metadata(response_id),
     })
+}
+
+pub(crate) fn parse_completion_response(
+    provider_id: &str,
+    default_model: &str,
+    payload: ChatCompletionResponse,
+) -> Result<CompletionResponse, AppError> {
+    parse_completion_response_with_tool_parser(
+        provider_id,
+        default_model,
+        payload,
+        parse_chat_tool_calls,
+    )
+}
+
+pub(crate) fn parse_completion_response_with_required_tool_calls(
+    provider_id: &str,
+    default_model: &str,
+    payload: ChatCompletionResponse,
+) -> Result<CompletionResponse, AppError> {
+    parse_completion_response_with_tool_parser(
+        provider_id,
+        default_model,
+        payload,
+        parse_required_chat_tool_calls,
+    )
 }
 
 // ─── Message conversion ───────────────────────────────────────────────────────

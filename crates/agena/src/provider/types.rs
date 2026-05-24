@@ -13,7 +13,7 @@ use crate::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ThinkingRequest {
-    #[serde(rename = "budget", alias = "enabled")]
+    #[serde(rename = "budget")]
     Budget {
         budget_tokens: u32,
     },

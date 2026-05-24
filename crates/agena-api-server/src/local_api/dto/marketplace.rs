@@ -26,17 +26,24 @@ pub struct MarketplaceSearchResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct MarketplaceRegistryRequestBody {
+pub struct MarketplaceRegistryRequest {
     #[serde(default)]
     pub registry_id: Option<String>,
     pub registry_url: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct MarketplaceSearchRequestBody {
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct MarketplaceRegistryOverrideRequest {
     #[serde(default)]
     pub registry_id: Option<String>,
-    pub registry_url: String,
+    #[serde(default)]
+    pub registry_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MarketplaceSearchRequest {
+    #[serde(flatten)]
+    pub registry: MarketplaceRegistryRequest,
     #[serde(default)]
     pub query: Option<String>,
     #[serde(default)]
@@ -67,28 +74,17 @@ pub struct MarketplaceInstalledPluginResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MarketplaceInstalledListResponse {
-    pub entries: Vec<MarketplaceInstalledPluginResource>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct MarketplaceOutdatedPluginResource {
     pub plugin_id: String,
     pub installed_version: String,
     pub latest_version: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct MarketplaceOutdatedListResponse {
-    pub entries: Vec<MarketplaceOutdatedPluginResource>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
-pub struct MarketplaceInstallRequestBody {
+pub struct MarketplaceInstallRequest {
     pub spec: String,
-    #[serde(default)]
-    pub registry_id: Option<String>,
-    pub registry_url: String,
+    #[serde(flatten)]
+    pub registry: MarketplaceRegistryRequest,
     #[serde(default)]
     pub config_path: Option<String>,
     #[serde(default)]
@@ -127,21 +123,14 @@ pub struct MarketplaceUninstallOutcomeResource {
     pub config_path: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct MarketplaceUninstallResponse {
-    pub entries: Vec<MarketplaceUninstallOutcomeResource>,
-}
-
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct MarketplaceUpgradeRequestBody {
+pub struct MarketplaceUpgradeRequest {
     #[serde(default)]
     pub plugin_id: Option<String>,
     #[serde(default)]
     pub all: bool,
-    #[serde(default)]
-    pub registry_id: Option<String>,
-    #[serde(default)]
-    pub registry_url: Option<String>,
+    #[serde(flatten)]
+    pub registry: MarketplaceRegistryOverrideRequest,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,9 +141,4 @@ pub struct MarketplaceUpgradeOutcomeResource {
     pub upgraded: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<MarketplaceInstallOutcomeResource>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MarketplaceUpgradeResponse {
-    pub entries: Vec<MarketplaceUpgradeOutcomeResource>,
 }

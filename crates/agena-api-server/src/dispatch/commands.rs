@@ -1,7 +1,25 @@
 use super::*;
+use crate::session_support::{
+    clear_session_goal_or_not_found, session_execution_reply_request, session_execution_request,
+    session_execution_resource, session_goal_resource as load_session_goal_resource,
+    session_permission_reply_request, session_user_message_request,
+    set_session_goal as set_session_goal_request,
+};
 use agena_api::resource::SessionResource;
 
 // ─── Command dispatch ───────────────────────────────────────────────────
+
+async fn execution_command_result(
+    state: &AppState,
+    manager: &agena::session::SessionManager,
+    session: &agena::session::Session,
+) -> Result<CommandResult, ServerError> {
+    Ok(CommandResult::Execution(
+        session_execution_resource(state, manager, session)
+            .await?
+            .into(),
+    ))
+}
 
 pub async fn dispatch_command(
     state: &AppState,
@@ -12,7 +30,7 @@ pub async fn dispatch_command(
         Command::CreateWorkspace(CreateWorkspaceParams { path }) => {
             let workspace = state
                 .service()
-                .create_workspace(WorkspaceWriteRequest { path })
+                .create_workspace(WorkspacePathRequest { path })
                 .await
                 .server()?;
             Ok(CommandResult::Workspace(workspace.into()))
@@ -22,7 +40,7 @@ pub async fn dispatch_command(
         }) => {
             let workspace = state
                 .service()
-                .replace_workspace(workspace_id, WorkspaceWriteRequest { path })
+                .replace_workspace(workspace_id, WorkspacePathRequest { path })
                 .await
                 .server()?;
             Ok(CommandResult::Workspace(workspace.into()))
@@ -42,7 +60,7 @@ pub async fn dispatch_command(
             let workspace = state
                 .service()
                 .resolve_workspace(WorkspaceResolveRequest {
-                    path,
+                    workspace: WorkspacePathRequest { path },
                     create_if_missing,
                 })
                 .await
@@ -58,8 +76,7 @@ pub async fn dispatch_command(
                 .service()
                 .create_session(HttpSessionCreateRequest {
                     workspace_id,
-                    title,
-                    parent_id,
+                    session: crate::local_api::SessionHierarchyRequest { title, parent_id },
                 })
                 .await
                 .server()?;
@@ -75,12 +92,8 @@ pub async fn dispatch_command(
                     objective,
                 })
                 .await?;
-            let session = manager.get_session(session_id).await?;
-            let resource = state
-                .service()
-                .session_goal_resource(manager.as_ref(), &session, &goal)
-                .await
-                .server()?;
+            let resource =
+                load_session_goal_resource(state, manager.as_ref(), session_id, &goal).await?;
             Ok(CommandResult::SessionGoal(resource.into()))
         }
         Command::SetSessionGoal(SetSessionGoalParams {
@@ -89,68 +102,30 @@ pub async fn dispatch_command(
             status,
             clear,
         }) => {
-            if clear {
-                let cleared = manager.clear_goal(session_id).await?;
-                if !cleared {
-                    return Err(ServerError::NotFound(format!(
-                        "session {session_id} goal not found"
-                    )));
-                }
-                return Ok(CommandResult::SessionGoalCleared { session_id });
-            }
-
-            let goal = if manager.get_goal(session_id).await?.is_some() {
-                manager
-                    .update_goal(agena::session::SessionGoalUpdateRequest {
-                        session_id,
-                        objective,
-                        status,
-                        expected_goal_id: None,
-                    })
-                    .await?
-            } else {
-                if !matches!(status, None | Some(agena::session::GoalStatus::Active)) {
-                    return Err(ServerError::BadRequest(format!(
-                        "session {session_id} goal must be created with status active"
-                    )));
-                }
-                let objective = objective.ok_or_else(|| {
-                    ServerError::BadRequest(format!(
-                        "session {session_id} goal objective is required when creating a goal"
-                    ))
-                })?;
-                manager
-                    .create_goal(agena::session::SessionGoalCreateRequest {
-                        session_id,
-                        objective,
-                    })
-                    .await?
+            let goal = match set_session_goal_request(
+                manager.as_ref(),
+                session_id,
+                objective,
+                status,
+                clear,
+            )
+            .await?
+            {
+                Some(goal) => goal,
+                None => return Ok(CommandResult::SessionGoalCleared { session_id }),
             };
-            let session = manager.get_session(session_id).await?;
-            let resource = state
-                .service()
-                .session_goal_resource(manager.as_ref(), &session, &goal)
-                .await
-                .server()?;
+            let resource =
+                load_session_goal_resource(state, manager.as_ref(), session_id, &goal).await?;
             Ok(CommandResult::SessionGoal(resource.into()))
         }
         Command::CompleteSessionGoal(CompleteSessionGoalParams { session_id }) => {
             let goal = manager.complete_goal(session_id).await?;
-            let session = manager.get_session(session_id).await?;
-            let resource = state
-                .service()
-                .session_goal_resource(manager.as_ref(), &session, &goal)
-                .await
-                .server()?;
+            let resource =
+                load_session_goal_resource(state, manager.as_ref(), session_id, &goal).await?;
             Ok(CommandResult::SessionGoal(resource.into()))
         }
         Command::ClearSessionGoal(ClearSessionGoalParams { session_id }) => {
-            let cleared = manager.clear_goal(session_id).await?;
-            if !cleared {
-                return Err(ServerError::NotFound(format!(
-                    "session {session_id} goal not found"
-                )));
-            }
+            clear_session_goal_or_not_found(manager.as_ref(), session_id).await?;
             Ok(CommandResult::SessionGoalCleared { session_id })
         }
         Command::SubmitMessage(SubmitMessageParams {
@@ -158,50 +133,25 @@ pub async fn dispatch_command(
             options,
             parts,
         }) => {
-            let request = SessionUserMessageRequest {
-                session_id,
-                options: run_options_to_core(state, session_id, &options).await?,
-                parts,
-            };
+            let request = session_user_message_request(state, session_id, options, parts).await?;
             let session = manager.submit_user_message(request).await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
-            Ok(CommandResult::Execution(resource.into()))
+            execution_command_result(state, manager.as_ref(), &session).await
         }
         Command::ContinueRun(ContinueRunParams {
             session_id,
             options,
         }) => {
-            let request = SessionContinueRequest {
-                session_id,
-                options: run_options_to_core(state, session_id, &options).await?,
-            };
+            let request = session_execution_request(state, session_id, options).await?;
             let session = manager.continue_session(request).await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
-            Ok(CommandResult::Execution(resource.into()))
+            execution_command_result(state, manager.as_ref(), &session).await
         }
         Command::CompactSession(CompactSessionParams {
             session_id,
             options,
         }) => {
-            let request = SessionCompactRequest {
-                session_id,
-                options: run_options_to_core(state, session_id, &options).await?,
-            };
+            let request = session_execution_request(state, session_id, options).await?;
             let session = manager.compact_session(request).await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
-            Ok(CommandResult::Execution(resource.into()))
+            execution_command_result(state, manager.as_ref(), &session).await
         }
         Command::CancelRun(CancelRunParams { session_id }) => {
             // Best-effort: if the run just finished moments before the
@@ -224,12 +174,7 @@ pub async fn dispatch_command(
                     expected_version,
                 })
                 .await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
-            Ok(CommandResult::Execution(resource.into()))
+            execution_command_result(state, manager.as_ref(), &session).await
         }
         Command::ForkSession(ForkSessionParams {
             session_id,
@@ -244,12 +189,7 @@ pub async fn dispatch_command(
                     expected_version: None,
                 })
                 .await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
-            Ok(CommandResult::Execution(resource.into()))
+            execution_command_result(state, manager.as_ref(), &session).await
         }
         Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
             let summaries = manager.list_session_tree(root_id).await?;
@@ -269,49 +209,33 @@ pub async fn dispatch_command(
         }
         Command::ImportSession(ImportSessionParams { jsonl }) => {
             let session = manager.import_session_jsonl(&jsonl).await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
-            Ok(CommandResult::Execution(resource.into()))
+            execution_command_result(state, manager.as_ref(), &session).await
         }
         Command::ReplyPermission(ReplyPermissionParams {
             session_id,
             options,
             reply,
         }) => {
-            let request = SessionPermissionReplyRequest {
+            let request = session_permission_reply_request(
+                state,
                 session_id,
-                options: run_options_to_core(state, session_id, &options).await?,
+                options,
                 reply,
-                operator: Some("jsonrpc".to_string()),
-            };
+                Some("jsonrpc".to_string()),
+            )
+            .await?;
             let session = manager.reply_permission(request).await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
-            Ok(CommandResult::Execution(resource.into()))
+            execution_command_result(state, manager.as_ref(), &session).await
         }
         Command::ReplyUserInput(ReplyUserInputParams {
             session_id,
             options,
             reply,
         }) => {
-            let request = SessionUserInputReplyRequest {
-                session_id,
-                options: run_options_to_core(state, session_id, &options).await?,
-                reply,
-            };
+            let request =
+                session_execution_reply_request(state, session_id, options, reply).await?;
             let session = manager.reply_user_input(request).await?;
-            let resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
-            Ok(CommandResult::Execution(resource.into()))
+            execution_command_result(state, manager.as_ref(), &session).await
         }
         Command::UpdateSession(UpdateSessionParams {
             session_id,
@@ -328,7 +252,7 @@ pub async fn dispatch_command(
             }
             let session = state
                 .service()
-                .replace_session(session_id, SessionReplaceRequest { title, parent_id })
+                .replace_session(session_id, SessionHierarchyRequest { title, parent_id })
                 .await
                 .server()?;
             Ok(CommandResult::Session(session.into()))

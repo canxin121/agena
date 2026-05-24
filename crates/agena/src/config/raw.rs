@@ -595,7 +595,6 @@ impl Merge for ProjectInstructionsConfig {
 pub(crate) struct RawTracingConfig {
     #[merge(strategy = option_override)]
     pub(crate) filter: Option<String>,
-    #[serde(alias = "database_level")]
     #[merge(strategy = option_override)]
     pub(crate) database: Option<String>,
     #[merge(strategy = option_override)]
@@ -709,10 +708,8 @@ pub(crate) struct RawDefaultConfig {
     pub(crate) adapter: Option<String>,
     #[merge(strategy = option_override)]
     pub(crate) model: Option<String>,
-    #[serde(alias = "think")]
     #[merge(strategy = option_override)]
     pub(crate) thinking_mode: Option<String>,
-    #[serde(alias = "speed")]
     #[merge(strategy = option_override)]
     pub(crate) speed_mode: Option<String>,
     #[merge(strategy = option_override)]

@@ -702,11 +702,11 @@ struct DirectAccessToken {
 struct DirectAccessResponse {
     token: String,
     headers: HashMap<String, String>,
-    #[serde(default, alias = "expiresIn")]
+    #[serde(default)]
     expires_in: Option<u64>,
-    #[serde(default, alias = "expiresAt")]
+    #[serde(default)]
     expires_at: Option<serde_json::Value>,
-    #[serde(default, alias = "expiresAtMs")]
+    #[serde(default)]
     expires_at_ms: Option<i64>,
 }
 

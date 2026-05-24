@@ -1449,7 +1449,7 @@ struct SessionExportMeta {
     schema: u32,
     /// Original session id at export time. Used for audit / cross-machine
     /// correlation; the new session always gets a fresh auto-increment id.
-    #[serde(default, alias = "id")]
+    #[serde(default)]
     source_session_id: i64,
     parent_id: Option<i64>,
     depth: i64,

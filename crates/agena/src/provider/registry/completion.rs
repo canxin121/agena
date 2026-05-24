@@ -6,9 +6,7 @@ impl ProviderRegistry {
         model: &ModelRef,
         mut request: CompletionRequest,
     ) -> Result<CompletionResponse, AppError> {
-        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
-            AppError::Config(format!("provider not found: {}", model.provider_id))
-        })?;
+        let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         self.call_with_retry(model.provider_id.as_str(), "complete", {
@@ -42,9 +40,7 @@ impl ProviderRegistry {
         model: &ModelRef,
         mut request: CompletionRequest,
     ) -> Result<Option<String>, AppError> {
-        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
-            AppError::Config(format!("provider not found: {}", model.provider_id))
-        })?;
+        let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         self.call_with_retry(model.provider_id.as_str(), "compact_conversation", {
@@ -73,9 +69,7 @@ impl ProviderRegistry {
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
         AppError,
     > {
-        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
-            AppError::Config(format!("provider not found: {}", model.provider_id))
-        })?;
+        let provider = self.provider_for_model_ref(model)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         let provider_id = model.provider_id.to_string();

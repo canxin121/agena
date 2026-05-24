@@ -27,12 +27,17 @@ use std::{
 
 use crate::{
     error::AppError,
-    message::{AttachmentItem, AttachmentKind, AttachmentSource, Message, MessageUsage},
+    message::{AttachmentItem, AttachmentKind, Message, MessageUsage},
     model::{ModelId, ProviderId},
     provider::{
         CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
         CompletionToolCall, CompletionUsage, ModelRuntime, ProviderModel, StreamResumePolicy,
-        ThinkingRequest, prompt_cache, sse, utils, wire_message,
+        ThinkingRequest,
+        chat_wire::{
+            ChatCompletionRequest, ChatCompletionResponse, ChatStreamOptions, ChatToolCallWire,
+            ChatUsage,
+        },
+        prompt_cache, sse, utils, wire_message,
     },
     role::Role,
 };
@@ -403,71 +408,11 @@ impl AmazonBedrockAdapter {
         &self,
         payload: ChatCompletionResponse,
     ) -> Result<CompletionResponse, AppError> {
-        let text = payload
-            .choices
-            .first()
-            .and_then(|c| c.message.as_ref())
-            .and_then(|m| m.content.as_ref())
-            .map(extract_text_from_content)
-            .or_else(|| {
-                payload
-                    .choices
-                    .first()
-                    .and_then(|c| c.delta.as_ref())
-                    .and_then(|d| d.content.as_ref())
-                    .map(extract_text_from_content)
-            })
-            .or_else(|| payload.choices.first().and_then(|c| c.text.clone()))
-            .unwrap_or_default();
-
-        let finish_reason = CompletionFinishReason::from_provider(
-            payload
-                .choices
-                .first()
-                .and_then(|c| c.finish_reason.as_deref()),
-        );
-
-        let tool_calls = parse_tool_calls(
+        crate::provider::chat_wire::parse_completion_response_with_required_tool_calls(
             PROVIDER_ID,
-            payload
-                .choices
-                .first()
-                .and_then(|c| c.message.as_ref())
-                .and_then(|m| m.tool_calls.as_ref()),
-        )?;
-
-        if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
-            return Err(AppError::Provider(
-                "amazon-bedrock returned empty completion payload without finish reason".to_owned(),
-            ));
-        }
-
-        let usage = payload.usage.map(|u| {
-            MessageUsage {
-                input_tokens: u.prompt_tokens.unwrap_or_default(),
-                output_tokens: u.completion_tokens.unwrap_or_default(),
-                reasoning_tokens: 0,
-                cache_write_tokens: 0,
-                cache_read_tokens: 0,
-                total_cost: 0.0,
-            }
-            .into()
-        });
-
-        Ok(CompletionResponse {
-            provider_id: ProviderId::new(PROVIDER_ID),
-            model: ModelId::new(
-                payload
-                    .model
-                    .unwrap_or_else(|| self.default_model.to_string()),
-            ),
-            text,
-            reasoning_text: None,
-            finish_reason,
-            tool_calls,
-            usage,
-            provider_metadata: None,
-        })
+            self.default_model.as_str(),
+            payload,
+        )
     }
 
     fn parse_anthropic_completion(
@@ -1188,14 +1133,25 @@ impl AmazonBedrockAdapter {
 
         let prompt_cache_key = request.prompt_cache_key.clone();
         let model = self.resolve_model(request.model.as_str());
-        let messages = convert_messages(request.system, request.messages);
+        let messages =
+            crate::provider::chat_wire::request_to_chat_messages_with_assistant_reasoning_field(
+                &request, None,
+            );
         let body = ChatCompletionRequest {
             model,
             messages,
+            tools: None,
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
+            cache_control: None,
             stream: false,
             stream_options: None,
+            stop: Vec::new(),
+            top_p: None,
+            seed: None,
+            response_format: None,
+            reasoning_effort: None,
+            verbosity: None,
             prompt_cache_key: prompt_cache_key.clone(),
             prompt_cache_key_camel_case: prompt_cache_key.clone(),
         };
@@ -1254,17 +1210,28 @@ impl AmazonBedrockAdapter {
 
         let prompt_cache_key = request.prompt_cache_key.clone();
         let model = self.resolve_model(request.model.as_str());
-        let messages = convert_messages(request.system, request.messages);
+        let messages =
+            crate::provider::chat_wire::request_to_chat_messages_with_assistant_reasoning_field(
+                &request, None,
+            );
 
         let body = ChatCompletionRequest {
             model: model.clone(),
             messages,
+            tools: None,
             temperature: request.temperature,
             max_tokens: request.max_output_tokens,
+            cache_control: None,
             stream: true,
             stream_options: Some(ChatStreamOptions {
                 include_usage: true,
             }),
+            stop: Vec::new(),
+            top_p: None,
+            seed: None,
+            response_format: None,
+            reasoning_effort: None,
+            verbosity: None,
             prompt_cache_key: prompt_cache_key.clone(),
             prompt_cache_key_camel_case: prompt_cache_key.clone(),
         };
@@ -1342,7 +1309,7 @@ impl AmazonBedrockAdapter {
                 let delta = choice
                     .and_then(|item| item.delta.as_ref())
                     .and_then(|delta| delta.content.as_ref())
-                    .map(extract_text_from_content)
+                    .map(crate::provider::chat_wire::extract_text_from_content)
                     .or_else(|| choice.and_then(|item| item.text.clone()))
                     .unwrap_or_default();
 
@@ -1361,7 +1328,7 @@ impl AmazonBedrockAdapter {
                     .unwrap_or_default();
 
                 for raw_tool in tool_deltas {
-                    let tool = utils::parse_json_value::<ChatToolCall>(
+                    let tool = utils::parse_json_value::<ChatToolCallWire>(
                         PROVIDER_ID,
                         "chat stream tool_call delta",
                         raw_tool,
@@ -1577,306 +1544,6 @@ impl ModelRuntime for AmazonBedrockAdapter {
                     .await
             }
         }
-    }
-}
-
-fn convert_messages(system: Option<String>, messages: Vec<Message>) -> Vec<ChatMessage> {
-    let mut result = Vec::new();
-
-    if let Some(system) = system.filter(|s| !s.trim().is_empty()) {
-        result.push(ChatMessage {
-            role: "system".to_owned(),
-            content: Some(Value::String(system)),
-            tool_call_id: None,
-            tool_calls: None,
-        });
-    }
-
-    for message in messages {
-        let projected_parts = wire_message::project(&message);
-        match message.role {
-            Role::System => {
-                result.push(ChatMessage {
-                    role: "system".to_owned(),
-                    content: Some(Value::String(session_text_lossy(
-                        &message,
-                        &projected_parts,
-                    ))),
-                    tool_call_id: None,
-                    tool_calls: None,
-                });
-            }
-            Role::User => {
-                result.push(ChatMessage {
-                    role: "user".to_owned(),
-                    content: Some(provider_message_to_openai_value(&message, &projected_parts)),
-                    tool_call_id: None,
-                    tool_calls: None,
-                });
-            }
-            Role::Assistant => {
-                result.extend(openai_assistant_messages_from_parts(
-                    &message,
-                    &projected_parts,
-                ));
-            }
-        }
-    }
-
-    result
-}
-
-fn provider_message_to_openai_value(message: &Message, parts: &[wire_message::WirePart]) -> Value {
-    if parts.is_empty() {
-        return Value::String(message.as_text_lossy());
-    }
-
-    projected_parts_to_openai_value(parts)
-}
-
-fn attachment_upload_name(item: &AttachmentItem) -> String {
-    wire_message::filename(item)
-        .map(str::to_owned)
-        .unwrap_or_else(|| item.summary_label())
-}
-
-fn attachment_file_content_value(item: &AttachmentItem) -> Option<Value> {
-    let filename = attachment_upload_name(item);
-    match &item.source {
-        AttachmentSource::Base64 { .. } | AttachmentSource::DataUrl { .. } => {
-            wire_message::data_url(item).map(|file_data| {
-                serde_json::json!({
-                    "type": "file",
-                    "file": {
-                        "file_data": file_data,
-                        "filename": filename,
-                    }
-                })
-            })
-        }
-        AttachmentSource::FileId { file_id } => {
-            let file_id = file_id.trim();
-            (!file_id.is_empty()).then(|| {
-                serde_json::json!({
-                    "type": "file",
-                    "file": {
-                        "file_id": file_id,
-                        "filename": filename,
-                    }
-                })
-            })
-        }
-        AttachmentSource::Url { .. } | AttachmentSource::LocalPath { .. } => None,
-    }
-}
-
-fn attachment_content_value(item: &AttachmentItem) -> Value {
-    match item.kind {
-        AttachmentKind::Image => wire_message::media_url(item)
-            .map(|url| {
-                serde_json::json!({
-                    "type": "image_url",
-                    "image_url": { "url": url }
-                })
-            })
-            .unwrap_or_else(|| {
-                serde_json::json!({
-                    "type": "text",
-                    "text": wire_message::hint_text(item),
-                })
-            }),
-        AttachmentKind::Audio
-        | AttachmentKind::Video
-        | AttachmentKind::Pdf
-        | AttachmentKind::File => attachment_file_content_value(item).unwrap_or_else(|| {
-            serde_json::json!({
-                "type": "text",
-                "text": wire_message::hint_text(item),
-            })
-        }),
-    }
-}
-
-fn projected_parts_to_openai_value(parts: &[wire_message::WirePart]) -> Value {
-    let items = parts
-        .iter()
-        .map(|part| match part {
-            wire_message::WirePart::Text { text } => {
-                serde_json::json!({ "type": "text", "text": text })
-            }
-            wire_message::WirePart::Attachment { item } => attachment_content_value(item),
-            wire_message::WirePart::ToolCall { name, .. } => {
-                serde_json::json!({ "type": "text", "text": format!("[tool_call:{name}]") })
-            }
-            wire_message::WirePart::ToolResult { tool_call_id, .. } => {
-                serde_json::json!({ "type": "text", "text": format!("[tool_result:{tool_call_id}]") })
-            }
-        })
-        .collect::<Vec<_>>();
-    Value::Array(items)
-}
-
-fn assistant_content_and_tool_calls(
-    message: &Message,
-    parts: &[wire_message::WirePart],
-) -> (Option<Value>, Vec<ChatToolCallRequest>) {
-    if parts.is_empty() {
-        return (Some(Value::String(message.as_text_lossy())), Vec::new());
-    }
-
-    let mut text_chunks = Vec::new();
-    let mut tool_calls = Vec::new();
-    for part in parts {
-        match part {
-            wire_message::WirePart::Text { text } => text_chunks.push(text.clone()),
-            wire_message::WirePart::ToolCall {
-                id,
-                name,
-                arguments_json,
-            } => {
-                tool_calls.push(ChatToolCallRequest {
-                    kind: "function".to_owned(),
-                    id: id.clone(),
-                    function: ChatFunctionCallRequest {
-                        name: name.clone(),
-                        arguments: arguments_json.clone(),
-                    },
-                });
-            }
-            wire_message::WirePart::Attachment { item } => {
-                text_chunks.push(wire_message::hint_text(item));
-            }
-            wire_message::WirePart::ToolResult { tool_call_id, .. } => {
-                text_chunks.push(format!("[tool_result:{tool_call_id}]"));
-            }
-        }
-    }
-    let content = (!text_chunks.is_empty()).then(|| Value::String(text_chunks.join("")));
-    (content, tool_calls)
-}
-
-fn openai_assistant_messages_from_parts(
-    message: &Message,
-    parts: &[wire_message::WirePart],
-) -> Vec<ChatMessage> {
-    if !parts
-        .iter()
-        .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
-    {
-        return vec![openai_assistant_message(message, parts)];
-    }
-
-    let mut messages = Vec::new();
-    let mut buffered_parts = Vec::new();
-
-    for part in parts {
-        match part {
-            wire_message::WirePart::ToolResult {
-                tool_call_id,
-                output_json,
-                ..
-            } if !tool_call_id.trim().is_empty() => {
-                flush_openai_assistant_message(message, &mut messages, &mut buffered_parts);
-
-                messages.push(ChatMessage {
-                    role: "tool".to_owned(),
-                    content: Some(Value::String(output_json.clone())),
-                    tool_call_id: Some(tool_call_id.clone()),
-                    tool_calls: None,
-                });
-            }
-            wire_message::WirePart::ToolResult { output_json, .. } => {
-                buffered_parts.push(wire_message::WirePart::Text {
-                    text: output_json.clone(),
-                });
-            }
-            other => buffered_parts.push(other.clone()),
-        }
-    }
-
-    flush_openai_assistant_message(message, &mut messages, &mut buffered_parts);
-
-    messages
-}
-
-fn flush_openai_assistant_message(
-    message: &Message,
-    messages: &mut Vec<ChatMessage>,
-    buffered_parts: &mut Vec<wire_message::WirePart>,
-) {
-    if buffered_parts.is_empty() {
-        return;
-    }
-    let next = openai_assistant_message(message, buffered_parts.as_slice());
-    buffered_parts.clear();
-    if next.content.is_none() && next.tool_calls.is_none() {
-        return;
-    }
-    messages.push(next);
-}
-
-fn openai_assistant_message(message: &Message, parts: &[wire_message::WirePart]) -> ChatMessage {
-    let (content, tool_calls) = assistant_content_and_tool_calls(message, parts);
-    ChatMessage {
-        role: "assistant".to_owned(),
-        content,
-        tool_call_id: None,
-        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
-    }
-}
-
-fn session_text_lossy(message: &Message, projected_parts: &[wire_message::WirePart]) -> String {
-    if projected_parts.is_empty() {
-        message.as_text_lossy()
-    } else {
-        wire_message::parts_text_lossy(projected_parts)
-    }
-}
-
-fn parse_tool_calls(
-    provider_id: &str,
-    value: Option<&Vec<ChatToolCall>>,
-) -> Result<Vec<CompletionToolCall>, AppError> {
-    value
-        .into_iter()
-        .flatten()
-        .map(|item| {
-            let id = utils::normalize_optional_text(item.id.clone()).ok_or_else(|| {
-                AppError::Provider(format!(
-                    "{provider_id} returned tool_call without id in completion response"
-                ))
-            })?;
-
-            let function = item.function.as_ref().ok_or_else(|| {
-                AppError::Provider(format!(
-                    "{provider_id} returned tool_call without function payload"
-                ))
-            })?;
-
-            let name = utils::normalize_optional_text(function.name.clone()).ok_or_else(|| {
-                AppError::Provider(format!(
-                    "{provider_id} returned tool_call without function.name"
-                ))
-            })?;
-
-            Ok(CompletionToolCall::Function {
-                id,
-                name,
-                arguments_json: function.arguments.clone().unwrap_or_default(),
-            })
-        })
-        .collect()
-}
-
-fn extract_text_from_content(value: &Value) -> String {
-    match value {
-        Value::String(s) => s.clone(),
-        Value::Array(items) => items
-            .iter()
-            .filter_map(|item| item.get("text").and_then(|v| v.as_str()))
-            .collect::<Vec<_>>()
-            .join(""),
-        _ => String::new(),
     }
 }
 
@@ -2177,114 +1844,6 @@ struct OpenAiCompatibleModel {
     display_name: Option<String>,
     #[serde(default)]
     name: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatCompletionRequest {
-    model: String,
-    messages: Vec<ChatMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_tokens: Option<u32>,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stream_options: Option<ChatStreamOptions>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    prompt_cache_key: Option<String>,
-    #[serde(
-        default,
-        rename = "promptCacheKey",
-        skip_serializing_if = "Option::is_none"
-    )]
-    prompt_cache_key_camel_case: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatStreamOptions {
-    #[serde(rename = "include_usage")]
-    include_usage: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatMessage {
-    role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<ChatToolCallRequest>>,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatToolCallRequest {
-    #[serde(rename = "type")]
-    kind: String,
-    id: String,
-    function: ChatFunctionCallRequest,
-}
-
-#[derive(Debug, Serialize)]
-struct ChatFunctionCallRequest {
-    name: String,
-    arguments: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionResponse {
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    choices: Vec<ChatCompletionChoice>,
-    #[serde(default)]
-    usage: Option<ChatUsage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatCompletionChoice {
-    #[serde(default)]
-    message: Option<ChatDeltaOrMessage>,
-    #[serde(default)]
-    delta: Option<ChatDeltaOrMessage>,
-    #[serde(default)]
-    text: Option<String>,
-    #[serde(default)]
-    finish_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatDeltaOrMessage {
-    #[serde(default)]
-    content: Option<Value>,
-    #[serde(default)]
-    tool_calls: Option<Vec<ChatToolCall>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatToolCall {
-    #[serde(default)]
-    index: Option<usize>,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    function: Option<ChatFunctionCall>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatFunctionCall {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    arguments: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChatUsage {
-    #[serde(default)]
-    prompt_tokens: Option<u64>,
-    #[serde(default)]
-    completion_tokens: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]

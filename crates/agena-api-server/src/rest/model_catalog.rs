@@ -223,7 +223,7 @@ pub async fn lookup_model_catalog(
         .into_iter()
         .filter(|entry| requested.contains(entry.model_id.as_str()))
         .collect::<Vec<_>>();
-    Ok(Json(ModelCatalogLookupResponse { items }))
+    Ok(items_json(items))
 }
 
 pub async fn refresh_model_catalog(

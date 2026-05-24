@@ -9,8 +9,6 @@ use super::{
     StructuredValue, TimeRange, TodoItem, UserInputQuestion,
 };
 
-pub type ToolAttachment = AttachmentItem;
-
 /// Filesystem access mode declared by a tool invocation.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
 #[serde(rename_all = "snake_case")]
@@ -50,7 +48,7 @@ pub struct NetworkEffect {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct BashToolInput {
+pub struct ShellCommandInput {
     pub command: String,
     #[serde(default)]
     pub description: String,
@@ -68,7 +66,6 @@ pub struct BashToolInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ReadToolInput {
-    #[serde(alias = "path")]
     pub file_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
@@ -210,22 +207,8 @@ pub struct MonitorEvent {
 pub enum MonitorToolInput {
     /// Spawn a new background monitor and return its id.
     Start {
-        /// Shell command to execute. Runs under `/bin/sh -lc` (or `cmd /c` on Windows).
-        command: String,
-        /// One-line human-readable description (shown in events / metadata).
-        #[serde(default)]
-        description: String,
-        /// Optional working directory; defaults to workspace root.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        workdir: Option<String>,
-        /// Filesystem paths the command may read or write. Relative paths are
-        /// resolved from the monitor working directory.
-        filesystem_effects: Vec<FilesystemEffect>,
-        /// Outbound network targets the command may connect to.
-        network_effects: Vec<NetworkEffect>,
-        /// Auto-kill after this many ms when not persistent. Default 300000, max 3_600_000.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        timeout_ms: Option<u64>,
+        #[serde(flatten)]
+        command: ShellCommandInput,
         /// If true, the monitor runs until explicitly stopped or the session ends.
         #[serde(default)]
         persistent: bool,
@@ -285,8 +268,6 @@ pub struct AskUserToolInput {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
 }
-
-pub type RequestUserInputToolInput = AskUserToolInput;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct ApplyPatchToolInput {
@@ -422,17 +403,22 @@ pub struct ScheduleWakeupToolInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct LspDefinitionToolInput {
+pub struct LspPositionToolInput {
     pub file_path: String,
     pub line: u32,
     pub character: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct LspDefinitionToolInput {
+    #[serde(flatten)]
+    pub position: LspPositionToolInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct LspReferencesToolInput {
-    pub file_path: String,
-    pub line: u32,
-    pub character: u32,
+    #[serde(flatten)]
+    pub position: LspPositionToolInput,
     #[serde(default = "default_true")]
     pub include_declaration: bool,
 }
@@ -443,9 +429,8 @@ fn default_true() -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 pub struct LspHoverToolInput {
-    pub file_path: String,
-    pub line: u32,
-    pub character: u32,
+    #[serde(flatten)]
+    pub position: LspPositionToolInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -497,23 +482,6 @@ pub struct NotebookEditToolInput {
     pub edit_mode: NotebookEditMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cell_type: Option<NotebookCellType>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
-pub struct PowerShellToolInput {
-    pub command: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workdir: Option<String>,
-    /// Filesystem paths the command may read or write. Pass an empty list only
-    /// when the command has no filesystem effect beyond entering `workdir`.
-    pub filesystem_effects: Vec<FilesystemEffect>,
-    /// Outbound network targets the command may connect to. Pass an empty list
-    /// when the command has no network effect.
-    pub network_effects: Vec<NetworkEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -886,7 +854,7 @@ pub struct ModelVisibleOutput {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<ToolAttachment>,
+    pub attachments: Vec<AttachmentItem>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncated: Option<bool>,
 }
@@ -916,7 +884,7 @@ pub struct OperationPart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<ToolAttachment>,
+    pub attachments: Vec<AttachmentItem>,
     #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
     pub details: ToolOutput,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -961,7 +929,7 @@ impl OperationPart {
         invocation: ToolInvocation,
         output_text: impl Into<String>,
         blocks: Vec<OperationBlock>,
-        attachments: Vec<ToolAttachment>,
+        attachments: Vec<AttachmentItem>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
@@ -995,7 +963,7 @@ impl OperationPart {
         error_message: impl Into<String>,
         output_text: impl Into<String>,
         blocks: Vec<OperationBlock>,
-        attachments: Vec<ToolAttachment>,
+        attachments: Vec<AttachmentItem>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {

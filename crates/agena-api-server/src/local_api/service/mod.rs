@@ -33,14 +33,14 @@ use agena::{
 
 use super::{
     dto::{
-        GitStatusResource, MessageListQuery, MessageResource, PartLoadMode,
-        PermissionRuleListQuery, PermissionRuleResource, PermissionRuleWriteRequest,
-        ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
-        SessionCreateRequest, SessionEventListQuery, SessionExecutionContextResource,
-        SessionExecutionResource, SessionGoalResource, SessionReplaceRequest, SessionResource,
-        SessionRunOptionsRequest, SessionRunState, SessionUsageResource, WorkspaceFileKind,
-        WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
-        WorkspaceResolveRequest, WorkspaceResource, WorkspaceWriteRequest,
+        CursorPaginationQuery, GitStatusResource, MessageListQuery, MessageResource, PartLoadMode,
+        PermissionRuleResource, PermissionRuleWriteRequest, ScheduledJobResource,
+        ScheduledJobRunResource, SearchPaginationQuery, SessionAutomationResource,
+        SessionCreateRequest, SessionExecutionContextResource, SessionExecutionResource,
+        SessionGoalResource, SessionHierarchyRequest, SessionResource, SessionRunOptionsRequest,
+        SessionRunState, SessionUsageResource, WorkspaceFileKind, WorkspaceFileNode,
+        WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
+        WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
     },
     error::ApiError,
     pagination::{

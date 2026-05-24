@@ -1,36 +1,13 @@
 use super::*;
 
-fn background_task_start_response(
-    start: agena::runtime::RuntimeBackgroundTaskStart,
-) -> RuntimeBackgroundTaskStartResponse {
-    RuntimeBackgroundTaskStartResponse {
-        started: start.started,
-        task: start.task.into(),
-    }
-}
-
 pub async fn search_marketplace_plugins(
     State(_): State<AppState>,
-    Json(request): Json<MarketplaceSearchRequestBody>,
+    Json(request): Json<MarketplaceSearchRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let registry_id = request
-        .registry_id
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
-    let registry_url = request.registry_url.trim().to_string();
-    if registry_url.is_empty() {
-        return Err(ServerError::BadRequest(
-            "registry_url cannot be empty".to_string(),
-        ));
-    }
+    let registry_id = registry_id_or_default(request.registry.registry_id.as_deref());
+    let registry_url = normalize_registry_url(request.registry.registry_url.as_str())?;
 
-    let cache = agena_plugin_marketplace::MarketplaceCache::new(
-        agena_plugin_marketplace::default_cache_root(),
-    );
-    let client = agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
-        cache,
-        std::collections::BTreeMap::new(),
-    );
+    let client = marketplace_client();
     let registry = client.registry(agena_plugin_marketplace::RegistrySpec {
         id: registry_id.clone(),
         url: registry_url.clone(),
@@ -38,7 +15,7 @@ pub async fn search_marketplace_plugins(
     });
     let index = registry
         .fetch_index(request.refresh)
-        .map_err(|error| ServerError::BadRequest(error.to_string()))?;
+        .map_err(marketplace_bad_request)?;
     let needle = request
         .query
         .as_deref()
@@ -89,81 +66,45 @@ pub async fn search_marketplace_plugins(
 
 pub async fn sync_marketplace_registry(
     State(state): State<AppState>,
-    Json(request): Json<MarketplaceRegistryRequestBody>,
+    Json(request): Json<MarketplaceRegistryRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let registry_id = request
-        .registry_id
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
-    let registry_url = request.registry_url.trim().to_string();
-    if registry_url.is_empty() {
-        return Err(ServerError::BadRequest(
-            "registry_url cannot be empty".to_string(),
-        ));
-    }
+    let registry_id = registry_id_or_default(request.registry_id.as_deref());
+    let registry_url = normalize_registry_url(request.registry_url.as_str())?;
 
-    let start = state
-        .runtime()
-        .spawn_background_task(
-            agena::runtime::RuntimeBackgroundTaskKind::MarketplaceRegistrySync,
-            agena::runtime::RuntimeBackgroundTaskOrigin::User,
-            format!("Sync marketplace registry {registry_id}"),
-            Some(format!(
-                "marketplace_registry_sync:{registry_id}:{registry_url}"
-            )),
-            false,
-            move |_| async move {
-                let registry_id = registry_id.clone();
-                let registry_url = registry_url.clone();
-                tokio::task::spawn_blocking(move || {
-                    let cache = agena_plugin_marketplace::MarketplaceCache::new(
-                        agena_plugin_marketplace::default_cache_root(),
-                    );
-                    let client = agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
-                        cache,
-                        std::collections::BTreeMap::new(),
-                    );
-                    let registry = client.registry(agena_plugin_marketplace::RegistrySpec {
-                        id: registry_id.clone(),
-                        url: registry_url.clone(),
-                        require_signature: false,
-                    });
-                    let index = registry
-                        .fetch_index(true)
-                        .map_err(|error| agena::AppError::Config(error.to_string()))?;
-                    Ok::<agena::runtime::RuntimeBackgroundTaskOutcome, agena::AppError>(
-                        agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(format!(
-                            "Synced registry {registry_id} ({} plugins).",
-                            index.plugins.len()
-                        )),
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    agena::AppError::Internal(format!(
-                        "sync marketplace registry task failed: {error}"
-                    ))
-                })?
-            },
-        )
-        .map_err(super::server_error_from_runtime_background_task)?;
-
-    Ok(Json(background_task_start_response(start)))
+    spawn_marketplace_background_task(
+        &state,
+        agena::runtime::RuntimeBackgroundTaskKind::MarketplaceRegistrySync,
+        format!("Sync marketplace registry {registry_id}"),
+        Some(format!(
+            "marketplace_registry_sync:{registry_id}:{registry_url}"
+        )),
+        "sync marketplace registry task failed",
+        move || {
+            let client = marketplace_client();
+            let registry = client.registry(agena_plugin_marketplace::RegistrySpec {
+                id: registry_id.clone(),
+                url: registry_url.clone(),
+                require_signature: false,
+            });
+            let index = registry.fetch_index(true)?;
+            Ok(agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(
+                format!(
+                    "Synced registry {registry_id} ({} plugins).",
+                    index.plugins.len()
+                ),
+            ))
+        },
+    )
+    .await
 }
 
 pub async fn list_marketplace_installed_plugins(
     State(_): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let cache = agena_plugin_marketplace::MarketplaceCache::new(
-        agena_plugin_marketplace::default_cache_root(),
-    );
-    let client = agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
-        cache,
-        std::collections::BTreeMap::new(),
-    );
+    let client = marketplace_client();
     let mut entries = client
         .list_installed()
-        .map_err(|error| ServerError::BadRequest(error.to_string()))?
+        .map_err(marketplace_bad_request)?
         .into_iter()
         .map(|record| MarketplaceInstalledPluginResource {
             plugin_id: record.plugin_id,
@@ -180,22 +121,16 @@ pub async fn list_marketplace_installed_plugins(
         })
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-    Ok(Json(MarketplaceInstalledListResponse { entries }))
+    Ok(entries_json(entries))
 }
 
 pub async fn list_marketplace_outdated_plugins(
     State(_): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let cache = agena_plugin_marketplace::MarketplaceCache::new(
-        agena_plugin_marketplace::default_cache_root(),
-    );
-    let client = agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
-        cache,
-        std::collections::BTreeMap::new(),
-    );
+    let client = marketplace_client();
     let entries = client
         .list_outdated()
-        .map_err(|error| ServerError::BadRequest(error.to_string()))?
+        .map_err(marketplace_bad_request)?
         .into_iter()
         .map(|record| MarketplaceOutdatedPluginResource {
             plugin_id: record.plugin_id,
@@ -203,19 +138,14 @@ pub async fn list_marketplace_outdated_plugins(
             latest_version: record.latest_version,
         })
         .collect::<Vec<_>>();
-    Ok(Json(MarketplaceOutdatedListResponse { entries }))
+    Ok(entries_json(entries))
 }
 
 pub async fn install_marketplace_plugin(
     State(state): State<AppState>,
-    Json(request): Json<MarketplaceInstallRequestBody>,
+    Json(request): Json<MarketplaceInstallRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let registry_url = request.registry_url.trim().to_string();
-    if registry_url.is_empty() {
-        return Err(ServerError::BadRequest(
-            "registry_url cannot be empty".to_string(),
-        ));
-    }
+    let registry_url = normalize_registry_url(request.registry.registry_url.as_str())?;
     let spec = request.spec.trim().to_string();
     if spec.is_empty() {
         return Err(ServerError::BadRequest("spec cannot be empty".to_string()));
@@ -224,10 +154,7 @@ pub async fn install_marketplace_plugin(
         Some((id, ver)) => (id.to_string(), Some(ver.to_string())),
         None => (spec, None),
     };
-    let registry_id = request
-        .registry_id
-        .clone()
-        .unwrap_or_else(|| "default".to_string());
+    let registry_id = registry_id_or_default(request.registry.registry_id.as_deref());
     let config_path = request
         .config_path
         .clone()
@@ -256,62 +183,42 @@ pub async fn install_marketplace_plugin(
     let allow_unverified = request.allow_unverified;
     let refresh_index = request.refresh;
 
-    let start = state
-        .runtime()
-        .spawn_background_task(
-            agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginInstall,
-            agena::runtime::RuntimeBackgroundTaskOrigin::User,
-            task_title,
-            Some(dedupe_key),
-            false,
-            move |_| async move {
-                tokio::task::spawn_blocking(move || {
-                    let cache = agena_plugin_marketplace::MarketplaceCache::new(
-                        agena_plugin_marketplace::default_cache_root(),
-                    );
-                    let client = agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
-                        cache,
-                        std::collections::BTreeMap::new(),
-                    );
-                    let outcome = client
-                        .install(agena_plugin_marketplace::InstallRequest {
-                            registry: agena_plugin_marketplace::RegistrySpec {
-                                id: registry_id.clone(),
-                                url: registry_url.clone(),
-                                require_signature,
-                            },
-                            plugin_id: plugin_id.clone(),
-                            version: version.clone(),
-                            config_path,
-                            force,
-                            dry_run,
-                            allow_unverified,
-                            refresh_index,
-                        })
-                        .map_err(|error| agena::AppError::Config(error.to_string()))?;
-                    let message = if outcome.dry_run {
-                        format!(
-                            "Dry-run resolved {} v{}.",
-                            outcome.plugin_id, outcome.version
-                        )
-                    } else {
-                        format!("Installed {} v{}.", outcome.plugin_id, outcome.version)
-                    };
-                    Ok::<agena::runtime::RuntimeBackgroundTaskOutcome, agena::AppError>(
-                        agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(message),
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    agena::AppError::Internal(format!(
-                        "install marketplace plugin task failed: {error}"
-                    ))
-                })?
-            },
-        )
-        .map_err(super::server_error_from_runtime_background_task)?;
-
-    Ok(Json(background_task_start_response(start)))
+    spawn_marketplace_background_task(
+        &state,
+        agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginInstall,
+        task_title,
+        Some(dedupe_key),
+        "install marketplace plugin task failed",
+        move || {
+            let client = marketplace_client();
+            let outcome = client.install(agena_plugin_marketplace::InstallRequest {
+                registry: agena_plugin_marketplace::RegistrySpec {
+                    id: registry_id.clone(),
+                    url: registry_url.clone(),
+                    require_signature,
+                },
+                plugin_id: plugin_id.clone(),
+                version: version.clone(),
+                config_path,
+                force,
+                dry_run,
+                allow_unverified,
+                refresh_index,
+            })?;
+            let message = if outcome.dry_run {
+                format!(
+                    "Dry-run resolved {} v{}.",
+                    outcome.plugin_id, outcome.version
+                )
+            } else {
+                format!("Installed {} v{}.", outcome.plugin_id, outcome.version)
+            };
+            Ok(agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(
+                message,
+            ))
+        },
+    )
+    .await
 }
 
 pub async fn uninstall_marketplace_plugin(
@@ -327,71 +234,48 @@ pub async fn uninstall_marketplace_plugin(
     let cascade = request.cascade;
     let title = format!("Uninstall marketplace plugin {plugin_id}");
     let dedupe_key = format!("marketplace_plugin_uninstall:{plugin_id}:{cascade}");
-    let start = state
-        .runtime()
-        .spawn_background_task(
-            agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginUninstall,
-            agena::runtime::RuntimeBackgroundTaskOrigin::User,
-            title,
-            Some(dedupe_key),
-            false,
-            move |_| async move {
-                tokio::task::spawn_blocking(move || {
-                    let cache = agena_plugin_marketplace::MarketplaceCache::new(
-                        agena_plugin_marketplace::default_cache_root(),
-                    );
-                    let client = agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
-                        cache,
-                        std::collections::BTreeMap::new(),
-                    );
-                    let entries = client
-                        .uninstall_with(plugin_id.as_str(), cascade)
-                        .map_err(|error| agena::AppError::Config(error.to_string()))?;
-                    let message = format!(
-                        "Uninstalled {}.",
-                        entries
-                            .iter()
-                            .map(|entry| entry.plugin_id.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                    Ok::<agena::runtime::RuntimeBackgroundTaskOutcome, agena::AppError>(
-                        agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(message),
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    agena::AppError::Internal(format!(
-                        "uninstall marketplace plugin task failed: {error}"
-                    ))
-                })?
-            },
-        )
-        .map_err(super::server_error_from_runtime_background_task)?;
-    Ok(Json(background_task_start_response(start)))
+    spawn_marketplace_background_task(
+        &state,
+        agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginUninstall,
+        title,
+        Some(dedupe_key),
+        "uninstall marketplace plugin task failed",
+        move || {
+            let client = marketplace_client();
+            let entries = client.uninstall_with(plugin_id.as_str(), cascade)?;
+            let message = format!(
+                "Uninstalled {}.",
+                entries
+                    .iter()
+                    .map(|entry| entry.plugin_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            Ok(agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(
+                message,
+            ))
+        },
+    )
+    .await
 }
 
 pub async fn upgrade_marketplace_plugins(
     State(state): State<AppState>,
-    Json(request): Json<MarketplaceUpgradeRequestBody>,
+    Json(request): Json<MarketplaceUpgradeRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     if !request.all && request.plugin_id.as_deref().unwrap_or("").trim().is_empty() {
         return Err(ServerError::BadRequest(
             "plugin_id is required unless all=true".to_string(),
         ));
     }
-    let override_spec =
-        request
-            .registry_url
-            .as_ref()
-            .map(|registry_url| agena_plugin_marketplace::RegistrySpec {
-                id: request
-                    .registry_id
-                    .clone()
-                    .unwrap_or_else(|| "default".to_string()),
-                url: registry_url.trim().to_string(),
-                require_signature: false,
-            });
+    let override_spec = match request.registry.registry_url.as_deref() {
+        Some(registry_url) => Some(agena_plugin_marketplace::RegistrySpec {
+            id: registry_id_or_default(request.registry.registry_id.as_deref()),
+            url: normalize_registry_url(registry_url)?,
+            require_signature: false,
+        }),
+        None => None,
+    };
     let plugin_id = request
         .plugin_id
         .clone()
@@ -409,62 +293,106 @@ pub async fn upgrade_marketplace_plugins(
         format!("marketplace_plugin_upgrade:{plugin_id}")
     };
     let all = request.all;
+    spawn_marketplace_background_task(
+        &state,
+        agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade,
+        title,
+        Some(dedupe_key),
+        "upgrade marketplace plugin task failed",
+        move || {
+            let client = marketplace_client();
+            let targets = if all {
+                client
+                    .list_installed()?
+                    .into_iter()
+                    .map(|record| record.plugin_id)
+                    .collect::<Vec<_>>()
+            } else {
+                vec![plugin_id.clone()]
+            };
+
+            let mut upgraded = Vec::new();
+            for plugin_id in targets.into_iter().filter(|item| !item.is_empty()) {
+                let outcome = client.upgrade(plugin_id.as_str(), override_spec.clone())?;
+                if outcome.upgraded {
+                    upgraded.push(outcome.plugin_id);
+                }
+            }
+
+            let message = if upgraded.is_empty() {
+                "Marketplace plugins are already up to date.".to_owned()
+            } else {
+                format!("Upgraded {}.", upgraded.join(", "))
+            };
+            Ok(agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(
+                message,
+            ))
+        },
+    )
+    .await
+}
+
+fn registry_id_or_default(registry_id: Option<&str>) -> String {
+    registry_id.unwrap_or("default").to_owned()
+}
+
+fn normalize_registry_url(registry_url: &str) -> Result<String, ServerError> {
+    let registry_url = registry_url.trim().to_string();
+    if registry_url.is_empty() {
+        return Err(ServerError::BadRequest(
+            "registry_url cannot be empty".to_string(),
+        ));
+    }
+    Ok(registry_url)
+}
+
+fn marketplace_client()
+-> agena_plugin_marketplace::MarketplaceClient<agena_plugin_marketplace::ReqwestFetcher> {
+    agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
+        agena_plugin_marketplace::MarketplaceCache::new(
+            agena_plugin_marketplace::default_cache_root(),
+        ),
+        std::collections::BTreeMap::new(),
+    )
+}
+
+fn marketplace_bad_request(error: impl ToString) -> ServerError {
+    ServerError::BadRequest(error.to_string())
+}
+
+async fn spawn_marketplace_background_task<F>(
+    state: &AppState,
+    kind: agena::runtime::RuntimeBackgroundTaskKind,
+    title: String,
+    dedupe_key: Option<String>,
+    task_error_context: &'static str,
+    task: F,
+) -> Result<Json<crate::local_api::RuntimeBackgroundTaskStartResponse>, ServerError>
+where
+    F: FnOnce() -> Result<
+            agena::runtime::RuntimeBackgroundTaskOutcome,
+            agena_plugin_marketplace::MarketplaceError,
+        > + Send
+        + 'static,
+{
     let start = state
         .runtime()
         .spawn_background_task(
-            agena::runtime::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade,
+            kind,
             agena::runtime::RuntimeBackgroundTaskOrigin::User,
             title,
-            Some(dedupe_key),
+            dedupe_key,
             false,
             move |_| async move {
                 tokio::task::spawn_blocking(move || {
-                    let cache = agena_plugin_marketplace::MarketplaceCache::new(
-                        agena_plugin_marketplace::default_cache_root(),
-                    );
-                    let client = agena_plugin_marketplace::MarketplaceClient::with_default_fetcher(
-                        cache,
-                        std::collections::BTreeMap::new(),
-                    );
-                    let targets = if all {
-                        client
-                            .list_installed()
-                            .map_err(|error| agena::AppError::Config(error.to_string()))?
-                            .into_iter()
-                            .map(|record| record.plugin_id)
-                            .collect::<Vec<_>>()
-                    } else {
-                        vec![plugin_id.clone()]
-                    };
-
-                    let mut upgraded = Vec::new();
-                    for plugin_id in targets.into_iter().filter(|item| !item.is_empty()) {
-                        let outcome = client
-                            .upgrade(plugin_id.as_str(), override_spec.clone())
-                            .map_err(|error| agena::AppError::Config(error.to_string()))?;
-                        if outcome.upgraded {
-                            upgraded.push(outcome.plugin_id);
-                        }
-                    }
-
-                    let message = if upgraded.is_empty() {
-                        "Marketplace plugins are already up to date.".to_owned()
-                    } else {
-                        format!("Upgraded {}.", upgraded.join(", "))
-                    };
-                    Ok::<agena::runtime::RuntimeBackgroundTaskOutcome, agena::AppError>(
-                        agena::runtime::RuntimeBackgroundTaskOutcome::succeeded(message),
-                    )
+                    task().map_err(|error| agena::AppError::Config(error.to_string()))
                 })
                 .await
                 .map_err(|error| {
-                    agena::AppError::Internal(format!(
-                        "upgrade marketplace plugin task failed: {error}"
-                    ))
+                    agena::AppError::Internal(format!("{task_error_context}: {error}"))
                 })?
             },
         )
         .map_err(super::server_error_from_runtime_background_task)?;
-
-    Ok(Json(background_task_start_response(start)))
+    Ok(Json(runtime_background_task_start_response(start)))
 }

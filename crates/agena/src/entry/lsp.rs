@@ -26,10 +26,10 @@ pub(super) fn execute_definition(
     input: &LspDefinitionToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.file_path);
+    let path = executor.resolve_target_path(&input.position.file_path);
     executor.ensure_read_permission(&path)?;
     let uri = path_to_uri(&path)?;
-    let pos = Position::new(input.line, input.character);
+    let pos = Position::new(input.position.line, input.position.character);
 
     let response = super::mcp::block_on(async {
         let client = registry.client_for_path(&path).await?;
@@ -44,8 +44,8 @@ pub(super) fn execute_definition(
         format!(
             "lsp_definition {}:{}:{}",
             display_path(&path, executor),
-            input.line + 1,
-            input.character + 1
+            input.position.line + 1,
+            input.position.character + 1
         ),
         if locations.is_empty() {
             "no definition found".to_string()
@@ -64,10 +64,10 @@ pub(super) fn execute_references(
     input: &LspReferencesToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.file_path);
+    let path = executor.resolve_target_path(&input.position.file_path);
     executor.ensure_read_permission(&path)?;
     let uri = path_to_uri(&path)?;
-    let pos = Position::new(input.line, input.character);
+    let pos = Position::new(input.position.line, input.position.character);
     let include_decl = input.include_declaration;
 
     let response = super::mcp::block_on(async {
@@ -85,8 +85,8 @@ pub(super) fn execute_references(
         format!(
             "lsp_references {}:{}:{}",
             display_path(&path, executor),
-            input.line + 1,
-            input.character + 1
+            input.position.line + 1,
+            input.position.character + 1
         ),
         if locations.is_empty() {
             "no references found".to_string()
@@ -105,10 +105,10 @@ pub(super) fn execute_hover(
     input: &LspHoverToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.file_path);
+    let path = executor.resolve_target_path(&input.position.file_path);
     executor.ensure_read_permission(&path)?;
     let uri = path_to_uri(&path)?;
-    let pos = Position::new(input.line, input.character);
+    let pos = Position::new(input.position.line, input.position.character);
 
     let response = super::mcp::block_on(async {
         let client = registry.client_for_path(&path).await?;
@@ -123,8 +123,8 @@ pub(super) fn execute_hover(
         format!(
             "lsp_hover {}:{}:{}",
             display_path(&path, executor),
-            input.line + 1,
-            input.character + 1
+            input.position.line + 1,
+            input.position.character + 1
         ),
         contents
             .clone()

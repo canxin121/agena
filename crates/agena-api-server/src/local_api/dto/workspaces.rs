@@ -12,24 +12,21 @@ pub struct WorkspaceResource {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct WorkspaceListQuery {
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub limit: Option<u64>,
-    #[serde(default)]
-    pub search: Option<String>,
+    #[serde(flatten)]
+    pub pagination: SearchPaginationQuery,
     #[serde(default)]
     pub include_session_count: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct WorkspaceWriteRequest {
+pub struct WorkspacePathRequest {
     pub path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkspaceResolveRequest {
-    pub path: String,
+    #[serde(flatten)]
+    pub workspace: WorkspacePathRequest,
     #[serde(default)]
     pub create_if_missing: bool,
 }

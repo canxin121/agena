@@ -1,6 +1,22 @@
 use super::*;
+use crate::session_support::{session_execution_resource, session_goal_resource_for_session};
 
 // ─── Query dispatch ─────────────────────────────────────────────────────
+
+fn cursor_pagination(cursor: Option<String>, limit: Option<u64>) -> CursorPaginationQuery {
+    CursorPaginationQuery { cursor, limit }
+}
+
+fn search_pagination(
+    cursor: Option<String>,
+    limit: Option<u64>,
+    search: Option<String>,
+) -> SearchPaginationQuery {
+    SearchPaginationQuery {
+        pagination: cursor_pagination(cursor, limit),
+        search,
+    }
+}
 
 pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResult, ServerError> {
     let manager = state.session_manager()?;
@@ -10,30 +26,19 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             limit,
             search,
             include_session_count,
-        }) => {
-            let page = state
-                .service()
-                .list_workspaces(WorkspaceListQuery {
-                    cursor,
-                    limit,
-                    search,
-                    include_session_count,
-                })
-                .await
-                .server()?;
-            Ok(QueryResult::Workspaces(page_from_http(page)))
-        }
-        Query::GetWorkspace(GetWorkspaceParams { workspace_id }) => {
-            let workspace = state
-                .service()
-                .get_workspace(workspace_id)
-                .await
-                .server()?
-                .ok_or_else(|| {
-                    ServerError::NotFound(format!("workspace {workspace_id} not found"))
-                })?;
-            Ok(QueryResult::Workspace(workspace.into()))
-        }
+        }) => Ok(QueryResult::Workspaces(
+            http_page_result(state.service().list_workspaces(WorkspaceListQuery {
+                pagination: search_pagination(cursor, limit, search),
+                include_session_count,
+            }))
+            .await?,
+        )),
+        Query::GetWorkspace(GetWorkspaceParams { workspace_id }) => Ok(QueryResult::Workspace(
+            http_optional_result(state.service().get_workspace(workspace_id), || {
+                format!("workspace {workspace_id} not found")
+            })
+            .await?,
+        )),
         Query::ListSessions(ListSessionsParams {
             cursor,
             limit,
@@ -41,61 +46,46 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             parent_id,
             roots,
             search,
-        }) => {
-            let page = state
-                .service()
-                .list_sessions(SessionListQuery {
-                    cursor,
-                    limit,
-                    workspace_id,
-                    parent_id,
-                    roots,
-                    search,
-                })
-                .await
-                .server()?;
-            Ok(QueryResult::Sessions(page_from_http(page)))
-        }
-        Query::GetSession(GetSessionParams { session_id }) => {
-            let session = state
-                .service()
-                .get_session(session_id)
-                .await
-                .server()?
-                .ok_or_else(|| ServerError::NotFound(format!("session {session_id} not found")))?;
-            Ok(QueryResult::Session(session.into()))
-        }
+        }) => Ok(QueryResult::Sessions(
+            http_page_result(state.service().list_sessions(SessionListQuery {
+                pagination: search_pagination(cursor, limit, search),
+                workspace_id,
+                parent_id,
+                roots,
+            }))
+            .await?,
+        )),
+        Query::GetSession(GetSessionParams { session_id }) => Ok(QueryResult::Session(
+            http_optional_result(state.service().get_session(session_id), || {
+                format!("session {session_id} not found")
+            })
+            .await?,
+        )),
         Query::ListMessages(ListMessagesParams {
             session_id,
             cursor,
             limit,
             parts,
-        }) => {
-            let page = state
-                .service()
-                .list_messages(
-                    manager.as_ref(),
-                    session_id,
-                    MessageListQuery {
-                        cursor,
-                        limit,
-                        parts: parts.into(),
-                    },
-                )
-                .await
-                .server()?;
-            Ok(QueryResult::Messages(page_from_http(page)))
-        }
-        Query::GetMessage(GetMessageParams { message_id, parts }) => {
-            let message = state
-                .service()
-                .get_message(manager.as_ref(), message_id, parts.into())
-                .await
-                .server()?
-                .map(Into::into)
-                .ok_or_else(|| ServerError::NotFound(format!("message {message_id} not found")))?;
-            Ok(QueryResult::Message(message))
-        }
+        }) => Ok(QueryResult::Messages(
+            http_page_result(state.service().list_messages(
+                manager.as_ref(),
+                session_id,
+                MessageListQuery {
+                    pagination: cursor_pagination(cursor, limit),
+                    parts: parts.into(),
+                },
+            ))
+            .await?,
+        )),
+        Query::GetMessage(GetMessageParams { message_id, parts }) => Ok(QueryResult::Message(
+            http_optional_result(
+                state
+                    .service()
+                    .get_message(manager.as_ref(), message_id, parts.into()),
+                || format!("message {message_id} not found"),
+            )
+            .await?,
+        )),
         Query::ListEvents(ListEventsParams {
             scope,
             kinds,
@@ -180,22 +170,16 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
         )),
         Query::GetSessionState(GetSessionParams { session_id }) => {
             let session = manager.get_session(session_id).await?;
-            let state_resource = state
-                .service()
-                .session_execution_resource(manager.as_ref(), &session)
-                .await
-                .server()?;
+            let state_resource =
+                session_execution_resource(state, manager.as_ref(), &session).await?;
             Ok(QueryResult::SessionState(state_resource.into()))
         }
         Query::GetSessionGoal(GetSessionParams { session_id }) => {
             let session = manager.get_session(session_id).await?;
             let goal = match session.goal.as_ref() {
                 Some(goal) => Some(
-                    state
-                        .service()
-                        .session_goal_resource(manager.as_ref(), &session, goal)
-                        .await
-                        .server()?
+                    session_goal_resource_for_session(state, manager.as_ref(), &session, goal)
+                        .await?
                         .into(),
                 ),
                 None => None,
@@ -206,28 +190,21 @@ pub async fn dispatch_query(state: &AppState, query: Query) -> Result<QueryResul
             cursor,
             limit,
             search,
-        }) => {
-            let page = state
-                .service()
-                .list_permission_rules(PermissionRuleListQuery {
-                    cursor,
-                    limit,
-                    search,
-                })
-                .await
-                .server()?;
-            Ok(QueryResult::PermissionRules(page_from_http(page)))
-        }
+        }) => Ok(QueryResult::PermissionRules(
+            http_page_result(
+                state
+                    .service()
+                    .list_permission_rules(search_pagination(cursor, limit, search)),
+            )
+            .await?,
+        )),
         Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
-            let rule = state
-                .service()
-                .get_permission_rule(rule_id)
-                .await
-                .server()?
-                .ok_or_else(|| {
-                    ServerError::NotFound(format!("permission rule {rule_id} not found"))
-                })?;
-            Ok(QueryResult::PermissionRule(rule.into()))
+            Ok(QueryResult::PermissionRule(
+                http_optional_result(state.service().get_permission_rule(rule_id), || {
+                    format!("permission rule {rule_id} not found")
+                })
+                .await?,
+            ))
         }
     }
 }

@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::error::{AppError, ProviderErrorKind};
+use crate::error::AppError;
 
 use super::super::{OAuthAuthorizeStart, OAuthTokenResponse, OAuthUserInfo};
+use super::shared::{ensure_http_success, expires_at_ms_from_seconds};
 
 const PLATFORM_LOGIN_URL: &str = "https://acs.atomgit.com/auth/login";
 const PLATFORM_CHECK_URL: &str = "https://acs.atomgit.com/auth/check";
@@ -62,7 +63,7 @@ pub async fn start_atomgit_oauth() -> Result<OAuthAuthorizeStart, AppError> {
         .send()
         .await?;
 
-    let response = ensure_success("auth/login", response).await?;
+    let response = ensure_http_success("atomgit", Some("auth/login"), response).await?;
     let data: PlatformLoginResponse = response.json().await?;
 
     Ok(OAuthAuthorizeStart {
@@ -111,14 +112,14 @@ pub async fn exchange_atomgit_oauth_state(state: &str) -> Result<OAuthTokenRespo
         .send()
         .await?;
 
-    let response = ensure_success("auth/token", response).await?;
+    let response = ensure_http_success("atomgit", Some("auth/token"), response).await?;
     let data: PlatformTokenResponse = response.json().await?;
     let user = user_info(data.user);
 
     Ok(OAuthTokenResponse {
         refresh: data.refresh_token.unwrap_or_default(),
         access: data.access_token,
-        expires_at_ms: expires_at_ms(data.expires_in),
+        expires_at_ms: expires_at_ms_from_seconds(data.expires_in),
         account_id: Some(user.id.clone()),
         user: Some(user),
     })
@@ -141,7 +142,7 @@ pub async fn refresh_atomgit_token(refresh_token: &str) -> Result<OAuthTokenResp
         .send()
         .await?;
 
-    let response = ensure_success("oauth/refresh", response).await?;
+    let response = ensure_http_success("atomgit", Some("oauth/refresh"), response).await?;
     let data: PlatformRefreshResponse = response.json().await?;
     let user = data.user.map(user_info);
 
@@ -150,7 +151,7 @@ pub async fn refresh_atomgit_token(refresh_token: &str) -> Result<OAuthTokenResp
             .refresh_token
             .unwrap_or_else(|| refresh_token.to_owned()),
         access: data.access_token,
-        expires_at_ms: expires_at_ms(data.expires_in),
+        expires_at_ms: expires_at_ms_from_seconds(data.expires_in),
         account_id: user.as_ref().map(|user| user.id.clone()),
         user,
     })
@@ -165,25 +166,6 @@ fn atomgit_client() -> Result<reqwest::Client, AppError> {
         .map_err(AppError::from)
 }
 
-async fn ensure_success(
-    endpoint: &str,
-    response: reqwest::Response,
-) -> Result<reqwest::Response, AppError> {
-    if response.status().is_success() {
-        return Ok(response);
-    }
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    Err(AppError::HttpStatus {
-        provider: "atomgit".to_owned(),
-        status,
-        body: format!("{endpoint}: {body}"),
-        kind: ProviderErrorKind::ApiError,
-        retryable: false,
-    })
-}
-
 fn user_info(user: PlatformUserInfo) -> OAuthUserInfo {
     OAuthUserInfo {
         id: user.id,
@@ -192,13 +174,6 @@ fn user_info(user: PlatformUserInfo) -> OAuthUserInfo {
         email: user.email,
         avatar_url: user.avatar_url,
     }
-}
-
-fn expires_at_ms(expires_in: Option<i64>) -> i64 {
-    expires_in
-        .filter(|seconds| *seconds > 0)
-        .map(|seconds| chrono::Utc::now().timestamp_millis() + seconds * 1_000)
-        .unwrap_or(0)
 }
 
 fn strip_force_login(url: &str) -> String {

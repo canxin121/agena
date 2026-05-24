@@ -3,18 +3,17 @@ use super::*;
 impl ApiService {
     pub async fn list_permission_rules(
         &self,
-        query: PermissionRuleListQuery,
+        query: SearchPaginationQuery,
     ) -> ApiResult<PaginatedResponse<PermissionRuleResource>> {
-        let limit = normalize_limit(query.limit);
+        let limit = normalize_limit(query.limit());
         let cursor = query
-            .cursor
-            .as_deref()
+            .cursor()
             .map(decode_cursor::<PermissionRuleCursor>)
             .transpose()?;
         let mut statement = entities::permission_rule::Entity::find()
             .order_by_desc(entities::permission_rule::Column::UpdatedAtMs)
             .order_by_desc(entities::permission_rule::Column::Id);
-        if let Some(search) = non_empty(query.search.as_deref()) {
+        if let Some(search) = non_empty(query.search()) {
             statement = statement
                 .filter(entities::permission_rule::Column::ActionKey.like(format!("%{search}%")));
         }

@@ -1,12 +1,12 @@
 use super::*;
 
 impl SessionManager {
-    #[tracing::instrument(skip(self, request), fields(session_id = request.session_id))]
+    #[tracing::instrument(skip(self, request), fields(session_id = request.run.session_id))]
     pub async fn submit_user_message(
         &self,
         request: SessionUserMessageRequest,
     ) -> Result<Session, AppError> {
-        let session_id = request.session_id;
+        let session_id = request.run.session_id;
         let (control, steer_rx) = self.run_registry.register(session_id).await;
         crate::metrics::session_started();
         let manager = self.background_handle();
@@ -44,7 +44,7 @@ impl SessionManager {
             .join("\n");
         if !prompt_text.is_empty() {
             let input = crate::plugin::UserPromptSubmitInput {
-                session_id: request.session_id,
+                session_id: request.run.session_id,
                 prompt: prompt_text,
             };
             match state
@@ -78,12 +78,12 @@ impl SessionManager {
 
         let mut session = self
             .store
-            .load_session(request.session_id, state.cache_policy())
+            .load_session(request.run.session_id, state.cache_policy())
             .await?;
         session = self
-            .apply_requested_agent_profile(session, &mut request.options, state.clone())
+            .apply_requested_agent_profile(session, &mut request.run.options, state.clone())
             .await?;
-        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
+        let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
         self.apply_run_selection_to_session(&mut session, &options);
         let ids = self.store.reserve_message_ids(request.parts.len()).await?;
         let user_message = build_message(
@@ -159,7 +159,7 @@ impl SessionManager {
 
     pub async fn continue_session(
         &self,
-        mut request: SessionContinueRequest,
+        mut request: SessionExecutionRequest,
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         let (control, steer_rx) = self.run_registry.register(session_id).await;
@@ -308,10 +308,9 @@ impl SessionManager {
                 requested_model.as_deref(),
                 profile_default.as_ref(),
             )?;
-            let session = Box::pin(self.continue_session(SessionContinueRequest {
-                session_id: existing.id,
-                options: options.clone(),
-            }))
+            let session = Box::pin(
+                self.continue_session(SessionExecutionRequest::new(existing.id, options.clone())),
+            )
             .await?;
             return Ok(SessionSubtaskResponse {
                 profile_name: Some(effective_profile_name),
@@ -360,11 +359,11 @@ impl SessionManager {
         let run_options = options.clone();
         let session = tokio::task::spawn(async move {
             manager
-                .submit_user_message(SessionUserMessageRequest {
-                    session_id: child_id,
-                    options: run_options,
-                    parts: vec![PartContent::text(request.prompt)],
-                })
+                .submit_user_message(SessionUserMessageRequest::new(
+                    child_id,
+                    run_options,
+                    vec![PartContent::text(request.prompt)],
+                ))
                 .await
         })
         .await

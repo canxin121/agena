@@ -4,10 +4,9 @@ use serde::{Deserialize, Serialize};
 use agena::{
     agent::{AgentMode, AgentPermissionConfig},
     agents::AgentScope,
-    message::{PartContent, UserInputReply},
+    message::PartContent,
     model_catalog::{ModelCatalogEntryRecord, ModelCatalogEntrySourceKind},
     permission::PermissionMode,
-    permission::PermissionReply,
     provider::ProviderModel,
     runtime::{
         RuntimeBackgroundTask, RuntimeBackgroundTaskKind, RuntimeBackgroundTaskOrigin,
@@ -47,6 +46,56 @@ pub struct HealthResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
     pub database_connected: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EntriesResponse<T> {
+    pub entries: Vec<T>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ItemsResponse<T> {
+    pub items: Vec<T>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct CursorPaginationQuery {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SearchPaginationQuery {
+    #[serde(flatten)]
+    pub pagination: CursorPaginationQuery,
+    #[serde(default)]
+    pub search: Option<String>,
+}
+
+impl CursorPaginationQuery {
+    pub fn cursor(&self) -> Option<&str> {
+        self.cursor.as_deref()
+    }
+
+    pub const fn limit(&self) -> Option<u64> {
+        self.limit
+    }
+}
+
+impl SearchPaginationQuery {
+    pub fn cursor(&self) -> Option<&str> {
+        self.pagination.cursor()
+    }
+
+    pub const fn limit(&self) -> Option<u64> {
+        self.pagination.limit()
+    }
+
+    pub fn search(&self) -> Option<&str> {
+        self.search.as_deref()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -17,6 +17,81 @@ use super::{
 pub(crate) type CompletionEventStream =
     std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>;
 
+macro_rules! impl_model_runtime_base_via_adapter_methods {
+    ($(
+        fn $method:ident / $adapter_method:ident (&self, model: &ModelId) -> $return:ty;
+    )*) => {
+        $(
+            fn $method(&self, model: &ModelId) -> $return {
+                self.$adapter_method(None, model)
+            }
+        )*
+    };
+}
+
+pub(crate) use impl_model_runtime_base_via_adapter_methods;
+
+macro_rules! impl_model_runtime_adapter_agnostic_methods {
+    ($(
+        fn $method:ident / $adapter_method:ident ($self:ident, $model:ident) -> $return:ty $body:block
+    )*) => {
+        $(
+            fn $method(&$self, $model: &ModelId) -> $return $body
+
+            fn $adapter_method(
+                &$self,
+                adapter_id: Option<&AdapterId>,
+                $model: &ModelId,
+            ) -> $return {
+                let _ = adapter_id;
+                $body
+            }
+        )*
+    };
+}
+
+pub(crate) use impl_model_runtime_adapter_agnostic_methods;
+
+macro_rules! impl_model_runtime_target_defaults {
+    () => {
+        fn default_model(&self) -> &ModelId {
+            self.target.default_model()
+        }
+
+        fn default_adapter(&self) -> Option<&AdapterId> {
+            self.target.default_adapter()
+        }
+
+        fn stream_resume_policy(&self) -> StreamResumePolicy {
+            self.target.stream_resume_policy()
+        }
+    };
+}
+
+pub(crate) use impl_model_runtime_target_defaults;
+
+macro_rules! impl_model_runtime_target_methods {
+    ($(
+        fn $method:ident / $adapter_method:ident (&self, model: &ModelId) -> $return:ty;
+    )*) => {
+        $(
+            fn $method(&self, model: &ModelId) -> $return {
+                self.target.$method(model)
+            }
+
+            fn $adapter_method(
+                &self,
+                adapter_id: Option<&AdapterId>,
+                model: &ModelId,
+            ) -> $return {
+                self.target.$adapter_method(adapter_id, model)
+            }
+        )*
+    };
+}
+
+pub(crate) use impl_model_runtime_target_methods;
+
 #[async_trait]
 pub trait ModelRuntime: Send + Sync {
     fn id(&self) -> &str;
@@ -37,40 +112,22 @@ pub trait ModelRuntime: Send + Sync {
         None
     }
 
-    fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
-        match self.capability_family() {
-            Some(family) => {
-                super::default_capability_registry().capabilities_for_family(family, model.as_str())
+    impl_model_runtime_adapter_agnostic_methods! {
+        fn model_capabilities / model_capabilities_for_adapter (self, model) -> ModelCapabilities {
+            match self.capability_family() {
+                Some(family) => super::default_capability_registry()
+                    .capabilities_for_family(family, model.as_str()),
+                None => ModelCapabilities::default(),
             }
-            None => ModelCapabilities::default(),
         }
-    }
 
-    fn model_capabilities_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> ModelCapabilities {
-        let _ = adapter_id;
-        self.model_capabilities(model)
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
-        match self.capability_family() {
-            Some(family) => {
-                super::default_model_metadata_registry().metadata_for_family(family, model.as_str())
+        fn model_metadata / model_metadata_for_adapter (self, model) -> ModelMetadata {
+            match self.capability_family() {
+                Some(family) => super::default_model_metadata_registry()
+                    .metadata_for_family(family, model.as_str()),
+                None => ModelMetadata::default(),
             }
-            None => ModelMetadata::default(),
         }
-    }
-
-    fn model_metadata_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> ModelMetadata {
-        let _ = adapter_id;
-        self.model_metadata(model)
     }
 
     fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
@@ -101,50 +158,27 @@ pub trait ModelRuntime: Send + Sync {
         }
     }
 
-    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
-        let _ = model;
-        BTreeMap::new()
-    }
-
-    fn model_speed_modes_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> BTreeMap<String, ModelSpeedMode> {
-        let _ = adapter_id;
-        self.model_speed_modes(model)
+    impl_model_runtime_adapter_agnostic_methods! {
+        fn model_speed_modes / model_speed_modes_for_adapter (self, model) -> BTreeMap<String, ModelSpeedMode> {
+            let _ = model;
+            BTreeMap::new()
+        }
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         StreamResumePolicy::Disabled
     }
 
-    fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
-        let _ = model;
-        false
-    }
+    impl_model_runtime_adapter_agnostic_methods! {
+        fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (self, model) -> bool {
+            let _ = model;
+            false
+        }
 
-    fn supports_prompt_continuation_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> bool {
-        let _ = adapter_id;
-        self.supports_prompt_continuation(model)
-    }
-
-    fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
-        let _ = model;
-        None
-    }
-
-    fn prompt_cache_shape_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> Option<PromptCacheShape> {
-        let _ = adapter_id;
-        self.prompt_cache_shape(model)
+        fn prompt_cache_shape / prompt_cache_shape_for_adapter (self, model) -> Option<PromptCacheShape> {
+            let _ = model;
+            None
+        }
     }
 
     fn prompt_cache_shape_fingerprint(&self, model: &ModelId) -> Option<String> {

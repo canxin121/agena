@@ -1,9 +1,9 @@
 use serde::Deserialize;
 
-use crate::error::{AppError, ProviderErrorKind};
+use crate::error::AppError;
 
 use super::super::{DeviceCodeStart, OAuthTokenResponse};
-use super::shared::{COPILOT_CLIENT_ID, normalize_domain};
+use super::shared::{COPILOT_CLIENT_ID, ensure_http_success, normalize_domain};
 
 pub async fn start_copilot_device_code(domain: &str) -> Result<DeviceCodeStart, AppError> {
     let domain = normalize_domain(domain);
@@ -28,21 +28,7 @@ pub async fn start_copilot_device_code(domain: &str) -> Result<DeviceCodeStart, 
         .send()
         .await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<empty>".to_owned());
-        return Err(AppError::HttpStatus {
-            provider: "github-copilot".to_owned(),
-            status,
-            body,
-            kind: ProviderErrorKind::ApiError,
-            retryable: false,
-        });
-    }
-
+    let response = ensure_http_success("github-copilot", None, response).await?;
     let data: DeviceCodeResponse = response.json().await?;
     Ok(DeviceCodeStart {
         verification_url: data.verification_uri,
@@ -77,21 +63,7 @@ pub async fn poll_copilot_device_code(
         .send()
         .await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<empty>".to_owned());
-        return Err(AppError::HttpStatus {
-            provider: "github-copilot".to_owned(),
-            status,
-            body,
-            kind: ProviderErrorKind::ApiError,
-            retryable: false,
-        });
-    }
-
+    let response = ensure_http_success("github-copilot", None, response).await?;
     let data: PollResult = response.json().await?;
     if let Some(token) = data.access_token {
         return Ok(Some(OAuthTokenResponse {

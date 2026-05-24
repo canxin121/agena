@@ -16,10 +16,10 @@ use crate::event::{
     PermissionRequestedEvent, SessionGoalEvent,
 };
 use crate::message::{
-    ExecutionStatus, Message, MessageMetadata, MessagePart, MessageSource, MessageStatus,
-    OperationBlock, OperationPart, PartContent, PermissionRequestPart, TaskSubagentType, TimeRange,
-    ToolAttachment, ToolInvocation, ToolOutput, UserInputReply, UserInputReplyKind,
-    UserInputRequest, UserInputRequestPart,
+    AttachmentItem, ExecutionStatus, InteractiveRequestPart, Message, MessageMetadata, MessagePart,
+    MessageSource, MessageStatus, OperationBlock, OperationPart, PartContent, RequestPart,
+    TaskSubagentType, TimeRange, ToolInvocation, ToolOutput, UserInputReply, UserInputReplyKind,
+    UserInputRequest,
 };
 use crate::model::ModelRef;
 use crate::model::ModelSpeedModeRequestOverride;
@@ -179,6 +179,54 @@ impl SessionRunOptions {
         }
     }
 
+    pub fn with_thinking_mode(mut self, thinking_mode: Option<String>) -> Self {
+        self.thinking_mode = thinking_mode;
+        self
+    }
+
+    pub fn with_speed_mode(mut self, speed_mode: Option<String>) -> Self {
+        self.speed_mode = speed_mode;
+        self
+    }
+
+    pub fn with_verbosity(mut self, verbosity: Option<String>) -> Self {
+        self.verbosity = verbosity;
+        self
+    }
+
+    pub fn with_thinking(mut self, thinking: Option<ThinkingRequest>) -> Self {
+        self.thinking = thinking;
+        self
+    }
+
+    pub fn with_request_override(
+        mut self,
+        request_override: ModelSpeedModeRequestOverride,
+    ) -> Self {
+        self.request_override = request_override;
+        self
+    }
+
+    pub fn with_system(mut self, system: Option<String>) -> Self {
+        self.system = system;
+        self
+    }
+
+    pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
+        self.temperature = temperature;
+        self
+    }
+
+    pub fn with_max_output_tokens(mut self, max_output_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_output_tokens;
+        self
+    }
+
+    pub fn with_agent_profile(mut self, agent_profile: Option<String>) -> Self {
+        self.agent_profile = agent_profile;
+        self
+    }
+
     fn completion_request(
         &self,
         system: Option<String>,
@@ -211,22 +259,33 @@ impl SessionRunOptions {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionUserMessageRequest {
+pub struct SessionExecutionRequest {
     pub session_id: i64,
     pub options: SessionRunOptions,
+}
+
+impl SessionExecutionRequest {
+    pub fn new(session_id: i64, options: SessionRunOptions) -> Self {
+        Self {
+            session_id,
+            options,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionUserMessageRequest {
+    pub run: SessionExecutionRequest,
     pub parts: Vec<PartContent>,
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionContinueRequest {
-    pub session_id: i64,
-    pub options: SessionRunOptions,
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionCompactRequest {
-    pub session_id: i64,
-    pub options: SessionRunOptions,
+impl SessionUserMessageRequest {
+    pub fn new(session_id: i64, options: SessionRunOptions, parts: Vec<PartContent>) -> Self {
+        Self {
+            run: SessionExecutionRequest::new(session_id, options),
+            parts,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -251,18 +310,40 @@ pub struct SessionRewindRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionPermissionReplyRequest {
+pub struct SessionExecutionReplyRequest<T> {
     pub session_id: i64,
     pub options: SessionRunOptions,
-    pub reply: PermissionReply,
-    pub operator: Option<String>,
+    pub reply: T,
+}
+
+impl<T> SessionExecutionReplyRequest<T> {
+    pub fn new(session_id: i64, options: SessionRunOptions, reply: T) -> Self {
+        Self {
+            session_id,
+            options,
+            reply,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionUserInputReplyRequest {
-    pub session_id: i64,
-    pub options: SessionRunOptions,
-    pub reply: UserInputReply,
+pub struct SessionPermissionReplyRequest {
+    pub request: SessionExecutionReplyRequest<PermissionReply>,
+    pub operator: Option<String>,
+}
+
+impl SessionPermissionReplyRequest {
+    pub fn new(
+        session_id: i64,
+        options: SessionRunOptions,
+        reply: PermissionReply,
+        operator: Option<String>,
+    ) -> Self {
+        Self {
+            request: SessionExecutionReplyRequest::new(session_id, options, reply),
+            operator,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -801,7 +882,7 @@ fn resolve_pending_tool(
 fn operation_blocks_from_tool_output(
     invocation: &ToolInvocation,
     details: &ToolOutput,
-    attachments: &[ToolAttachment],
+    attachments: &[AttachmentItem],
     output_text: &str,
 ) -> Vec<OperationBlock> {
     let mut blocks = text_result_blocks(output_text);
@@ -884,43 +965,24 @@ fn dedupe_operation_blocks(blocks: Vec<OperationBlock>) -> Vec<OperationBlock> {
 fn part_status(content: &PartContent) -> ExecutionStatus {
     match content {
         PartContent::Operation(tool) => tool.status(),
-        PartContent::Request(crate::message::RequestPart::Permission(permission)) => {
-            permission.status()
-        }
-        PartContent::Request(crate::message::RequestPart::UserInput(request)) => request.status(),
+        PartContent::Request(RequestPart::Permission(permission)) => permission.status(),
+        PartContent::Request(RequestPart::UserInput(request)) => request.status(),
         _ => ExecutionStatus::Completed,
     }
 }
 
-fn build_permission_part(
+fn build_request_part(
     part_id: i64,
     message_id: i64,
     operation_id: &str,
-    permission: PermissionRequestPart,
-) -> MessagePart {
-    let mut part = MessagePart::with_content(
-        part_id,
-        message_id,
-        Utc::now(),
-        permission.status(),
-        PartContent::permission_request(permission),
-    );
-    part.operation_id = Some(operation_id.to_string());
-    part
-}
-
-fn build_user_input_part(
-    part_id: i64,
-    message_id: i64,
-    operation_id: &str,
-    request: UserInputRequestPart,
+    request: RequestPart,
 ) -> MessagePart {
     let mut part = MessagePart::with_content(
         part_id,
         message_id,
         Utc::now(),
         request.status(),
-        PartContent::user_input_request(request),
+        PartContent::Request(request),
     );
     part.operation_id = Some(operation_id.to_string());
     part

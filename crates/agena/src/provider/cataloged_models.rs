@@ -14,7 +14,10 @@ use crate::{
     },
 };
 
-use super::core::ForwardingModelRuntime;
+use super::core::{
+    ForwardingModelRuntime, impl_model_runtime_base_via_adapter_methods,
+    impl_model_runtime_target_defaults,
+};
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelCapabilities, ModelRuntime,
     PromptCacheShape, StreamResumePolicy,
@@ -46,26 +49,42 @@ impl CatalogedModelsProvider {
         &self,
         model: &ModelId,
     ) -> Option<crate::provider::ConfiguredModelDefinition> {
-        self.provider
-            .models
-            .get(model.as_str())
-            .or_else(|| {
-                catalog_model_id_for_raw(model.as_str())
-                    .as_ref()
-                    .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
-            })
+        self.provider_definition(model)
             .map(catalog_definition_to_provider_definition)
     }
 
-    fn apply_to_model(&self, model_id: &ModelId, mut model: Model) -> Model {
-        if let Some(catalog_model_id) = catalog_model_id_for_raw(model_id.as_str()) {
-            model.catalog_model_id = Some(ModelId::new(catalog_model_id));
-        }
-        if let Some(definition) = self.provider.models.get(model_id.as_str()).or_else(|| {
-            catalog_model_id_for_raw(model_id.as_str())
-                .as_ref()
+    fn provider_definition(
+        &self,
+        model: &ModelId,
+    ) -> Option<&crate::model_catalog::CatalogModelDefinition> {
+        self.provider.models.get(model.as_str()).or_else(|| {
+            catalog_model_id_for_raw(model.as_str())
+                .as_deref()
                 .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
-        }) {
+        })
+    }
+
+    fn with_configured_definition<T>(
+        &self,
+        model: &ModelId,
+        base: T,
+        map: impl FnOnce(T, &crate::provider::ConfiguredModelDefinition) -> T,
+    ) -> T {
+        match self.configured_definition(model) {
+            Some(configured) => map(base, &configured),
+            None => base,
+        }
+    }
+
+    fn apply_catalog_model_id(&self, model_id: &ModelId, model: &mut Model) -> Option<String> {
+        let catalog_model_id = catalog_model_id_for_raw(model_id.as_str())?;
+        model.catalog_model_id = Some(ModelId::new(catalog_model_id.clone()));
+        Some(catalog_model_id)
+    }
+
+    fn apply_to_model(&self, model_id: &ModelId, mut model: Model) -> Model {
+        self.apply_catalog_model_id(model_id, &mut model);
+        if let Some(definition) = self.provider_definition(model_id) {
             apply_catalog_display_name_as_fallback(&mut model, definition);
             let capability_fallback = self
                 .target
@@ -118,16 +137,15 @@ impl ModelRuntime for CatalogedModelsProvider {
         self.target.id()
     }
 
-    fn default_model(&self) -> &ModelId {
-        self.target.default_model()
-    }
+    impl_model_runtime_target_defaults!();
 
-    fn default_adapter(&self) -> Option<&AdapterId> {
-        self.target.default_adapter()
-    }
-
-    fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
-        self.model_capabilities_for_adapter(None, model)
+    impl_model_runtime_base_via_adapter_methods! {
+        fn model_capabilities / model_capabilities_for_adapter (&self, model: &ModelId) -> ModelCapabilities;
+        fn model_metadata / model_metadata_for_adapter (&self, model: &ModelId) -> ModelMetadata;
+        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode>;
+        fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
+        fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
+        fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
     }
 
     fn model_capabilities_for_adapter(
@@ -138,19 +156,13 @@ impl ModelRuntime for CatalogedModelsProvider {
         let primary = self
             .target
             .model_capabilities_for_adapter(adapter_id, model);
-        if let Some(configured) = self.configured_definition(model) {
+        self.with_configured_definition(model, primary, |primary, configured| {
             primary.with_fallbacks_from(
                 &configured
                     .capabilities
                     .apply_to(ModelCapabilities::default()),
             )
-        } else {
-            primary
-        }
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
-        self.model_metadata_for_adapter(None, model)
+        })
     }
 
     fn model_metadata_for_adapter(
@@ -159,15 +171,9 @@ impl ModelRuntime for CatalogedModelsProvider {
         model: &ModelId,
     ) -> ModelMetadata {
         let metadata = self.target.model_metadata_for_adapter(adapter_id, model);
-        if let Some(configured) = self.configured_definition(model) {
+        self.with_configured_definition(model, metadata, |metadata, configured| {
             metadata.with_fallbacks_from(&configured.metadata())
-        } else {
-            metadata
-        }
-    }
-
-    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
-        self.model_thinking_modes_for_adapter(None, model)
+        })
     }
 
     fn model_thinking_modes_for_adapter(
@@ -181,14 +187,9 @@ impl ModelRuntime for CatalogedModelsProvider {
         for (name, mode) in self.synthesize_thinking_modes_from_metadata(adapter_id, model) {
             modes.entry(name).or_insert(mode);
         }
-        if let Some(configured) = self.configured_definition(model) {
-            modes = merge_catalog_baseline_thinking_modes(modes, &configured.thinking_modes);
-        }
-        modes
-    }
-
-    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
-        self.model_speed_modes_for_adapter(None, model)
+        self.with_configured_definition(model, modes, |modes, configured| {
+            merge_catalog_baseline_thinking_modes(modes, &configured.thinking_modes)
+        })
     }
 
     fn model_speed_modes_for_adapter(
@@ -196,22 +197,11 @@ impl ModelRuntime for CatalogedModelsProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> BTreeMap<String, ModelSpeedMode> {
-        self.configured_definition(model)
-            .map(|configured| {
-                merge_catalog_baseline_speed_modes(
-                    self.target.model_speed_modes_for_adapter(adapter_id, model),
-                    &configured.speed_modes,
-                )
-            })
-            .unwrap_or_else(|| self.target.model_speed_modes_for_adapter(adapter_id, model))
-    }
-
-    fn stream_resume_policy(&self) -> StreamResumePolicy {
-        self.target.stream_resume_policy()
-    }
-
-    fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
-        self.supports_prompt_continuation_for_adapter(None, model)
+        self.with_configured_definition(
+            model,
+            self.target.model_speed_modes_for_adapter(adapter_id, model),
+            |modes, configured| merge_catalog_baseline_speed_modes(modes, &configured.speed_modes),
+        )
     }
 
     fn supports_prompt_continuation_for_adapter(
@@ -221,10 +211,6 @@ impl ModelRuntime for CatalogedModelsProvider {
     ) -> bool {
         self.target
             .supports_prompt_continuation_for_adapter(adapter_id, model)
-    }
-
-    fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
-        self.prompt_cache_shape_for_adapter(None, model)
     }
 
     fn prompt_cache_shape_for_adapter(
@@ -242,9 +228,8 @@ impl ModelRuntime for CatalogedModelsProvider {
         let mut listed_catalog_ids = std::collections::BTreeSet::new();
         for model in &mut models {
             listed.insert(model.id.to_string());
-            if let Some(catalog_model_id) = catalog_model_id_for_raw(model.id.as_str()) {
-                listed_catalog_ids.insert(catalog_model_id.clone());
-                model.catalog_model_id = Some(ModelId::new(catalog_model_id));
+            if let Some(catalog_model_id) = self.apply_catalog_model_id(&model.id.clone(), model) {
+                listed_catalog_ids.insert(catalog_model_id);
             }
             *model = self.apply_to_model(&model.id.clone(), model.clone());
         }

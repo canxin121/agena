@@ -175,113 +175,179 @@ fn provider_model_speed_modes(
     }
 }
 
-pub(crate) fn merge_catalog_baseline_thinking_modes(
-    mut primary: BTreeMap<String, crate::model::ModelThinkingMode>,
-    baseline: &BTreeMap<String, ConfiguredModelThinkingMode>,
-) -> BTreeMap<String, crate::model::ModelThinkingMode> {
+trait CatalogBaselineMode {
+    fn display_name(&self) -> &Option<String>;
+    fn display_name_mut(&mut self) -> &mut Option<String>;
+    fn description(&self) -> &Option<String>;
+    fn description_mut(&mut self) -> &mut Option<String>;
+    fn request_override(&self) -> &crate::model::ModelSpeedModeRequestOverride;
+    fn request_override_mut(&mut self) -> &mut crate::model::ModelSpeedModeRequestOverride;
+    fn adapter_overrides(&self) -> &BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>;
+    fn adapter_overrides_mut(
+        &mut self,
+    ) -> &mut BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>;
+}
+
+macro_rules! impl_catalog_baseline_mode {
+    ($ty:path) => {
+        impl CatalogBaselineMode for $ty {
+            fn display_name(&self) -> &Option<String> {
+                &self.display_name
+            }
+
+            fn display_name_mut(&mut self) -> &mut Option<String> {
+                &mut self.display_name
+            }
+
+            fn description(&self) -> &Option<String> {
+                &self.description
+            }
+
+            fn description_mut(&mut self) -> &mut Option<String> {
+                &mut self.description
+            }
+
+            fn request_override(&self) -> &crate::model::ModelSpeedModeRequestOverride {
+                &self.request_override
+            }
+
+            fn request_override_mut(&mut self) -> &mut crate::model::ModelSpeedModeRequestOverride {
+                &mut self.request_override
+            }
+
+            fn adapter_overrides(
+                &self,
+            ) -> &BTreeMap<String, crate::model::ModelSpeedModeRequestOverride> {
+                &self.adapter_overrides
+            }
+
+            fn adapter_overrides_mut(
+                &mut self,
+            ) -> &mut BTreeMap<String, crate::model::ModelSpeedModeRequestOverride> {
+                &mut self.adapter_overrides
+            }
+        }
+    };
+}
+
+impl_catalog_baseline_mode!(crate::model::ModelThinkingMode);
+impl_catalog_baseline_mode!(crate::model::ModelSpeedMode);
+
+trait ConfiguredCatalogBaselineMode<Mode> {
+    fn disabled(&self) -> bool;
+    fn apply_to_empty(&self) -> Option<Mode>;
+}
+
+impl ConfiguredCatalogBaselineMode<crate::model::ModelThinkingMode>
+    for ConfiguredModelThinkingMode
+{
+    fn disabled(&self) -> bool {
+        self.disabled
+    }
+
+    fn apply_to_empty(&self) -> Option<crate::model::ModelThinkingMode> {
+        self.apply_to_mode(None)
+    }
+}
+
+impl ConfiguredCatalogBaselineMode<crate::model::ModelSpeedMode> for ConfiguredModelSpeedMode {
+    fn disabled(&self) -> bool {
+        self.disabled
+    }
+
+    fn apply_to_empty(&self) -> Option<crate::model::ModelSpeedMode> {
+        self.apply_to_mode(None)
+    }
+}
+
+fn fill_missing_option<T: Clone>(current: &mut Option<T>, next: &Option<T>) {
+    if current.is_none() {
+        *current = next.clone();
+    }
+}
+
+fn merge_baseline_adapter_overrides(
+    primary: &mut BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>,
+    baseline: &BTreeMap<String, crate::model::ModelSpeedModeRequestOverride>,
+) {
+    for (adapter_id, override_patch) in baseline {
+        match primary.remove(adapter_id.as_str()) {
+            Some(existing) => {
+                primary.insert(adapter_id.clone(), override_patch.merged_with(&existing));
+            }
+            None => {
+                primary.insert(adapter_id.clone(), override_patch.clone());
+            }
+        }
+    }
+}
+
+fn merge_catalog_baseline_mode<Mode, ConfiguredMode>(
+    mut primary: Mode,
+    baseline: &ConfiguredMode,
+    merge_extra: impl Fn(&mut Mode, &Mode),
+) -> Mode
+where
+    Mode: CatalogBaselineMode,
+    ConfiguredMode: ConfiguredCatalogBaselineMode<Mode>,
+{
+    if let Some(mode) = baseline.apply_to_empty() {
+        fill_missing_option(primary.display_name_mut(), mode.display_name());
+        fill_missing_option(primary.description_mut(), mode.description());
+        merge_extra(&mut primary, &mode);
+        let merged = mode
+            .request_override()
+            .merged_with(primary.request_override());
+        *primary.request_override_mut() = merged;
+        merge_baseline_adapter_overrides(primary.adapter_overrides_mut(), mode.adapter_overrides());
+    }
+    primary
+}
+
+fn merge_catalog_baseline_modes<Mode, ConfiguredMode>(
+    mut primary: BTreeMap<String, Mode>,
+    baseline: &BTreeMap<String, ConfiguredMode>,
+    merge_mode: impl Fn(Mode, &ConfiguredMode) -> Mode,
+) -> BTreeMap<String, Mode>
+where
+    ConfiguredMode: ConfiguredCatalogBaselineMode<Mode>,
+{
     for (name, configured) in baseline {
-        if configured.disabled {
+        if configured.disabled() {
             continue;
         }
         match primary.remove(name) {
             Some(mode) => {
-                primary.insert(
-                    name.clone(),
-                    merge_catalog_baseline_thinking_mode(mode, configured),
-                );
+                primary.insert(name.clone(), merge_mode(mode, configured));
             }
             None => {
-                if let Some(mode) = configured.apply_to_mode(None) {
+                if let Some(mode) = configured.apply_to_empty() {
                     primary.insert(name.clone(), mode);
                 }
             }
         }
     }
     primary
+}
+
+pub(crate) fn merge_catalog_baseline_thinking_modes(
+    primary: BTreeMap<String, crate::model::ModelThinkingMode>,
+    baseline: &BTreeMap<String, ConfiguredModelThinkingMode>,
+) -> BTreeMap<String, crate::model::ModelThinkingMode> {
+    merge_catalog_baseline_modes(primary, baseline, |mode, configured| {
+        merge_catalog_baseline_mode(mode, configured, |primary, baseline| {
+            fill_missing_option(&mut primary.thinking, &baseline.thinking);
+        })
+    })
 }
 
 pub(crate) fn merge_catalog_baseline_speed_modes(
-    mut primary: BTreeMap<String, crate::model::ModelSpeedMode>,
+    primary: BTreeMap<String, crate::model::ModelSpeedMode>,
     baseline: &BTreeMap<String, ConfiguredModelSpeedMode>,
 ) -> BTreeMap<String, crate::model::ModelSpeedMode> {
-    for (name, configured) in baseline {
-        if configured.disabled {
-            continue;
-        }
-        match primary.remove(name) {
-            Some(mode) => {
-                primary.insert(
-                    name.clone(),
-                    merge_catalog_baseline_speed_mode(mode, configured),
-                );
-            }
-            None => {
-                if let Some(mode) = configured.apply_to_mode(None) {
-                    primary.insert(name.clone(), mode);
-                }
-            }
-        }
-    }
-    primary
-}
-
-fn merge_catalog_baseline_thinking_mode(
-    mut primary: crate::model::ModelThinkingMode,
-    baseline: &ConfiguredModelThinkingMode,
-) -> crate::model::ModelThinkingMode {
-    if let Some(mode) = baseline.apply_to_mode(None) {
-        if primary.display_name.is_none() {
-            primary.display_name = mode.display_name;
-        }
-        if primary.description.is_none() {
-            primary.description = mode.description;
-        }
-        if primary.thinking.is_none() {
-            primary.thinking = mode.thinking;
-        }
-        primary.request_override = mode.request_override.merged_with(&primary.request_override);
-        for (adapter_id, override_patch) in mode.adapter_overrides {
-            match primary.adapter_overrides.remove(adapter_id.as_str()) {
-                Some(existing) => {
-                    primary
-                        .adapter_overrides
-                        .insert(adapter_id, override_patch.merged_with(&existing));
-                }
-                None => {
-                    primary.adapter_overrides.insert(adapter_id, override_patch);
-                }
-            }
-        }
-    }
-    primary
-}
-
-fn merge_catalog_baseline_speed_mode(
-    mut primary: crate::model::ModelSpeedMode,
-    baseline: &ConfiguredModelSpeedMode,
-) -> crate::model::ModelSpeedMode {
-    if let Some(mode) = baseline.apply_to_mode(None) {
-        if primary.display_name.is_none() {
-            primary.display_name = mode.display_name;
-        }
-        if primary.description.is_none() {
-            primary.description = mode.description;
-        }
-        primary.request_override = mode.request_override.merged_with(&primary.request_override);
-        for (adapter_id, override_patch) in mode.adapter_overrides {
-            match primary.adapter_overrides.remove(adapter_id.as_str()) {
-                Some(existing) => {
-                    primary
-                        .adapter_overrides
-                        .insert(adapter_id, override_patch.merged_with(&existing));
-                }
-                None => {
-                    primary.adapter_overrides.insert(adapter_id, override_patch);
-                }
-            }
-        }
-    }
-    primary
+    merge_catalog_baseline_modes(primary, baseline, |mode, configured| {
+        merge_catalog_baseline_mode(mode, configured, |_primary, _baseline| {})
+    })
 }
 
 fn catalog_definition_for_model_id<'a>(

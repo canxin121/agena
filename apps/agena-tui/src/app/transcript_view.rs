@@ -925,7 +925,10 @@ fn render_checklist(
 }
 
 fn render_permission_request(
-    permission: &agena::message::PermissionRequestPart,
+    permission: &agena::message::InteractiveRequestPart<
+        agena::permission::PermissionRequest,
+        agena::permission::PermissionReply,
+    >,
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
@@ -948,7 +951,10 @@ fn render_permission_request(
 }
 
 fn render_user_input_request(
-    request: &agena::message::UserInputRequestPart,
+    request: &agena::message::InteractiveRequestPart<
+        agena::message::UserInputRequest,
+        agena::message::UserInputReply,
+    >,
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,

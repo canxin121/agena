@@ -35,6 +35,12 @@ fn memory_base_dir() -> PathBuf {
     PathBuf::from(home).join(".agena")
 }
 
+pub(crate) fn workspace_key(workspace_root: &Path) -> String {
+    let workspace_str = workspace_root.to_string_lossy();
+    let normalized = workspace_str.replace('\\', "/");
+    sanitize_path(&normalized)
+}
+
 pub struct MemoryDir {
     path: PathBuf,
 }
@@ -43,13 +49,11 @@ impl MemoryDir {
     /// Build the memory directory path for the given workspace root.
     /// Path: `~/.agena/projects/<sanitized-workspace-root>/memory/`
     pub fn from_workspace(workspace_root: &Path) -> Self {
-        let workspace_str = workspace_root.to_string_lossy();
-        // Normalize separators before sanitizing so the same workspace gets
-        // the same key across platforms.
-        let normalized = workspace_str.replace('\\', "/");
-        let key = sanitize_path(&normalized);
         Self {
-            path: memory_base_dir().join("projects").join(key).join("memory"),
+            path: memory_base_dir()
+                .join("projects")
+                .join(workspace_key(workspace_root))
+                .join("memory"),
         }
     }
 

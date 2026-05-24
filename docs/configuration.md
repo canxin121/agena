@@ -29,7 +29,7 @@ agena config validate
 - provider HTTP timeout、retry、stream replay。
 - runtime reload、janitor、session cache。
 - permission path/network/tool rules。
-- `agena.memory` project instructions。
+- `agena.memory` durable memory / retrieval 配置。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
 - provider model metadata，以及拆分后的 model thinking/speed modes。
 
@@ -911,9 +911,50 @@ kind = "static"
 [plugins.list."agena.memory".options.project_instructions]
 enabled = true
 include_global = true
+
+[plugins.list."agena.memory".options.search]
+url = "http://127.0.0.1:7700"
+api_key = "optional-meili-key"
+index_prefix = "agena_memory"
+
+[plugins.list."agena.memory".options.retrieval]
+enabled = true
+limit = 3
+min_query_chars = 8
 ```
 
-默认两项都为 true。该配置会影响项目指令/记忆是否进入上下文。Memory 配置属于 `agena.memory` static plugin options。
+`agena.memory` 现在是“文件持久化 + Meilisearch 检索 + 会话前自动回忆”的组合，不再只是把 `MEMORY.md` 整体注入 prompt。
+
+字段说明：
+
+- `project_instructions.enabled`: 是否启用工作区项目记忆/指令。
+- `project_instructions.include_global`: 是否同时读取全局 project instructions。
+- `search.url`: Meilisearch 地址；为空时 `memory search` 和自动回忆不会生效。
+- `search.api_key`: 可选 Meilisearch API key。
+- `search.index_prefix`: memory 检索索引前缀，默认 `agena_memory`。
+- `retrieval.enabled`: 会话消息进入模型前，是否基于最后一条用户消息自动检索相关 memory。
+- `retrieval.limit`: 自动回忆最多注入多少条命中。
+- `retrieval.min_query_chars`: 用户消息短于这个长度时跳过自动回忆。
+
+`agena.memory` 暴露的顶层 tool 是 `memory`，支持 `search`、`get`、`list`、`write`、`delete` 五个 action。`write` / `delete` 会同步更新文件和 Meilisearch 索引。
+
+## Workflow Tool Search
+
+```toml
+[plugins.list."agena.workflow"]
+kind = "static"
+
+[plugins.list."agena.workflow".options.tool_search]
+url = "http://127.0.0.1:7700"
+api_key = "optional-meili-key"
+index = "agena_tool_catalog"
+```
+
+`agena.workflow/tools` 的 `search` action 现在直接走 Meilisearch。字段说明：
+
+- `tool_search.url`: Meilisearch 地址；为空时 `tools search` 会报配置缺失。
+- `tool_search.api_key`: 可选 Meilisearch API key。
+- `tool_search.index`: tool catalog 索引名，默认 `agena_tool_catalog`。
 
 ## Removed: `agena.hooks`
 
@@ -1128,17 +1169,6 @@ HTTP:
 [plugins.list."agena.mcp".options.servers.remote]
 transport = "http"
 url = "https://mcp.example.com"
-mode = "streamable_http"
-headers = { }
-auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
-```
-
-WebSocket:
-
-```toml
-[plugins.list."agena.mcp".options.servers.browser]
-transport = "ws"
-url = "wss://mcp.example.com/socket"
 headers = { }
 auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
 ```
@@ -1148,7 +1178,6 @@ MCP server transport：
 ```text
 stdio
 http
-ws
 ```
 
 `stdio` 字段：
@@ -1164,25 +1193,11 @@ cwd
 
 ```text
 url
-mode
 headers
 auth
 ```
 
-`ws` 字段：
-
-```text
-url
-headers
-auth
-```
-
-HTTP mode:
-
-- `streamable_http`
-- `sse`
-
-`mode` 省略时使用 `streamable_http`。`headers` 是普通 header map，`auth` 可以省略。`streamable_http` 会自动尝试打开可选的 GET/SSE server-events 通道；如果服务端返回 `404` 或 `405`，runtime 会回退到仅使用 POST/response 路径。
+HTTP transport 固定使用 streamable HTTP，不再支持 `mode` 字段，也不再支持 `ws` / `websocket` transport。`headers` 是普通 header map，`auth` 可以省略。
 
 HTTP auth:
 
@@ -1237,30 +1252,18 @@ kind = "static"
 fetch_enabled = true
 
 [plugins.list."agena.web".options.search]
-backend = "duck_duck_go_html"
-tavily_api_key = "..."
-exa_api_key = "..."
-brave_api_key = "..."
+api_key = "..."
 ```
 
-`fetch_enabled` 控制 `web` 的 `fetch` command。Search backend 省略时使用 `duck_duck_go_html`。
-
-Search backend：
-
-- `tavily`
-- `exa`
-- `brave`
-- `duck_duck_go_html`
+`fetch_enabled` 控制 `web` 的 `fetch` command。`agena.web` 现在只支持 Brave Search，不再有 backend 选择。
 
 API key 可写在配置里，也可由环境变量提供：
 
 ```text
-TAVILY_API_KEY
-EXA_API_KEY
 BRAVE_API_KEY
 ```
 
-`duck_duck_go_html` 不需要 API key；`tavily` 使用 `tavily_api_key` 或 `TAVILY_API_KEY`，`exa` 使用 `exa_api_key` 或 `EXA_API_KEY`，`brave` 使用 `brave_api_key` 或 `BRAVE_API_KEY`。
+`api_key` 为空时会回落到 `BRAVE_API_KEY`。runtime 权限审计固定按 `https://api.search.brave.com/res/v1/web/search` 申请网络访问。
 
 ## Studio 服务配置
 

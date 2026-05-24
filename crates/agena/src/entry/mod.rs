@@ -56,7 +56,7 @@ use crate::plugin::{
     },
 };
 use crate::plugins::provided::{
-    cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp,
+    code as provided_code, cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp,
     router as in_process_router, settings as provided_settings, shell as provided_shell, skills,
     web as provided_web, workflow as provided_workflow,
 };
@@ -100,6 +100,14 @@ pub fn cron_plugin_id() -> &'static str {
 
 pub fn new_cron_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_cron::CronPlugin::new()
+}
+
+pub fn code_plugin_id() -> &'static str {
+    provided_code::CODE_PLUGIN_ID
+}
+
+pub fn new_code_plugin() -> impl crate::plugin::sdk::Plugin {
+    provided_code::new_plugin()
 }
 
 pub fn fs_plugin_id() -> &'static str {
@@ -147,6 +155,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
     let skills_id = skills_plugin_id().to_string();
     let lsp_id = lsp_plugin_id().to_string();
     let cron_id = cron_plugin_id().to_string();
+    let code_id = code_plugin_id().to_string();
     let fs_id = fs_plugin_id().to_string();
     let settings_id = settings_plugin_id().to_string();
     let shell_id = shell_plugin_id().to_string();
@@ -157,16 +166,22 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
         &skills_id,
         &lsp_id,
         &cron_id,
+        &code_id,
         &fs_id,
         &settings_id,
         &shell_id,
         &web_id,
         &workflow_id,
     ] {
+        let options = if id == &workflow_id {
+            serde_json::json!({})
+        } else {
+            serde_json::Value::Null
+        };
         list.insert(
             (*id).clone(),
             crate::plugin::PluginEntry::Static {
-                options: serde_json::Value::Null,
+                options,
                 timeouts: Default::default(),
                 disabled: false,
             },
@@ -187,6 +202,7 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
             .register_static(skills_id, new_skills_plugin())
             .register_static(lsp_id, new_lsp_plugin())
             .register_static(cron_id, new_cron_plugin())
+            .register_static(code_id, new_code_plugin())
             .register_static(fs_id, new_fs_plugin())
             .register_static(settings_id, new_settings_plugin())
             .register_static(shell_id, new_shell_plugin())
@@ -328,7 +344,7 @@ pub struct ToolExecutor {
     truncator: ToolOutputTruncator,
     plugins: Arc<PluginHost>,
     web_search_backend: crate::config::WebSearchBackend,
-    web_search_duckduckgo_url_override: Option<String>,
+    web_search_url_override: Option<String>,
     plan_registry: Option<plan::PlanRegistry>,
     worktree_registry: Option<worktree::WorktreeRegistry>,
     scheduler: Option<Arc<agena_scheduler::Scheduler>>,
@@ -347,8 +363,8 @@ impl ToolExecutor {
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
             plugins: PluginHost::new_empty(),
-            web_search_backend: crate::config::WebSearchBackend::DuckDuckGoHtml,
-            web_search_duckduckgo_url_override: None,
+            web_search_backend: crate::config::WebSearchConfig::default().resolve(),
+            web_search_url_override: None,
             plan_registry: None,
             worktree_registry: None,
             scheduler: None,
@@ -400,8 +416,8 @@ impl ToolExecutor {
         self
     }
 
-    pub fn with_web_search_duckduckgo_url_override(mut self, url: impl Into<String>) -> Self {
-        self.web_search_duckduckgo_url_override = Some(url.into());
+    pub fn with_web_search_url_override(mut self, url: impl Into<String>) -> Self {
+        self.web_search_url_override = Some(url.into());
         self
     }
 
@@ -409,8 +425,8 @@ impl ToolExecutor {
         self.web_search_backend.clone()
     }
 
-    pub fn web_search_duckduckgo_url_override(&self) -> Option<&str> {
-        self.web_search_duckduckgo_url_override.as_deref()
+    pub fn web_search_url_override(&self) -> Option<&str> {
+        self.web_search_url_override.as_deref()
     }
 
     pub fn with_plan_registry(mut self, reg: plan::PlanRegistry) -> Self {
@@ -2096,8 +2112,7 @@ mod tests {
         FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
         LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent, ReadToolInput,
         ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem,
-        TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, ToolSearchToolInput,
-        WebFetchToolInput,
+        TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -2418,7 +2433,9 @@ mod tests {
         let skills_id = super::skills_plugin_id().to_string();
         let lsp_id = super::lsp_plugin_id().to_string();
         let cron_id = super::cron_plugin_id().to_string();
+        let code_id = super::code_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
+        let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
         let web_id = super::web_plugin_id().to_string();
         let workflow_id = super::workflow_plugin_id().to_string();
@@ -2427,15 +2444,22 @@ mod tests {
             &skills_id,
             &lsp_id,
             &cron_id,
+            &code_id,
             &fs_id,
+            &settings_id,
             &shell_id,
             &web_id,
             &workflow_id,
         ] {
+            let options = if id == &workflow_id {
+                serde_json::json!({})
+            } else {
+                serde_json::Value::Null
+            };
             list.insert(
                 (*id).clone(),
                 PluginEntry::Static {
-                    options: serde_json::Value::Null,
+                    options,
                     timeouts: Default::default(),
                     disabled: false,
                 },
@@ -2465,7 +2489,9 @@ mod tests {
                 .register_static(skills_id, super::new_skills_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
                 .register_static(cron_id, super::new_cron_plugin())
+                .register_static(code_id, super::new_code_plugin())
                 .register_static(fs_id, super::new_fs_plugin())
+                .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
                 .register_static(web_id, super::new_web_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
@@ -2482,7 +2508,9 @@ mod tests {
         let skills_id = super::skills_plugin_id().to_string();
         let lsp_id = super::lsp_plugin_id().to_string();
         let cron_id = super::cron_plugin_id().to_string();
+        let code_id = super::code_plugin_id().to_string();
         let fs_id = super::fs_plugin_id().to_string();
+        let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
         let web_id = super::web_plugin_id().to_string();
         let workflow_id = super::workflow_plugin_id().to_string();
@@ -2491,15 +2519,22 @@ mod tests {
             &skills_id,
             &lsp_id,
             &cron_id,
+            &code_id,
             &fs_id,
+            &settings_id,
             &shell_id,
             &web_id,
             &workflow_id,
         ] {
+            let options = if id == &workflow_id {
+                serde_json::json!({})
+            } else {
+                serde_json::Value::Null
+            };
             list.insert(
                 (*id).clone(),
                 PluginEntry::Static {
-                    options: serde_json::Value::Null,
+                    options,
                     timeouts: Default::default(),
                     disabled: false,
                 },
@@ -2521,7 +2556,9 @@ mod tests {
                 .register_static(skills_id, super::new_skills_plugin())
                 .register_static(lsp_id, super::new_lsp_plugin())
                 .register_static(cron_id, super::new_cron_plugin())
+                .register_static(code_id, super::new_code_plugin())
                 .register_static(fs_id, super::new_fs_plugin())
+                .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
                 .register_static(web_id, super::new_web_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
@@ -2852,23 +2889,25 @@ mod tests {
     }
 
     #[test]
-    fn tool_search_provided_discovers_tools() {
+    fn tools_help_provided_describes_registered_tool() {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
 
-        let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::ToolSearch(ToolSearchToolInput {
-                query: "patch files".to_string(),
-                limit: None,
+        let invocation = ToolInvocation::new(
+            "tools",
+            StructuredObject::try_from(serde_json::json!({
+                "action": "help",
+                "tool": "fs",
+                "include_schema": false
             }))
-            .expect("tool_search should succeed");
+            .expect("tools help input should serialize"),
+        );
+        let result = executor
+            .execute_invocation_detailed(&invocation, 7, 9)
+            .expect("tools help should succeed");
 
-        match result.output {
-            ToolPayloadOutput::ToolSearch { results } => {
-                assert!(results.iter().any(|name| name == "fs"));
-            }
-            other => panic!("expected tool_search output, got {other:?}"),
-        }
+        assert!(result.view.output_text.contains("Tool: fs"));
+        assert!(result.view.output_text.contains("Description:"));
     }
 
     #[test]

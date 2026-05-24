@@ -1,19 +1,7 @@
-//! `web_search` plugin tool.
-//!
-//! Backend selection: configured per-runtime via `[web.search] backend = "..."`.
-//! Supported backends:
-//!
-//! * `tavily`            — POST <https://api.tavily.com/search> (needs TAVILY_API_KEY)
-//! * `exa`               — POST <https://api.exa.ai/search>     (needs EXA_API_KEY)
-//! * `brave`             — GET  <https://api.search.brave.com/res/v1/web/search> (needs BRAVE_API_KEY)
-//! * `duckduckgo_html`   — scrape <https://html.duckduckgo.com/html/> (no key required, default)
-//!
-//! The backend is picked from config, falling back to `duckduckgo_html` so
-//! the tool works out of the box with zero credentials.
+//! `web_search` plugin tool backed by Brave Search.
 
 use serde::Deserialize;
 
-use crate::config::WebSearchBackend;
 use crate::message::WebSearchToolInput;
 
 use super::{
@@ -23,6 +11,7 @@ use super::{
 
 const DEFAULT_MAX_RESULTS: u32 = 8;
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const BRAVE_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/web/search";
 
 pub(super) fn execute(
     executor: &ToolExecutor,
@@ -44,21 +33,18 @@ pub(super) fn execute(
     let block = input.blocked_domains.clone();
 
     let query = q.to_string();
-    let backend_name = backend.name();
-    let request_url = web_search_backend_request_url(executor, &backend);
+    let backend_name = backend.name().to_string();
+    let api_key = backend.api_key.clone();
+    let request_url = executor
+        .web_search_url_override()
+        .unwrap_or(BRAVE_SEARCH_URL)
+        .to_string();
     let target = crate::permission::NetworkTarget::parse(request_url.as_str())
         .map_err(|e| ToolError::Plugin(format!("web_search: invalid network target: {e}")))?;
     executor.ensure_network_permission(&target)?;
 
     let raw_hits: Vec<WebSearchHit> = super::mcp::block_on(async move {
-        match backend {
-            WebSearchBackend::Tavily { api_key } => tavily_search(&query, max, &api_key).await,
-            WebSearchBackend::Exa { api_key } => exa_search(&query, max, &api_key).await,
-            WebSearchBackend::Brave { api_key } => brave_search(&query, max, &api_key).await,
-            WebSearchBackend::DuckDuckGoHtml => {
-                duckduckgo_html_search(&query, max, request_url.as_str()).await
-            }
-        }
+        brave_search(&query, max, &api_key, request_url.as_str()).await
     })?;
 
     let hits: Vec<WebSearchHit> = raw_hits
@@ -68,9 +54,9 @@ pub(super) fn execute(
         .collect();
 
     let summary = if hits.is_empty() {
-        format!("[{backend_name}] no results for {q:?}")
+        format!("[brave] no results for {q:?}")
     } else {
-        let mut buf = format!("[{backend_name}] {} result(s):\n", hits.len());
+        let mut buf = format!("[brave] {} result(s):\n", hits.len());
         for (i, h) in hits.iter().enumerate() {
             use std::fmt::Write as _;
             let _ = writeln!(&mut buf, "  {}. {} — {}", i + 1, h.title, h.url);
@@ -81,7 +67,7 @@ pub(super) fn execute(
     let view = ToolExecutionView::simple(format!("WebSearch {q:?}"), summary);
     let output = ToolPayloadOutput::WebSearch {
         query: q.to_string(),
-        backend: backend_name.to_string(),
+        backend: backend_name,
         results: hits,
     };
     Ok(ToolPayloadExecution::new(output, view))
@@ -107,127 +93,11 @@ fn host_matches(host: &str, pattern: &str) -> bool {
     h == p || h.ends_with(&format!(".{p}"))
 }
 
-fn web_search_backend_request_url(executor: &ToolExecutor, backend: &WebSearchBackend) -> String {
-    match backend {
-        WebSearchBackend::Tavily { .. } => "https://api.tavily.com/search".to_string(),
-        WebSearchBackend::Exa { .. } => "https://api.exa.ai/search".to_string(),
-        WebSearchBackend::Brave { .. } => {
-            "https://api.search.brave.com/res/v1/web/search".to_string()
-        }
-        WebSearchBackend::DuckDuckGoHtml => executor
-            .web_search_duckduckgo_url_override()
-            .unwrap_or("https://html.duckduckgo.com/html/")
-            .to_string(),
-    }
-}
-
-// ─── Backends ──────────────────────────────────────────────────────────
-
-async fn tavily_search(
-    query: &str,
-    max: u32,
-    api_key: &str,
-) -> Result<Vec<WebSearchHit>, ToolError> {
-    if api_key.is_empty() {
-        return Err(ToolError::Plugin(
-            "web_search[tavily]: TAVILY_API_KEY missing".to_string(),
-        ));
-    }
-    let body = serde_json::json!({
-        "api_key": api_key,
-        "query": query,
-        "max_results": max,
-        "search_depth": "basic",
-    });
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|e| ToolError::Plugin(e.to_string()))?;
-    let resp = client
-        .post("https://api.tavily.com/search")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ToolError::Plugin(format!("tavily request failed: {e}")))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(ToolError::Plugin(format!("tavily {status}")));
-    }
-    #[derive(Deserialize)]
-    struct R {
-        results: Vec<TItem>,
-    }
-    #[derive(Deserialize)]
-    struct TItem {
-        title: Option<String>,
-        url: String,
-        content: Option<String>,
-    }
-    let parsed: R = resp
-        .json()
-        .await
-        .map_err(|e| ToolError::Plugin(e.to_string()))?;
-    Ok(parsed
-        .results
-        .into_iter()
-        .map(|i| WebSearchHit {
-            title: i.title.unwrap_or_default(),
-            url: i.url,
-            snippet: i.content,
-        })
-        .collect())
-}
-
-async fn exa_search(query: &str, max: u32, api_key: &str) -> Result<Vec<WebSearchHit>, ToolError> {
-    if api_key.is_empty() {
-        return Err(ToolError::Plugin(
-            "web_search[exa]: EXA_API_KEY missing".to_string(),
-        ));
-    }
-    let body = serde_json::json!({"query": query, "numResults": max});
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|e| ToolError::Plugin(e.to_string()))?;
-    let resp = client
-        .post("https://api.exa.ai/search")
-        .header("x-api-key", api_key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| ToolError::Plugin(format!("exa request failed: {e}")))?;
-    if !resp.status().is_success() {
-        return Err(ToolError::Plugin(format!("exa {}", resp.status())));
-    }
-    #[derive(Deserialize)]
-    struct R {
-        results: Vec<EItem>,
-    }
-    #[derive(Deserialize)]
-    struct EItem {
-        title: Option<String>,
-        url: String,
-        text: Option<String>,
-    }
-    let parsed: R = resp
-        .json()
-        .await
-        .map_err(|e| ToolError::Plugin(e.to_string()))?;
-    Ok(parsed
-        .results
-        .into_iter()
-        .map(|i| WebSearchHit {
-            title: i.title.unwrap_or_default(),
-            url: i.url,
-            snippet: i.text,
-        })
-        .collect())
-}
-
 async fn brave_search(
     query: &str,
     max: u32,
     api_key: &str,
+    request_url: &str,
 ) -> Result<Vec<WebSearchHit>, ToolError> {
     if api_key.is_empty() {
         return Err(ToolError::Plugin(
@@ -239,7 +109,7 @@ async fn brave_search(
         .build()
         .map_err(|e| ToolError::Plugin(e.to_string()))?;
     let url = format!(
-        "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+        "{request_url}?q={}&count={}",
         urlencoding::encode(query),
         max
     );
@@ -254,109 +124,32 @@ async fn brave_search(
         return Err(ToolError::Plugin(format!("brave {}", resp.status())));
     }
     #[derive(Deserialize)]
-    struct R {
-        web: Option<W>,
+    struct Response {
+        web: Option<Web>,
     }
     #[derive(Deserialize)]
-    struct W {
-        results: Vec<BItem>,
+    struct Web {
+        results: Vec<Item>,
     }
     #[derive(Deserialize)]
-    struct BItem {
+    struct Item {
         title: Option<String>,
         url: String,
         description: Option<String>,
     }
-    let parsed: R = resp
+    let parsed: Response = resp
         .json()
         .await
         .map_err(|e| ToolError::Plugin(e.to_string()))?;
     Ok(parsed
         .web
-        .map(|w| w.results)
+        .map(|web| web.results)
         .unwrap_or_default()
         .into_iter()
-        .map(|i| WebSearchHit {
-            title: i.title.unwrap_or_default(),
-            url: i.url,
-            snippet: i.description,
+        .map(|item| WebSearchHit {
+            title: item.title.unwrap_or_default(),
+            url: item.url,
+            snippet: item.description,
         })
         .collect())
-}
-
-async fn duckduckgo_html_search(
-    query: &str,
-    max: u32,
-    request_url: &str,
-) -> Result<Vec<WebSearchHit>, ToolError> {
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .user_agent(crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT)
-        .build()
-        .map_err(|e| ToolError::Plugin(e.to_string()))?;
-    let body = format!("q={}", urlencoding::encode(query));
-    let resp = client
-        .post(request_url)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| ToolError::Plugin(format!("duckduckgo request failed: {e}")))?;
-    if !resp.status().is_success() {
-        return Err(ToolError::Plugin(format!("duckduckgo {}", resp.status())));
-    }
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| ToolError::Plugin(e.to_string()))?;
-    Ok(parse_ddg_html(&body, max as usize))
-}
-
-/// Best-effort parse of DuckDuckGo's HTML page.  We avoid pulling in a
-/// full HTML parser; the markup is stable enough for a regex pass.
-fn parse_ddg_html(body: &str, max: usize) -> Vec<WebSearchHit> {
-    use std::sync::OnceLock;
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        regex::Regex::new(
-            r#"(?s)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>"#,
-        )
-        .expect("ddg regex compiles")
-    });
-
-    let mut out = Vec::new();
-    for caps in re.captures_iter(body).take(max) {
-        let raw_url = &caps[1];
-        let title = strip_html(&caps[2]);
-        let snippet = strip_html(&caps[3]);
-        let url = decode_ddg_redirect(raw_url);
-        out.push(WebSearchHit {
-            title,
-            url,
-            snippet: Some(snippet),
-        });
-    }
-    out
-}
-
-fn strip_html(s: &str) -> String {
-    let re = regex::Regex::new("<[^>]+>").unwrap();
-    let stripped = re.replace_all(s, "");
-    html_escape::decode_html_entities(&stripped).into_owned()
-}
-
-/// DuckDuckGo wraps result links in a `/l/?uddg=<encoded-url>` redirect;
-/// pull out the underlying URL when present.
-fn decode_ddg_redirect(url: &str) -> String {
-    if let Some(encoded) = url.split("uddg=").nth(1) {
-        let raw = encoded.split('&').next().unwrap_or(encoded);
-        if let Ok(decoded) = urlencoding::decode(raw) {
-            return decoded.into_owned();
-        }
-    }
-    if let Some(stripped) = url.strip_prefix("//") {
-        format!("https://{stripped}")
-    } else {
-        url.to_string()
-    }
 }

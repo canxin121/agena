@@ -1,24 +1,25 @@
-//! Server side of Model Context Protocol (MCP). Lets the agena runtime
-//! expose itself as an MCP backend so external clients (IDE plugins,
-//! other agents) can list / invoke tools over JSON-RPC.
-//!
-//! See `agena-mcp-client` for the client-side implementation.
-
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use agena_mcp_client::protocol::{
-    self, CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult,
-    Implementation, InboundMessage, InitializeResult, JsonRpcError, JsonRpcNotification,
-    JsonRpcRequest, JsonRpcResponse, ListPromptsResult, ListResourcesResult, ListToolsResult,
-    PromptDescriptor, PromptsCapability, ReadResourceParams, ReadResourceResult,
-    ResourceDescriptor, ResourcesCapability, ServerCapabilities, ToolDescriptor, ToolsCapability,
+    CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult,
+    PromptDescriptor, PromptMessage, ReadResourceParams, ReadResourceResult, ResourceContents,
+    ResourceDescriptor, ToolDescriptor,
 };
 use async_trait::async_trait;
-use serde_json::Value;
-use thiserror::Error;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
+use rmcp::ServerHandler;
+use rmcp::model::{
+    AnnotateAble, Content, ErrorCode, ErrorData, GetPromptRequestParams,
+    GetPromptResult as RmcpGetPromptResult, Implementation, ListPromptsResult, ListResourcesResult,
+    ListToolsResult, Prompt as RmcpPrompt, PromptArgument as RmcpPromptArgument,
+    PromptMessage as RmcpPromptMessage, PromptMessageContent, PromptMessageRole, RawResource,
+    ReadResourceRequestParams, ReadResourceResult as RmcpReadResourceResult,
+    ResourceContents as RmcpResourceContents, ServerCapabilities, ServerInfo as RmcpServerInfo,
+    Tool as RmcpTool,
+};
+use rmcp::service::{RequestContext, RoleServer};
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum McpServerError {
     #[error("invalid params: {0}")]
     InvalidParams(String),
@@ -76,187 +77,143 @@ pub trait McpServerBackend: Send + Sync + 'static {
     }
 }
 
-#[derive(Clone)]
-pub struct McpServer<B> {
+struct BackendHandler<B> {
     backend: Arc<B>,
     info: ServerInfo,
 }
 
-impl<B> McpServer<B>
+impl<B> BackendHandler<B> {
+    fn new(backend: B) -> Self {
+        Self {
+            backend: Arc::new(backend),
+            info: ServerInfo::default(),
+        }
+    }
+}
+
+impl<B> ServerHandler for BackendHandler<B>
 where
     B: McpServerBackend,
 {
-    pub fn new(backend: B) -> Self {
-        Self::with_info(backend, ServerInfo::default())
-    }
-
-    pub fn with_info(backend: B, info: ServerInfo) -> Self {
-        Self {
-            backend: Arc::new(backend),
-            info,
+    fn get_info(&self) -> RmcpServerInfo {
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_prompts()
+            .build();
+        let info = RmcpServerInfo::new(capabilities).with_server_info(Implementation::new(
+            self.info.name.clone(),
+            self.info.version.clone(),
+        ));
+        if let Some(instructions) = self.info.instructions.clone() {
+            info.with_instructions(instructions)
+        } else {
+            info
         }
     }
 
-    pub async fn serve_stdio<R, W>(&self, reader: R, writer: W) -> Result<(), McpServerError>
-    where
-        R: AsyncBufRead + Unpin,
-        W: AsyncWrite + Unpin,
-    {
-        let mut lines = reader.lines();
-        let mut writer = writer;
-        while let Some(line) = lines.next_line().await? {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            let value: Value = serde_json::from_str(line)?;
-            if let Some(response) = self.handle_value(value).await? {
-                let mut encoded = serde_json::to_vec(&response)?;
-                encoded.push(b'\n');
-                writer.write_all(&encoded).await?;
-                writer.flush().await?;
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn handle_value(
+    fn list_tools(
         &self,
-        value: Value,
-    ) -> Result<Option<JsonRpcResponse>, McpServerError> {
-        match InboundMessage::from_value(value)? {
-            InboundMessage::Request(request) => Ok(Some(self.handle_request(request).await)),
-            InboundMessage::Notification(notification) => {
-                self.handle_notification(notification).await;
-                Ok(None)
-            }
-            InboundMessage::Response(_) => Ok(None),
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListToolsResult, ErrorData>> + Send + '_ {
+        let backend = Arc::clone(&self.backend);
+        async move {
+            let tools = backend.list_tools().await.map_err(to_rmcp_error)?;
+            let mut result = ListToolsResult::default();
+            result.tools = tools
+                .into_iter()
+                .map(convert_tool_descriptor)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(to_rmcp_error)?;
+            Ok(result)
         }
     }
 
-    async fn handle_notification(&self, notification: JsonRpcNotification) {
-        if notification.method != protocol::method::INITIALIZED {
-            tracing::debug!(method = notification.method, "ignoring MCP notification");
+    fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<rmcp::model::CallToolResult, ErrorData>> + Send + '_
+    {
+        let backend = Arc::clone(&self.backend);
+        async move {
+            let params = CallToolParams {
+                name: request.name.to_string(),
+                arguments: request.arguments.map(serde_json::Value::Object),
+            };
+            let result = backend.call_tool(params).await.map_err(to_rmcp_error)?;
+            convert_call_tool_result(result).map_err(to_rmcp_error)
         }
     }
 
-    async fn handle_request(&self, request: JsonRpcRequest) -> JsonRpcResponse {
-        let result = match request.method.as_str() {
-            protocol::method::INITIALIZE => self.initialize(),
-            protocol::method::PING => Ok(serde_json::json!({})),
-            protocol::method::TOOLS_LIST => self.tools_list().await,
-            protocol::method::TOOLS_CALL => self.tools_call(request.params).await,
-            protocol::method::RESOURCES_LIST => self.resources_list().await,
-            protocol::method::RESOURCES_READ => self.resources_read(request.params).await,
-            protocol::method::PROMPTS_LIST => self.prompts_list().await,
-            protocol::method::PROMPTS_GET => self.prompts_get(request.params).await,
-            _ => Err(JsonRpcError {
-                code: -32601,
-                message: format!("method not found: {}", request.method),
-                data: None,
-            }),
-        };
-        match result {
-            Ok(value) => JsonRpcResponse {
-                jsonrpc: protocol::JSONRPC_VERSION.to_owned(),
-                id: request.id,
-                result: Some(value),
-                error: None,
-            },
-            Err(error) => JsonRpcResponse {
-                jsonrpc: protocol::JSONRPC_VERSION.to_owned(),
-                id: request.id,
-                result: None,
-                error: Some(error),
-            },
+    fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListResourcesResult, ErrorData>> + Send + '_ {
+        let backend = Arc::clone(&self.backend);
+        async move {
+            let resources = backend.list_resources().await.map_err(to_rmcp_error)?;
+            let mut result = ListResourcesResult::default();
+            result.resources = resources
+                .into_iter()
+                .map(convert_resource_descriptor)
+                .collect();
+            Ok(result)
         }
     }
 
-    fn initialize(&self) -> Result<Value, JsonRpcError> {
-        serialize_result(InitializeResult {
-            protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
-            capabilities: ServerCapabilities {
-                tools: Some(ToolsCapability {
-                    list_changed: Some(false),
-                }),
-                resources: Some(ResourcesCapability {
-                    subscribe: Some(false),
-                    list_changed: Some(false),
-                }),
-                prompts: Some(PromptsCapability {
-                    list_changed: Some(false),
-                }),
-                logging: None,
-                experimental: Default::default(),
-            },
-            server_info: Implementation {
-                name: self.info.name.clone(),
-                version: self.info.version.clone(),
-            },
-            instructions: self.info.instructions.clone(),
-        })
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<RmcpReadResourceResult, ErrorData>> + Send + '_
+    {
+        let backend = Arc::clone(&self.backend);
+        async move {
+            let result = backend
+                .read_resource(ReadResourceParams { uri: request.uri })
+                .await
+                .map_err(to_rmcp_error)?;
+            Ok(RmcpReadResourceResult::new(
+                result
+                    .contents
+                    .into_iter()
+                    .map(convert_resource_contents)
+                    .collect(),
+            ))
+        }
     }
 
-    async fn tools_list(&self) -> Result<Value, JsonRpcError> {
-        let tools = self.backend.list_tools().await.map_err(to_json_rpc_error)?;
-        serialize_result(ListToolsResult {
-            tools,
-            next_cursor: None,
-        })
+    fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListPromptsResult, ErrorData>> + Send + '_ {
+        let backend = Arc::clone(&self.backend);
+        async move {
+            let prompts = backend.list_prompts().await.map_err(to_rmcp_error)?;
+            let mut result = ListPromptsResult::default();
+            result.prompts = prompts.into_iter().map(convert_prompt_descriptor).collect();
+            Ok(result)
+        }
     }
 
-    async fn tools_call(&self, params: Option<Value>) -> Result<Value, JsonRpcError> {
-        let params = decode_params::<CallToolParams>(params)?;
-        let result = self
-            .backend
-            .call_tool(params)
-            .await
-            .map_err(to_json_rpc_error)?;
-        serialize_result(result)
-    }
-
-    async fn resources_list(&self) -> Result<Value, JsonRpcError> {
-        let resources = self
-            .backend
-            .list_resources()
-            .await
-            .map_err(to_json_rpc_error)?;
-        serialize_result(ListResourcesResult {
-            resources,
-            next_cursor: None,
-        })
-    }
-
-    async fn resources_read(&self, params: Option<Value>) -> Result<Value, JsonRpcError> {
-        let params = decode_params::<ReadResourceParams>(params)?;
-        let result = self
-            .backend
-            .read_resource(params)
-            .await
-            .map_err(to_json_rpc_error)?;
-        serialize_result(result)
-    }
-
-    async fn prompts_list(&self) -> Result<Value, JsonRpcError> {
-        let prompts = self
-            .backend
-            .list_prompts()
-            .await
-            .map_err(to_json_rpc_error)?;
-        serialize_result(ListPromptsResult {
-            prompts,
-            next_cursor: None,
-        })
-    }
-
-    async fn prompts_get(&self, params: Option<Value>) -> Result<Value, JsonRpcError> {
-        let params = decode_params::<GetPromptParams>(params)?;
-        let result = self
-            .backend
-            .get_prompt(params)
-            .await
-            .map_err(to_json_rpc_error)?;
-        serialize_result(result)
+    fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<RmcpGetPromptResult, ErrorData>> + Send + '_ {
+        let backend = Arc::clone(&self.backend);
+        async move {
+            let params = GetPromptParams {
+                name: request.name,
+                arguments: request.arguments.map(json_object_to_string_map),
+            };
+            let result = backend.get_prompt(params).await.map_err(to_rmcp_error)?;
+            convert_get_prompt_result(result).map_err(to_rmcp_error)
+        }
     }
 }
 
@@ -264,15 +221,20 @@ pub async fn serve_stdio<B>(backend: B) -> Result<(), McpServerError>
 where
     B: McpServerBackend,
 {
-    let stdin = tokio::io::BufReader::new(tokio::io::stdin());
-    let stdout = tokio::io::stdout();
-    McpServer::new(backend).serve_stdio(stdin, stdout).await
+    let running = rmcp::serve_server(BackendHandler::new(backend), rmcp::transport::stdio())
+        .await
+        .map_err(|err| McpServerError::Backend(err.to_string()))?;
+    running
+        .waiting()
+        .await
+        .map_err(|err| McpServerError::Backend(err.to_string()))?;
+    Ok(())
 }
 
 pub fn text_result(text: impl Into<String>) -> CallToolResult {
     CallToolResult {
         content: vec![ContentBlock::Text { text: text.into() }],
-        is_error: None,
+        is_error: Some(false),
     }
 }
 
@@ -283,46 +245,175 @@ pub fn text_error(text: impl Into<String>) -> CallToolResult {
     }
 }
 
-fn decode_params<T>(params: Option<Value>) -> Result<T, JsonRpcError>
-where
-    T: serde::de::DeserializeOwned,
-{
-    serde_json::from_value(params.unwrap_or_else(|| serde_json::json!({}))).map_err(|err| {
-        JsonRpcError {
-            code: -32602,
-            message: format!("invalid params: {err}"),
-            data: None,
-        }
-    })
-}
-
-fn serialize_result<T>(value: T) -> Result<Value, JsonRpcError>
-where
-    T: serde::Serialize,
-{
-    serde_json::to_value(value).map_err(|err| JsonRpcError {
-        code: -32603,
-        message: format!("serialize result: {err}"),
-        data: None,
-    })
-}
-
-fn to_json_rpc_error(error: McpServerError) -> JsonRpcError {
+fn to_rmcp_error(error: McpServerError) -> ErrorData {
     match error {
-        McpServerError::InvalidParams(message) => JsonRpcError {
-            code: -32602,
-            message,
-            data: None,
+        McpServerError::InvalidParams(message) => {
+            ErrorData::new(ErrorCode::INVALID_PARAMS, message, None)
+        }
+        McpServerError::NotFound(message) => {
+            ErrorData::new(ErrorCode::METHOD_NOT_FOUND, message, None)
+        }
+        other => ErrorData::new(ErrorCode::INTERNAL_ERROR, other.to_string(), None),
+    }
+}
+
+fn convert_tool_descriptor(tool: ToolDescriptor) -> Result<RmcpTool, McpServerError> {
+    let input_schema = json_object_from_optional_value(tool.input_schema)?;
+    Ok(RmcpTool::new_with_raw(
+        Cow::Owned(tool.name),
+        tool.description.map(Cow::Owned),
+        Arc::new(input_schema),
+    ))
+}
+
+fn convert_call_tool_result(
+    result: CallToolResult,
+) -> Result<rmcp::model::CallToolResult, McpServerError> {
+    let mut content = Vec::new();
+    for block in result.content {
+        match block {
+            ContentBlock::Text { text } => content.push(Content::text(text)),
+            ContentBlock::Image { data, mime_type } => {
+                content.push(Content::image(data, mime_type));
+            }
+            ContentBlock::Resource { resource } => {
+                content.push(Content::resource(convert_resource_contents(resource)));
+            }
+            ContentBlock::Other => {}
+        }
+    }
+    let mut output = if matches!(result.is_error, Some(true)) {
+        rmcp::model::CallToolResult::error(content)
+    } else {
+        rmcp::model::CallToolResult::success(content)
+    };
+    output.is_error = result.is_error;
+    Ok(output)
+}
+
+fn convert_resource_descriptor(resource: ResourceDescriptor) -> rmcp::model::Resource {
+    let mut raw = RawResource::new(
+        resource.uri.clone(),
+        resource.name.unwrap_or_else(|| resource.uri.clone()),
+    );
+    if let Some(description) = resource.description {
+        raw = raw.with_description(description);
+    }
+    if let Some(mime_type) = resource.mime_type {
+        raw = raw.with_mime_type(mime_type);
+    }
+    raw.no_annotation()
+}
+
+fn convert_resource_contents(resource: ResourceContents) -> RmcpResourceContents {
+    match (resource.text, resource.blob) {
+        (Some(text), _) => RmcpResourceContents::TextResourceContents {
+            uri: resource.uri,
+            mime_type: resource.mime_type,
+            text,
+            meta: None,
         },
-        McpServerError::NotFound(message) => JsonRpcError {
-            code: -32004,
-            message,
-            data: None,
-        },
-        other => JsonRpcError {
-            code: -32603,
-            message: other.to_string(),
-            data: None,
+        (None, blob) => RmcpResourceContents::BlobResourceContents {
+            uri: resource.uri,
+            mime_type: resource.mime_type,
+            blob: blob.unwrap_or_default(),
+            meta: None,
         },
     }
+}
+
+fn convert_prompt_descriptor(prompt: PromptDescriptor) -> RmcpPrompt {
+    let arguments = if prompt.arguments.is_empty() {
+        None
+    } else {
+        Some(
+            prompt
+                .arguments
+                .into_iter()
+                .map(|argument| {
+                    let mut output = RmcpPromptArgument::new(argument.name);
+                    if let Some(description) = argument.description {
+                        output = output.with_description(description);
+                    }
+                    if let Some(required) = argument.required {
+                        output = output.with_required(required);
+                    }
+                    output
+                })
+                .collect(),
+        )
+    };
+    RmcpPrompt::from_raw(prompt.name, prompt.description, arguments)
+}
+
+fn convert_get_prompt_result(
+    result: GetPromptResult,
+) -> Result<RmcpGetPromptResult, McpServerError> {
+    let mut messages = Vec::new();
+    for message in result.messages {
+        messages.push(convert_prompt_message(message)?);
+    }
+    let mut prompt = RmcpGetPromptResult::new(messages);
+    prompt.description = result.description;
+    Ok(prompt)
+}
+
+fn convert_prompt_message(message: PromptMessage) -> Result<RmcpPromptMessage, McpServerError> {
+    let role = match message.role.as_str() {
+        "user" => PromptMessageRole::User,
+        "assistant" => PromptMessageRole::Assistant,
+        other => {
+            return Err(McpServerError::InvalidParams(format!(
+                "unsupported prompt role '{other}'"
+            )));
+        }
+    };
+    let content = match message.content {
+        ContentBlock::Text { text } => PromptMessageContent::Text { text },
+        ContentBlock::Image { data, mime_type } => PromptMessageContent::Image {
+            image: rmcp::model::RawImageContent {
+                data,
+                mime_type,
+                meta: None,
+            }
+            .no_annotation(),
+        },
+        ContentBlock::Resource { resource } => PromptMessageContent::Resource {
+            resource: rmcp::model::RawEmbeddedResource::new(convert_resource_contents(resource))
+                .no_annotation(),
+        },
+        ContentBlock::Other => {
+            return Err(McpServerError::InvalidParams(
+                "unsupported prompt content block".to_string(),
+            ));
+        }
+    };
+    Ok(RmcpPromptMessage::new(role, content))
+}
+
+fn json_object_from_optional_value(
+    value: Option<serde_json::Value>,
+) -> Result<serde_json::Map<String, serde_json::Value>, McpServerError> {
+    match value {
+        None => Ok(serde_json::Map::new()),
+        Some(serde_json::Value::Object(map)) => Ok(map),
+        Some(other) => Err(McpServerError::InvalidParams(format!(
+            "tool input_schema must be a JSON object, got {other}"
+        ))),
+    }
+}
+
+fn json_object_to_string_map(
+    value: serde_json::Map<String, serde_json::Value>,
+) -> std::collections::BTreeMap<String, String> {
+    value
+        .into_iter()
+        .map(|(key, value)| {
+            let value = match value {
+                serde_json::Value::String(text) => text,
+                other => other.to_string(),
+            };
+            (key, value)
+        })
+        .collect()
 }

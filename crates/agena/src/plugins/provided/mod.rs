@@ -1,3 +1,4 @@
+pub mod code;
 pub mod cron;
 pub mod fs;
 pub mod lsp;

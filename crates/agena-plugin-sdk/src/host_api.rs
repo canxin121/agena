@@ -1214,8 +1214,6 @@ pub enum AgentPermissionMode {
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct AgentPermissionConfig {
-    #[serde(default, skip_serializing_if = "AgentPermissionInheritance::is_empty")]
-    pub inherit: AgentPermissionInheritance,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<AgentPathPermissionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1226,55 +1224,7 @@ pub struct AgentPermissionConfig {
 
 impl AgentPermissionConfig {
     pub fn is_empty(&self) -> bool {
-        self.inherit.is_empty()
-            && self.path.is_none()
-            && self.network.is_none()
-            && self.tools.is_none()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum AgentPermissionInheritance {
-    All(bool),
-    Sections(AgentPermissionInheritanceSections),
-}
-
-impl Default for AgentPermissionInheritance {
-    fn default() -> Self {
-        Self::Sections(AgentPermissionInheritanceSections::default())
-    }
-}
-
-impl AgentPermissionInheritance {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::All(_) => false,
-            Self::Sections(sections) => sections.is_empty(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct AgentPermissionInheritanceSections {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_tools: Option<bool>,
-}
-
-impl AgentPermissionInheritanceSections {
-    pub fn is_empty(&self) -> bool {
-        self.path.is_none()
-            && self.network.is_none()
-            && self.tools.is_none()
-            && self.plugin_tools.is_none()
+        self.path.is_none() && self.network.is_none() && self.tools.is_none()
     }
 }
 
@@ -1363,20 +1313,6 @@ pub struct HostAgentDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    #[serde(default)]
-    pub mode: String,
-    #[serde(default)]
-    pub hidden: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub steps: Option<u32>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
     #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
     pub permission: AgentPermissionConfig,
     #[serde(
@@ -1385,8 +1321,6 @@ pub struct HostAgentDescriptor {
         skip_serializing_if = "HostAgentDefaultModelConfig::is_empty"
     )]
     pub default: HostAgentDefaultModelConfig,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub scope: String,

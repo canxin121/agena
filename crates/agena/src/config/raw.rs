@@ -402,7 +402,7 @@ impl RawConfig {
         validate_default_config(&default, &providers)?;
         validate_permission_config("permission", &permission)?;
         for (agent_name, agent) in &self.agents {
-            let effective = agent.permission.effective_with_defaults(&permission);
+            let effective = permission.merged_with(&agent.permission);
             validate_permission_config(
                 format!("agents.{agent_name}.permission").as_str(),
                 &effective,
@@ -643,24 +643,10 @@ impl Merge for crate::config::types::AgentConfig {
         if !overlay.prompt.is_empty() {
             self.prompt = overlay.prompt;
         }
-        self.mode = overlay.mode;
-        if overlay.hidden {
-            self.hidden = true;
-        }
-        merge_option(&mut self.color, overlay.color);
-        merge_option(&mut self.temperature, overlay.temperature);
-        merge_option(&mut self.max_output_tokens, overlay.max_output_tokens);
-        merge_option(&mut self.steps, overlay.steps);
-        if !overlay.allowed_tools.is_empty() {
-            self.allowed_tools = overlay.allowed_tools;
-        }
         self.permission.merge_from(overlay.permission);
         merge_option(&mut self.default.provider, overlay.default.provider);
         merge_option(&mut self.default.adapter, overlay.default.adapter);
         merge_option(&mut self.default.model, overlay.default.model);
-        if !overlay.aliases.is_empty() {
-            self.aliases = overlay.aliases;
-        }
         if overlay.disabled {
             self.disabled = true;
         }
@@ -679,21 +665,9 @@ impl Merge for crate::permission::PermissionMode {
     }
 }
 
-impl Merge for crate::agent::AgentTemperature {
-    fn merge_from(&mut self, overlay: Self) {
-        *self = overlay;
-    }
-}
-
-impl Merge for crate::agent::AgentPermissionConfig {
-    fn merge_from(&mut self, overlay: Self) {
-        self.merge_from(overlay);
-    }
-}
-
-fn agent_permission_config_merge(
-    base: &mut crate::agent::AgentPermissionConfig,
-    overlay: crate::agent::AgentPermissionConfig,
+fn permission_config_merge(
+    base: &mut crate::agent::PermissionConfig,
+    overlay: crate::agent::PermissionConfig,
 ) {
     base.merge_from(overlay);
 }
@@ -719,8 +693,8 @@ pub(crate) struct RawDefaultConfig {
     #[merge(strategy = option_override)]
     pub(crate) agent: Option<String>,
     #[serde(default)]
-    #[merge(strategy = agent_permission_config_merge)]
-    pub(crate) permission: crate::agent::AgentPermissionConfig,
+    #[merge(strategy = permission_config_merge)]
+    pub(crate) permission: crate::agent::PermissionConfig,
 }
 
 impl RawDefaultConfig {

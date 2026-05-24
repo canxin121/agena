@@ -3,7 +3,7 @@
 //! Discovers Markdown files under `.agena/agents/` (project-local, walked
 //! up from the workspace root) and `~/.agena/agents/` (user-global). Each
 //! file describes a named subagent the dispatcher can route to: a system
-//! prompt, optional tool whitelist, and optional default model selection.
+//! prompt, optional permission policy, and optional default model selection.
 //! Mirrors
 //! the layout of `crates/agena/src/commands/` and the SKILL.md frontmatter
 //! convention `agena-skills` already exposes, so users who know one know
@@ -14,10 +14,8 @@
 //! ```markdown
 //! ---
 //! description: "Read-only repo explorer"
-//! allowed_entries: ["fs"]
 //! default:
 //!   model: "claude-haiku-4-5"
-//! aliases: ["scout"]
 //! ---
 //! You are a focused codebase explorer. Read files, grep for symbols, and
 //! report concise findings. Do not edit anything.
@@ -71,37 +69,17 @@ impl AgentDefaultModelConfig {
 pub struct AgentFrontmatter {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    #[serde(default, skip_serializing_if = "crate::agent::AgentMode::is_primary")]
-    pub mode: crate::agent::AgentMode,
-    #[serde(default)]
-    pub hidden: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<crate::agent::AgentTemperature>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub steps: Option<usize>,
     #[serde(
         default,
-        rename = "allowed_entries",
-        skip_serializing_if = "Vec::is_empty"
+        skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
-    pub allowed_tools: Vec<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
-    )]
-    pub permission: crate::agent::AgentPermissionConfig,
+    pub permission: crate::agent::PermissionConfig,
     #[serde(
         default,
         rename = "default",
         skip_serializing_if = "AgentDefaultModelConfig::is_empty"
     )]
     pub default: AgentDefaultModelConfig,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,32 +96,17 @@ pub struct AgentDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    pub mode: crate::agent::AgentMode,
-    #[serde(default)]
-    pub hidden: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<crate::agent::AgentTemperature>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub steps: Option<usize>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_tools: Vec<String>,
     #[serde(
         default,
-        skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
+        skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
-    pub permission: crate::agent::AgentPermissionConfig,
+    pub permission: crate::agent::PermissionConfig,
     #[serde(
         default,
         rename = "default",
         skip_serializing_if = "AgentDefaultModelConfig::is_empty"
     )]
     pub default: AgentDefaultModelConfig,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
     pub scope: AgentScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_path: Option<PathBuf>,
@@ -230,6 +193,9 @@ impl SubagentRegistry {
         let inner = self.inner.read();
         let mut seen: BTreeMap<String, AgentProfile> = BTreeMap::new();
         for profile in inner.by_name.values() {
+            if !profile.is_exposed() {
+                continue;
+            }
             seen.entry(profile.name.clone())
                 .or_insert_with(|| profile.clone());
         }
@@ -290,24 +256,24 @@ fn agents_upsert(
     profile: AgentProfile,
     scope: AgentScope,
 ) {
-    let candidate_keys = std::iter::once(profile.name.clone())
-        .chain(profile.frontmatter.aliases.iter().cloned())
-        .collect::<Vec<_>>();
-    for key in candidate_keys {
-        match by_name.get(&key) {
-            Some(existing) => {
-                if scope_priority(scope) >= scope_priority(existing.scope) {
-                    by_name.insert(key, profile.clone());
-                }
+    let key = profile.name.clone();
+    match by_name.get(&key) {
+        Some(existing) => {
+            if scope_priority(scope) >= scope_priority(existing.scope) {
+                by_name.insert(key, profile);
             }
-            None => {
-                by_name.insert(key, profile.clone());
-            }
+        }
+        None => {
+            by_name.insert(key, profile);
         }
     }
 }
 
 impl AgentProfile {
+    pub fn is_exposed(&self) -> bool {
+        self.name != "compaction"
+    }
+
     pub fn from_path(path: &Path, stem: &str, scope: AgentScope) -> AgentResult<Self> {
         let raw = std::fs::read_to_string(path)?;
         let mut profile = Self::from_raw(&raw, stem, scope)?;
@@ -337,19 +303,18 @@ impl From<AgentProfile> for AgentDescriptor {
         Self {
             name: profile.name,
             description: profile.frontmatter.description,
-            mode: profile.frontmatter.mode,
-            hidden: profile.frontmatter.hidden,
-            color: profile.frontmatter.color,
-            temperature: profile.frontmatter.temperature,
-            max_output_tokens: profile.frontmatter.max_output_tokens,
-            steps: profile.frontmatter.steps,
-            allowed_tools: profile.frontmatter.allowed_tools,
             permission: profile.frontmatter.permission,
             default: profile.frontmatter.default,
-            aliases: profile.frontmatter.aliases,
             scope: profile.scope,
             source_path: profile.source_path,
         }
+    }
+}
+
+pub(crate) fn internal_allowed_tools(profile_name: &str) -> Vec<String> {
+    match profile_name {
+        "compaction" => vec!["__agena_compaction_no_tools__".to_string()],
+        _ => Vec::new(),
     }
 }
 
@@ -415,7 +380,7 @@ fn default_permission(
     external: crate::permission::PermissionMode,
     names: &[(&str, crate::permission::PermissionMode)],
 ) -> crate::agent::AgentPermissionConfig {
-    crate::agent::AgentPermissionConfig {
+    crate::agent::PermissionConfig {
         path: Some(crate::agent::PathPermissionConfig {
             workspace: Some(crate::agent::PathAccessModes {
                 read: Some(crate::permission::PermissionMode::Allow),
@@ -444,7 +409,6 @@ fn default_profiles() -> Vec<AgentProfile> {
         default_profile(
             "build",
             "Primary coding agent for normal end-to-end implementation work.",
-            &[],
             default_permission(
                 crate::permission::PermissionMode::Ask,
                 crate::permission::PermissionMode::Ask,
@@ -458,13 +422,11 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("workflow", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            &["default", "main"],
             "You are the primary engineering agent. Own the task end to end, choose tools pragmatically, delegate when it helps, preserve surrounding behavior, and avoid reverting unrelated work.",
         ),
         default_profile(
             "general",
             "General-purpose delegated agent for broad research and mixed tasks.",
-            &["fs", "shell", "web", "todo", "user", "tools", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
@@ -478,13 +440,11 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("shell", crate::permission::PermissionMode::Ask),
                 ],
             ),
-            &["delegate", "helper"],
             "You are a general-purpose delegated agent. Investigate broadly, combine code reading with focused web research when useful, and return evidence-backed conclusions without making workspace edits unless explicitly allowed.",
         ),
         default_profile(
             "explore",
             "Read-only codebase explorer for fast repo analysis.",
-            &["fs", "shell", "web"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
@@ -494,13 +454,11 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("web", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            &["read", "reader"],
             "You are a focused read-only engineering explorer. Gather evidence quickly, inspect code paths, summarize findings concisely, and do not make edits.",
         ),
         default_profile(
             "scout",
             "Read-only external research agent for docs, APIs, and dependency behavior.",
-            &["fs", "shell", "web"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
@@ -510,25 +468,21 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("shell", crate::permission::PermissionMode::Ask),
                 ],
             ),
-            &["research", "docs"],
             "You are a read-only research agent for external documentation, APIs, and dependency behavior. Prefer direct evidence from docs, source, or fetched pages, separate verified facts from inference, and do not modify the user's workspace.",
         ),
         default_profile(
             "implement",
             "Editing agent for making targeted code changes.",
-            &["fs", "shell", "todo", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Ask,
                 crate::permission::PermissionMode::Ask,
                 &[],
             ),
-            &["edit", "builder", "codex"],
             "You are a pragmatic implementation agent. Make the requested code changes, preserve surrounding behavior, adapt to concurrent edits, and avoid reverting unrelated work.",
         ),
         default_profile(
             "verify",
             "Validation agent for targeted testing and regression checks.",
-            &["fs", "shell", "todo", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
@@ -537,13 +491,11 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("agent", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            &["review", "reviewer", "test"],
             "You are a verification agent. Run focused checks, inspect outputs critically, look for regressions, and report the remaining risks plainly.",
         ),
         default_profile(
             "planner",
             "Planning agent for read-only decomposition and execution strategy.",
-            &["fs", "shell", "todo", "plan", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Allow,
                 crate::permission::PermissionMode::Ask,
@@ -553,13 +505,11 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("todo", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            &["plan", "planning", "design"],
             "You are a planning agent. Break work into concrete steps, surface assumptions and blockers, and keep the output actionable. Prefer read-only investigation unless the user explicitly asks to execute.",
         ),
         default_profile(
             "reviewer",
             "Code review agent focused on bugs, risks, and missing tests.",
-            &["fs", "shell", "agent"],
             default_permission(
                 crate::permission::PermissionMode::Deny,
                 crate::permission::PermissionMode::Ask,
@@ -568,7 +518,6 @@ fn default_profiles() -> Vec<AgentProfile> {
                     ("agent", crate::permission::PermissionMode::Allow),
                 ],
             ),
-            &["audit", "critic"],
             "You are a strict code review agent. Prioritize correctness issues, behavioral regressions, and test gaps. Findings come first; summaries are secondary.",
         ),
     ]
@@ -579,16 +528,8 @@ fn compaction_profile() -> AgentProfile {
     AgentProfile {
         name: "compaction".to_string(),
         frontmatter: AgentFrontmatter {
-            description: "Hidden agent used only for conversation compaction.".to_string(),
-            mode: crate::agent::AgentMode::All,
-            hidden: true,
-            color: None,
-            temperature: Some(crate::agent::AgentTemperature(0.1)),
-            max_output_tokens: Some(20_000),
-            steps: Some(1),
-            allowed_tools: vec!["__agena_compaction_no_tools__".to_string()],
-            permission: crate::agent::AgentPermissionConfig {
-                inherit: crate::agent::PermissionInheritanceConfig::All(false),
+            description: "Agent used only for conversation compaction.".to_string(),
+            permission: crate::agent::PermissionConfig {
                 path: Some(crate::agent::PathPermissionConfig {
                     workspace: Some(crate::agent::PathAccessModes {
                         read: Some(deny),
@@ -609,9 +550,8 @@ fn compaction_profile() -> AgentProfile {
                 tools: Some(crate::agent::ToolPermissionConfig::default()),
             },
             default: AgentDefaultModelConfig::default(),
-            aliases: Vec::new(),
         },
-        prompt: "You are Agena's hidden conversation compaction agent. Summarize only the transcript and context provided by the user message. Preserve the user's current objective, explicit constraints, decisions already made, important files or commands, tool results, pending work, blockers, and open questions. Do not call tools, do not invent facts, and do not mention the act of compaction. Return a concise Markdown summary with stable section headings.".to_string(),
+        prompt: "You are Agena's conversation compaction agent. Summarize only the transcript and context provided by the user message. Preserve the user's current objective, explicit constraints, decisions already made, important files or commands, tool results, pending work, blockers, and open questions. Do not call tools, do not invent facts, and do not mention the act of compaction. Return a concise Markdown summary with stable section headings.".to_string(),
         source_path: None,
         scope: AgentScope::Default,
     }
@@ -620,28 +560,15 @@ fn compaction_profile() -> AgentProfile {
 fn default_profile(
     name: &str,
     description: &str,
-    allowed_tools: &[&str],
     permission: crate::agent::AgentPermissionConfig,
-    aliases: &[&str],
     prompt: &str,
 ) -> AgentProfile {
     AgentProfile {
         name: name.to_string(),
         frontmatter: AgentFrontmatter {
             description: description.to_string(),
-            mode: crate::agent::AgentMode::All,
-            hidden: false,
-            color: None,
-            temperature: None,
-            max_output_tokens: None,
-            steps: None,
-            allowed_tools: allowed_tools
-                .iter()
-                .map(|tool| (*tool).to_string())
-                .collect(),
             permission,
             default: AgentDefaultModelConfig::default(),
-            aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
         },
         prompt: prompt.to_string(),
         source_path: None,

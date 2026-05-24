@@ -223,13 +223,9 @@ impl ApiService {
             automation: session_automation_resource(&scheduler_jobs, session.id),
             execution: SessionExecutionContextResource {
                 agent_profile: session.runtime().execution.selection.agent.clone(),
-                agent_mode: session.runtime().execution.agent_mode,
-                agent_hidden: session.runtime().execution.agent_hidden,
-                agent_color: session.runtime().execution.agent_color.clone(),
                 active_skill_name: session.runtime().execution.active_skill_name.clone(),
                 system_prompt_override: session.runtime().execution.system_prompt_override.clone(),
-                allowed_tools: session.runtime().execution.allowed_tools.clone(),
-                agent_permission: session.runtime().execution.agent_permission.clone(),
+                effective_permission: session.runtime().execution.effective_permission.clone(),
                 model_provider_id: session.runtime().execution.selection.provider.clone(),
                 model_adapter_id: session.runtime().execution.selection.adapter.clone(),
                 model_id: session.runtime().execution.selection.model.clone(),
@@ -241,7 +237,6 @@ impl ApiService {
                     .execution
                     .selection
                     .parallel_tool_calls,
-                agent_run: session.runtime().execution.agent_run.clone(),
                 effective_workspace_root: session
                     .runtime()
                     .effective_workspace_root()

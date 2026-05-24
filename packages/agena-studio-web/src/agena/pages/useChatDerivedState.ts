@@ -165,7 +165,6 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
       facts.push(`parallel_tools=${execution.model_parallel_tool_calls ? 'on' : 'off'}`)
     }
     if (execution.effective_workspace_root) facts.push(`workspace=${execution.effective_workspace_root}`)
-    if (execution.allowed_tools.length) facts.push(`allowed_tools=${execution.allowed_tools.length}`)
     return facts
   })
 

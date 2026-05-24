@@ -657,10 +657,9 @@ TOML 示例：
 [agents.plan]
 description = "Read-only planning agent"
 prompt = "You are a planning agent..."
-allowed_entries = ["fs", "shell", "todo", "plan"]
-mode = "all"
+
+[agents.plan.default]
 model = "anthropic/claude-sonnet-4-6"
-aliases = ["planner"]
 ```
 
 Markdown frontmatter 示例：
@@ -668,10 +667,8 @@ Markdown frontmatter 示例：
 ```markdown
 ---
 description: "Read-only planning agent"
-mode: "all"
-allowed_entries: ["fs", "shell", "todo", "plan"]
-model: "anthropic/claude-sonnet-4-6"
-aliases: ["planner"]
+default:
+  model: "anthropic/claude-sonnet-4-6"
 permission:
   path:
     workspace:
@@ -690,27 +687,9 @@ TOML agent 的 `prompt` 字段是 system prompt；Markdown agent 的正文是 sy
 
 - `description`
 - `prompt`
-- `mode`: `primary`、`subagent`、`all`
-- `hidden`
-- `color`
-- `temperature`
-- `max_output_tokens`
-- `steps`
-- `allowed_entries`
 - `permission`
-- `model`
-- `aliases`
+- `default`
 - `disabled`
-
-`mode` 可选：
-
-```text
-primary
-subagent
-all
-```
-
-`allowed_entries` 会收窄 agent 能调用的 entries 集合，同时保留已有 `shell` command pattern 规则。省略或写空数组表示不额外收窄。
 
 ## Permissions
 
@@ -753,30 +732,7 @@ plan = "allow"
 todo = "allow"
 ```
 
-Agent permission 默认继承顶层 permission。可用 `inherit` 控制：
-
-```toml
-[agents.plan.permission]
-inherit = false
-```
-
-`inherit` 也可以直接写成 inline table：
-
-```toml
-[agents.plan.permission]
-inherit = { path = true, network = false, entries = true }
-```
-
-也可以按 section 控制：
-
-```toml
-[agents.plan.permission.inherit]
-path = true
-network = true
-entries = true
-```
-
-`inherit = true` 表示继承所有 section，`inherit = false` 表示不继承。按 section 写表时，未写的 section 默认继承。
+Agent permission 会在顶层 permission 之上继续合并，不支持单独的 `inherit` 字段。
 
 ### Path permission
 

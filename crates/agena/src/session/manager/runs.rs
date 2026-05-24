@@ -221,14 +221,6 @@ impl SessionManager {
             .as_ref()
             .map(|profile| profile.name.clone())
             .unwrap_or_else(|| requested_profile_name.clone());
-        if let Some(profile) = resolved_profile.as_ref()
-            && !profile.frontmatter.mode.allows_subagent()
-        {
-            return Err(AppError::Config(format!(
-                "agent profile '{}' is not available for subtask sessions",
-                profile.name
-            )));
-        }
         let prompt = resolved_profile
             .as_ref()
             .map(|profile| {
@@ -245,38 +237,11 @@ impl SessionManager {
             .unwrap_or_else(|| request.subagent_type.apply_prompt_guidance(&request.prompt));
         let profile_allowed_tools = resolved_profile
             .as_ref()
-            .map(|profile| profile.frontmatter.allowed_tools.clone())
+            .map(|profile| crate::agents::internal_allowed_tools(profile.name.as_str()))
             .unwrap_or_default();
         let profile_permission = resolved_profile
             .as_ref()
-            .map(|profile| {
-                profile
-                    .frontmatter
-                    .permission
-                    .effective_with_defaults(&state.config.permission)
-            })
-            .unwrap_or_else(|| {
-                crate::agent::AgentPermissionConfig::default()
-                    .effective_with_defaults(&state.config.permission)
-            });
-        let profile_mode = resolved_profile
-            .as_ref()
-            .map(|profile| profile.frontmatter.mode);
-        let profile_hidden = resolved_profile
-            .as_ref()
-            .map(|profile| profile.frontmatter.hidden)
-            .unwrap_or(false);
-        let profile_color = resolved_profile
-            .as_ref()
-            .and_then(|profile| profile.frontmatter.color.clone());
-        let profile_run = resolved_profile
-            .as_ref()
-            .map(|profile| crate::agent::AgentRunConfig {
-                temperature: profile.frontmatter.temperature,
-                max_output_tokens: profile.frontmatter.max_output_tokens,
-                steps: profile.frontmatter.steps,
-            })
-            .unwrap_or_default();
+            .map(|profile| profile.frontmatter.permission.clone());
         let profile_default = resolved_profile
             .as_ref()
             .map(|profile| profile.frontmatter.default.clone());
@@ -288,15 +253,16 @@ impl SessionManager {
         {
             let mut existing = existing;
             existing.runtime.execution.selection.agent = Some(effective_profile_name.clone());
-            existing.runtime.execution.agent_mode = profile_mode;
-            existing.runtime.execution.agent_hidden = profile_hidden;
-            existing.runtime.execution.agent_color = profile_color.clone();
             existing.runtime.execution.system_prompt_override = Some(prompt.clone());
             existing
                 .runtime
                 .set_allowed_tools(profile_allowed_tools.clone());
-            existing.runtime.execution.agent_permission = profile_permission.clone();
-            existing.runtime.execution.agent_run = profile_run.clone();
+            existing.runtime.execution.effective_permission = self
+                .resolve_effective_session_permission(
+                    &existing,
+                    &state,
+                    profile_permission.as_ref(),
+                );
             existing.runtime.execution.task_id = request.task_id.clone();
             existing = self
                 .persist_session_changes(existing, Vec::new(), Vec::new(), None, state.clone())
@@ -330,13 +296,10 @@ impl SessionManager {
             )
             .await?;
         child.runtime.execution.selection.agent = Some(effective_profile_name.clone());
-        child.runtime.execution.agent_mode = profile_mode;
-        child.runtime.execution.agent_hidden = profile_hidden;
-        child.runtime.execution.agent_color = profile_color;
         child.runtime.execution.system_prompt_override = Some(prompt.clone());
         child.runtime.set_allowed_tools(profile_allowed_tools);
-        child.runtime.execution.agent_permission = profile_permission;
-        child.runtime.execution.agent_run = profile_run;
+        child.runtime.execution.effective_permission =
+            self.resolve_effective_session_permission(&child, &state, profile_permission.as_ref());
         child.runtime.execution.task_id = request.task_id.clone();
         child = self
             .persist_session_changes(child, Vec::new(), Vec::new(), None, state.clone())

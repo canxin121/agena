@@ -30,8 +30,6 @@ const props = defineProps<{
       <div v-if="props.runtime" class="stack">
         <div><strong>Default Agent:</strong> {{ props.runtime.operator.agents.default_agent }}</div>
         <div><strong>Agents:</strong> {{ props.runtime.operator.agents.total_count }}</div>
-        <div><strong>Primary Agents:</strong> {{ props.runtime.operator.agents.primary_count }}</div>
-        <div><strong>Subagents:</strong> {{ props.runtime.operator.agents.subagent_count }}</div>
         <div><strong>LSP Servers:</strong> {{ props.runtime.operator.lsp.server_count }}</div>
         <div><strong>Diagnostics:</strong> {{ props.runtime.operator.lsp.diagnostics_count }}</div>
         <div><strong>Skills:</strong> {{ props.runtime.operator.skills.skill_count }}</div>

@@ -876,7 +876,6 @@ Submit message:
   "run_state": "idle",
   "latest_event_seq": 123,
   "execution": {
-    "allowed_tools": [],
     "model_provider_id": "anthropic",
     "model_id": "claude-sonnet-4-6"
   },
@@ -889,8 +888,6 @@ Submit message:
   }
 }
 ```
-
-`execution.allowed_tools` 是 API wire 字段名，内容对应该 session 可用的 entries。
 
 Permission reply:
 

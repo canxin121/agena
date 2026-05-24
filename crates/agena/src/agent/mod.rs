@@ -10,247 +10,117 @@ use crate::permission::{
 };
 use crate::plugin::sdk::ToolTag;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(Default)]
-pub enum AgentMode {
-    #[default]
-    Primary,
-    Subagent,
-    All,
-}
-
-impl AgentMode {
-    pub const fn is_primary(&self) -> bool {
-        matches!(self, Self::Primary)
-    }
-
-    pub const fn allows_root(self) -> bool {
-        matches!(self, Self::Primary | Self::All)
-    }
-
-    pub const fn allows_subagent(self) -> bool {
-        matches!(self, Self::Subagent | Self::All)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct AgentTemperature(pub f32);
-
-impl Eq for AgentTemperature {}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct AgentRunConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<AgentTemperature>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub steps: Option<usize>,
-}
-
-impl AgentRunConfig {
-    pub fn is_empty(&self) -> bool {
-        self.temperature.is_none() && self.max_output_tokens.is_none() && self.steps.is_none()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionConfig {
-    #[serde(default, skip_serializing_if = "PathPermissionConfig::is_empty")]
-    pub path: PathPermissionConfig,
-    #[serde(default, skip_serializing_if = "NetworkPermissionConfig::is_empty")]
-    pub network: NetworkPermissionConfig,
+    #[serde(default, skip_serializing_if = "path_permission_is_empty")]
+    pub path: Option<PathPermissionConfig>,
+    #[serde(default, skip_serializing_if = "network_permission_is_empty")]
+    pub network: Option<NetworkPermissionConfig>,
     #[serde(
         default,
         rename = "entries",
-        skip_serializing_if = "ToolPermissionConfig::is_empty"
+        skip_serializing_if = "tool_permission_is_empty"
     )]
-    pub tools: ToolPermissionConfig,
+    pub tools: Option<ToolPermissionConfig>,
 }
 
 impl PermissionConfig {
     pub fn is_empty(&self) -> bool {
-        self.path.is_empty() && self.network.is_empty() && self.tools.is_empty()
+        path_permission_is_empty(&self.path)
+            && network_permission_is_empty(&self.network)
+            && tool_permission_is_empty(&self.tools)
     }
 
     pub fn merge_from(&mut self, overlay: Self) {
-        self.path.merge_from(overlay.path);
-        self.network.merge_from(overlay.network);
-        self.tools.merge_from(overlay.tools);
+        merge_permission_section(&mut self.path, overlay.path);
+        merge_permission_section(&mut self.network, overlay.network);
+        merge_permission_section(&mut self.tools, overlay.tools);
+    }
+
+    pub fn merged_with(&self, overlay: &Self) -> Self {
+        let mut merged = self.clone();
+        merged.merge_from(overlay.clone());
+        merged
     }
 
     pub fn apply_to_permission_policy(
         &self,
         base: PermissionPolicy,
     ) -> Result<PermissionPolicy, PermissionConfigError> {
-        self.path.apply_to_permission_policy(base)
+        match self.path.as_ref() {
+            Some(path) => path.apply_to_permission_policy(base),
+            None => Ok(base),
+        }
     }
 
     pub fn apply_to_tool_permission_policy(
         &self,
         base: ToolPermissionPolicy,
     ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
-        self.tools.apply_to_tool_permission_policy(base)
+        match self.tools.as_ref() {
+            Some(tools) => tools.apply_to_tool_permission_policy(base),
+            None => Ok(base),
+        }
     }
 
     pub fn apply_to_network_permission_policy(
         &self,
         base: NetworkPermissionPolicy,
     ) -> Result<NetworkPermissionPolicy, PermissionConfigError> {
-        self.network.apply_to_network_permission_policy(base)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct AgentPermissionConfig {
-    #[serde(default, skip_serializing_if = "PermissionInheritanceConfig::is_empty")]
-    pub inherit: PermissionInheritanceConfig,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathPermissionConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network: Option<NetworkPermissionConfig>,
-    #[serde(default, rename = "entries", skip_serializing_if = "Option::is_none")]
-    pub tools: Option<ToolPermissionConfig>,
-}
-
-impl AgentPermissionConfig {
-    pub fn is_empty(&self) -> bool {
-        self.inherit.is_empty()
-            && self.path.is_none()
-            && self.network.is_none()
-            && self.tools.is_none()
-    }
-
-    pub fn merge_from(&mut self, overlay: Self) {
-        if !overlay.inherit.is_empty() {
-            self.inherit = overlay.inherit;
-        }
-        if let Some(path) = overlay.path {
-            match self.path.as_mut() {
-                Some(current) => current.merge_from(path),
-                None => self.path = Some(path),
-            }
-        }
-        if let Some(network) = overlay.network {
-            match self.network.as_mut() {
-                Some(current) => current.merge_from(network),
-                None => self.network = Some(network),
-            }
-        }
-        if let Some(tools) = overlay.tools {
-            match self.tools.as_mut() {
-                Some(current) => current.merge_from(tools),
-                None => self.tools = Some(tools),
-            }
-        }
-    }
-
-    pub fn effective_with_defaults(&self, defaults: &PermissionConfig) -> PermissionConfig {
-        let mut effective = PermissionConfig::default();
-        if self.inherit.path() {
-            effective.path = defaults.path.clone();
-        }
-        if self.inherit.network() {
-            effective.network = defaults.network.clone();
-        }
-        if self.inherit.tools() {
-            effective.tools.tags = defaults.tools.tags.clone();
-            effective.tools.names = defaults.tools.names.clone();
-            effective.tools.rules = defaults.tools.rules.clone();
-        }
-        if self.inherit.plugin_tools() {
-            effective.tools.plugin = defaults.tools.plugin.clone();
-        }
-        if let Some(path) = self.path.as_ref() {
-            effective.path.merge_from(path.clone());
-        }
-        if let Some(network) = self.network.as_ref() {
-            effective.network.merge_from(network.clone());
-        }
-        if let Some(tools) = self.tools.as_ref() {
-            effective.tools.merge_from(tools.clone());
-        }
-        effective
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum PermissionInheritanceConfig {
-    All(bool),
-    Sections(PermissionInheritanceSections),
-}
-
-impl Default for PermissionInheritanceConfig {
-    fn default() -> Self {
-        Self::Sections(PermissionInheritanceSections::default())
-    }
-}
-
-impl PermissionInheritanceConfig {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::All(_) => false,
-            Self::Sections(sections) => sections.is_empty(),
-        }
-    }
-
-    pub fn path(&self) -> bool {
-        match self {
-            Self::All(value) => *value,
-            Self::Sections(sections) => sections.path.unwrap_or(true),
-        }
-    }
-
-    pub fn tools(&self) -> bool {
-        match self {
-            Self::All(value) => *value,
-            Self::Sections(sections) => sections.tools.unwrap_or(true),
-        }
-    }
-
-    pub fn network(&self) -> bool {
-        match self {
-            Self::All(value) => *value,
-            Self::Sections(sections) => sections.network.unwrap_or(true),
-        }
-    }
-
-    pub fn plugin_tools(&self) -> bool {
-        match self {
-            Self::All(value) => *value,
-            Self::Sections(sections) => sections.plugin_tools.unwrap_or(true),
+        match self.network.as_ref() {
+            Some(network) => network.apply_to_network_permission_policy(base),
+            None => Ok(base),
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
-#[serde(deny_unknown_fields)]
-pub struct PermissionInheritanceSections {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network: Option<bool>,
-    #[serde(default, rename = "entries", skip_serializing_if = "Option::is_none")]
-    pub tools: Option<bool>,
-    #[serde(default, skip)]
-    pub plugin_tools: Option<bool>,
+pub type AgentPermissionConfig = PermissionConfig;
+
+fn path_permission_is_empty(config: &Option<PathPermissionConfig>) -> bool {
+    config.as_ref().is_none_or(PathPermissionConfig::is_empty)
 }
 
-impl PermissionInheritanceSections {
-    pub fn is_empty(&self) -> bool {
-        self.path.is_none()
-            && self.network.is_none()
-            && self.tools.is_none()
-            && self.plugin_tools.is_none()
+fn network_permission_is_empty(config: &Option<NetworkPermissionConfig>) -> bool {
+    config
+        .as_ref()
+        .is_none_or(NetworkPermissionConfig::is_empty)
+}
+
+fn tool_permission_is_empty(config: &Option<ToolPermissionConfig>) -> bool {
+    config.as_ref().is_none_or(ToolPermissionConfig::is_empty)
+}
+
+fn merge_permission_section<T: PermissionSection>(current: &mut Option<T>, overlay: Option<T>) {
+    let Some(overlay) = overlay else {
+        return;
+    };
+    match current.as_mut() {
+        Some(current) => current.merge_from(overlay),
+        None => *current = Some(overlay),
+    }
+}
+
+trait PermissionSection {
+    fn merge_from(&mut self, overlay: Self);
+}
+
+impl PermissionSection for PathPermissionConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        PathPermissionConfig::merge_from(self, overlay);
+    }
+}
+
+impl PermissionSection for NetworkPermissionConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        NetworkPermissionConfig::merge_from(self, overlay);
+    }
+}
+
+impl PermissionSection for ToolPermissionConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        ToolPermissionConfig::merge_from(self, overlay);
     }
 }
 
@@ -567,7 +437,6 @@ fn sorted_rule_entries(entries: &IndexMap<String, PermissionMode>) -> Vec<(&str,
 pub struct Agent {
     pub name: String,
     pub description: Option<String>,
-    pub mode: AgentMode,
     pub prompt: Option<String>,
     pub disable: bool,
     pub permission_policy: PermissionPolicy,
@@ -580,7 +449,6 @@ impl Agent {
         let name = name.into();
         Self {
             description: None,
-            mode: AgentMode::Primary,
             prompt: None,
             disable: false,
             name,

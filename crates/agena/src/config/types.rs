@@ -274,37 +274,17 @@ pub struct AgentConfig {
     pub description: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub prompt: String,
-    #[serde(default, skip_serializing_if = "crate::agent::AgentMode::is_primary")]
-    pub mode: crate::agent::AgentMode,
-    #[serde(default)]
-    pub hidden: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<crate::agent::AgentTemperature>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_output_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub steps: Option<usize>,
     #[serde(
         default,
-        rename = "allowed_entries",
-        skip_serializing_if = "Vec::is_empty"
+        skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
-    pub allowed_tools: Vec<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "crate::agent::AgentPermissionConfig::is_empty"
-    )]
-    pub permission: crate::agent::AgentPermissionConfig,
+    pub permission: crate::agent::PermissionConfig,
     #[serde(
         default,
         rename = "default",
         skip_serializing_if = "crate::agents::AgentDefaultModelConfig::is_empty"
     )]
     pub default: crate::agents::AgentDefaultModelConfig,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub disabled: bool,
 }

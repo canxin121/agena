@@ -1,10 +1,6 @@
-//! Errors surfaced by the MCP client.
-
 use std::io;
 
 use thiserror::Error;
-
-use crate::protocol::JsonRpcError;
 
 #[derive(Debug, Error)]
 pub enum McpError {
@@ -42,18 +38,39 @@ pub enum McpError {
     ServerNotConnected(String),
 }
 
-impl From<JsonRpcError> for McpError {
-    fn from(e: JsonRpcError) -> Self {
+impl From<rmcp::ErrorData> for McpError {
+    fn from(error: rmcp::ErrorData) -> Self {
         Self::Rpc {
-            code: e.code,
-            message: e.message,
+            code: i64::from(error.code.0),
+            message: error.message.to_string(),
         }
     }
 }
 
-impl From<reqwest::Error> for McpError {
-    fn from(e: reqwest::Error) -> Self {
-        Self::Http(e.to_string())
+impl From<rmcp::service::ServiceError> for McpError {
+    fn from(error: rmcp::service::ServiceError) -> Self {
+        match error {
+            rmcp::service::ServiceError::McpError(error) => error.into(),
+            rmcp::service::ServiceError::TransportClosed => Self::TransportClosed,
+            rmcp::service::ServiceError::TransportSend(error) => Self::Transport(error.to_string()),
+            rmcp::service::ServiceError::UnexpectedResponse => {
+                Self::Malformed("unexpected MCP response".to_string())
+            }
+            rmcp::service::ServiceError::Cancelled { reason } => {
+                Self::Transport(reason.unwrap_or_else(|| "request cancelled".to_string()))
+            }
+            rmcp::service::ServiceError::Timeout { .. } => Self::Timeout,
+            other => Self::Transport(other.to_string()),
+        }
+    }
+}
+
+impl From<rmcp::service::ClientInitializeError> for McpError {
+    fn from(error: rmcp::service::ClientInitializeError) -> Self {
+        match error {
+            rmcp::service::ClientInitializeError::JsonRpcError(error) => error.into(),
+            other => Self::Transport(other.to_string()),
+        }
     }
 }
 

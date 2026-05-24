@@ -189,33 +189,28 @@ impl McpEntryTarget {
     tags(ToolTag::ReadOnly, ToolTag::Mutating, ToolTag::Mcp),
     concurrency_safe = false
 )]
-#[serde(tag = "action", rename_all = "snake_case")]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum McpToolInput {
-    #[serde(alias = "resources_list")]
     #[tool(exec = "list_resources")]
     ListResources {
         #[serde(flatten)]
         args: McpServerInput,
     },
-    #[serde(alias = "resources_read")]
     #[tool(exec = "read_resource")]
     ReadResource {
         #[serde(flatten)]
         args: ReadResourceInput,
     },
-    #[serde(alias = "prompts_list")]
     #[tool(exec = "list_prompts")]
     ListPrompts {
         #[serde(flatten)]
         args: McpServerInput,
     },
-    #[serde(alias = "prompts_get")]
     #[tool(exec = "get_prompt")]
     GetPrompt {
         #[serde(flatten)]
         args: GetPromptInput,
     },
-    #[serde(alias = "tool")]
     #[tool(exec = "call")]
     Call {
         #[serde(flatten)]
@@ -224,14 +219,15 @@ enum McpToolInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct McpServerInput {
     server: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
 struct CallToolInput {
     server: String,
-    #[serde(alias = "tool")]
     name: String,
     #[serde(default)]
     arguments: Option<Value>,
@@ -354,12 +350,14 @@ fn maybe_network_tag(entry: PluginToolDecl, has_network_servers: bool) -> Plugin
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ReadResourceInput {
     server: String,
     uri: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub(super) struct GetPromptInput {
     server: String,
     name: String,
@@ -754,6 +752,17 @@ mod tests {
             }
         );
         assert!(target_from_invocation("mcp:docs:search", serde_json::json!({})).is_err());
+        assert!(
+            target_from_invocation(
+                "mcp",
+                serde_json::json!({
+                    "action": "tool",
+                    "server": "docs",
+                    "name": "search"
+                })
+            )
+            .is_err()
+        );
     }
 
     #[test]

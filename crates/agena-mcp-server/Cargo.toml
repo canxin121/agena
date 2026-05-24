@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 agena-mcp-client = { workspace = true }
 async-trait = { workspace = true }
+rmcp = { workspace = true, features = ["server", "transport-io"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

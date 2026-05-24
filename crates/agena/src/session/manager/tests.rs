@@ -3383,12 +3383,7 @@ mod runtime_builtin_tool_tests {
         ToolDescriptor, current_host_callback_context,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
-    use axum::{
-        Router,
-        extract::State,
-        response::Html,
-        routing::{get, post},
-    };
+    use axum::{Router, extract::State, response::Html, routing::get};
 
     struct NoopJobSink;
 
@@ -4254,24 +4249,24 @@ mod runtime_builtin_tool_tests {
 
         async fn search_results(
             State(state): State<LocalWebServerState>,
-            _body: String,
-        ) -> Html<String> {
+        ) -> axum::Json<serde_json::Value> {
             state.search_hits.fetch_add(1, Ordering::SeqCst);
-            Html(format!(
-                r#"
-                <html><body>
-                  <div class="result">
-                    <a class="result__a" href="{base}/docs/runtime-web">Runtime Web Docs</a>
-                    <a class="result__snippet">Local runtime search result</a>
-                  </div>
-                  <div class="result">
-                    <a class="result__a" href="https://example.com/external">External Result</a>
-                    <a class="result__snippet">Should be filtered out</a>
-                  </div>
-                </body></html>
-                "#,
-                base = state.base_url
-            ))
+            axum::Json(serde_json::json!({
+                "web": {
+                    "results": [
+                        {
+                            "title": "Runtime Web Docs",
+                            "url": format!("{}/docs/runtime-web", state.base_url),
+                            "description": "Local runtime search result"
+                        },
+                        {
+                            "title": "External Result",
+                            "url": "https://example.com/external",
+                            "description": "Should be filtered out"
+                        }
+                    ]
+                }
+            }))
         }
 
         let fetch_hits = Arc::new(AtomicUsize::new(0));
@@ -4292,7 +4287,7 @@ mod runtime_builtin_tool_tests {
         };
         let app = Router::new()
             .route("/page", get(fetch_page))
-            .route("/html/", post(search_results))
+            .route("/search", get(search_results))
             .with_state(state);
         std::thread::Builder::new()
             .name("runtime-web-fixture".to_string())
@@ -4512,10 +4507,9 @@ while True:
                     "call_tools_1",
                     "tools",
                     serde_json::json!({
-                        "action": "search",
-                        "query": "plan worktree edit files",
-                        "load": ["worktree"],
-                        "limit": 5
+                        "action": "help",
+                        "tool": "plan",
+                        "include_schema": false
                     })
                     .to_string(),
                 )])
@@ -4836,10 +4830,9 @@ while True:
                     "call_tools_shell_1",
                     "tools",
                     serde_json::json!({
-                        "action": "search",
-                        "query": "shell monitor background process tools",
-                        "load": ["shell"],
-                        "limit": 5
+                        "action": "help",
+                        "tool": "shell",
+                        "include_schema": false
                     })
                     .to_string(),
                 )])
@@ -5153,21 +5146,9 @@ while True:
             std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, AppError>> + Send>>,
             AppError,
         > {
-            let events = if completed_or_failed_operation_count(&request, &["call_tools_web_1"])
+            let events = if completed_or_failed_operation_count(&request, &["call_web_fetch_1"])
                 == 0
             {
-                scripted_tool_call_events(vec![(
-                    "call_tools_web_1",
-                    "tools",
-                    serde_json::json!({
-                        "action": "search",
-                        "query": "web search fetch pages",
-                        "load": ["web"],
-                        "limit": 5
-                    })
-                    .to_string(),
-                )])
-            } else if completed_or_failed_operation_count(&request, &["call_web_fetch_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_web_fetch_1",
                     "web",
@@ -5221,10 +5202,11 @@ while True:
                     fetch_url: format!("{}/page", web_fixture.base_url),
                 },
                 |executor| {
-                    executor.with_web_search_duckduckgo_url_override(format!(
-                        "{}/html/",
-                        web_fixture.base_url
-                    ))
+                    executor
+                        .with_web_search_backend(crate::config::WebSearchBackend {
+                            api_key: "test-brave-key".to_string(),
+                        })
+                        .with_web_search_url_override(format!("{}/search", web_fixture.base_url))
                 },
             )
             .await;
@@ -5280,12 +5262,7 @@ while True:
                 "assistant should acknowledge the web flow completion"
             );
 
-            for operation_id in [
-                "call_tools_web_1",
-                "call_web_fetch_1",
-                "call_web_fetch_2",
-                "call_web_search_1",
-            ] {
+            for operation_id in ["call_web_fetch_1", "call_web_fetch_2", "call_web_search_1"] {
                 let (status, error, _) = operation_snapshot(&session, operation_id);
                 assert_eq!(
                     status,
@@ -5319,8 +5296,8 @@ while True:
             let search_payload = session_operation_payload(&session, "call_web_search_1");
             assert_eq!(
                 search_payload["backend"].as_str(),
-                Some("duckduckgo_html"),
-                "web search should still report the configured backend"
+                Some("brave"),
+                "web search should report the active provider"
             );
             let results = search_payload["results"]
                 .as_array()
@@ -5333,7 +5310,7 @@ while True:
             assert_eq!(
                 results[0]["title"].as_str(),
                 Some("Runtime Web Docs"),
-                "web search should parse the local duckduckgo-like HTML"
+                "web search should parse the local Brave-like JSON payload"
             );
             assert!(
                 results[0]["url"]
@@ -5422,10 +5399,9 @@ while True:
                         "call_tools_task_1",
                         "tools",
                         serde_json::json!({
-                            "action": "search",
-                            "query": "subtask delegated work",
-                            "load": ["task"],
-                            "limit": 5
+                            "action": "help",
+                            "tool": "task",
+                            "include_schema": false
                         })
                         .to_string(),
                     )])

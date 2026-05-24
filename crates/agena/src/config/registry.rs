@@ -322,6 +322,10 @@ impl super::ConfigResolution {
                 crate::tool::cron_plugin_id(),
                 crate::tool::new_cron_plugin(),
             )
+            .register_static(
+                crate::tool::code_plugin_id(),
+                crate::tool::new_code_plugin(),
+            )
             .register_static(crate::tool::fs_plugin_id(), crate::tool::new_fs_plugin())
             .register_static(
                 crate::tool::settings_plugin_id(),

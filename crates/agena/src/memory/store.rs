@@ -10,6 +10,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -17,7 +18,7 @@ use crate::memory::paths::MemoryDir;
 
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryType {
     User,

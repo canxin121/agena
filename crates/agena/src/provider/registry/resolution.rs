@@ -27,11 +27,9 @@ impl ProviderRegistry {
     }
 
     pub fn supports_prompt_continuation(&self, model: &ModelRef) -> Result<bool, AppError> {
-        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
-            AppError::Config(format!("provider not found: {}", model.provider_id))
-        })?;
-        Ok(provider
-            .supports_prompt_continuation_for_adapter(model.adapter_id.as_ref(), &model.model_id))
+        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+            provider.supports_prompt_continuation_for_adapter(adapter_id, model_id)
+        })
     }
 
     pub fn prompt_cache_shape_fingerprint(
@@ -47,10 +45,9 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
     ) -> Result<Option<crate::provider::PromptCacheShape>, AppError> {
-        let provider = self.get(model.provider_id.as_str()).ok_or_else(|| {
-            AppError::Config(format!("provider not found: {}", model.provider_id))
-        })?;
-        Ok(provider.prompt_cache_shape_for_adapter(model.adapter_id.as_ref(), &model.model_id))
+        self.with_model_ref_provider(model, |provider, adapter_id, model_id| {
+            provider.prompt_cache_shape_for_adapter(adapter_id, model_id)
+        })
     }
 
     pub fn provider_ids(&self) -> Vec<String> {
@@ -87,9 +84,7 @@ impl ProviderRegistry {
             return Ok(parsed);
         }
 
-        let provider = self
-            .get(target)
-            .ok_or_else(|| AppError::Config(format!("provider not found: {target}")))?;
+        let provider = self.require_provider(target)?;
         let provider_id = ProviderId::try_new(target)
             .map_err(|err| AppError::Config(format!("invalid provider id `{target}`: {err}")))?;
         let model_id = match requested_model {
@@ -116,9 +111,7 @@ impl ProviderRegistry {
         if provider_id.is_empty() {
             return Err(AppError::Config("provider id cannot be empty".to_owned()));
         }
-        let provider = self
-            .get(provider_id)
-            .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
+        let provider = self.require_provider(provider_id)?;
         let provider_id = ProviderId::try_new(provider_id).map_err(|err| {
             AppError::Config(format!("invalid provider id `{provider_id}`: {err}"))
         })?;

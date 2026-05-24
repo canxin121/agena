@@ -2,10 +2,10 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use agena::{
     config::{
-        ConfigLoader, ConfigSettingsPatchInput, LoadConfigRequest, ProcessEnvironment,
-        ProviderAdapterModelsResult, list_provider_adapter_models_for_target,
-        patch_file_settings_with_env, provider_model_overlay_from_catalog_definition,
-        saved_provider_adapter_models_target,
+        ConfigLoader, ConfigSettingsEditOptions, ConfigSettingsPatchInput, ConfigSettingsPathInput,
+        LoadConfigRequest, ProcessEnvironment, ProviderAdapterModelsResult,
+        list_provider_adapter_models_with_config, patch_file_settings_with_env,
+        provider_model_overlay_from_catalog_definition, saved_provider_adapter_models_target,
     },
     db::init_schema,
     model_catalog::{
@@ -270,11 +270,15 @@ async fn run_live_provider_case(
     let save_provider_response = patch_file_settings_with_env(
         &config_path,
         ConfigSettingsPatchInput {
-            path: Some("providers".to_owned()),
+            target: ConfigSettingsPathInput {
+                path: Some("providers".to_owned()),
+            },
             changes: json!({ provider_id: provider_patch }),
-            dry_run: false,
-            validate: true,
-            reload: false,
+            options: ConfigSettingsEditOptions {
+                dry_run: false,
+                validate: true,
+                reload: false,
+            },
         },
         &ProcessEnvironment,
     )
@@ -323,12 +327,14 @@ async fn run_live_provider_case(
         saved_provider_adapter_models_target(provider_id, resolved_provider, &adapter_ids_vec)
             .expect("saved provider adapter target should resolve");
 
-    let adapter_results = list_provider_adapter_models_for_target(
+    let adapter_results = list_provider_adapter_models_with_config(
+        &initial_resolution.config,
         &target,
-        reqwest::Client::new(),
         &ProcessEnvironment,
     )
-    .await;
+    .await
+    .expect("provider adapter model listing should run")
+    .adapters;
     assert_adapter_results_ready(&adapter_results);
 
     let public_match = collect_match_result(
@@ -380,15 +386,19 @@ async fn run_live_provider_case(
     let save_models_response = patch_file_settings_with_env(
         &config_path,
         ConfigSettingsPatchInput {
-            path: Some("providers".to_owned()),
+            target: ConfigSettingsPathInput {
+                path: Some("providers".to_owned()),
+            },
             changes: json!({
                 provider_id: {
                     "adapters": provider_models_patch,
                 }
             }),
-            dry_run: false,
-            validate: true,
-            reload: false,
+            options: ConfigSettingsEditOptions {
+                dry_run: false,
+                validate: true,
+                reload: false,
+            },
         },
         &ProcessEnvironment,
     )

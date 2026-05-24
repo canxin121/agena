@@ -7,8 +7,7 @@ use crate::{
         ModelSpeedModeRequestOverride,
     },
     provider::{
-        ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, FeatureCapabilityPatch,
-        FeatureCapabilityPatchBody, InputCapabilityPatch, InputCapabilityPatchBody,
+        CapabilitySelectionPatch, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
         ModelCapabilityFeature, ModelCapabilityPatch, ReasoningEffort, ThinkingRequest,
     },
 };
@@ -2016,17 +2015,13 @@ fn model_capability_patch(
     ),
 ) -> ModelCapabilityPatch {
     ModelCapabilityPatch {
-        input: (!supported_inputs.is_empty() || !unsupported_inputs.is_empty()).then_some(
-            InputCapabilityPatch::Patch(InputCapabilityPatchBody {
-                supported: supported_inputs,
-                unsupported: unsupported_inputs,
-            }),
+        input: CapabilitySelectionPatch::optional_from_supported_unsupported(
+            supported_inputs,
+            unsupported_inputs,
         ),
-        features: (!supported_features.is_empty() || !unsupported_features.is_empty()).then_some(
-            FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
-                supported: supported_features,
-                unsupported: unsupported_features,
-            }),
+        features: CapabilitySelectionPatch::optional_from_supported_unsupported(
+            supported_features,
+            unsupported_features,
         ),
         ..ModelCapabilityPatch::default()
     }

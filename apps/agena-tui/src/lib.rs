@@ -50,9 +50,8 @@ pub struct TuiLaunchArgs {
 #[command(
     name = "agena-tui",
     version,
-    about = "Agena terminal UI compatibility launcher",
-    long_about = "Compatibility launcher for the legacy `agena-tui` binary. \
-Use `agena` to launch the unified CLI/TUI experience."
+    about = "Agena terminal UI",
+    long_about = "Launch the Agena terminal UI."
 )]
 struct AgenaTuiCli {
     #[arg(long, env = "AGENA_CONFIG", global = true)]
@@ -74,7 +73,7 @@ struct RunCommand {
     database_url: Option<String>,
     #[arg(long, env = "AGENA_DATABASE_PATH")]
     database_path: Option<PathBuf>,
-    #[arg(long = "workspace", alias = "cwd")]
+    #[arg(long = "workspace")]
     workspace_root: Option<PathBuf>,
     #[arg(long)]
     session: Option<i64>,
@@ -174,9 +173,9 @@ impl<'a> MakeWriter<'a> for TuiLogWriter {
     }
 }
 
-pub async fn run_compat_cli() -> Result<(), AppError> {
+pub async fn run_cli() -> Result<(), AppError> {
     let cli = AgenaTuiCli::parse();
-    run_with_load_request(cli.load_request(), launch_args_from_compat_cli(&cli)).await
+    run_with_load_request(cli.load_request(), launch_args_from_cli(&cli)).await
 }
 
 pub async fn run_with_load_request(
@@ -281,7 +280,7 @@ pub async fn run_embedded(
     result.map_err(|error| AppError::Internal(error.to_string()))
 }
 
-fn launch_args_from_compat_cli(cli: &AgenaTuiCli) -> TuiLaunchArgs {
+fn launch_args_from_cli(cli: &AgenaTuiCli) -> TuiLaunchArgs {
     match cli.resolved_command() {
         TuiCommand::Run(command) => TuiLaunchArgs {
             database_url: command.database_url,

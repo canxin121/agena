@@ -470,11 +470,11 @@ pub(super) fn build_scheduler(
 
                         match self
                             .session_manager
-                            .submit_user_message(crate::session::SessionUserMessageRequest {
+                            .submit_user_message(crate::session::SessionUserMessageRequest::new(
                                 session_id,
                                 options,
-                                parts: vec![crate::message::PartContent::text(job.prompt.clone())],
-                            })
+                                vec![crate::message::PartContent::text(job.prompt.clone())],
+                            ))
                             .await
                         {
                             Ok(_) => {

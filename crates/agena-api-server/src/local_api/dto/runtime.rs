@@ -155,11 +155,6 @@ impl From<RuntimeBackgroundTask> for RuntimeBackgroundTaskResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RuntimeBackgroundTaskListResponse {
-    pub items: Vec<RuntimeBackgroundTaskResource>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct RuntimeBackgroundTaskStartResponse {
     pub started: bool,
     pub task: RuntimeBackgroundTaskResource,

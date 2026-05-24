@@ -65,16 +65,6 @@ pub struct GitStatusResource {
     pub worktree_managed_dirs: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct PermissionRuleListQuery {
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub limit: Option<u64>,
-    #[serde(default)]
-    pub search: Option<String>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct PermissionRuleWriteRequest {
     #[serde(default)]
@@ -108,14 +98,6 @@ pub struct PermissionRuleWriteRequest {
 pub struct PermissionRuleRevokeRequest {
     #[serde(default)]
     pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct SessionEventListQuery {
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub limit: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

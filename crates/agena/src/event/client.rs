@@ -13,7 +13,6 @@ fn is_false(value: &bool) -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecutionStartedEvent {
-    #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub ts_ms: i64,
 }
@@ -26,7 +25,6 @@ pub struct ErrorInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExecutionFailedEvent {
-    #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub error: ErrorInfo,
     pub ts_ms: i64,
@@ -34,7 +32,6 @@ pub struct ExecutionFailedEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StreamErrorEvent {
-    #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub error: ErrorInfo,
     pub ts_ms: i64,
@@ -49,7 +46,6 @@ pub enum CommandOutputStream {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandContext {
-    #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub call_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,7 +109,6 @@ pub enum PartDeltaField {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessagePartUpdatedEvent {
-    #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub message_id: i64,
     pub message_role: Role,
@@ -125,7 +120,6 @@ pub struct MessagePartUpdatedEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessagePartDeltaEvent {
-    #[serde(alias = "thread_id")]
     pub session_id: i64,
     pub message_id: i64,
     pub part_id: i64,

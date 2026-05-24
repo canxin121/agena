@@ -5,10 +5,10 @@ impl ApiService {
         &self,
         query: crate::local_api::dto::SessionListQuery,
     ) -> ApiResult<PaginatedResponse<SessionResource>> {
-        let limit = normalize_limit(query.limit);
+        let limit = normalize_limit(query.pagination.limit());
         let cursor = query
-            .cursor
-            .as_deref()
+            .pagination
+            .cursor()
             .map(decode_cursor::<SessionCursor>)
             .transpose()?;
         let mut statement = entities::session::Entity::find()
@@ -24,7 +24,7 @@ impl ApiService {
         if let Some(parent_id) = query.parent_id {
             statement = statement.filter(entities::session::Column::ParentId.eq(parent_id));
         }
-        if let Some(search) = non_empty(query.search.as_deref()) {
+        if let Some(search) = non_empty(query.pagination.search()) {
             statement =
                 statement.filter(entities::session::Column::Title.like(format!("%{search}%")));
         }
@@ -73,7 +73,7 @@ impl ApiService {
         request: SessionCreateRequest,
     ) -> ApiResult<SessionResource> {
         self.ensure_workspace_exists(request.workspace_id).await?;
-        if let Some(parent_id) = request.parent_id {
+        if let Some(parent_id) = request.session.parent_id {
             let parent = self.ensure_session_model(parent_id).await?;
             if parent.workspace_id != request.workspace_id {
                 return Err(ApiError::bad_request(
@@ -85,8 +85,8 @@ impl ApiService {
         let created = session_crud::create_session(
             self.db.as_ref(),
             request.workspace_id,
-            request.parent_id,
-            request.title,
+            request.session.parent_id,
+            request.session.title,
         )
         .await
         .map_err(db_error)?;
@@ -100,7 +100,7 @@ impl ApiService {
     pub async fn replace_session(
         &self,
         session_id: i64,
-        request: SessionReplaceRequest,
+        request: SessionHierarchyRequest,
     ) -> ApiResult<SessionResource> {
         let existing = self.ensure_session_model(session_id).await?;
         if request.parent_id == Some(session_id) {
@@ -148,7 +148,7 @@ impl ApiService {
         &self,
         manager: &SessionManager,
         session_id: i64,
-        query: SessionEventListQuery,
+        query: CursorPaginationQuery,
     ) -> ApiResult<PaginatedResponse<agena::event::DomainEvent>> {
         self.ensure_session_exists(session_id).await?;
         let limit = normalize_limit(query.limit);

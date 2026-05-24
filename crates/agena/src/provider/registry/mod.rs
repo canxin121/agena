@@ -17,7 +17,10 @@ use crate::model::{
 };
 use crate::plugin::ProviderDescriptor;
 
-use super::core::{ForwardingModelRuntime, remap_stream_event_provider_id};
+use super::core::{
+    ForwardingModelRuntime, impl_model_runtime_target_defaults, impl_model_runtime_target_methods,
+    remap_stream_event_provider_id,
+};
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, CompletionUsage, ModelRuntime,
     ProviderHttpClientConfig, ProviderRequestRetryConfig, ProviderRuntimeConfig,
@@ -67,6 +70,72 @@ fn assign_catalog_model_id(model: &mut Model) {
         return;
     }
     model.catalog_model_id = Some(ModelId::new(catalog_model_id));
+}
+
+fn provider_not_found_error(provider_id: &str) -> AppError {
+    AppError::Config(format!("provider not found: {provider_id}"))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ModeHydration {
+    FillEmpty,
+    OverrideIfPresent,
+}
+
+fn hydrate_model_from_provider(
+    provider: &dyn ModelRuntime,
+    model: &mut Model,
+    adapter_id: Option<&AdapterId>,
+    mode_hydration: ModeHydration,
+) {
+    let adapter_id = adapter_id.or(model.adapter_id.as_ref()).cloned();
+    let fallback = provider.model_capabilities_for_adapter(adapter_id.as_ref(), &model.id);
+    let current_capabilities = std::mem::take(&mut model.capabilities);
+    model.capabilities = if current_capabilities.is_default_placeholder() {
+        fallback
+    } else {
+        current_capabilities.with_fallbacks_from(&fallback)
+    };
+
+    let metadata_fallback = provider.model_metadata_for_adapter(adapter_id.as_ref(), &model.id);
+    model.metadata = model
+        .metadata
+        .clone()
+        .with_fallbacks_from(&metadata_fallback);
+
+    let thinking_modes = provider.model_thinking_modes_for_adapter(adapter_id.as_ref(), &model.id);
+    let speed_modes = provider.model_speed_modes_for_adapter(adapter_id.as_ref(), &model.id);
+    match mode_hydration {
+        ModeHydration::FillEmpty => {
+            if model.thinking_modes.is_empty() {
+                model.thinking_modes = thinking_modes;
+            }
+            if model.speed_modes.is_empty() {
+                model.speed_modes = speed_modes;
+            }
+        }
+        ModeHydration::OverrideIfPresent => {
+            if !thinking_modes.is_empty() {
+                model.thinking_modes = thinking_modes;
+            }
+            if !speed_modes.is_empty() {
+                model.speed_modes = speed_modes;
+            }
+        }
+    }
+}
+
+fn prepare_listed_model(
+    provider: &dyn ModelRuntime,
+    provider_id: &str,
+    model: &mut Model,
+    assign_catalog_id: bool,
+) {
+    model.provider_id = ProviderId::new(provider_id.to_owned());
+    if assign_catalog_id {
+        assign_catalog_model_id(model);
+    }
+    hydrate_model_from_provider(provider, model, None, ModeHydration::FillEmpty);
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -279,124 +348,26 @@ impl ModelRuntime for NamedProvider {
         self.provider_id.as_str()
     }
 
-    fn default_model(&self) -> &ModelId {
-        self.target.default_model()
-    }
+    impl_model_runtime_target_defaults!();
 
-    fn default_adapter(&self) -> Option<&AdapterId> {
-        self.target.default_adapter()
-    }
-
-    fn model_capabilities(&self, model: &ModelId) -> super::ModelCapabilities {
-        self.target.model_capabilities(model)
-    }
-
-    fn model_capabilities_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> super::ModelCapabilities {
-        self.target
-            .model_capabilities_for_adapter(adapter_id, model)
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> super::ModelMetadata {
-        self.target.model_metadata(model)
-    }
-
-    fn model_metadata_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> super::ModelMetadata {
-        self.target.model_metadata_for_adapter(adapter_id, model)
-    }
-
-    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
-        self.target.model_thinking_modes(model)
-    }
-
-    fn model_thinking_modes_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> BTreeMap<String, ModelThinkingMode> {
-        self.target
-            .model_thinking_modes_for_adapter(adapter_id, model)
-    }
-
-    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
-        self.target.model_speed_modes(model)
-    }
-
-    fn model_speed_modes_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> BTreeMap<String, ModelSpeedMode> {
-        self.target.model_speed_modes_for_adapter(adapter_id, model)
-    }
-
-    fn stream_resume_policy(&self) -> StreamResumePolicy {
-        self.target.stream_resume_policy()
-    }
-
-    fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
-        self.target.supports_prompt_continuation(model)
-    }
-
-    fn supports_prompt_continuation_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> bool {
-        self.target
-            .supports_prompt_continuation_for_adapter(adapter_id, model)
-    }
-
-    fn prompt_cache_shape(&self, model: &ModelId) -> Option<super::PromptCacheShape> {
-        self.target.prompt_cache_shape(model)
-    }
-
-    fn prompt_cache_shape_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> Option<super::PromptCacheShape> {
-        self.target
-            .prompt_cache_shape_for_adapter(adapter_id, model)
+    impl_model_runtime_target_methods! {
+        fn model_capabilities / model_capabilities_for_adapter (&self, model: &ModelId) -> super::ModelCapabilities;
+        fn model_metadata / model_metadata_for_adapter (&self, model: &ModelId) -> super::ModelMetadata;
+        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode>;
+        fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
+        fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
+        fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<super::PromptCacheShape>;
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
         let mut models = self.target.list_models().await?;
         for model in &mut models {
-            model.provider_id = ProviderId::new(self.provider_id.clone());
-            let fallback = self
-                .target
-                .model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.id);
-            let current_capabilities = std::mem::take(&mut model.capabilities);
-            model.capabilities = if current_capabilities.is_default_placeholder() {
-                fallback.clone()
-            } else {
-                current_capabilities.with_fallbacks_from(&fallback)
-            };
-            let metadata_fallback = self
-                .target
-                .model_metadata_for_adapter(model.adapter_id.as_ref(), &model.id);
-            model.metadata = model
-                .metadata
-                .clone()
-                .with_fallbacks_from(&metadata_fallback);
-            if model.thinking_modes.is_empty() {
-                model.thinking_modes = self
-                    .target
-                    .model_thinking_modes_for_adapter(model.adapter_id.as_ref(), &model.id);
-            }
-            if model.speed_modes.is_empty() {
-                model.speed_modes = self
-                    .target
-                    .model_speed_modes_for_adapter(model.adapter_id.as_ref(), &model.id);
-            }
+            prepare_listed_model(
+                self.target.as_ref(),
+                self.provider_id.as_str(),
+                model,
+                false,
+            );
         }
         Ok(models)
     }
@@ -567,6 +538,34 @@ impl ProviderRegistry {
 
     pub fn get(&self, provider_id: &str) -> Option<Arc<dyn ModelRuntime>> {
         self.providers.get(provider_id).cloned()
+    }
+
+    pub(super) fn require_provider(
+        &self,
+        provider_id: &str,
+    ) -> Result<Arc<dyn ModelRuntime>, AppError> {
+        self.get(provider_id)
+            .ok_or_else(|| provider_not_found_error(provider_id))
+    }
+
+    pub(super) fn provider_for_model_ref(
+        &self,
+        model: &ModelRef,
+    ) -> Result<Arc<dyn ModelRuntime>, AppError> {
+        self.require_provider(model.provider_id.as_str())
+    }
+
+    pub(super) fn with_model_ref_provider<T>(
+        &self,
+        model: &ModelRef,
+        map: impl FnOnce(&dyn ModelRuntime, Option<&AdapterId>, &ModelId) -> T,
+    ) -> Result<T, AppError> {
+        let provider = self.provider_for_model_ref(model)?;
+        Ok(map(
+            provider.as_ref(),
+            model.adapter_id.as_ref(),
+            &model.model_id,
+        ))
     }
 
     fn should_retry_error(&self, err: &AppError, retry_index: u32) -> bool {

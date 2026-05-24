@@ -11,21 +11,26 @@ use crate::model::{
     ModelThinkingMode,
 };
 
-use super::core::ForwardingModelRuntime;
+use super::core::{
+    ForwardingModelRuntime, impl_model_runtime_adapter_agnostic_methods,
+    impl_model_runtime_base_via_adapter_methods, impl_model_runtime_target_defaults,
+    impl_model_runtime_target_methods,
+};
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, ModelRuntime, PromptCacheShape,
     StreamResumePolicy, ThinkingRequest,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct InputCapabilityPatchBody {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
+pub struct CapabilitySelectionPatchBody<T> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub supported: Vec<ModelInputModality>,
+    pub supported: Vec<T>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unsupported: Vec<ModelInputModality>,
+    pub unsupported: Vec<T>,
 }
 
-impl InputCapabilityPatchBody {
+impl<T> CapabilitySelectionPatchBody<T> {
     pub fn is_empty(&self) -> bool {
         self.supported.is_empty() && self.unsupported.is_empty()
     }
@@ -33,12 +38,13 @@ impl InputCapabilityPatchBody {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum InputCapabilityPatch {
-    Supported(Vec<ModelInputModality>),
-    Patch(InputCapabilityPatchBody),
+#[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
+pub enum CapabilitySelectionPatch<T> {
+    Supported(Vec<T>),
+    Patch(CapabilitySelectionPatchBody<T>),
 }
 
-impl InputCapabilityPatch {
+impl<T> CapabilitySelectionPatch<T> {
     pub fn is_empty(&self) -> bool {
         match self {
             Self::Supported(values) => values.is_empty(),
@@ -46,62 +52,37 @@ impl InputCapabilityPatch {
         }
     }
 
-    fn supported_values(&self) -> Vec<ModelInputModality> {
+    pub fn supported(&self) -> &[T] {
         match self {
-            Self::Supported(values) => values.clone(),
-            Self::Patch(values) => values.supported.clone(),
+            Self::Supported(values) => values.as_slice(),
+            Self::Patch(values) => values.supported.as_slice(),
         }
     }
 
-    fn unsupported_values(&self) -> Vec<ModelInputModality> {
+    pub fn unsupported(&self) -> &[T] {
         match self {
-            Self::Supported(_) => Vec::new(),
-            Self::Patch(values) => values.unsupported.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct FeatureCapabilityPatchBody {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub supported: Vec<ModelCapabilityFeature>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unsupported: Vec<ModelCapabilityFeature>,
-}
-
-impl FeatureCapabilityPatchBody {
-    pub fn is_empty(&self) -> bool {
-        self.supported.is_empty() && self.unsupported.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum FeatureCapabilityPatch {
-    Supported(Vec<ModelCapabilityFeature>),
-    Patch(FeatureCapabilityPatchBody),
-}
-
-impl FeatureCapabilityPatch {
-    pub fn is_empty(&self) -> bool {
-        match self {
-            Self::Supported(values) => values.is_empty(),
-            Self::Patch(values) => values.is_empty(),
+            Self::Supported(_) => &[],
+            Self::Patch(values) => values.unsupported.as_slice(),
         }
     }
 
-    fn supported_values(&self) -> Vec<ModelCapabilityFeature> {
-        match self {
-            Self::Supported(values) => values.clone(),
-            Self::Patch(values) => values.supported.clone(),
+    pub fn from_supported_unsupported(supported: Vec<T>, unsupported: Vec<T>) -> Self {
+        if unsupported.is_empty() {
+            Self::Supported(supported)
+        } else {
+            Self::Patch(CapabilitySelectionPatchBody {
+                supported,
+                unsupported,
+            })
         }
     }
 
-    fn unsupported_values(&self) -> Vec<ModelCapabilityFeature> {
-        match self {
-            Self::Supported(_) => Vec::new(),
-            Self::Patch(values) => values.unsupported.clone(),
-        }
+    pub fn optional_from_supported_unsupported(
+        supported: Vec<T>,
+        unsupported: Vec<T>,
+    ) -> Option<Self> {
+        (!supported.is_empty() || !unsupported.is_empty())
+            .then(|| Self::from_supported_unsupported(supported, unsupported))
     }
 }
 
@@ -131,146 +112,62 @@ impl ModelCapabilityFeature {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ModelCapabilityPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input: Option<InputCapabilityPatch>,
+    pub input: Option<CapabilitySelectionPatch<ModelInputModality>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub features: Option<FeatureCapabilityPatch>,
-    #[serde(default, skip_serializing)]
-    pub text_input: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub image_input: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub document_input: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub audio_input: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub video_input: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub file_input: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub tool_calling: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub streaming: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub reasoning: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub structured_output: Option<CapabilitySupport>,
-    #[serde(default, skip_serializing)]
-    pub temperature_supported: Option<CapabilitySupport>,
+    pub features: Option<CapabilitySelectionPatch<ModelCapabilityFeature>>,
 }
 
 impl ModelCapabilityPatch {
     pub fn is_empty(&self) -> bool {
-        self.input
-            .as_ref()
-            .is_none_or(InputCapabilityPatch::is_empty)
-            && self
-                .features
-                .as_ref()
-                .is_none_or(FeatureCapabilityPatch::is_empty)
-            && self.text_input.is_none()
-            && self.image_input.is_none()
-            && self.document_input.is_none()
-            && self.audio_input.is_none()
-            && self.video_input.is_none()
-            && self.file_input.is_none()
-            && self.tool_calling.is_none()
-            && self.streaming.is_none()
-            && self.reasoning.is_none()
-            && self.structured_output.is_none()
-            && self.temperature_supported.is_none()
+        self.input.as_ref().is_none_or(|patch| patch.is_empty())
+            && self.features.as_ref().is_none_or(|patch| patch.is_empty())
     }
 
     pub fn input_support(&self, modality: ModelInputModality) -> Option<CapabilitySupport> {
         if let Some(selection) = &self.input {
-            if selection.supported_values().contains(&modality) {
+            if selection.supported().contains(&modality) {
                 return Some(CapabilitySupport::Supported);
             }
-            if selection.unsupported_values().contains(&modality) {
+            if selection.unsupported().contains(&modality) {
                 return Some(CapabilitySupport::Unsupported);
             }
         }
-        match modality {
-            ModelInputModality::Text => self.text_input,
-            ModelInputModality::Image => self.image_input,
-            ModelInputModality::Document => self.document_input,
-            ModelInputModality::Audio => self.audio_input,
-            ModelInputModality::Video => self.video_input,
-            ModelInputModality::File => self.file_input,
-        }
+        None
     }
 
     pub fn feature_support(&self, feature: ModelCapabilityFeature) -> Option<CapabilitySupport> {
         if let Some(selection) = &self.features {
-            if selection.supported_values().contains(&feature) {
+            if selection.supported().contains(&feature) {
                 return Some(CapabilitySupport::Supported);
             }
-            if selection.unsupported_values().contains(&feature) {
+            if selection.unsupported().contains(&feature) {
                 return Some(CapabilitySupport::Unsupported);
             }
         }
-        match feature {
-            ModelCapabilityFeature::ToolCalling => self.tool_calling,
-            ModelCapabilityFeature::Streaming => self.streaming,
-            ModelCapabilityFeature::Reasoning => self.reasoning,
-            ModelCapabilityFeature::StructuredOutput => self.structured_output,
-            ModelCapabilityFeature::Temperature => self.temperature_supported,
-        }
+        None
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        validate_modality_patch(self.input.as_ref())?;
-        validate_feature_patch(self.features.as_ref())?;
+        validate_capability_selection_patch("input", self.input.as_ref(), |modality| {
+            modality.as_str()
+        })?;
+        validate_capability_selection_patch("features", self.features.as_ref(), |feature| {
+            feature.as_str()
+        })?;
         Ok(())
     }
 
     pub fn normalize_compact_patch(&mut self) {
-        for modality in [
-            ModelInputModality::Text,
-            ModelInputModality::Image,
-            ModelInputModality::Document,
-            ModelInputModality::Audio,
-            ModelInputModality::Video,
-            ModelInputModality::File,
-        ] {
-            if let Some(value) = self.input_support(modality) {
-                match modality {
-                    ModelInputModality::Text => self.text_input = Some(value),
-                    ModelInputModality::Image => self.image_input = Some(value),
-                    ModelInputModality::Document => self.document_input = Some(value),
-                    ModelInputModality::Audio => self.audio_input = Some(value),
-                    ModelInputModality::Video => self.video_input = Some(value),
-                    ModelInputModality::File => self.file_input = Some(value),
-                }
-            }
-        }
-
-        for feature in [
-            ModelCapabilityFeature::ToolCalling,
-            ModelCapabilityFeature::Streaming,
-            ModelCapabilityFeature::Reasoning,
-            ModelCapabilityFeature::StructuredOutput,
-            ModelCapabilityFeature::Temperature,
-        ] {
-            if let Some(value) = self.feature_support(feature) {
-                match feature {
-                    ModelCapabilityFeature::ToolCalling => self.tool_calling = Some(value),
-                    ModelCapabilityFeature::Streaming => self.streaming = Some(value),
-                    ModelCapabilityFeature::Reasoning => self.reasoning = Some(value),
-                    ModelCapabilityFeature::StructuredOutput => {
-                        self.structured_output = Some(value);
-                    }
-                    ModelCapabilityFeature::Temperature => {
-                        self.temperature_supported = Some(value);
-                    }
-                }
-            }
-        }
+        *self = self.normalized_resolved_patch();
     }
 
     pub fn apply_to(&self, mut capabilities: ModelCapabilities) -> ModelCapabilities {
-        apply_legacy_capability_patch(self, &mut capabilities);
-        apply_modality_patch(self.input.as_ref(), &mut capabilities);
-        apply_feature_patch(self.features.as_ref(), &mut capabilities);
+        apply_capability_selection_patch(self.input.as_ref(), |modality, support| {
+            set_input_capability(&mut capabilities, modality, support);
+        });
+        apply_capability_selection_patch(self.features.as_ref(), |feature, support| {
+            set_feature_capability(&mut capabilities, feature, support);
+        });
         capabilities
     }
 
@@ -309,98 +206,32 @@ impl ModelCapabilityPatch {
         }
 
         Self {
-            input: capability_input_patch(supported_inputs, unsupported_inputs),
-            features: capability_feature_patch(supported_features, unsupported_features),
+            input: capability_selection_patch(supported_inputs, unsupported_inputs),
+            features: capability_selection_patch(supported_features, unsupported_features),
             ..Self::default()
         }
     }
 }
 
-fn capability_input_patch(
-    supported: Vec<ModelInputModality>,
-    unsupported: Vec<ModelInputModality>,
-) -> Option<InputCapabilityPatch> {
-    if supported.is_empty() && unsupported.is_empty() {
-        return None;
-    }
-    if unsupported.is_empty() {
-        Some(InputCapabilityPatch::Supported(supported))
-    } else {
-        Some(InputCapabilityPatch::Patch(InputCapabilityPatchBody {
-            supported,
-            unsupported,
-        }))
-    }
+fn capability_selection_patch<T>(
+    supported: Vec<T>,
+    unsupported: Vec<T>,
+) -> Option<CapabilitySelectionPatch<T>> {
+    CapabilitySelectionPatch::optional_from_supported_unsupported(supported, unsupported)
 }
 
-fn capability_feature_patch(
-    supported: Vec<ModelCapabilityFeature>,
-    unsupported: Vec<ModelCapabilityFeature>,
-) -> Option<FeatureCapabilityPatch> {
-    if supported.is_empty() && unsupported.is_empty() {
-        return None;
-    }
-    if unsupported.is_empty() {
-        Some(FeatureCapabilityPatch::Supported(supported))
-    } else {
-        Some(FeatureCapabilityPatch::Patch(FeatureCapabilityPatchBody {
-            supported,
-            unsupported,
-        }))
-    }
-}
-
-fn apply_legacy_capability_patch(
-    patch: &ModelCapabilityPatch,
-    capabilities: &mut ModelCapabilities,
-) {
-    if let Some(value) = patch.text_input {
-        capabilities.text_input = value;
-    }
-    if let Some(value) = patch.image_input {
-        capabilities.image_input = value;
-    }
-    if let Some(value) = patch.document_input {
-        capabilities.document_input = value;
-    }
-    if let Some(value) = patch.audio_input {
-        capabilities.audio_input = value;
-    }
-    if let Some(value) = patch.video_input {
-        capabilities.video_input = value;
-    }
-    if let Some(value) = patch.file_input {
-        capabilities.file_input = value;
-    }
-    if let Some(value) = patch.tool_calling {
-        capabilities.tool_calling = value;
-    }
-    if let Some(value) = patch.streaming {
-        capabilities.streaming = value;
-    }
-    if let Some(value) = patch.reasoning {
-        capabilities.reasoning = value;
-    }
-    if let Some(value) = patch.structured_output {
-        capabilities.structured_output = value;
-    }
-    if let Some(value) = patch.temperature_supported {
-        capabilities.temperature_supported = value;
-    }
-}
-
-fn apply_modality_patch(
-    patch: Option<&InputCapabilityPatch>,
-    capabilities: &mut ModelCapabilities,
+fn apply_capability_selection_patch<T: Clone>(
+    patch: Option<&CapabilitySelectionPatch<T>>,
+    mut apply: impl FnMut(T, CapabilitySupport),
 ) {
     let Some(patch) = patch else {
         return;
     };
-    for modality in patch.supported_values() {
-        set_input_capability(capabilities, modality, CapabilitySupport::Supported);
+    for value in patch.supported() {
+        apply(value.clone(), CapabilitySupport::Supported);
     }
-    for modality in patch.unsupported_values() {
-        set_input_capability(capabilities, modality, CapabilitySupport::Unsupported);
+    for value in patch.unsupported() {
+        apply(value.clone(), CapabilitySupport::Unsupported);
     }
 }
 
@@ -419,21 +250,6 @@ fn set_input_capability(
     }
 }
 
-fn apply_feature_patch(
-    patch: Option<&FeatureCapabilityPatch>,
-    capabilities: &mut ModelCapabilities,
-) {
-    let Some(patch) = patch else {
-        return;
-    };
-    for feature in patch.supported_values() {
-        set_feature_capability(capabilities, feature, CapabilitySupport::Supported);
-    }
-    for feature in patch.unsupported_values() {
-        set_feature_capability(capabilities, feature, CapabilitySupport::Unsupported);
-    }
-}
-
 fn set_feature_capability(
     capabilities: &mut ModelCapabilities,
     feature: ModelCapabilityFeature,
@@ -448,41 +264,18 @@ fn set_feature_capability(
     }
 }
 
-fn validate_modality_patch(patch: Option<&InputCapabilityPatch>) -> Result<(), String> {
+fn validate_capability_selection_patch<T>(
+    group: &str,
+    patch: Option<&CapabilitySelectionPatch<T>>,
+    name: impl Fn(&T) -> &'static str,
+) -> Result<(), String> {
     let Some(patch) = patch else {
         return Ok(());
     };
     validate_named_patch(
-        "input",
-        patch
-            .supported_values()
-            .into_iter()
-            .map(ModelInputModality::as_str)
-            .collect(),
-        patch
-            .unsupported_values()
-            .into_iter()
-            .map(ModelInputModality::as_str)
-            .collect(),
-    )
-}
-
-fn validate_feature_patch(patch: Option<&FeatureCapabilityPatch>) -> Result<(), String> {
-    let Some(patch) = patch else {
-        return Ok(());
-    };
-    validate_named_patch(
-        "features",
-        patch
-            .supported_values()
-            .into_iter()
-            .map(ModelCapabilityFeature::as_str)
-            .collect(),
-        patch
-            .unsupported_values()
-            .into_iter()
-            .map(ModelCapabilityFeature::as_str)
-            .collect(),
+        group,
+        patch.supported().iter().map(&name).collect(),
+        patch.unsupported().iter().map(name).collect(),
     )
 }
 
@@ -518,116 +311,102 @@ fn validate_named_patch(
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct ConfiguredModelThinkingMode {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<ThinkingRequest>,
-    #[serde(
-        default,
-        skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
-    )]
-    pub request_override: ModelSpeedModeRequestOverride,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub disabled: bool,
+fn merge_mode_adapter_overrides(
+    target: &mut BTreeMap<String, ModelSpeedModeRequestOverride>,
+    overrides: &BTreeMap<String, ModelSpeedModeRequestOverride>,
+) {
+    for (adapter_id, override_patch) in overrides {
+        let merged = target
+            .get(adapter_id)
+            .cloned()
+            .unwrap_or_default()
+            .merged_with(override_patch);
+        target.insert(adapter_id.clone(), merged);
+    }
 }
 
-impl ConfiguredModelThinkingMode {
-    pub fn is_empty(&self) -> bool {
-        self.display_name.is_none()
-            && self.description.is_none()
-            && self.thinking.is_none()
-            && self.request_override.is_empty()
-            && self.adapter_overrides.is_empty()
-            && !self.disabled
-    }
+macro_rules! define_configured_model_mode {
+    (
+        $name:ident,
+        $mode:ident,
+        fields { $($extra_fields:tt)* },
+        empty |$empty_self:ident| $extra_empty:expr,
+        apply |$apply_self:ident, $apply_mode:ident| $extra_apply:block
+    ) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+        pub struct $name {
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub display_name: Option<String>,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            pub description: Option<String>,
+            $($extra_fields)*
+            #[serde(
+                default,
+                skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
+            )]
+            pub request_override: ModelSpeedModeRequestOverride,
+            #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+            pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
+            #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+            pub disabled: bool,
+        }
 
-    pub(crate) fn apply_to_mode(
-        &self,
-        base: Option<&ModelThinkingMode>,
-    ) -> Option<ModelThinkingMode> {
-        if self.disabled {
-            return None;
+        impl $name {
+            pub fn is_empty(&self) -> bool {
+                let $empty_self = self;
+                self.display_name.is_none()
+                    && self.description.is_none()
+                    && $extra_empty
+                    && self.request_override.is_empty()
+                    && self.adapter_overrides.is_empty()
+                    && !self.disabled
+            }
+
+            pub(crate) fn apply_to_mode(&self, base: Option<&$mode>) -> Option<$mode> {
+                if self.disabled {
+                    return None;
+                }
+                let mut mode = base.cloned().unwrap_or_default();
+                if let Some(display_name) = self.display_name.clone() {
+                    mode.display_name = Some(display_name);
+                }
+                if let Some(description) = self.description.clone() {
+                    mode.description = Some(description);
+                }
+                let $apply_self = self;
+                let $apply_mode = &mut mode;
+                $extra_apply
+                mode.request_override = mode.request_override.merged_with(&self.request_override);
+                merge_mode_adapter_overrides(&mut mode.adapter_overrides, &self.adapter_overrides);
+                Some(mode)
+            }
         }
-        let mut mode = base.cloned().unwrap_or_default();
-        if let Some(display_name) = self.display_name.clone() {
-            mode.display_name = Some(display_name);
-        }
-        if let Some(description) = self.description.clone() {
-            mode.description = Some(description);
-        }
-        if let Some(thinking) = self.thinking.clone() {
+    };
+}
+
+define_configured_model_mode!(
+    ConfiguredModelThinkingMode,
+    ModelThinkingMode,
+    fields {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub thinking: Option<ThinkingRequest>,
+    },
+    empty |configured| configured.thinking.is_none(),
+    apply |configured, mode| {
+        if let Some(thinking) = configured.thinking.clone() {
             mode.thinking = Some(thinking);
         }
-        mode.request_override = mode.request_override.merged_with(&self.request_override);
-        for (adapter_id, override_patch) in &self.adapter_overrides {
-            let merged = mode
-                .adapter_overrides
-                .get(adapter_id)
-                .cloned()
-                .unwrap_or_default()
-                .merged_with(override_patch);
-            mode.adapter_overrides.insert(adapter_id.clone(), merged);
-        }
-        Some(mode)
     }
-}
+);
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct ConfiguredModelSpeedMode {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "ModelSpeedModeRequestOverride::is_empty"
-    )]
-    pub request_override: ModelSpeedModeRequestOverride,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub adapter_overrides: BTreeMap<String, ModelSpeedModeRequestOverride>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub disabled: bool,
-}
-
-impl ConfiguredModelSpeedMode {
-    pub fn is_empty(&self) -> bool {
-        self.display_name.is_none()
-            && self.description.is_none()
-            && self.request_override.is_empty()
-            && self.adapter_overrides.is_empty()
-            && !self.disabled
-    }
-
-    pub(crate) fn apply_to_mode(&self, base: Option<&ModelSpeedMode>) -> Option<ModelSpeedMode> {
-        if self.disabled {
-            return None;
-        }
-        let mut mode = base.cloned().unwrap_or_default();
-        if let Some(display_name) = self.display_name.clone() {
-            mode.display_name = Some(display_name);
-        }
-        if let Some(description) = self.description.clone() {
-            mode.description = Some(description);
-        }
-        mode.request_override = mode.request_override.merged_with(&self.request_override);
-        for (adapter_id, override_patch) in &self.adapter_overrides {
-            let merged = mode
-                .adapter_overrides
-                .get(adapter_id)
-                .cloned()
-                .unwrap_or_default()
-                .merged_with(override_patch);
-            mode.adapter_overrides.insert(adapter_id.clone(), merged);
-        }
-        Some(mode)
-    }
-}
+define_configured_model_mode!(
+    ConfiguredModelSpeedMode,
+    ModelSpeedMode,
+    fields {},
+    empty | _configured | true,
+    apply | _configured,
+    _mode | {}
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ConfiguredModelDefinition {
@@ -794,37 +573,30 @@ impl ConfiguredModelDefinition {
             .clone()
             .with_fallbacks_from(metadata_fallback);
         model.metadata = self.metadata().with_fallbacks_from(&base_metadata);
-        model.thinking_modes =
-            apply_configured_thinking_modes(model.thinking_modes, self.thinking_modes.iter());
-        model.speed_modes =
-            apply_configured_speed_modes(model.speed_modes, self.speed_modes.iter());
+        model.thinking_modes = apply_configured_modes(
+            model.thinking_modes,
+            self.thinking_modes.iter(),
+            |configured, base| configured.apply_to_mode(base),
+        );
+        model.speed_modes = apply_configured_modes(
+            model.speed_modes,
+            self.speed_modes.iter(),
+            |configured, base| configured.apply_to_mode(base),
+        );
         model
     }
 }
 
-fn apply_configured_thinking_modes<'a>(
-    mut modes: BTreeMap<String, ModelThinkingMode>,
-    configured_modes: impl Iterator<Item = (&'a String, &'a ConfiguredModelThinkingMode)>,
-) -> BTreeMap<String, ModelThinkingMode> {
+pub(crate) fn apply_configured_modes<'a, Mode, ConfiguredMode: 'a, F>(
+    mut modes: BTreeMap<String, Mode>,
+    configured_modes: impl Iterator<Item = (&'a String, &'a ConfiguredMode)>,
+    apply_to_mode: F,
+) -> BTreeMap<String, Mode>
+where
+    F: Fn(&ConfiguredMode, Option<&Mode>) -> Option<Mode>,
+{
     for (name, configured) in configured_modes {
-        match configured.apply_to_mode(modes.get(name)) {
-            Some(mode) => {
-                modes.insert(name.clone(), mode);
-            }
-            None => {
-                modes.remove(name);
-            }
-        }
-    }
-    modes
-}
-
-fn apply_configured_speed_modes<'a>(
-    mut modes: BTreeMap<String, ModelSpeedMode>,
-    configured_modes: impl Iterator<Item = (&'a String, &'a ConfiguredModelSpeedMode)>,
-) -> BTreeMap<String, ModelSpeedMode> {
-    for (name, configured) in configured_modes {
-        match configured.apply_to_mode(modes.get(name)) {
+        match apply_to_mode(configured, modes.get(name)) {
             Some(mode) => {
                 modes.insert(name.clone(), mode);
             }
@@ -892,22 +664,24 @@ impl ConfiguredModelsProvider {
                 base.entry(name).or_insert(mode);
             }
         }
-        apply_configured_thinking_modes(
+        apply_configured_modes(
             base,
             self.configured_model(model)
                 .map(|configured| configured.thinking_modes.iter())
                 .into_iter()
                 .flatten(),
+            |configured, existing| configured.apply_to_mode(existing),
         )
     }
 
     fn configured_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
-        apply_configured_speed_modes(
+        apply_configured_modes(
             self.target.model_speed_modes(model),
             self.configured_model(model)
                 .map(|configured| configured.speed_modes.iter())
                 .into_iter()
                 .flatten(),
+            |configured, existing| configured.apply_to_mode(existing),
         )
     }
 }
@@ -929,42 +703,24 @@ impl ModelRuntime for ConfiguredModelsProvider {
         self.target.id()
     }
 
-    fn default_model(&self) -> &ModelId {
-        self.target.default_model()
+    impl_model_runtime_target_defaults!();
+
+    impl_model_runtime_adapter_agnostic_methods! {
+        fn model_capabilities / model_capabilities_for_adapter (self, model) -> ModelCapabilities {
+            self.configured_capabilities(model)
+        }
+
+        fn model_metadata / model_metadata_for_adapter (self, model) -> ModelMetadata {
+            self.configured_metadata(model)
+        }
+
+        fn model_speed_modes / model_speed_modes_for_adapter (self, model) -> BTreeMap<String, ModelSpeedMode> {
+            self.configured_speed_modes(model)
+        }
     }
 
-    fn default_adapter(&self) -> Option<&AdapterId> {
-        self.target.default_adapter()
-    }
-
-    fn model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
-        self.configured_capabilities(model)
-    }
-
-    fn model_capabilities_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> ModelCapabilities {
-        let _ = adapter_id;
-        self.configured_capabilities(model)
-    }
-
-    fn model_metadata(&self, model: &ModelId) -> ModelMetadata {
-        self.configured_metadata(model)
-    }
-
-    fn model_metadata_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> ModelMetadata {
-        let _ = adapter_id;
-        self.configured_metadata(model)
-    }
-
-    fn model_thinking_modes(&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode> {
-        self.configured_thinking_modes_for_adapter(None, model)
+    impl_model_runtime_base_via_adapter_methods! {
+        fn model_thinking_modes / model_thinking_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelThinkingMode>;
     }
 
     fn model_thinking_modes_for_adapter(
@@ -975,47 +731,9 @@ impl ModelRuntime for ConfiguredModelsProvider {
         self.configured_thinking_modes_for_adapter(adapter_id, model)
     }
 
-    fn model_speed_modes(&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode> {
-        self.configured_speed_modes(model)
-    }
-
-    fn model_speed_modes_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> BTreeMap<String, ModelSpeedMode> {
-        let _ = adapter_id;
-        self.configured_speed_modes(model)
-    }
-
-    fn stream_resume_policy(&self) -> StreamResumePolicy {
-        self.target.stream_resume_policy()
-    }
-
-    fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
-        self.target.supports_prompt_continuation(model)
-    }
-
-    fn supports_prompt_continuation_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> bool {
-        self.target
-            .supports_prompt_continuation_for_adapter(adapter_id, model)
-    }
-
-    fn prompt_cache_shape(&self, model: &ModelId) -> Option<PromptCacheShape> {
-        self.target.prompt_cache_shape(model)
-    }
-
-    fn prompt_cache_shape_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> Option<PromptCacheShape> {
-        self.target
-            .prompt_cache_shape_for_adapter(adapter_id, model)
+    impl_model_runtime_target_methods! {
+        fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
+        fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {

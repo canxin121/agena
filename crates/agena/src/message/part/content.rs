@@ -2,8 +2,8 @@ use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AttachmentItem, AttachmentPart, ErrorPart, OperationPart, PartKind, PermissionRequestPart,
-    ReasoningPart, RequestPart, TextPart, UserInputRequestPart,
+    AttachmentItem, AttachmentPart, ErrorPart, OperationPart, PartKind, ReasoningPart, RequestPart,
+    TextPart,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -38,12 +38,8 @@ impl PartContent {
         Self::Attachment(AttachmentPart { attachments: items })
     }
 
-    pub fn permission_request(part: PermissionRequestPart) -> Self {
-        Self::Request(RequestPart::Permission(part))
-    }
-
-    pub fn user_input_request(part: UserInputRequestPart) -> Self {
-        Self::Request(RequestPart::UserInput(part))
+    pub fn request(part: RequestPart) -> Self {
+        Self::Request(part)
     }
 
     pub const fn kind(&self) -> PartKind {

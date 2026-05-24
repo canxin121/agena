@@ -694,7 +694,7 @@ pub enum ConfigOutputFormat {
 #[serde(rename_all = "snake_case")]
 pub enum StreamTransportMode {
     Sse,
-    #[serde(rename = "realtime_websocket", alias = "realtime_web_socket")]
+    #[serde(rename = "realtime_websocket")]
     RealtimeWebSocket,
 }
 
@@ -859,7 +859,6 @@ pub enum McpServerConfig {
     },
     /// Connect to a WebSocket-based MCP server and exchange JSON-RPC
     /// messages over text frames.
-    #[serde(alias = "websocket")]
     Ws {
         url: String,
         #[serde(default)]

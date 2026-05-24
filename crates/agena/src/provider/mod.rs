@@ -34,9 +34,9 @@ pub use anthropic::{AnthropicAdapter, AnthropicProfile};
 pub use capabilities::{CapabilityFamily, CapabilityRegistry, default_capability_registry};
 pub use cataloged_models::CatalogedModelsProvider;
 pub use configured_models::{
-    ConfiguredModelDefinition, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
-    ConfiguredModelsProvider, FeatureCapabilityPatch, FeatureCapabilityPatchBody,
-    InputCapabilityPatch, InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch,
+    CapabilitySelectionPatch, CapabilitySelectionPatchBody, ConfiguredModelDefinition,
+    ConfiguredModelSpeedMode, ConfiguredModelThinkingMode, ConfiguredModelsProvider,
+    ModelCapabilityFeature, ModelCapabilityPatch,
 };
 pub use core::{ModelRuntime, StreamResumePolicy};
 pub use credential::{

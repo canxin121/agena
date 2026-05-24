@@ -10,10 +10,10 @@ impl ApiService {
         query: MessageListQuery,
     ) -> ApiResult<PaginatedResponse<MessageResource>> {
         self.ensure_session_exists(session_id).await?;
-        let limit = normalize_limit(query.limit);
+        let limit = normalize_limit(query.pagination.limit());
         let cursor = query
-            .cursor
-            .as_deref()
+            .pagination
+            .cursor()
             .map(decode_cursor::<MessageCursor>)
             .transpose()?;
         let visible =

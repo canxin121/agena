@@ -9,7 +9,7 @@ pub enum CredentialIssuer {
     Gitlab,
     GoogleAdc,
     SapAiCore,
-    #[serde(rename = "atomgit", alias = "atom_git")]
+    #[serde(rename = "atomgit")]
     AtomGit,
 }
 
@@ -35,7 +35,7 @@ pub struct OAuthUserInfo {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    #[serde(default, alias = "avatarUrl", skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
 }
 
@@ -45,23 +45,16 @@ pub enum AuthData {
     Api {
         key: String,
     },
-    #[serde(rename = "oauth", alias = "o_auth")]
+    #[serde(rename = "oauth")]
     OAuth {
-        #[serde(default, alias = "provider", skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         issuer: Option<CredentialIssuer>,
-        #[serde(alias = "refreshToken")]
         refresh: String,
-        #[serde(alias = "accessToken")]
         access: String,
-        #[serde(alias = "expiresAtMs")]
         expires_at_ms: i64,
-        #[serde(default, alias = "accountId", skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         account_id: Option<String>,
-        #[serde(
-            default,
-            alias = "enterpriseUrl",
-            skip_serializing_if = "Option::is_none"
-        )]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         enterprise_url: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         user: Option<OAuthUserInfo>,

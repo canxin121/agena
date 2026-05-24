@@ -2976,30 +2976,11 @@ struct OpenAiModel {
     display_name: Option<String>,
     #[serde(default)]
     name: Option<String>,
-    #[serde(
-        default,
-        alias = "context_window",
-        alias = "context_length",
-        alias = "contextWindow",
-        alias = "context_window_tokens"
-    )]
+    #[serde(default)]
     context_window_tokens: Option<u64>,
-    #[serde(
-        default,
-        alias = "input_token_limit",
-        alias = "inputTokenLimit",
-        alias = "max_input_tokens",
-        alias = "maxInputTokens"
-    )]
+    #[serde(default)]
     max_input_tokens: Option<u64>,
-    #[serde(
-        default,
-        alias = "max_completion_tokens",
-        alias = "output_token_limit",
-        alias = "outputTokenLimit",
-        alias = "max_output_tokens",
-        alias = "maxOutputTokens"
-    )]
+    #[serde(default)]
     max_output_tokens: Option<u64>,
 }
 

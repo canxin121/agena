@@ -172,8 +172,17 @@ mod tests {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "request_type", rename_all = "snake_case")]
 pub enum RequestPart {
-    Permission(PermissionRequestPart),
-    UserInput(UserInputRequestPart),
+    Permission(InteractiveRequestPart<PermissionRequest, PermissionReply>),
+    UserInput(InteractiveRequestPart<UserInputRequest, UserInputReply>),
+}
+
+macro_rules! map_request_part {
+    ($value:expr, |$part:ident| $body:expr) => {
+        match $value {
+            RequestPart::Permission($part) => $body,
+            RequestPart::UserInput($part) => $body,
+        }
+    };
 }
 
 impl RequestPart {
@@ -185,31 +194,21 @@ impl RequestPart {
     }
 
     pub const fn status(&self) -> ExecutionStatus {
-        match self {
-            Self::Permission(part) => part.status(),
-            Self::UserInput(part) => part.status(),
-        }
+        map_request_part!(self, |part| part.status())
     }
 
     pub fn summary_text(&self) -> String {
-        match self {
-            Self::Permission(part) => part.summary_text(),
-            Self::UserInput(part) => part.summary_text(),
-        }
+        map_request_part!(self, |part| part.summary_text())
     }
 
     pub fn request_id(&self) -> &str {
-        match self {
-            Self::Permission(part) => part.request_id(),
-            Self::UserInput(part) => part.request_id(),
-        }
+        map_request_part!(self, |part| part.request_id())
     }
 
     pub fn pending_interactive_request(&self) -> Option<PendingInteractiveRequest> {
-        match self {
-            Self::Permission(part) => part.pending_request().map(PendingInteractiveRequest::from),
-            Self::UserInput(part) => part.pending_request().map(PendingInteractiveRequest::from),
-        }
+        map_request_part!(self, |part| {
+            part.pending_request().map(PendingInteractiveRequest::from)
+        })
     }
 }
 
@@ -233,6 +232,15 @@ pub enum PendingInteractiveRequest {
     },
 }
 
+macro_rules! map_pending_interactive_request {
+    ($value:expr, |$request:ident| $body:expr) => {
+        match $value {
+            PendingInteractiveRequest::Permission { request: $request } => $body,
+            PendingInteractiveRequest::UserInput { request: $request } => $body,
+        }
+    };
+}
+
 impl PendingInteractiveRequest {
     pub const fn kind(&self) -> PendingInteractiveRequestKind {
         match self {
@@ -242,24 +250,15 @@ impl PendingInteractiveRequest {
     }
 
     pub fn request_id(&self) -> &str {
-        match self {
-            Self::Permission { request } => request.request_id.as_str(),
-            Self::UserInput { request } => request.request_id.as_str(),
-        }
+        map_pending_interactive_request!(self, |request| request.request_id.as_str())
     }
 
     pub const fn session_id(&self) -> Option<i64> {
-        match self {
-            Self::Permission { request } => request.session_id,
-            Self::UserInput { request } => request.session_id,
-        }
+        map_pending_interactive_request!(self, |request| request.session_id)
     }
 
     pub fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
-        match self {
-            Self::Permission { request } => request.created_at,
-            Self::UserInput { request } => request.created_at,
-        }
+        map_pending_interactive_request!(self, |request| request.created_at)
     }
 
     pub fn as_permission(&self) -> Option<&PermissionRequest> {
@@ -277,40 +276,37 @@ impl PendingInteractiveRequest {
     }
 }
 
-impl From<PermissionRequest> for PendingInteractiveRequest {
-    fn from(request: PermissionRequest) -> Self {
-        Self::Permission { request }
-    }
+macro_rules! impl_pending_interactive_request_from {
+    ($request_type:ty, $variant:ident) => {
+        impl From<$request_type> for PendingInteractiveRequest {
+            fn from(request: $request_type) -> Self {
+                Self::$variant { request }
+            }
+        }
+    };
 }
 
-impl From<UserInputRequest> for PendingInteractiveRequest {
-    fn from(request: UserInputRequest) -> Self {
-        Self::UserInput { request }
-    }
-}
+impl_pending_interactive_request_from!(PermissionRequest, Permission);
+impl_pending_interactive_request_from!(UserInputRequest, UserInput);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PermissionRequestPart {
-    pub request: PermissionRequest,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reply: Option<PermissionReply>,
+pub struct InteractiveRequestPart<Request, Reply> {
+    pub request: Request,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply: Option<Reply>,
 }
 
-impl PermissionRequestPart {
-    pub fn pending(request: PermissionRequest) -> Self {
+impl<Request, Reply> InteractiveRequestPart<Request, Reply> {
+    pub fn pending(request: Request) -> Self {
         Self {
             request,
             reply: None,
         }
     }
 
-    pub fn with_reply(mut self, reply: PermissionReply) -> Self {
+    pub fn with_reply(mut self, reply: Reply) -> Self {
         self.reply = Some(reply);
         self
-    }
-
-    pub fn request_id(&self) -> &str {
-        self.request.request_id.as_str()
     }
 
     pub const fn status(&self) -> ExecutionStatus {
@@ -321,8 +317,17 @@ impl PermissionRequestPart {
         }
     }
 
-    pub fn pending_request(&self) -> Option<PermissionRequest> {
+    pub fn pending_request(&self) -> Option<Request>
+    where
+        Request: Clone,
+    {
         self.reply.is_none().then_some(self.request.clone())
+    }
+}
+
+impl InteractiveRequestPart<PermissionRequest, PermissionReply> {
+    pub fn request_id(&self) -> &str {
+        self.request.request_id.as_str()
     }
 
     pub fn summary_text(&self) -> String {
@@ -362,7 +367,7 @@ pub struct UserInputQuestion {
     pub options: Vec<UserInputOption>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub multiple: bool,
-    #[serde(default, alias = "custom", skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub allow_custom: bool,
 }
 
@@ -396,40 +401,9 @@ pub struct UserInputReply {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UserInputRequestPart {
-    pub request: UserInputRequest,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reply: Option<UserInputReply>,
-}
-
-impl UserInputRequestPart {
-    pub fn pending(request: UserInputRequest) -> Self {
-        Self {
-            request,
-            reply: None,
-        }
-    }
-
-    pub fn with_reply(mut self, reply: UserInputReply) -> Self {
-        self.reply = Some(reply);
-        self
-    }
-
+impl InteractiveRequestPart<UserInputRequest, UserInputReply> {
     pub fn request_id(&self) -> &str {
         self.request.request_id.as_str()
-    }
-
-    pub const fn status(&self) -> ExecutionStatus {
-        if self.reply.is_some() {
-            ExecutionStatus::Completed
-        } else {
-            ExecutionStatus::Pending
-        }
-    }
-
-    pub fn pending_request(&self) -> Option<UserInputRequest> {
-        self.reply.is_none().then_some(self.request.clone())
     }
 
     pub fn summary_text(&self) -> String {

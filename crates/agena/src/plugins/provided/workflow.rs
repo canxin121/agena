@@ -214,14 +214,13 @@ enum GoalToolInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "user",
-    description = "User interaction command. Use action `request_input` to request structured short answers. Legacy action alias `ask` still works but is not the preferred name.",
+    description = "User interaction command. Use action `request_input` to request structured short answers.",
     tags(ToolTag::ReadOnly, ToolTag::Interactive),
     host_capabilities(HostCapability::AskUser),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum UserToolInput {
-    #[serde(alias = "ask")]
     #[tool(exec = "request_input")]
     RequestInput(AskUserToolInput),
 }
@@ -300,7 +299,7 @@ impl ExitWorktreeAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 struct ExitWorktreeCommandInput {
-    #[serde(rename = "exit_action", alias = "action")]
+    #[serde(rename = "exit_action")]
     exit_action: ExitWorktreeAction,
     #[serde(default)]
     discard_changes: bool,

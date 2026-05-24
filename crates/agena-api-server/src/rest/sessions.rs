@@ -1,29 +1,61 @@
 use super::*;
+use crate::session_support::{
+    clear_session_goal_or_not_found, session_execution_reply_request, session_execution_request,
+    session_execution_resource, session_goal_resource as load_session_goal_resource,
+    session_goal_resource_for_session, session_permission_reply_request,
+    session_user_message_request, set_session_goal as set_session_goal_request,
+};
+
+async fn session_execution_json(
+    state: &AppState,
+    manager: &agena::session::SessionManager,
+    session: &agena::session::Session,
+) -> Result<Json<crate::local_api::SessionExecutionResource>, ServerError> {
+    Ok(Json(
+        session_execution_resource(state, manager, session).await?,
+    ))
+}
+
+async fn session_execution_json_result(
+    state: &AppState,
+    manager: &agena::session::SessionManager,
+    future: impl Future<Output = Result<agena::session::Session, agena::AppError>>,
+) -> Result<Json<crate::local_api::SessionExecutionResource>, ServerError> {
+    let session = future.await.map_err(ServerError::Core)?;
+    session_execution_json(state, manager, &session).await
+}
+
+async fn assert_if_match_session_version(
+    state: &AppState,
+    session_id: i64,
+    headers: &HeaderMap,
+) -> Result<(), ServerError> {
+    let Some(expected_version) = if_match_version(headers)? else {
+        return Ok(());
+    };
+    state
+        .service()
+        .assert_session_version(session_id, expected_version)
+        .await
+        .map_err(server_error_from_http)?;
+    Ok(())
+}
 
 pub async fn list_sessions(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<SessionListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .service()
-            .list_sessions(query)
-            .await
-            .map_err(server_error_from_http)?,
-    ))
+    json_http(state.service().list_sessions(query)).await
 }
 
 pub async fn get_session(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let session = state
-        .service()
-        .get_session(session_id)
-        .await
-        .map_err(server_error_from_http)?
-        .ok_or_else(|| ServerError::NotFound(format!("session not found: {session_id}")))?;
-    Ok(Json(session))
+    json_http_found(state.service().get_session(session_id), || {
+        format!("session not found: {session_id}")
+    })
+    .await
 }
 
 pub async fn get_session_state(
@@ -31,16 +63,7 @@ pub async fn get_session_state(
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    let session = manager
-        .get_session(session_id)
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+    session_execution_json_result(&state, manager.as_ref(), manager.get_session(session_id)).await
 }
 
 pub async fn get_session_goal(
@@ -53,13 +76,9 @@ pub async fn get_session_goal(
         .await
         .map_err(ServerError::Core)?;
     let goal = match session.goal.as_ref() {
-        Some(goal) => Some(
-            state
-                .service()
-                .session_goal_resource(manager.as_ref(), &session, goal)
-                .await
-                .map_err(server_error_from_http)?,
-        ),
+        Some(goal) => {
+            Some(session_goal_resource_for_session(&state, manager.as_ref(), &session, goal).await?)
+        }
         None => None,
     };
     Ok(Json(goal))
@@ -71,66 +90,22 @@ pub async fn set_session_goal(
     Json(request): Json<SessionGoalSetRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    if request.clear {
-        let cleared = manager
-            .clear_goal(session_id)
-            .await
-            .map_err(ServerError::Core)?;
-        if !cleared {
-            return Err(ServerError::NotFound(format!(
-                "session {session_id} goal not found"
-            )));
-        }
-        return Ok(Json(serde_json::Value::Null));
-    }
-
-    let goal = if manager
-        .get_goal(session_id)
-        .await
-        .map_err(ServerError::Core)?
-        .is_some()
+    let goal = match set_session_goal_request(
+        manager.as_ref(),
+        session_id,
+        request.objective,
+        request.status,
+        request.clear,
+    )
+    .await?
     {
-        manager
-            .update_goal(agena::session::SessionGoalUpdateRequest {
-                session_id,
-                objective: request.objective,
-                status: request.status,
-                expected_goal_id: None,
-            })
-            .await
-            .map_err(ServerError::Core)?
-    } else {
-        if !matches!(
-            request.status,
-            None | Some(agena::session::GoalStatus::Active)
-        ) {
-            return Err(ServerError::BadRequest(format!(
-                "session {session_id} goal must be created with status active"
-            )));
+        Some(goal) => goal,
+        None => {
+            return Ok(Json(serde_json::Value::Null));
         }
-        let objective = request.objective.ok_or_else(|| {
-            ServerError::BadRequest(format!(
-                "session {session_id} goal objective is required when creating a goal"
-            ))
-        })?;
-        manager
-            .create_goal(agena::session::SessionGoalCreateRequest {
-                session_id,
-                objective,
-            })
-            .await
-            .map_err(ServerError::Core)?
     };
 
-    let session = manager
-        .get_session(session_id)
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_goal_resource(manager.as_ref(), &session, &goal)
-        .await
-        .map_err(server_error_from_http)?;
+    let resource = load_session_goal_resource(&state, manager.as_ref(), session_id, &goal).await?;
     Ok(Json(serde_json::to_value(resource).map_err(|error| {
         ServerError::Internal(error.to_string())
     })?))
@@ -145,16 +120,9 @@ pub async fn complete_session_goal(
         .complete_goal(session_id)
         .await
         .map_err(ServerError::Core)?;
-    let session = manager
-        .get_session(session_id)
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_goal_resource(manager.as_ref(), &session, &goal)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+    Ok(Json(
+        load_session_goal_resource(&state, manager.as_ref(), session_id, &goal).await?,
+    ))
 }
 
 pub async fn clear_session_goal(
@@ -162,15 +130,7 @@ pub async fn clear_session_goal(
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    let cleared = manager
-        .clear_goal(session_id)
-        .await
-        .map_err(ServerError::Core)?;
-    if !cleared {
-        return Err(ServerError::NotFound(format!(
-            "session {session_id} goal not found"
-        )));
-    }
+    clear_session_goal_or_not_found(manager.as_ref(), session_id).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -179,35 +139,17 @@ pub async fn create_session(
     State(state): State<AppState>,
     Json(request): Json<SessionCreateRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state
-            .service()
-            .create_session(request)
-            .await
-            .map_err(server_error_from_http)?,
-    ))
+    json_http(state.service().create_session(request)).await
 }
 
 pub async fn replace_session(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
-    Json(request): Json<SessionReplaceRequest>,
+    Json(request): Json<SessionHierarchyRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if let Some(expected_version) = if_match_version(&headers)? {
-        state
-            .service()
-            .assert_session_version(session_id, expected_version)
-            .await
-            .map_err(server_error_from_http)?;
-    }
-    Ok(Json(
-        state
-            .service()
-            .replace_session(session_id, request)
-            .await
-            .map_err(server_error_from_http)?,
-    ))
+    assert_if_match_session_version(&state, session_id, &headers).await?;
+    json_http(state.service().replace_session(session_id, request)).await
 }
 
 pub async fn delete_session(
@@ -215,20 +157,8 @@ pub async fn delete_session(
     Path(session_id): Path<i64>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
-    if let Some(expected_version) = if_match_version(&headers)? {
-        state
-            .service()
-            .assert_session_version(session_id, expected_version)
-            .await
-            .map_err(server_error_from_http)?;
-    }
-    Ok(Json(
-        state
-            .service()
-            .delete_session(session_id)
-            .await
-            .map_err(server_error_from_http)?,
-    ))
+    assert_if_match_session_version(&state, session_id, &headers).await?;
+    json_http(state.service().delete_session(session_id)).await
 }
 
 pub async fn list_session_events(
@@ -263,7 +193,7 @@ pub async fn list_session_events(
         .list_session_events(
             manager.as_ref(),
             session_id,
-            crate::local_api::SessionEventListQuery {
+            crate::local_api::CursorPaginationQuery {
                 cursor: query.cursor,
                 limit: query.limit,
             },
@@ -359,61 +289,31 @@ pub async fn submit_message(
             "session message requires at least one part".into(),
         ));
     }
-    if let Some(expected_version) = if_match_version(&headers)? {
-        state
-            .service()
-            .assert_session_version(session_id, expected_version)
-            .await
-            .map_err(server_error_from_http)?;
-    }
+    assert_if_match_session_version(&state, session_id, &headers).await?;
 
-    let options = resolve_run_options(&state, session_id, request.options).await?;
     let manager = state.session_manager()?;
-    let session = manager
-        .submit_user_message(agena::session::SessionUserMessageRequest {
-            session_id,
-            options,
-            parts: request.parts,
-        })
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+    let request =
+        session_user_message_request(&state, session_id, request.run.options, request.parts)
+            .await?;
+    session_execution_json_result(
+        &state,
+        manager.as_ref(),
+        manager.submit_user_message(request),
+    )
+    .await
 }
 
 pub async fn continue_run(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
-    Json(request): Json<SessionContinueRequestBody>,
+    Json(request): Json<SessionRunRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if let Some(expected_version) = if_match_version(&headers)? {
-        state
-            .service()
-            .assert_session_version(session_id, expected_version)
-            .await
-            .map_err(server_error_from_http)?;
-    }
+    assert_if_match_session_version(&state, session_id, &headers).await?;
 
-    let options = resolve_run_options(&state, session_id, request.options).await?;
     let manager = state.session_manager()?;
-    let session = manager
-        .continue_session(agena::session::SessionContinueRequest {
-            session_id,
-            options,
-        })
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+    let request = session_execution_request(&state, session_id, request.options).await?;
+    session_execution_json_result(&state, manager.as_ref(), manager.continue_session(request)).await
 }
 
 pub async fn fork_session(
@@ -428,21 +328,17 @@ pub async fn fork_session(
         ));
     }
     let manager = state.session_manager()?;
-    let session = manager
-        .fork_session(agena::session::SessionForkRequest {
+    session_execution_json_result(
+        &state,
+        manager.as_ref(),
+        manager.fork_session(agena::session::SessionForkRequest {
             session_id,
             at_message_id: request.at_message_id,
             title: request.title,
             expected_version: if_match_version(&headers)?,
-        })
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+        }),
+    )
+    .await
 }
 
 pub async fn cancel_run(
@@ -466,65 +362,35 @@ pub async fn reply_permission(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
-    Json(request): Json<SessionPermissionReplyRequestBody>,
+    Json(request): Json<SessionReplyRequestBody<PermissionReply>>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if let Some(expected_version) = if_match_version(&headers)? {
-        state
-            .service()
-            .assert_session_version(session_id, expected_version)
-            .await
-            .map_err(server_error_from_http)?;
-    }
+    assert_if_match_session_version(&state, session_id, &headers).await?;
 
-    let options = resolve_run_options(&state, session_id, request.options).await?;
     let manager = state.session_manager()?;
-    let session = manager
-        .reply_permission(agena::session::SessionPermissionReplyRequest {
-            session_id,
-            options,
-            reply: request.reply,
-            operator: Some("http_api".to_string()),
-        })
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+    let request = session_permission_reply_request(
+        &state,
+        session_id,
+        request.run.options,
+        request.reply,
+        Some("http_api".to_string()),
+    )
+    .await?;
+    session_execution_json_result(&state, manager.as_ref(), manager.reply_permission(request)).await
 }
 
 pub async fn reply_user_input(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
-    Json(request): Json<SessionUserInputReplyRequestBody>,
+    Json(request): Json<SessionReplyRequestBody<UserInputReply>>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if let Some(expected_version) = if_match_version(&headers)? {
-        state
-            .service()
-            .assert_session_version(session_id, expected_version)
-            .await
-            .map_err(server_error_from_http)?;
-    }
+    assert_if_match_session_version(&state, session_id, &headers).await?;
 
-    let options = resolve_run_options(&state, session_id, request.options).await?;
     let manager = state.session_manager()?;
-    let session = manager
-        .reply_user_input(agena::session::SessionUserInputReplyRequest {
-            session_id,
-            options,
-            reply: request.reply,
-        })
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+    let request =
+        session_execution_reply_request(&state, session_id, request.run.options, request.reply)
+            .await?;
+    session_execution_json_result(&state, manager.as_ref(), manager.reply_user_input(request)).await
 }
 
 pub async fn rewind_session(
@@ -535,20 +401,16 @@ pub async fn rewind_session(
 ) -> Result<impl IntoResponse, ServerError> {
     let expected_version = if_match_version(&headers)?;
     let manager = state.session_manager()?;
-    let session = manager
-        .rewind_session(agena::session::SessionRewindRequest {
+    session_execution_json_result(
+        &state,
+        manager.as_ref(),
+        manager.rewind_session(agena::session::SessionRewindRequest {
             session_id,
             message_id: request.message_id,
             expected_version,
-        })
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+        }),
+    )
+    .await
 }
 
 pub async fn list_session_tree(
@@ -604,14 +466,10 @@ pub async fn import_session(
     Json(request): Json<SessionImportRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    let session = manager
-        .import_session_jsonl(&request.jsonl)
-        .await
-        .map_err(ServerError::Core)?;
-    let resource = state
-        .service()
-        .session_execution_resource(manager.as_ref(), &session)
-        .await
-        .map_err(server_error_from_http)?;
-    Ok(Json(resource))
+    session_execution_json_result(
+        &state,
+        manager.as_ref(),
+        manager.import_session_jsonl(&request.jsonl),
+    )
+    .await
 }

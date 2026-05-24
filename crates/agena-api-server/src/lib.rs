@@ -38,6 +38,7 @@ pub mod local_api;
 mod provider_queries;
 #[cfg(feature = "http")]
 pub mod rest;
+mod session_support;
 #[cfg(feature = "sse")]
 pub mod sse;
 pub mod state;

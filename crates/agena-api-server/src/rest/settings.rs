@@ -5,18 +5,19 @@ pub async fn get_settings(
     AxumQuery(input): AxumQuery<ConfigSettingsGetInput>,
 ) -> Result<impl IntoResponse, ServerError> {
     let resolution = state.runtime().config_resolution();
+    let path = input.target.path.clone();
     let response = match input.source {
         ConfigSettingsSource::File => {
             read_file_setting(resolution.meta.config_path.clone(), input).map_err(settings_error)?
         }
         ConfigSettingsSource::Effective => {
             let value = resolved_config_json(&resolution.config)?;
-            let value = get_json_path(&value, input.path.as_deref()).map_err(settings_error)?;
+            let value = get_json_path(&value, path.as_deref()).map_err(settings_error)?;
             ConfigSettingsReadResponse {
                 config_path: resolution.meta.config_path.clone(),
                 config_found: resolution.meta.config_found,
                 source: ConfigSettingsSource::Effective,
-                path: input.path,
+                path,
                 value,
             }
         }
@@ -29,6 +30,7 @@ pub async fn list_settings(
     AxumQuery(input): AxumQuery<ConfigSettingsListInput>,
 ) -> Result<impl IntoResponse, ServerError> {
     let resolution = state.runtime().config_resolution();
+    let path = input.target.path.clone();
     let response = match input.source {
         ConfigSettingsSource::File => {
             list_file_settings(resolution.meta.config_path.clone(), input)
@@ -36,13 +38,13 @@ pub async fn list_settings(
         }
         ConfigSettingsSource::Effective => {
             let value = resolved_config_json(&resolution.config)?;
-            let entries = list_json_path(&value, input.path.as_deref(), input.recursive)
-                .map_err(settings_error)?;
+            let entries =
+                list_json_path(&value, path.as_deref(), input.recursive).map_err(settings_error)?;
             ConfigSettingsListResponse {
                 config_path: resolution.meta.config_path.clone(),
                 config_found: resolution.meta.config_found,
                 source: ConfigSettingsSource::Effective,
-                path: input.path,
+                path,
                 entries,
             }
         }

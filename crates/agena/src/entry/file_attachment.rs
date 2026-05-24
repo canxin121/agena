@@ -5,7 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use mime_guess::MimeGuess;
 
 use crate::entry::payload::ReadAttachmentOutput;
-use crate::message::{AttachmentKind, AttachmentSource, ToolAttachment};
+use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource};
 
 use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
 
@@ -23,7 +23,7 @@ struct PreparedFileAttachment {
     duration_ms: Option<u64>,
     page_count: Option<u32>,
     summary: String,
-    attachment: ToolAttachment,
+    attachment: AttachmentItem,
 }
 
 impl PreparedFileAttachment {
@@ -41,7 +41,7 @@ impl PreparedFileAttachment {
         }
     }
 
-    fn into_attachment(self) -> ToolAttachment {
+    fn into_attachment(self) -> AttachmentItem {
         self.attachment
     }
 }
@@ -148,7 +148,7 @@ fn build_file_attachment(
         duration_ms: None,
         page_count: None,
         summary,
-        attachment: ToolAttachment {
+        attachment: AttachmentItem {
             kind,
             mime,
             source: AttachmentSource::Base64 {

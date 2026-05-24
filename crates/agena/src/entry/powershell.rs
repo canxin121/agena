@@ -1,20 +1,18 @@
-use std::collections::HashMap;
-
-use crate::message::PowerShellToolInput;
+use crate::message::ShellCommandInput;
 
 use super::shell::ShellRequest;
+use super::shell_tools::{
+    DEFAULT_TIMEOUT_MS, inherited_environment, powershell_command_for_windows, resolve_workdir,
+    truncate_output, validate_declared_filesystem_effects,
+};
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
     ToolRuntimeContext,
 };
 
-const DEFAULT_TIMEOUT_MS: u64 = 120_000;
-const MAX_OUTPUT_BYTES: usize = 50 * 1024;
-const MAX_OUTPUT_LINES: usize = 2_000;
-
 pub(super) fn execute(
     executor: &ToolExecutor,
-    input: &PowerShellToolInput,
+    input: &ShellCommandInput,
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     if !cfg!(windows) {
@@ -27,19 +25,12 @@ pub(super) fn execute(
             "powershell command must not be empty".to_string(),
         ));
     }
-    if input.filesystem_effects.is_empty()
-        && let Some(reason) = super::bash::filesystem_command_reason(input.command.as_str())
-    {
-        return Err(ToolError::InvalidInput(format!(
-            "powershell filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
-        )));
-    }
-    let cwd = input
-        .workdir
-        .as_deref()
-        .map(|workdir| executor.resolve_target_path(workdir))
-        .unwrap_or_else(|| executor.workspace_root().to_path_buf());
-    executor.ensure_read_permission(&cwd)?;
+    validate_declared_filesystem_effects(
+        "powershell",
+        input.command.as_str(),
+        &input.filesystem_effects,
+    )?;
+    let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
     executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
     executor.ensure_network_effects_permission(&input.network_effects)?;
 
@@ -96,49 +87,4 @@ pub(super) fn execute(
     view.metadata.insert("status".to_string(), status_text);
 
     Ok(ToolPayloadExecution::new(output, view))
-}
-
-fn inherited_environment() -> HashMap<String, String> {
-    std::env::vars().collect::<HashMap<_, _>>()
-}
-
-fn powershell_command_for_windows(command: &str) -> Vec<String> {
-    vec![
-        "powershell.exe".to_string(),
-        "-NoLogo".to_string(),
-        "-NoProfile".to_string(),
-        "-NonInteractive".to_string(),
-        "-Command".to_string(),
-        command.to_string(),
-    ]
-}
-
-fn truncate_output(output: &str) -> (String, bool) {
-    let mut lines = output.lines().collect::<Vec<_>>();
-    let line_truncated = lines.len() > MAX_OUTPUT_LINES;
-    if line_truncated {
-        lines.truncate(MAX_OUTPUT_LINES);
-    }
-
-    let joined = lines.join("\n");
-    let byte_truncated = joined.len() > MAX_OUTPUT_BYTES;
-    let clipped = if byte_truncated {
-        let bytes = joined.as_bytes();
-        String::from_utf8_lossy(&bytes[..std::cmp::min(bytes.len(), MAX_OUTPUT_BYTES)]).to_string()
-    } else {
-        joined
-    };
-
-    let truncated = line_truncated || byte_truncated;
-    if truncated {
-        (
-            format!(
-                "{}\n\n[output truncated: max {} lines / {} bytes]",
-                clipped, MAX_OUTPUT_LINES, MAX_OUTPUT_BYTES
-            ),
-            true,
-        )
-    } else {
-        (clipped, false)
-    }
 }

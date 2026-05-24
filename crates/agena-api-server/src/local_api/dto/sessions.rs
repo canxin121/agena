@@ -18,61 +18,49 @@ pub struct SessionGoalSetRequest {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SessionListQuery {
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub limit: Option<u64>,
+    #[serde(flatten)]
+    pub pagination: SearchPaginationQuery,
     #[serde(default)]
     pub workspace_id: Option<i64>,
     #[serde(default)]
     pub parent_id: Option<i64>,
     #[serde(default)]
     pub roots: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionHierarchyRequest {
+    pub title: String,
     #[serde(default)]
-    pub search: Option<String>,
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionCreateRequest {
     pub workspace_id: i64,
-    pub title: String,
-    #[serde(default)]
-    pub parent_id: Option<i64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SessionReplaceRequest {
-    pub title: String,
-    #[serde(default)]
-    pub parent_id: Option<i64>,
+    #[serde(flatten)]
+    pub session: SessionHierarchyRequest,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionMessageRequest {
     #[serde(flatten)]
-    pub options: SessionRunOptionsRequest,
+    pub run: SessionRunRequestBody,
     #[serde(default)]
     pub parts: Vec<PartContent>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-pub struct SessionContinueRequestBody {
+pub struct SessionRunRequestBody {
     #[serde(flatten)]
     pub options: SessionRunOptionsRequest,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SessionPermissionReplyRequestBody {
+pub struct SessionReplyRequestBody<T> {
     #[serde(flatten)]
-    pub options: SessionRunOptionsRequest,
-    pub reply: PermissionReply,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SessionUserInputReplyRequestBody {
-    #[serde(flatten)]
-    pub options: SessionRunOptionsRequest,
-    pub reply: UserInputReply,
+    pub run: SessionRunRequestBody,
+    pub reply: T,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -5,17 +5,17 @@ impl ApiService {
         &self,
         query: WorkspaceListQuery,
     ) -> ApiResult<PaginatedResponse<WorkspaceResource>> {
-        let limit = normalize_limit(query.limit);
+        let limit = normalize_limit(query.pagination.limit());
         let cursor = query
-            .cursor
-            .as_deref()
+            .pagination
+            .cursor()
             .map(decode_cursor::<WorkspaceCursor>)
             .transpose()?;
         let mut statement = entities::workspace::Entity::find()
             .order_by_desc(entities::workspace::Column::UpdatedAtMs)
             .order_by_desc(entities::workspace::Column::Id);
 
-        if let Some(search) = non_empty(query.search.as_deref()) {
+        if let Some(search) = non_empty(query.pagination.search()) {
             statement =
                 statement.filter(entities::workspace::Column::Path.like(format!("%{search}%")));
         }
@@ -123,7 +123,7 @@ impl ApiService {
 
     pub async fn create_workspace(
         &self,
-        request: WorkspaceWriteRequest,
+        request: WorkspacePathRequest,
     ) -> ApiResult<WorkspaceResource> {
         let path = normalize_workspace_path(request.path.as_str()).map_err(db_error)?;
         if self.workspace_id_by_path(path.as_str()).await?.is_some() {
@@ -150,7 +150,7 @@ impl ApiService {
         &self,
         request: WorkspaceResolveRequest,
     ) -> ApiResult<WorkspaceResource> {
-        let path = normalize_workspace_path(request.path.as_str()).map_err(db_error)?;
+        let path = normalize_workspace_path(request.workspace.path.as_str()).map_err(db_error)?;
         if let Some(workspace_id) = self.workspace_id_by_path(path.as_str()).await? {
             return self.get_workspace(workspace_id).await?.ok_or_else(|| {
                 ApiError::internal(format!(
@@ -166,7 +166,7 @@ impl ApiService {
         }
 
         match self
-            .create_workspace(WorkspaceWriteRequest { path: path.clone() })
+            .create_workspace(WorkspacePathRequest { path: path.clone() })
             .await
         {
             Ok(workspace) => Ok(workspace),
@@ -186,7 +186,7 @@ impl ApiService {
     pub async fn replace_workspace(
         &self,
         workspace_id: i64,
-        request: WorkspaceWriteRequest,
+        request: WorkspacePathRequest,
     ) -> ApiResult<WorkspaceResource> {
         let Some(existing) = entities::workspace::Entity::find_by_id(workspace_id)
             .one(self.db.as_ref())

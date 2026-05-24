@@ -1526,7 +1526,6 @@ pub enum HostMcpServerSpec {
         #[serde(default)]
         headers: BTreeMap<String, String>,
     },
-    #[serde(alias = "websocket")]
     Ws {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]

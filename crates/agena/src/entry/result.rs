@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::message::{ToolAttachment, ToolOutput};
+use crate::message::{AttachmentItem, ToolOutput};
 
 use super::{ApplyPatchExecution, ToolPayloadOutput};
 
@@ -9,7 +9,7 @@ pub struct ToolExecutionView {
     pub title: String,
     pub output_text: String,
     pub metadata: BTreeMap<String, String>,
-    pub attachments: Vec<ToolAttachment>,
+    pub attachments: Vec<AttachmentItem>,
 }
 
 impl ToolExecutionView {

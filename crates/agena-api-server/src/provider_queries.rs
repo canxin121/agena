@@ -1,6 +1,6 @@
 use agena::config::{
     ProcessEnvironment, draft_provider_adapter_models_target,
-    list_provider_adapter_models_for_target, saved_provider_adapter_models_target,
+    list_provider_adapter_models_with_config, saved_provider_adapter_models_target,
 };
 use agena_api::{
     queries::{ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams},
@@ -130,19 +130,18 @@ async fn list_provider_adapter_models(
     state: &AppState,
     target: agena::config::ProviderAdapterModelsTarget,
 ) -> Result<ProviderAdapterModelsResponse, ServerError> {
-    let client = agena::provider::ProviderRegistry::build_http_client(
-        state
-            .runtime()
-            .config_resolution()
-            .config
-            .provider_http_client_config(),
-    )
-    .map_err(ServerError::Core)?;
+    let resolution = state.runtime().config_resolution();
     let adapter_models =
-        list_provider_adapter_models_for_target(&target, client, &ProcessEnvironment).await;
+        list_provider_adapter_models_with_config(&resolution.config, &target, &ProcessEnvironment)
+            .await
+            .map_err(ServerError::Core)?;
     Ok(ProviderAdapterModelsResponse {
-        provider_id: target.provider_id,
-        adapters: adapter_models.into_iter().map(Into::into).collect(),
+        provider_id: adapter_models.provider_id,
+        adapters: adapter_models
+            .adapters
+            .into_iter()
+            .map(Into::into)
+            .collect(),
     })
 }
 

@@ -2,10 +2,10 @@ use std::path::Path;
 
 use agena::{
     message::{
-        AttachmentKind, ExecutionStatus, FileChangeKind, MessageStatus, PermissionRequestPart,
+        AttachmentKind, ExecutionStatus, FileChangeKind, InteractiveRequestPart, MessageStatus,
         TodoPriority, TodoStatus,
     },
-    permission::PermissionReplyKind,
+    permission::{PermissionReply, PermissionReplyKind, PermissionRequest},
 };
 use agena_api::resource::MessageRole;
 use chrono::{DateTime, Local, Utc};
@@ -130,7 +130,10 @@ pub fn permission_reply_label(i18n: &I18n, kind: PermissionReplyKind) -> String 
     }
 }
 
-pub fn permission_summary(i18n: &I18n, permission: &PermissionRequestPart) -> String {
+pub fn permission_summary(
+    i18n: &I18n,
+    permission: &InteractiveRequestPart<PermissionRequest, PermissionReply>,
+) -> String {
     match permission.reply.as_ref() {
         None => {
             let mut summary = i18n.text_args(

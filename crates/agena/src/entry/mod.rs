@@ -18,6 +18,7 @@ pub(crate) mod powershell;
 pub(crate) mod read;
 pub(crate) mod result;
 pub(crate) mod shell;
+pub(crate) mod shell_tools;
 pub(crate) mod task;
 pub(crate) mod todo_write;
 pub(crate) mod tool_search;
@@ -484,7 +485,7 @@ impl ToolExecutor {
             .any(|tag| tag == &crate::plugin::sdk::ToolTag::Shell)
             && shell_command_from_invocation(invocation)
                 .as_deref()
-                .is_some_and(bash::is_read_only_command)
+                .is_some_and(shell_tools::is_read_only_command)
         {
             return Ok(());
         }
@@ -1023,7 +1024,7 @@ impl ToolExecutor {
 
     pub fn prepare_shell_command(
         &self,
-        input: &crate::message::BashToolInput,
+        input: &crate::message::ShellCommandInput,
         session_id: i64,
         call_id: i64,
     ) -> Result<Option<PreparedShellCommand>, ToolError> {
@@ -1664,14 +1665,7 @@ fn validate_shell_filesystem_effects(
     command: &str,
     effects: &[FilesystemEffect],
 ) -> Result<(), ToolError> {
-    if effects.is_empty()
-        && let Some(reason) = bash::filesystem_command_reason(command)
-    {
-        return Err(ToolError::InvalidInput(format!(
-            "{tool_name} filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
-        )));
-    }
-    Ok(())
+    shell_tools::validate_declared_filesystem_effects(tool_name, command, effects)
 }
 
 fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> {
@@ -1681,7 +1675,7 @@ fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> 
             ToolPayloadInput::PowerShell(payload) => Some(payload.command),
             ToolPayloadInput::Monitor(crate::message::MonitorToolInput::Start {
                 command, ..
-            }) => Some(command),
+            }) => Some(command.command),
             _ => None,
         };
         if command.is_some() {
@@ -2098,11 +2092,12 @@ mod tests {
     use uuid::Uuid;
 
     use crate::message::{
-        ApplyPatchToolInput, BashToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput,
-        FileChangeKind, FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput,
-        LspDefinitionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent,
-        ReadToolInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem, TodoPriority,
-        TodoStatus, TodoWriteToolInput, ToolInvocation, ToolSearchToolInput, WebFetchToolInput,
+        ApplyPatchToolInput, EnterPlanModeToolInput, EnterWorktreeToolInput, FileChangeKind,
+        FilesystemAccess, FilesystemEffect, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
+        LspPositionToolInput, Message, MonitorToolInput, NetworkEffect, PartContent, ReadToolInput,
+        ShellCommandInput, StructuredObject, TaskSubagentType, TaskToolInput, TodoItem,
+        TodoPriority, TodoStatus, TodoWriteToolInput, ToolInvocation, ToolSearchToolInput,
+        WebFetchToolInput,
     };
     use crate::permission::PermissionPolicy;
     use crate::plugin::sdk::host_api::{
@@ -3068,7 +3063,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
                 command: "echo hello_agena".to_string(),
                 description: "smoke bash".to_string(),
                 timeout_ms: Some(30_000),
@@ -3102,7 +3097,7 @@ mod tests {
 
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root);
-        let invocation = ToolPayloadInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
             command: "echo hello_shell_exec".to_string(),
             description: "grouped shell exec".to_string(),
             timeout_ms: Some(30_000),
@@ -3149,7 +3144,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
                 command: "grep missing notes.txt".to_string(),
                 description: "search missing text".to_string(),
                 timeout_ms: Some(30_000),
@@ -3203,7 +3198,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let result = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
                 command: "diff left.txt right.txt".to_string(),
                 description: "compare files".to_string(),
                 timeout_ms: Some(30_000),
@@ -3253,7 +3248,7 @@ mod tests {
         let executor = build_executor(&workspace.root);
 
         let err = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
                 command: "echo hi > created.txt".to_string(),
                 description: "attempt write".to_string(),
                 timeout_ms: Some(30_000),
@@ -3660,9 +3655,11 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let invocation = ToolPayloadInput::LspDefinition(LspDefinitionToolInput {
-            file_path: "src/lib.rs".to_string(),
-            line: 3,
-            character: 8,
+            position: LspPositionToolInput {
+                file_path: "src/lib.rs".to_string(),
+                line: 3,
+                character: 8,
+            },
         })
         .into_invocation();
 
@@ -3693,14 +3690,16 @@ mod tests {
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
         let invocation = ToolPayloadInput::Monitor(MonitorToolInput::Start {
-            command: "curl https://status.example.com/health".to_string(),
-            description: "watch status".to_string(),
-            workdir: Some("services/api".to_string()),
-            filesystem_effects: Vec::new(),
-            network_effects: vec![NetworkEffect {
-                target: "https://status.example.com/health".to_string(),
-            }],
-            timeout_ms: Some(5_000),
+            command: ShellCommandInput {
+                command: "curl https://status.example.com/health".to_string(),
+                description: "watch status".to_string(),
+                timeout_ms: Some(5_000),
+                workdir: Some("services/api".to_string()),
+                filesystem_effects: Vec::new(),
+                network_effects: vec![NetworkEffect {
+                    target: "https://status.example.com/health".to_string(),
+                }],
+            },
             persistent: false,
             include_pattern: None,
             max_buffered_lines: None,
@@ -3780,7 +3779,7 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .unwrap_or("agena")
         ));
-        let invocation = ToolPayloadInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
             command: "cat src/lib.rs > target/out.txt".to_string(),
             description: "declared effects".to_string(),
             timeout_ms: Some(30_000),
@@ -3880,7 +3879,7 @@ mod tests {
         );
         let executor = ToolExecutor::new(&workspace.root, agent)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
             command: "touch created.txt".to_string(),
             description: "declared write".to_string(),
             timeout_ms: Some(30_000),
@@ -3925,7 +3924,7 @@ mod tests {
 
     #[test]
     fn bash_input_requires_filesystem_effects_field() {
-        let err = serde_json::from_value::<BashToolInput>(json!({
+        let err = serde_json::from_value::<ShellCommandInput>(json!({
             "command": "pwd",
             "description": "",
             "timeout_ms": null,
@@ -3939,7 +3938,7 @@ mod tests {
 
     #[test]
     fn bash_input_requires_network_effects_field() {
-        let err = serde_json::from_value::<BashToolInput>(json!({
+        let err = serde_json::from_value::<ShellCommandInput>(json!({
             "command": "pwd",
             "description": "",
             "timeout_ms": null,
@@ -3953,7 +3952,7 @@ mod tests {
 
     #[test]
     fn bash_tool_schema_requires_declared_effect_fields() {
-        let schema = crate::entry::definition::json_schema_for::<BashToolInput>();
+        let schema = crate::entry::definition::json_schema_for::<ShellCommandInput>();
         let required = schema
             .get("required")
             .and_then(serde_json::Value::as_array)
@@ -3988,7 +3987,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
             command: "touch created.txt".to_string(),
             description: "missing effects".to_string(),
             timeout_ms: Some(30_000),
@@ -4015,7 +4014,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
             command: "cat notes.txt".to_string(),
             description: "missing read effects".to_string(),
             timeout_ms: Some(30_000),
@@ -4042,7 +4041,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
             command: "curl https://example.com/health".to_string(),
             description: "missing network targets".to_string(),
             timeout_ms: Some(30_000),
@@ -4069,7 +4068,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
             command: "curl https://example.com/health".to_string(),
             description: "network only curl".to_string(),
             timeout_ms: Some(30_000),
@@ -4091,7 +4090,7 @@ mod tests {
         let workspace = TempWorkspace::new();
         let executor = build_executor(&workspace.root)
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
-        let invocation = ToolPayloadInput::Bash(BashToolInput {
+        let invocation = ToolPayloadInput::Bash(ShellCommandInput {
             command: "curl -o download.json https://example.com/data.json".to_string(),
             description: "curl writes file".to_string(),
             timeout_ms: Some(30_000),
@@ -4133,7 +4132,7 @@ mod tests {
             .with_plugin_manager(build_default_plugin_manager(&workspace.root));
 
         let err = executor
-            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(BashToolInput {
+            .execute_tool_payload_detailed(&ToolPayloadInput::Bash(ShellCommandInput {
                 command: "printf ok".to_string(),
                 description: "declared write denied".to_string(),
                 timeout_ms: Some(30_000),
@@ -4166,7 +4165,7 @@ mod tests {
 
         let execution = executor
             .execute_invocation_detailed(
-                &ToolPayloadInput::Bash(BashToolInput {
+                &ToolPayloadInput::Bash(ShellCommandInput {
                     command: "printf %s \"$PLUGIN_FLAG\"".to_string(),
                     description: "print plugin env".to_string(),
                     timeout_ms: Some(30_000),
@@ -4210,7 +4209,7 @@ mod tests {
         );
 
         let bash_input = |cmd: &str| -> ToolInvocation {
-            ToolPayloadInput::Bash(BashToolInput {
+            ToolPayloadInput::Bash(ShellCommandInput {
                 command: cmd.to_string(),
                 description: String::new(),
                 timeout_ms: None,
@@ -4302,7 +4301,7 @@ mod tests {
             },
         );
 
-        let inv = ToolPayloadInput::Bash(BashToolInput {
+        let inv = ToolPayloadInput::Bash(ShellCommandInput {
             command: "rm -rf /".to_string(),
             description: String::new(),
             timeout_ms: None,

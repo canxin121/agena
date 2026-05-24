@@ -191,31 +191,26 @@ impl McpEntryTarget {
 )]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum McpToolInput {
-    #[serde(alias = "resources_list")]
     #[tool(exec = "list_resources")]
     ListResources {
         #[serde(flatten)]
         args: McpServerInput,
     },
-    #[serde(alias = "resources_read")]
     #[tool(exec = "read_resource")]
     ReadResource {
         #[serde(flatten)]
         args: ReadResourceInput,
     },
-    #[serde(alias = "prompts_list")]
     #[tool(exec = "list_prompts")]
     ListPrompts {
         #[serde(flatten)]
         args: McpServerInput,
     },
-    #[serde(alias = "prompts_get")]
     #[tool(exec = "get_prompt")]
     GetPrompt {
         #[serde(flatten)]
         args: GetPromptInput,
     },
-    #[serde(alias = "tool")]
     #[tool(exec = "call")]
     Call {
         #[serde(flatten)]
@@ -231,7 +226,6 @@ struct McpServerInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 struct CallToolInput {
     server: String,
-    #[serde(alias = "tool")]
     name: String,
     #[serde(default)]
     arguments: Option<Value>,

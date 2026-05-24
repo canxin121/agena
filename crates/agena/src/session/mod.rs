@@ -23,11 +23,11 @@ pub use cost::{
 };
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
 pub use manager::{
-    SessionAutoCompactionConfig, SessionCacheStats, SessionCompactRequest, SessionContinueRequest,
-    SessionCreateRequest, SessionForkRequest, SessionGoalCreateRequest, SessionGoalUpdateRequest,
-    SessionManager, SessionManagerConfig, SessionPermissionReplyRequest, SessionRewindRequest,
-    SessionRunOptions, SessionSubtaskRequest, SessionSubtaskResponse, SessionUsage,
-    SessionUsageLimitBasis, SessionUserInputReplyRequest, SessionUserMessageRequest,
+    SessionAutoCompactionConfig, SessionCacheStats, SessionCreateRequest,
+    SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
+    SessionGoalCreateRequest, SessionGoalUpdateRequest, SessionManager, SessionManagerConfig,
+    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionSubtaskRequest,
+    SessionSubtaskResponse, SessionUsage, SessionUsageLimitBasis, SessionUserMessageRequest,
 };
 pub use model::{
     GoalStatus, MAX_SESSION_GOAL_OBJECTIVE_CHARS, PlanState, PromptCompactionRuntime,

@@ -195,6 +195,25 @@ pub fn provider_auth_data(resolved: &ResolvedProviderConfig) -> Option<AuthData>
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProviderOAuthTarget {
+    OpenAi,
+    Gitlab { instance_url: String },
+    AtomGit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderDeviceAuthTarget {
+    OpenAi,
+    Copilot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAuthTargetError {
+    AmbiguousProvider,
+    AmbiguousGitlab,
+}
+
 pub fn provider_supports_openai_oauth(resolved: &ResolvedProviderConfig) -> bool {
     matches!(
         resolved.auth,
@@ -309,6 +328,37 @@ pub fn provider_supports_api_key_write(resolved: &ResolvedProviderConfig) -> boo
         ProviderAuthConfig::Gitlab(_) => true,
         ProviderAuthConfig::Credential(_) => false,
         ProviderAuthConfig::None | ProviderAuthConfig::BedrockSigv4(_) => false,
+    }
+}
+
+pub fn resolve_provider_oauth_target(
+    resolved: &ResolvedProviderConfig,
+) -> Result<Option<ProviderOAuthTarget>, ProviderAuthTargetError> {
+    let openai = provider_supports_openai_oauth(resolved);
+    let gitlab = provider_has_gitlab_adapter(resolved);
+    let atomgit = provider_supports_atomgit_oauth(resolved);
+    match (openai, gitlab, atomgit) {
+        (true, false, false) => Ok(Some(ProviderOAuthTarget::OpenAi)),
+        (false, true, false) => provider_gitlab_instance_url(resolved)
+            .map(|instance_url| ProviderOAuthTarget::Gitlab { instance_url })
+            .map(Some)
+            .ok_or(ProviderAuthTargetError::AmbiguousGitlab),
+        (false, false, true) => Ok(Some(ProviderOAuthTarget::AtomGit)),
+        (false, false, false) => Ok(None),
+        _ => Err(ProviderAuthTargetError::AmbiguousProvider),
+    }
+}
+
+pub fn resolve_provider_device_auth_target(
+    resolved: &ResolvedProviderConfig,
+) -> Result<Option<ProviderDeviceAuthTarget>, ProviderAuthTargetError> {
+    let openai = provider_supports_openai_oauth(resolved);
+    let copilot = provider_supports_copilot_device(resolved);
+    match (openai, copilot) {
+        (true, false) => Ok(Some(ProviderDeviceAuthTarget::OpenAi)),
+        (false, true) => Ok(Some(ProviderDeviceAuthTarget::Copilot)),
+        (false, false) => Ok(None),
+        _ => Err(ProviderAuthTargetError::AmbiguousProvider),
     }
 }
 

@@ -43,9 +43,8 @@ use crate::{
         ModelPricing,
     },
     provider::{
-        ConfiguredModelDefinition, ConfiguredModelSpeedMode, ConfiguredModelThinkingMode,
-        FeatureCapabilityPatch, FeatureCapabilityPatchBody, InputCapabilityPatch,
-        InputCapabilityPatchBody, ModelCapabilityFeature, ModelCapabilityPatch, ModelRuntime,
+        CapabilitySelectionPatch, ConfiguredModelDefinition, ConfiguredModelSpeedMode,
+        ConfiguredModelThinkingMode, ModelCapabilityFeature, ModelCapabilityPatch, ModelRuntime,
         ProviderRegistry,
     },
 };

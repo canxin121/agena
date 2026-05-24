@@ -280,21 +280,7 @@ impl SessionManager {
         let session = self.get_session(session_id).await?;
         let state = self.execution_state();
         let model = self.model_from_session_or_default(&session, &state)?;
-        self.apply_execution_context_to_run_options(
-            &session,
-            SessionRunOptions {
-                model,
-                thinking_mode: None,
-                speed_mode: None,
-                verbosity: None,
-                thinking: None,
-                request_override: Default::default(),
-                system: None,
-                temperature: None,
-                max_output_tokens: None,
-                agent_profile: None,
-            },
-        )
+        self.apply_execution_context_to_run_options(&session, SessionRunOptions::new(model))
     }
 
     pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {

@@ -13,10 +13,10 @@ use serde_json::Value as JsonValue;
 
 use crate::config::{
     ConfigError, ConfigSettingsDeleteInput, ConfigSettingsGetInput, ConfigSettingsListInput,
-    ConfigSettingsPatchInput, ConfigSettingsReadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateResponse, delete_file_setting, list_file_settings,
-    list_json_path, patch_file_settings, read_file_setting, set_file_setting,
-    validate_file_settings,
+    ConfigSettingsPatchInput, ConfigSettingsPathInput, ConfigSettingsReadResponse,
+    ConfigSettingsSetInput, ConfigSettingsSource, ConfigSettingsValidateResponse,
+    delete_file_setting, list_file_settings, list_json_path, patch_file_settings,
+    read_file_setting, set_file_setting, validate_file_settings,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostConfigReloadResponse};
@@ -158,7 +158,9 @@ impl SettingsPlugin {
                 read_file_setting(
                     config_path,
                     ConfigSettingsGetInput {
-                        path: input.path.clone(),
+                        target: ConfigSettingsPathInput {
+                            path: input.path.clone(),
+                        },
                         source: input.source,
                     },
                 )
@@ -192,7 +194,9 @@ impl SettingsPlugin {
                 list_file_settings(
                     config_path,
                     ConfigSettingsListInput {
-                        path: input.path.clone(),
+                        target: ConfigSettingsPathInput {
+                            path: input.path.clone(),
+                        },
                         source: input.source,
                         recursive: input.recursive,
                     },
@@ -229,7 +233,7 @@ impl SettingsPlugin {
 
     async fn set(&self, input: ConfigSettingsSetInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
-        let reload = input.reload;
+        let reload = input.options.reload;
         let response = set_file_setting(config_path, input).map_err(map_err)?;
         self.edit_output(
             "Settings updated",
@@ -242,7 +246,7 @@ impl SettingsPlugin {
 
     async fn delete(&self, input: ConfigSettingsDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
-        let reload = input.reload;
+        let reload = input.options.reload;
         let response = delete_file_setting(config_path, input).map_err(map_err)?;
         self.edit_output(
             "Settings deleted",
@@ -255,7 +259,7 @@ impl SettingsPlugin {
 
     async fn patch(&self, input: ConfigSettingsPatchInput) -> SdkResult<ToolInvokeOutput> {
         let (config_path, _) = self.config_meta().await?;
-        let reload = input.reload;
+        let reload = input.options.reload;
         let response = patch_file_settings(config_path, input).map_err(map_err)?;
         self.edit_output("Settings patched", "Patched settings.", response, reload)
             .await

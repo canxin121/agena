@@ -2,43 +2,41 @@
 //! return the plain JSON resources the current web client already consumes,
 //! while WS/SSE protocol traffic continues to route through `dispatch`.
 
-use std::{collections::BTreeSet, convert::Infallible, sync::Arc};
+use std::{collections::BTreeSet, convert::Infallible, future::Future, sync::Arc};
 
 use crate::local_api::{
-    AuthApiKeyWriteRequest, AuthAtomGitBrowserPollRequest, AuthAtomGitBrowserStartRequest,
-    AuthBrowserStartRequest, AuthBrowserStartResource, AuthCopilotDevicePollRequest,
-    AuthCopilotDeviceStartRequest, AuthCredentialType, AuthDeviceStartResource,
-    AuthGitLabBrowserFinishRequest, AuthGitLabBrowserStartRequest, AuthLoginResultResource,
-    AuthOpenAiBrowserFinishRequest, AuthOpenAiDevicePollRequest, AuthOpenAiDeviceStartRequest,
-    AuthProviderResource, HealthResponse, MarketplaceInstallRequestBody,
-    MarketplaceInstalledListResponse, MarketplaceInstalledPluginResource,
-    MarketplaceOutdatedListResponse, MarketplaceOutdatedPluginResource, MarketplacePluginResource,
-    MarketplaceRegistryRequestBody, MarketplaceSearchRequestBody, MarketplaceSearchResponse,
-    MarketplaceUninstallRequestBody, MarketplaceUpgradeRequestBody, MessageListQuery,
-    ModelCatalogListResponse, ModelCatalogLookupRequest, ModelCatalogLookupResponse,
-    ModelCatalogRefreshResponse, ModelCatalogResponse, PartLoadMode, PermissionRuleListQuery,
+    AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest, AuthCredentialType,
+    AuthDeviceStartResource, AuthEnterpriseDevicePollRequest, AuthEnterpriseDeviceRequest,
+    AuthLoginResultResource, AuthProviderRequest, AuthProviderResource, AuthRedirectRequest,
+    AuthStatePollRequest, AuthUserCodeDevicePollRequest, EntriesResponse, HealthResponse,
+    ItemsResponse, MarketplaceInstallRequest, MarketplaceInstalledPluginResource,
+    MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequest,
+    MarketplaceSearchRequest, MarketplaceSearchResponse, MarketplaceUninstallRequestBody,
+    MarketplaceUpgradeRequest, MessageListQuery, ModelCatalogListResponse,
+    ModelCatalogLookupRequest, ModelCatalogRefreshResponse, ModelCatalogResponse, PartLoadMode,
     PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
-    PluginLogListQuery, PluginLogListResponse, PluginStatusListResponse, PluginUiCatalogResponse,
-    PluginUiInvokeToolRequest, PluginUiRunActionRequest, RuntimeBackgroundTaskCancelResponse,
-    RuntimeBackgroundTaskListResponse, RuntimeBackgroundTaskStartResponse,
-    SessionContinueRequestBody, SessionCreateRequest, SessionEventStreamQuery,
-    SessionGoalSetRequest, SessionListQuery, SessionMessageRequest,
-    SessionPermissionReplyRequestBody, SessionReplaceRequest, SessionRewindRequestBody,
-    SessionRunOptionsRequest, SessionUserInputReplyRequestBody, WorkspaceFileTreeQuery,
-    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceWriteRequest,
+    PluginLogListQuery, PluginLogListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
+    PluginUiRequestContext, RuntimeBackgroundTaskCancelResponse,
+    RuntimeBackgroundTaskStartResponse, SearchPaginationQuery, SessionCreateRequest,
+    SessionEventStreamQuery, SessionGoalSetRequest, SessionHierarchyRequest, SessionListQuery,
+    SessionMessageRequest, SessionReplyRequestBody, SessionRewindRequestBody,
+    SessionRunRequestBody, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
+    WorkspaceResolveRequest,
 };
 use agena::config::{
     ConfigError, ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
     ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
     ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateInput, ProviderAuthConfig,
-    ProviderConfigCredentialStore, ResolvedProviderConfig, delete_file_setting, get_json_path,
-    list_file_settings, list_json_path, patch_file_settings, provider_auth_data,
-    provider_gitlab_instance_url, provider_has_gitlab_adapter, provider_supports_api_key_write,
-    provider_supports_atomgit_oauth, provider_supports_copilot_device,
-    provider_supports_openai_oauth, read_file_setting, set_file_setting, validate_file_settings,
+    ConfigSettingsSource, ConfigSettingsValidateInput, ProviderAuthConfig, ProviderAuthTargetError,
+    ProviderConfigCredentialStore, ProviderDeviceAuthTarget, ProviderOAuthTarget,
+    ResolvedProviderConfig, delete_file_setting, get_json_path, list_file_settings, list_json_path,
+    patch_file_settings, provider_auth_data, provider_supports_api_key_write, read_file_setting,
+    resolve_provider_device_auth_target, resolve_provider_oauth_target, set_file_setting,
+    validate_file_settings,
 };
 use agena::event::{EventStore, StoreRange};
+use agena::message::UserInputReply;
+use agena::permission::PermissionReply;
 use agena::provider::auth::{AuthManager, CopilotDeployment};
 use agena::session::{UsagePeriod, UsageStatsQuery};
 use agena_api::{
@@ -61,6 +59,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
+use crate::session_support::server_error_from_http;
 use crate::{dispatch, error::ServerError, state::AppState};
 
 mod auth;
@@ -131,7 +130,7 @@ pub struct MessageDetailQuery {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct MessagePartsQuery {
-    #[serde(default, alias = "parts")]
+    #[serde(default)]
     pub mode: PartLoadMode,
 }
 
@@ -143,6 +142,59 @@ pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, 
         loaded_at: snapshot.loaded_at(),
         database_connected: true,
     }))
+}
+
+async fn json_http<T>(
+    future: impl Future<Output = Result<T, crate::local_api::ApiError>>,
+) -> Result<Json<T>, ServerError> {
+    Ok(Json(future.await.map_err(server_error_from_http)?))
+}
+
+async fn json_http_found<T>(
+    future: impl Future<Output = Result<Option<T>, crate::local_api::ApiError>>,
+    not_found: impl FnOnce() -> String,
+) -> Result<Json<T>, ServerError> {
+    let value = future
+        .await
+        .map_err(server_error_from_http)?
+        .ok_or_else(|| ServerError::NotFound(not_found()))?;
+    Ok(Json(value))
+}
+
+async fn query_json<T>(
+    state: &AppState,
+    query: Query,
+    select: impl FnOnce(QueryResult) -> Option<T>,
+    unexpected: &'static str,
+) -> Result<Json<T>, ServerError> {
+    let result = dispatch::dispatch_query(state, query).await?;
+    match select(result) {
+        Some(value) => Ok(Json(value)),
+        None => unreachable!("{unexpected}"),
+    }
+}
+
+fn entries_json<T>(entries: Vec<T>) -> Json<EntriesResponse<T>> {
+    Json(EntriesResponse { entries })
+}
+
+fn items_json<T>(items: Vec<T>) -> Json<ItemsResponse<T>> {
+    Json(ItemsResponse { items })
+}
+
+fn runtime_background_task_start_response(
+    start: agena::runtime::RuntimeBackgroundTaskStart,
+) -> RuntimeBackgroundTaskStartResponse {
+    RuntimeBackgroundTaskStartResponse {
+        started: start.started,
+        task: start.task.into(),
+    }
+}
+
+fn runtime_background_task_cancel_response(
+    task: agena::runtime::RuntimeBackgroundTask,
+) -> RuntimeBackgroundTaskCancelResponse {
+    RuntimeBackgroundTaskCancelResponse { task: task.into() }
 }
 
 /// Lightweight liveness probe — returns 200 OK with a static body.
@@ -317,10 +369,16 @@ pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
 pub async fn get_runtime_status(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    match dispatch::dispatch_query(&state, Query::Runtime).await? {
-        QueryResult::Runtime(runtime) => Ok(Json(runtime)),
-        _ => unreachable!("runtime query returned unexpected result"),
-    }
+    query_json(
+        &state,
+        Query::Runtime,
+        |result| match result {
+            QueryResult::Runtime(runtime) => Some(runtime),
+            _ => None,
+        },
+        "runtime query returned unexpected result",
+    )
+    .await
 }
 
 pub async fn get_usage_stats(
@@ -407,23 +465,20 @@ pub async fn reload_runtime(
     if task.started {
         METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    Ok(Json(RuntimeBackgroundTaskStartResponse {
-        started: task.started,
-        task: task.task.into(),
-    }))
+    Ok(Json(runtime_background_task_start_response(task)))
 }
 
 pub async fn list_runtime_background_tasks(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(RuntimeBackgroundTaskListResponse {
-        items: state
+    Ok(items_json(
+        state
             .runtime()
             .background_tasks()
             .into_iter()
             .map(Into::into)
-            .collect(),
-    }))
+            .collect::<Vec<crate::local_api::RuntimeBackgroundTaskResource>>(),
+    ))
 }
 
 pub async fn cancel_runtime_background_task(
@@ -434,9 +489,7 @@ pub async fn cancel_runtime_background_task(
         .runtime()
         .cancel_background_task(task_id.trim())
         .map_err(server_error_from_runtime_background_task)?;
-    Ok(Json(RuntimeBackgroundTaskCancelResponse {
-        task: task.into(),
-    }))
+    Ok(Json(runtime_background_task_cancel_response(task)))
 }
 
 pub async fn plugin_rpc(
@@ -507,41 +560,6 @@ fn settings_error(error: ConfigError) -> ServerError {
         ConfigError::App(error) => ServerError::Core(error),
         _ => ServerError::BadRequest(message),
     }
-}
-
-fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
-    match error.status_code() {
-        axum::http::StatusCode::BAD_REQUEST => ServerError::BadRequest(error.message().to_owned()),
-        axum::http::StatusCode::NOT_FOUND => ServerError::NotFound(error.message().to_owned()),
-        axum::http::StatusCode::CONFLICT => ServerError::Conflict(error.message().to_owned()),
-        axum::http::StatusCode::SERVICE_UNAVAILABLE => {
-            ServerError::ServiceUnavailable(error.message().to_owned())
-        }
-        _ => ServerError::Internal(error.message().to_owned()),
-    }
-}
-
-async fn resolve_run_options(
-    state: &AppState,
-    session_id: i64,
-    request: SessionRunOptionsRequest,
-) -> Result<agena::session::SessionRunOptions, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
-    let default_model = snapshot
-        .resolve_default_model()
-        .map_err(ServerError::Core)?;
-    let manager = state.session_manager()?;
-    state
-        .service()
-        .resolve_run_options(
-            snapshot.provider_registry().as_ref(),
-            default_model,
-            manager.as_ref(),
-            session_id,
-            request,
-        )
-        .await
-        .map_err(server_error_from_http)
 }
 
 fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {

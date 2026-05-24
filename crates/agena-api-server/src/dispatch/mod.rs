@@ -2,23 +2,17 @@
 //! REST and WS handlers funnel through these helpers so semantics stay
 //! identical regardless of transport.
 
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future};
 
 use crate::local_api::{
-    MessageListQuery, ModelCatalogResponse as HttpModelCatalogResponse, PermissionRuleListQuery,
+    CursorPaginationQuery, MessageListQuery, ModelCatalogResponse as HttpModelCatalogResponse,
     PermissionRuleResource as HttpPermissionRuleResource, PermissionRuleWriteRequest,
-    SessionCreateRequest as HttpSessionCreateRequest, SessionListQuery, SessionReplaceRequest,
-    WorkspaceListQuery, WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource,
-    WorkspaceWriteRequest,
+    SearchPaginationQuery, SessionCreateRequest as HttpSessionCreateRequest,
+    SessionHierarchyRequest, SessionListQuery, WorkspaceListQuery, WorkspacePathRequest,
+    WorkspaceResolveRequest, WorkspaceResource as HttpWorkspaceResource,
 };
+use agena::event::EventKind;
 use agena::event::{EventStore, StoreRange};
-use agena::{
-    event::EventKind,
-    session::{
-        SessionCompactRequest, SessionContinueRequest, SessionPermissionReplyRequest,
-        SessionUserInputReplyRequest, SessionUserMessageRequest,
-    },
-};
 use agena_api::{
     commands::{
         CancelRunParams, ClearSessionGoalParams, Command, CommandResult, CompactSessionParams,
@@ -39,7 +33,7 @@ use agena_api::{
         PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        ModelCatalogResponse, RunOptions, RuntimeAgentResource, RuntimeAgentsResource,
+        ModelCatalogResponse, RuntimeAgentResource, RuntimeAgentsResource,
         RuntimeAutomationResource, RuntimeBackgroundTaskResource, RuntimeLspResource,
         RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
         RuntimeOperatorResource, RuntimeSessionCacheResource, RuntimeSkillResource,
@@ -47,42 +41,8 @@ use agena_api::{
     },
 };
 
+use crate::session_support::server_error_from_http;
 use crate::{error::ServerError, state::AppState};
-
-async fn run_options_to_core(
-    state: &AppState,
-    session_id: i64,
-    options: &RunOptions,
-) -> Result<agena::session::SessionRunOptions, ServerError> {
-    let snapshot = state.runtime().current_snapshot();
-    let default_model = snapshot
-        .resolve_default_model()
-        .map_err(ServerError::Core)?;
-    let manager = state.session_manager()?;
-    state
-        .service()
-        .resolve_run_options(
-            snapshot.provider_registry().as_ref(),
-            default_model,
-            manager.as_ref(),
-            session_id,
-            options.clone(),
-        )
-        .await
-        .server()
-}
-
-fn server_error_from_http(error: crate::local_api::ApiError) -> ServerError {
-    match error.status_code() {
-        axum::http::StatusCode::BAD_REQUEST => ServerError::BadRequest(error.message().to_owned()),
-        axum::http::StatusCode::NOT_FOUND => ServerError::NotFound(error.message().to_owned()),
-        axum::http::StatusCode::CONFLICT => ServerError::Conflict(error.message().to_owned()),
-        axum::http::StatusCode::SERVICE_UNAVAILABLE => {
-            ServerError::ServiceUnavailable(error.message().to_owned())
-        }
-        _ => ServerError::Internal(error.message().to_owned()),
-    }
-}
 
 trait HttpApiResultExt<T> {
     fn server(self) -> Result<T, ServerError>;
@@ -178,6 +138,31 @@ where
             returned: value.page.returned as u64,
         },
     }
+}
+
+async fn http_page_result<T, U>(
+    future: impl Future<
+        Output = Result<crate::local_api::PaginatedResponse<T>, crate::local_api::ApiError>,
+    >,
+) -> Result<PaginatedResponse<U>, ServerError>
+where
+    T: Into<U>,
+{
+    Ok(page_from_http(future.await.server()?))
+}
+
+async fn http_optional_result<T, U>(
+    future: impl Future<Output = Result<Option<T>, crate::local_api::ApiError>>,
+    not_found: impl FnOnce() -> String,
+) -> Result<U, ServerError>
+where
+    T: Into<U>,
+{
+    future
+        .await
+        .server()?
+        .map(Into::into)
+        .ok_or_else(|| ServerError::NotFound(not_found()))
 }
 
 async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {

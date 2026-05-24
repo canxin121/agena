@@ -6,13 +6,12 @@ pub async fn list_messages(
     AxumQuery(query): AxumQuery<MessageListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    Ok(Json(
+    json_http(
         state
             .service()
-            .list_messages(manager.as_ref(), session_id, query)
-            .await
-            .map_err(server_error_from_http)?,
-    ))
+            .list_messages(manager.as_ref(), session_id, query),
+    )
+    .await
 }
 
 pub async fn get_message(
@@ -21,13 +20,13 @@ pub async fn get_message(
     AxumQuery(query): AxumQuery<MessageDetailQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    let message = state
-        .service()
-        .get_message(manager.as_ref(), message_id, query.parts)
-        .await
-        .map_err(server_error_from_http)?
-        .ok_or_else(|| ServerError::NotFound(format!("message not found: {message_id}")))?;
-    Ok(Json(message))
+    json_http_found(
+        state
+            .service()
+            .get_message(manager.as_ref(), message_id, query.parts),
+        || format!("message not found: {message_id}"),
+    )
+    .await
 }
 
 pub async fn list_message_parts(
@@ -36,13 +35,12 @@ pub async fn list_message_parts(
     AxumQuery(query): AxumQuery<MessagePartsQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    Ok(Json(
+    json_http(
         state
             .service()
-            .list_message_parts(manager.as_ref(), message_id, query.mode)
-            .await
-            .map_err(server_error_from_http)?,
-    ))
+            .list_message_parts(manager.as_ref(), message_id, query.mode),
+    )
+    .await
 }
 
 pub async fn get_message_part(
@@ -50,11 +48,9 @@ pub async fn get_message_part(
     Path(part_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     let manager = state.session_manager()?;
-    let part = state
-        .service()
-        .get_message_part(manager.as_ref(), part_id)
-        .await
-        .map_err(server_error_from_http)?
-        .ok_or_else(|| ServerError::NotFound(format!("message part not found: {part_id}")))?;
-    Ok(Json(part))
+    json_http_found(
+        state.service().get_message_part(manager.as_ref(), part_id),
+        || format!("message part not found: {part_id}"),
+    )
+    .await
 }

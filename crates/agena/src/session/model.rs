@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     execution_prefs::ExecutionSelection,
     message::{
-        ExecutionStatus, Message, MessagePart, MessageStatus, PartContent,
-        PendingInteractiveRequest, PermissionRequestPart, RequestPart, TimeRange, ToolInvocation,
-        UserInputRequest, UserInputRequestPart,
+        ExecutionStatus, InteractiveRequestPart, Message, MessagePart, MessageStatus, PartContent,
+        PendingInteractiveRequest, RequestPart, TimeRange, ToolInvocation, UserInputRequest,
     },
     model::ModelRef,
     role::Role,
@@ -44,13 +43,7 @@ pub(crate) struct SessionPendingTool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct SessionPendingPermission {
-    pub request: SessionPartRef,
-    pub tool: SessionPendingTool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct SessionPendingUserInput {
+pub(crate) struct SessionPendingInteractiveRequest {
     pub request: SessionPartRef,
     pub tool: SessionPendingTool,
 }
@@ -58,9 +51,54 @@ pub(crate) struct SessionPendingUserInput {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum SessionPendingOperation {
-    Tool { tool: SessionPendingTool },
-    Permission { pending: SessionPendingPermission },
-    UserInput { pending: SessionPendingUserInput },
+    Tool {
+        tool: SessionPendingTool,
+    },
+    Permission {
+        pending: SessionPendingInteractiveRequest,
+    },
+    UserInput {
+        pending: SessionPendingInteractiveRequest,
+    },
+}
+
+impl SessionPendingOperation {
+    fn tool(&self) -> &SessionPendingTool {
+        match self {
+            Self::Tool { tool }
+            | Self::Permission {
+                pending: SessionPendingInteractiveRequest { tool, .. },
+            }
+            | Self::UserInput {
+                pending: SessionPendingInteractiveRequest { tool, .. },
+            } => tool,
+        }
+    }
+
+    fn queued_tool(&self) -> Option<&SessionPendingTool> {
+        match self {
+            Self::Tool { tool } => Some(tool),
+            Self::Permission { .. } | Self::UserInput { .. } => None,
+        }
+    }
+
+    fn is_blocking_request(&self) -> bool {
+        matches!(self, Self::Permission { .. } | Self::UserInput { .. })
+    }
+
+    fn permission_request(&self) -> Option<&SessionPendingInteractiveRequest> {
+        match self {
+            Self::Permission { pending } => Some(pending),
+            Self::Tool { .. } | Self::UserInput { .. } => None,
+        }
+    }
+
+    fn user_input_request(&self) -> Option<&SessionPendingInteractiveRequest> {
+        match self {
+            Self::UserInput { pending } => Some(pending),
+            Self::Tool { .. } | Self::Permission { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -823,15 +861,7 @@ impl Session {
         self.pending_operations
             .iter()
             .filter_map(|pending| {
-                let tool = match pending {
-                    SessionPendingOperation::Tool { tool }
-                    | SessionPendingOperation::Permission {
-                        pending: SessionPendingPermission { tool, .. },
-                    }
-                    | SessionPendingOperation::UserInput {
-                        pending: SessionPendingUserInput { tool, .. },
-                    } => tool,
-                };
+                let tool = pending.tool();
                 let (call_id, invocation, _) = self.pending_tool_execution(tool)?;
                 let part = self.part(&tool.part)?;
                 let operation_id = part.operation_id.clone()?;
@@ -873,13 +903,9 @@ impl Session {
     }
 
     pub fn blocked(&self) -> bool {
-        self.pending_operations.iter().any(|pending| {
-            matches!(
-                pending,
-                SessionPendingOperation::Permission { .. }
-                    | SessionPendingOperation::UserInput { .. }
-            )
-        })
+        self.pending_operations
+            .iter()
+            .any(SessionPendingOperation::is_blocking_request)
     }
 
     pub(crate) fn next_call_id(&self) -> i64 {
@@ -896,30 +922,68 @@ impl Session {
         self.approx_bytes
     }
 
-    pub(crate) fn find_pending_user_input_by_request_id(
+    fn find_pending_request_by_id<P: Clone>(
         &self,
         request_id: &str,
-    ) -> Option<SessionPendingUserInput> {
-        self.pending_operations.iter().find_map(|pending| {
-            let SessionPendingOperation::UserInput { pending } = pending else {
-                return None;
-            };
-            self.pending_user_input_request(pending)
-                .filter(|request| request.request_id == request_id)
-                .map(|_| pending.clone())
-        })
+        extract_pending: impl Fn(&SessionPendingOperation) -> Option<&P>,
+        request_matches: impl Fn(&Self, &P, &str) -> bool,
+    ) -> Option<P> {
+        self.pending_operations
+            .iter()
+            .find_map(|pending_operation| {
+                let pending = extract_pending(pending_operation)?;
+                request_matches(self, pending, request_id).then(|| pending.clone())
+            })
     }
 
-    pub(crate) fn has_replied_user_input_request(&self, request_id: &str) -> bool {
+    fn has_replied_request(
+        &self,
+        request_id: &str,
+        request_matches: impl Fn(&RequestPart, &str) -> bool,
+    ) -> bool {
         self.messages
             .iter()
             .flat_map(|message| message.parts.iter())
             .any(|part| match part.content.as_ref() {
-                Some(PartContent::Request(RequestPart::UserInput(request))) => {
-                    request.request.request_id == request_id && request.reply.is_some()
-                }
+                Some(PartContent::Request(request)) => request_matches(request, request_id),
                 _ => false,
             })
+    }
+
+    fn pending_request<'a, T>(
+        &'a self,
+        request_part: &SessionPartRef,
+        extract_request: impl FnOnce(&'a RequestPart) -> Option<&'a T>,
+    ) -> Option<&'a T> {
+        let part = self.part(request_part)?;
+        let PartContent::Request(request) = part.content.as_ref()? else {
+            return None;
+        };
+        extract_request(request)
+    }
+
+    pub(crate) fn find_pending_user_input_by_request_id(
+        &self,
+        request_id: &str,
+    ) -> Option<SessionPendingInteractiveRequest> {
+        self.find_pending_request_by_id(
+            request_id,
+            SessionPendingOperation::user_input_request,
+            |session, pending, request_id| {
+                session
+                    .pending_user_input_request(pending)
+                    .is_some_and(|request| request.request_id == request_id)
+            },
+        )
+    }
+
+    pub(crate) fn has_replied_user_input_request(&self, request_id: &str) -> bool {
+        self.has_replied_request(request_id, |request, request_id| match request {
+            RequestPart::UserInput(request) => {
+                request.request.request_id == request_id && request.reply.is_some()
+            }
+            _ => false,
+        })
     }
 
     pub(crate) fn has_finished_operation(&self, operation_id: &str) -> bool {
@@ -959,7 +1023,7 @@ impl Session {
         &self,
         operation_id: &str,
         sequence_index: usize,
-    ) -> Option<UserInputRequestPart> {
+    ) -> Option<InteractiveRequestPart<UserInputRequest, crate::message::UserInputReply>> {
         self.messages
             .iter()
             .flat_map(|message| message.parts.iter())
@@ -1033,30 +1097,34 @@ impl Session {
     pub(crate) fn find_pending_permission_by_request_id(
         &self,
         request_id: &str,
-    ) -> Option<SessionPendingPermission> {
-        self.pending_operations.iter().find_map(|pending| {
-            let SessionPendingOperation::Permission { pending } = pending else {
-                return None;
-            };
-            self.pending_permission_request(pending)
-                .filter(|request| request.request_id == request_id)
-                .map(|_| pending.clone())
-        })
+    ) -> Option<SessionPendingInteractiveRequest> {
+        self.find_pending_request_by_id(
+            request_id,
+            SessionPendingOperation::permission_request,
+            |session, pending, request_id| {
+                session
+                    .pending_permission_request(pending)
+                    .is_some_and(|request| request.request_id == request_id)
+            },
+        )
     }
 
     pub(crate) fn has_replied_permission_request(&self, request_id: &str) -> bool {
-        self.messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .any(|part| match part.content.as_ref() {
-                Some(PartContent::Request(RequestPart::Permission(request))) => {
-                    request.request.request_id == request_id && request.reply.is_some()
-                }
-                _ => false,
-            })
+        self.has_replied_request(request_id, |request, request_id| match request {
+            RequestPart::Permission(request) => {
+                request.request.request_id == request_id && request.reply.is_some()
+            }
+            _ => false,
+        })
     }
 
     fn derive_pending_operations(&self) -> Vec<SessionPendingOperation> {
+        #[derive(Default)]
+        struct PendingRequestParts {
+            permission: Option<SessionPartRef>,
+            user_input: Option<SessionPartRef>,
+        }
+
         let mut operations = Vec::new();
         let completed_tool_operations = self.completed_tool_operations();
 
@@ -1065,8 +1133,7 @@ impl Session {
                 continue;
             }
 
-            let mut permission_parts = HashMap::new();
-            let mut user_input_parts = HashMap::new();
+            let mut request_parts_by_operation: HashMap<&str, PendingRequestParts> = HashMap::new();
 
             for (part_index, part) in message.parts.iter().enumerate() {
                 if part.status != ExecutionStatus::Pending {
@@ -1079,16 +1146,26 @@ impl Session {
 
                 match part.content.as_ref() {
                     Some(PartContent::Request(RequestPart::Permission(_))) => {
-                        permission_parts.insert(
-                            operation_id,
-                            SessionPartRef::new(message_index, message, part_index, part),
-                        );
+                        request_parts_by_operation
+                            .entry(operation_id)
+                            .or_default()
+                            .permission = Some(SessionPartRef::new(
+                            message_index,
+                            message,
+                            part_index,
+                            part,
+                        ));
                     }
                     Some(PartContent::Request(RequestPart::UserInput(_))) => {
-                        user_input_parts.insert(
-                            operation_id,
-                            SessionPartRef::new(message_index, message, part_index, part),
-                        );
+                        request_parts_by_operation
+                            .entry(operation_id)
+                            .or_default()
+                            .user_input = Some(SessionPartRef::new(
+                            message_index,
+                            message,
+                            part_index,
+                            part,
+                        ));
                     }
                     _ => {}
                 }
@@ -1113,24 +1190,26 @@ impl Session {
                     part: SessionPartRef::new(message_index, message, part_index, part),
                 };
 
-                if let Some(request) = permission_parts.get(operation_id) {
-                    operations.push(SessionPendingOperation::Permission {
-                        pending: SessionPendingPermission {
-                            request: request.clone(),
-                            tool,
-                        },
-                    });
-                    continue;
-                }
+                if let Some(request_parts) = request_parts_by_operation.get(operation_id) {
+                    if let Some(request) = request_parts.permission.as_ref() {
+                        operations.push(SessionPendingOperation::Permission {
+                            pending: SessionPendingInteractiveRequest {
+                                request: request.clone(),
+                                tool,
+                            },
+                        });
+                        continue;
+                    }
 
-                if let Some(request) = user_input_parts.get(operation_id) {
-                    operations.push(SessionPendingOperation::UserInput {
-                        pending: SessionPendingUserInput {
-                            request: request.clone(),
-                            tool,
-                        },
-                    });
-                    continue;
+                    if let Some(request) = request_parts.user_input.as_ref() {
+                        operations.push(SessionPendingOperation::UserInput {
+                            pending: SessionPendingInteractiveRequest {
+                                request: request.clone(),
+                                tool,
+                            },
+                        });
+                        continue;
+                    }
                 }
 
                 operations.push(SessionPendingOperation::Tool { tool });
@@ -1141,21 +1220,15 @@ impl Session {
     }
 
     pub(crate) fn next_pending_tool(&self) -> Option<SessionPendingTool> {
-        self.pending_operations.iter().find_map(|pending| {
-            let SessionPendingOperation::Tool { tool } = pending else {
-                return None;
-            };
-            Some(tool.clone())
-        })
+        self.pending_operations
+            .iter()
+            .find_map(|pending| pending.queued_tool().cloned())
     }
 
     pub(crate) fn pending_tools(&self) -> Vec<SessionPendingTool> {
         self.pending_operations
             .iter()
-            .filter_map(|pending| match pending {
-                SessionPendingOperation::Tool { tool } => Some(tool.clone()),
-                _ => None,
-            })
+            .filter_map(|pending| pending.queued_tool().cloned())
             .collect()
     }
 
@@ -1230,33 +1303,22 @@ impl Session {
 
     pub(crate) fn pending_permission_request(
         &self,
-        pending: &SessionPendingPermission,
+        pending: &SessionPendingInteractiveRequest,
     ) -> Option<&crate::permission::PermissionRequest> {
-        let part = self.part(&pending.request)?;
-        let request = match part.content.as_ref()? {
-            PartContent::Request(RequestPart::Permission(PermissionRequestPart {
-                request,
-                ..
-            })) => request,
-            _ => return None,
-        };
-
-        Some(request)
+        self.pending_request(&pending.request, |request| match request {
+            RequestPart::Permission(InteractiveRequestPart { request, .. }) => Some(request),
+            _ => None,
+        })
     }
 
     pub(crate) fn pending_user_input_request(
         &self,
-        pending: &SessionPendingUserInput,
+        pending: &SessionPendingInteractiveRequest,
     ) -> Option<&UserInputRequest> {
-        let part = self.part(&pending.request)?;
-        let request = match part.content.as_ref()? {
-            PartContent::Request(RequestPart::UserInput(UserInputRequestPart {
-                request, ..
-            })) => request,
-            _ => return None,
-        };
-
-        Some(request)
+        self.pending_request(&pending.request, |request| match request {
+            RequestPart::UserInput(InteractiveRequestPart { request, .. }) => Some(request),
+            _ => None,
+        })
     }
 
     fn completed_tool_operations(&self) -> HashSet<&str> {

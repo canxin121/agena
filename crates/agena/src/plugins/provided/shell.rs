@@ -1,8 +1,6 @@
 //! `agena.shell` plugin: exec, monitor.
 
-use crate::message::{
-    BashToolInput, FilesystemEffect, MonitorToolInput, NetworkEffect, PowerShellToolInput,
-};
+use crate::message::{MonitorToolInput, ShellCommandInput};
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{HostCapability, ToolTag};
 use crate::plugins::provided::router::InProcessToolPlugin;
@@ -73,28 +71,14 @@ enum ShellExecKind {
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ShellExecInput {
     shell: ShellExecKind,
-    command: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    timeout_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    workdir: Option<String>,
-    filesystem_effects: Vec<FilesystemEffect>,
-    network_effects: Vec<NetworkEffect>,
+    #[serde(flatten)]
+    command: ShellCommandInput,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ShellMonitorStartInput {
-    command: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    workdir: Option<String>,
-    filesystem_effects: Vec<FilesystemEffect>,
-    network_effects: Vec<NetworkEffect>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    timeout_ms: Option<u64>,
+    #[serde(flatten)]
+    command: ShellCommandInput,
     #[serde(default)]
     persistent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,28 +124,8 @@ fn tool_args<T: serde::Serialize>(
 
 fn shell_exec_tool_args(input: ShellExecInput) -> crate::plugin::sdk::Result<(String, JsonValue)> {
     match input.shell {
-        ShellExecKind::Bash => tool_args(
-            "bash",
-            BashToolInput {
-                command: input.command,
-                description: input.description,
-                timeout_ms: input.timeout_ms,
-                workdir: input.workdir,
-                filesystem_effects: input.filesystem_effects,
-                network_effects: input.network_effects,
-            },
-        ),
-        ShellExecKind::PowerShell => tool_args(
-            "powershell",
-            PowerShellToolInput {
-                command: input.command,
-                description: input.description,
-                timeout_ms: input.timeout_ms,
-                workdir: input.workdir,
-                filesystem_effects: input.filesystem_effects,
-                network_effects: input.network_effects,
-            },
-        ),
+        ShellExecKind::Bash => tool_args("bash", input.command),
+        ShellExecKind::PowerShell => tool_args("powershell", input.command),
     }
 }
 
@@ -172,11 +136,6 @@ fn shell_monitor_start_tool_args(
         "monitor",
         MonitorToolInput::Start {
             command: args.command,
-            description: args.description,
-            workdir: args.workdir,
-            filesystem_effects: args.filesystem_effects,
-            network_effects: args.network_effects,
-            timeout_ms: args.timeout_ms,
             persistent: args.persistent,
             include_pattern: args.include_pattern,
             max_buffered_lines: args.max_buffered_lines,

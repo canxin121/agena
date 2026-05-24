@@ -16,15 +16,33 @@ pub enum ConfigSettingsSource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
-pub struct ConfigSettingsGetInput {
+pub struct ConfigSettingsPathInput {
     pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct ConfigSettingsEditOptions {
+    pub dry_run: bool,
+    #[serde(default = "default_true")]
+    pub validate: bool,
+    #[serde(default = "default_true")]
+    pub reload: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(default)]
+pub struct ConfigSettingsGetInput {
+    #[serde(flatten)]
+    pub target: ConfigSettingsPathInput,
     pub source: ConfigSettingsSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
 pub struct ConfigSettingsListInput {
-    pub path: Option<String>,
+    #[serde(flatten)]
+    pub target: ConfigSettingsPathInput,
     pub source: ConfigSettingsSource,
     pub recursive: bool,
 }
@@ -33,42 +51,31 @@ pub struct ConfigSettingsListInput {
 pub struct ConfigSettingsSetInput {
     pub path: String,
     pub value: JsonValue,
-    #[serde(default)]
-    pub dry_run: bool,
-    #[serde(default = "default_true")]
-    pub validate: bool,
-    #[serde(default = "default_true")]
-    pub reload: bool,
+    #[serde(flatten)]
+    pub options: ConfigSettingsEditOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigSettingsDeleteInput {
     pub path: String,
-    #[serde(default)]
-    pub dry_run: bool,
-    #[serde(default = "default_true")]
-    pub validate: bool,
-    #[serde(default = "default_true")]
-    pub reload: bool,
+    #[serde(flatten)]
+    pub options: ConfigSettingsEditOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ConfigSettingsPatchInput {
-    #[serde(default)]
-    pub path: Option<String>,
+    #[serde(flatten)]
+    pub target: ConfigSettingsPathInput,
     pub changes: JsonValue,
-    #[serde(default)]
-    pub dry_run: bool,
-    #[serde(default = "default_true")]
-    pub validate: bool,
-    #[serde(default = "default_true")]
-    pub reload: bool,
+    #[serde(flatten)]
+    pub options: ConfigSettingsEditOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
 pub struct ConfigSettingsValidateInput {
-    pub path: Option<String>,
+    #[serde(flatten)]
+    pub target: ConfigSettingsPathInput,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -346,12 +353,12 @@ pub fn read_file_setting(
 ) -> Result<ConfigSettingsReadResponse, ConfigError> {
     let config_path = config_path.into();
     let (config_found, file_value) = read_or_create_doc(&config_path)?;
-    let value = get_json_path(&file_value, input.path.as_deref())?;
+    let value = get_json_path(&file_value, input.target.path.as_deref())?;
     Ok(ConfigSettingsReadResponse {
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
-        path: input.path,
+        path: input.target.path,
         value,
     })
 }
@@ -362,12 +369,12 @@ pub fn list_file_settings(
 ) -> Result<ConfigSettingsListResponse, ConfigError> {
     let config_path = config_path.into();
     let (config_found, file_value) = read_or_create_doc(&config_path)?;
-    let entries = list_json_path(&file_value, input.path.as_deref(), input.recursive)?;
+    let entries = list_json_path(&file_value, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
-        path: input.path,
+        path: input.target.path,
         entries,
     })
 }
@@ -404,9 +411,9 @@ pub fn set_file_setting_with_env(
         before,
         Some(input.path),
         "set",
-        input.dry_run,
-        input.validate,
-        input.reload,
+        input.options.dry_run,
+        input.options.validate,
+        input.options.reload,
         created,
         false,
         env,
@@ -437,9 +444,9 @@ pub fn delete_file_setting_with_env(
         before,
         Some(input.path),
         "delete",
-        input.dry_run,
-        input.validate,
-        input.reload,
+        input.options.dry_run,
+        input.options.validate,
+        input.options.reload,
         false,
         deleted,
         env,
@@ -464,22 +471,22 @@ pub fn patch_file_settings_with_env(
     let config_path = config_path.into();
     let (config_found, mut doc) = read_or_create_doc(&config_path)?;
     let before = doc.clone();
-    let created = match input.path.as_deref() {
+    let created = match input.target.path.as_deref() {
         Some(path) => get_json_path(&before, Some(path))?.is_null(),
         None => false,
     };
-    let target = ensure_object_path(&mut doc, input.path.as_deref())?;
+    let target = ensure_object_path(&mut doc, input.target.path.as_deref())?;
     merge_json_object(target, changes)?;
     finish_edit(
         config_path,
         config_found,
         doc,
         before,
-        input.path,
+        input.target.path,
         "patch",
-        input.dry_run,
-        input.validate,
-        input.reload,
+        input.options.dry_run,
+        input.options.validate,
+        input.options.reload,
         created,
         false,
         env,

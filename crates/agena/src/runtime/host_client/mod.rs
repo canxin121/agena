@@ -3,8 +3,7 @@
 //! JSON-RPC; the `HostHandle` in `agena-plugin-host` routes those calls
 //! through this client.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::{collections::BTreeMap, future::Future, sync::Arc};
 
 use async_trait::async_trait;
 
@@ -66,20 +65,63 @@ pub fn noop_host_client() -> Arc<dyn HostClient> {
     Arc::new(NoopHostClient)
 }
 
+fn plugin_error(error: impl ToString) -> PluginError {
+    PluginError::new(error.to_string())
+}
+
 struct RuntimeHostClient {
     runtime: AgenaRuntime,
 }
 
 impl RuntimeHostClient {
+    fn snapshot(&self) -> Arc<crate::runtime::RuntimeSnapshot> {
+        self.runtime.current_snapshot()
+    }
+
     fn session_manager(&self) -> Result<Arc<crate::session::SessionManager>, PluginError> {
-        self.runtime
-            .current_snapshot()
+        self.snapshot()
             .session_manager()
             .ok_or_else(|| host_unavailable("session manager is not enabled in this runtime"))
     }
 
+    fn optional_session_manager(&self) -> Option<Arc<crate::session::SessionManager>> {
+        self.snapshot().session_manager()
+    }
+
     fn tool_executor(&self) -> Result<crate::tool::ToolExecutor, PluginError> {
         Ok(self.session_manager()?.tool_executor())
+    }
+
+    async fn with_session_manager<T, E, F>(
+        &self,
+        use_manager: impl FnOnce(Arc<crate::session::SessionManager>) -> F,
+    ) -> Result<T, PluginError>
+    where
+        E: ToString,
+        F: Future<Output = Result<T, E>>,
+    {
+        use_manager(self.session_manager()?)
+            .await
+            .map_err(plugin_error)
+    }
+
+    fn snapshot_feature<T>(
+        &self,
+        feature: impl FnOnce(&crate::runtime::RuntimeSnapshot) -> Option<T>,
+        unavailable: &'static str,
+    ) -> Result<T, PluginError> {
+        let snapshot = self.snapshot();
+        feature(snapshot.as_ref()).ok_or_else(|| host_unavailable(unavailable))
+    }
+
+    fn executor_feature<T>(
+        &self,
+        feature: impl FnOnce(&crate::tool::ToolExecutor) -> Option<T>,
+        unavailable: &'static str,
+    ) -> Result<(crate::tool::ToolExecutor, T), PluginError> {
+        let executor = self.tool_executor()?;
+        let feature = feature(&executor).ok_or_else(|| host_unavailable(unavailable))?;
+        Ok((executor, feature))
     }
 
     async fn callback_session_context(
@@ -90,13 +132,13 @@ impl RuntimeHostClient {
         else {
             return Ok(None);
         };
-        let Some(manager) = self.runtime.current_snapshot().session_manager() else {
+        let Some(manager) = self.optional_session_manager() else {
             return Ok(None);
         };
         let session = manager
             .get_session(session_id)
             .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .map_err(plugin_error)?;
         Ok(Some(session.runtime.execution))
     }
 
@@ -159,23 +201,42 @@ impl RuntimeHostClient {
     }
 
     fn plugin_storage(&self) -> Arc<dyn PluginStorage> {
-        self.runtime
-            .current_snapshot()
-            .config_resolution()
-            .config
-            .plugin_storage()
+        self.snapshot().config_resolution().config.plugin_storage()
     }
 
     fn plugin_secret_store(&self) -> Arc<dyn PluginSecretStore> {
-        self.runtime
-            .current_snapshot()
+        self.snapshot()
             .config_resolution()
             .config
             .plugin_secret_store()
     }
 
     fn agents(&self) -> crate::agents::SubagentRegistry {
-        self.runtime.current_snapshot().agents()
+        self.snapshot().agents()
+    }
+
+    fn plugin_manager(&self) -> Arc<crate::plugin::PluginHost> {
+        self.snapshot().plugin_manager()
+    }
+
+    fn with_plugin_storage<T>(
+        &self,
+        scope: crate::plugin::sdk::host_api::HostStorageScope,
+        visibility: crate::plugin::sdk::host_api::HostStorageVisibility,
+        use_store: impl FnOnce(&dyn PluginStorage, &StorageLocator) -> Result<T, PluginStorageError>,
+    ) -> Result<T, PluginError> {
+        let locator = self.storage_locator(scope, visibility)?;
+        let store = self.plugin_storage();
+        use_store(store.as_ref(), &locator).map_err(map_storage_error)
+    }
+
+    fn with_plugin_secret_store<T>(
+        &self,
+        use_store: impl FnOnce(&dyn PluginSecretStore, &str) -> Result<T, PluginStorageError>,
+    ) -> Result<T, PluginError> {
+        let plugin_id = self.callback_plugin_id()?;
+        let store = self.plugin_secret_store();
+        use_store(store.as_ref(), plugin_id.as_str()).map_err(map_storage_error)
     }
 
     async fn resolve_permission_check(
@@ -185,13 +246,13 @@ impl RuntimeHostClient {
         let session_id = current_host_callback_context()
             .and_then(|context| context.session_id)
             .filter(|session_id| *session_id >= 0);
-        let Some(manager) = self.runtime.current_snapshot().session_manager() else {
+        let Some(manager) = self.optional_session_manager() else {
             return Ok(host_permission_check_response_from_decision(check.decision));
         };
         let resolution = manager
             .resolve_tool_permission_check(session_id, &check)
             .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .map_err(plugin_error)?;
         Ok(host_permission_check_response_from_resolution(resolution))
     }
 
@@ -208,6 +269,30 @@ impl RuntimeHostClient {
                 ))
             }),
         }
+    }
+
+    fn callback_session_id_for(&self, action: &str) -> Result<i64, PluginError> {
+        self.callback_or_requested_session_id(None, action)
+    }
+
+    async fn run_workflow_tool<T>(
+        &self,
+        tool_name: &'static str,
+        input: T,
+    ) -> Result<ToolInvokeOutput, PluginError>
+    where
+        T: serde::Serialize,
+    {
+        let context = self.callback_context()?;
+        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
+        workflow_tool_output(
+            &executor,
+            tool_name,
+            serde_json::to_value(input).map_err(|err| PluginError::new(err.to_string()))?,
+            context.session_id.filter(|id| *id >= 0),
+            context.call_id.filter(|id| *id >= 0),
+            session_context.as_ref(),
+        )
     }
 }
 
@@ -344,7 +429,7 @@ impl HostClient for RuntimeHostClient {
         tool: String,
         input: serde_json::Value,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let host = self.runtime.current_snapshot().plugin_manager();
+        let host = self.plugin_manager();
         let resolution = host
             .lookup_entry(&tool)
             .ok_or_else(|| PluginError::new(format!("entry `{tool}` not found")))?;
@@ -385,7 +470,7 @@ impl HostClient for RuntimeHostClient {
         self.session_manager()?
             .request_host_user_input(session_id, call_id, input)
             .await
-            .map_err(|err| PluginError::new(err.to_string()))
+            .map_err(plugin_error)
     }
 
     async fn spawn_subtask(
@@ -402,32 +487,43 @@ impl HostClient for RuntimeHostClient {
         }
         let subagent_type =
             parse_subagent_type(requested_profile).unwrap_or(TaskSubagentType::Explore);
+        let description = req.description;
+        let prompt = req.prompt;
+        let task_id = req.task_id;
+        let command = req.command;
+        let requested_model = req.model;
+        let profile_name = requested_profile.to_string();
+        let request_description = description.clone();
+        let request_prompt = prompt.clone();
+        let request_task_id = task_id.clone();
+        let request_command = command.clone();
+        let request_model = requested_model.clone();
+        let request_profile_name = profile_name.clone();
         let response = self
-            .session_manager()?
-            .spawn_subtask(crate::session::SessionSubtaskRequest {
-                parent_session_id,
-                description: req.description.clone(),
-                prompt: req.prompt.clone(),
-                subagent_type,
-                profile_name: Some(requested_profile.to_string()),
-                task_id: req.task_id.clone(),
-                command: req.command.clone(),
-                requested_model: req.model.clone(),
+            .with_session_manager(|manager| async move {
+                manager
+                    .spawn_subtask(crate::session::SessionSubtaskRequest {
+                        parent_session_id,
+                        description: request_description,
+                        prompt: request_prompt,
+                        subagent_type,
+                        profile_name: Some(request_profile_name),
+                        task_id: request_task_id,
+                        command: request_command,
+                        requested_model: request_model,
+                    })
+                    .await
             })
-            .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .await?;
 
         let session = response.session;
         let mut metadata = BTreeMap::new();
         metadata.insert("session_id".to_string(), session.id.to_string());
         metadata.insert(
             "subagent_type".to_string(),
-            response
-                .profile_name
-                .clone()
-                .unwrap_or_else(|| requested_profile.to_string()),
+            response.profile_name.clone().unwrap_or(profile_name),
         );
-        if let Some(model) = req.model {
+        if let Some(model) = requested_model {
             metadata.insert("requested_model".to_string(), model);
         }
         if let Some(model_provider_id) = response.model_provider_id.clone() {
@@ -436,10 +532,10 @@ impl HostClient for RuntimeHostClient {
         if let Some(model_id) = response.model_id.clone() {
             metadata.insert("model_id".to_string(), model_id);
         }
-        if let Some(command) = req.command.clone() {
+        if let Some(command) = command {
             metadata.insert("command".to_string(), command);
         }
-        metadata.insert("description".to_string(), req.description.clone());
+        metadata.insert("description".to_string(), description);
 
         Ok(SpawnSubtaskResponse {
             final_text: format!(
@@ -465,19 +561,13 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn todo_write(&self, req: HostTodoWriteRequest) -> Result<ToolInvokeOutput, PluginError> {
-        let context = self.callback_context()?;
-        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_tool_output(
-            &executor,
+        self.run_workflow_tool(
             "todo_write",
-            serde_json::to_value(TodoWriteToolInput {
+            TodoWriteToolInput {
                 items: req.items.into_iter().map(todo_item_from_host).collect(),
-            })
-            .map_err(|err| PluginError::new(err.to_string()))?,
-            context.session_id.filter(|id| *id >= 0),
-            context.call_id.filter(|id| *id >= 0),
-            session_context.as_ref(),
+            },
         )
+        .await
     }
 
     async fn get_session(
@@ -486,10 +576,8 @@ impl HostClient for RuntimeHostClient {
     ) -> Result<HostGetSessionResponse, PluginError> {
         let session_id = self.callback_or_requested_session_id(req.session_id, "get_session")?;
         let session = self
-            .session_manager()?
-            .get_session(session_id)
-            .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .with_session_manager(|manager| async move { manager.get_session(session_id).await })
+            .await?;
         Ok(HostGetSessionResponse {
             session: host_session_from_session(&session),
         })
@@ -506,25 +594,22 @@ impl HostClient for RuntimeHostClient {
                 "session title must not be empty",
             ));
         }
+        let title = title.to_string();
         let session = self
-            .session_manager()?
-            .rename_session(session_id, title.to_string())
-            .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .with_session_manager(|manager| async move {
+                manager.rename_session(session_id, title).await
+            })
+            .await?;
         Ok(HostRenameSessionResponse {
             session: host_session_from_session(&session),
         })
     }
 
     async fn get_goal(&self, _req: HostGetGoalRequest) -> Result<HostGetGoalResponse, PluginError> {
-        let session_id = self.callback_context()?.session_id.ok_or_else(|| {
-            host_unavailable("host callback context is missing session_id for get_goal")
-        })?;
+        let session_id = self.callback_session_id_for("get_goal")?;
         let goal = self
-            .session_manager()?
-            .get_goal(session_id)
-            .await
-            .map_err(|err| PluginError::new(err.to_string()))?
+            .with_session_manager(|manager| async move { manager.get_goal(session_id).await })
+            .await?
             .map(host_goal_from_session_goal);
         Ok(HostGetGoalResponse { goal })
     }
@@ -533,9 +618,7 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostCreateGoalRequest,
     ) -> Result<HostCreateGoalResponse, PluginError> {
-        let session_id = self.callback_context()?.session_id.ok_or_else(|| {
-            host_unavailable("host callback context is missing session_id for create_goal")
-        })?;
+        let session_id = self.callback_session_id_for("create_goal")?;
         if req.objective.trim().is_empty() {
             return Err(PluginError::invalid_params(
                 "goal objective must not be empty",
@@ -546,7 +629,7 @@ impl HostClient for RuntimeHostClient {
         if manager
             .get_goal(session_id)
             .await
-            .map_err(|err| PluginError::new(err.to_string()))?
+            .map_err(plugin_error)?
             .is_some()
         {
             return Err(PluginError::invalid_params(format!(
@@ -570,19 +653,19 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostUpdateGoalRequest,
     ) -> Result<HostUpdateGoalResponse, PluginError> {
-        let session_id = self.callback_context()?.session_id.ok_or_else(|| {
-            host_unavailable("host callback context is missing session_id for update_goal")
-        })?;
+        let session_id = self.callback_session_id_for("update_goal")?;
         let goal = self
-            .session_manager()?
-            .update_goal(crate::session::SessionGoalUpdateRequest {
-                session_id,
-                objective: req.objective,
-                status: req.status.map(session_goal_status_from_host),
-                expected_goal_id: None,
+            .with_session_manager(|manager| async move {
+                manager
+                    .update_goal(crate::session::SessionGoalUpdateRequest {
+                        session_id,
+                        objective: req.objective,
+                        status: req.status.map(session_goal_status_from_host),
+                        expected_goal_id: None,
+                    })
+                    .await
             })
-            .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .await?;
         Ok(HostUpdateGoalResponse {
             goal: host_goal_from_session_goal(goal),
         })
@@ -592,14 +675,10 @@ impl HostClient for RuntimeHostClient {
         &self,
         _req: HostClearGoalRequest,
     ) -> Result<HostClearGoalResponse, PluginError> {
-        let session_id = self.callback_context()?.session_id.ok_or_else(|| {
-            host_unavailable("host callback context is missing session_id for clear_goal")
-        })?;
+        let session_id = self.callback_session_id_for("clear_goal")?;
         let cleared = self
-            .session_manager()?
-            .clear_goal(session_id)
-            .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .with_session_manager(|manager| async move { manager.clear_goal(session_id).await })
+            .await?;
         Ok(HostClearGoalResponse { cleared })
     }
 
@@ -607,81 +686,51 @@ impl HostClient for RuntimeHostClient {
         &self,
         _req: HostEnterPlanModeRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let context = self.callback_context()?;
-        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_tool_output(
-            &executor,
-            "enter_plan_mode",
-            serde_json::to_value(EnterPlanModeToolInput::default())
-                .map_err(|err| PluginError::new(err.to_string()))?,
-            context.session_id.filter(|id| *id >= 0),
-            context.call_id.filter(|id| *id >= 0),
-            session_context.as_ref(),
-        )
+        self.run_workflow_tool("enter_plan_mode", EnterPlanModeToolInput::default())
+            .await
     }
 
     async fn exit_plan_mode(
         &self,
         _req: HostExitPlanModeRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let context = self.callback_context()?;
-        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_tool_output(
-            &executor,
-            "exit_plan_mode",
-            serde_json::to_value(ExitPlanModeToolInput::default())
-                .map_err(|err| PluginError::new(err.to_string()))?,
-            context.session_id.filter(|id| *id >= 0),
-            context.call_id.filter(|id| *id >= 0),
-            session_context.as_ref(),
-        )
+        self.run_workflow_tool("exit_plan_mode", ExitPlanModeToolInput::default())
+            .await
     }
 
     async fn enter_worktree(
         &self,
         req: HostEnterWorktreeRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let context = self.callback_context()?;
-        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_tool_output(
-            &executor,
+        self.run_workflow_tool(
             "enter_worktree",
-            serde_json::to_value(EnterWorktreeToolInput {
+            EnterWorktreeToolInput {
                 name: req.name,
                 path: req.path,
-            })
-            .map_err(|err| PluginError::new(err.to_string()))?,
-            context.session_id.filter(|id| *id >= 0),
-            context.call_id.filter(|id| *id >= 0),
-            session_context.as_ref(),
+            },
         )
+        .await
     }
 
     async fn exit_worktree(
         &self,
         req: HostExitWorktreeRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        let context = self.callback_context()?;
-        let (executor, session_context) = self.callback_scoped_tool_executor().await?;
-        workflow_tool_output(
-            &executor,
+        self.run_workflow_tool(
             "exit_worktree",
-            serde_json::to_value(ExitWorktreeToolInput {
+            ExitWorktreeToolInput {
                 action: req.action,
                 discard_changes: req.discard_changes,
-            })
-            .map_err(|err| PluginError::new(err.to_string()))?,
-            context.session_id.filter(|id| *id >= 0),
-            context.call_id.filter(|id| *id >= 0),
-            session_context.as_ref(),
+            },
         )
+        .await
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> Result<MonitorHandle, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .monitor_registry()
-            .ok_or_else(|| host_unavailable("monitor registry is not enabled in this runtime"))?;
+        let (executor, registry) = self.executor_feature(
+            |executor| executor.monitor_registry().cloned(),
+            "monitor registry is not enabled in this runtime",
+        )?;
         let cwd = req
             .cwd
             .as_deref()
@@ -714,10 +763,10 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn monitor_list(&self) -> Result<Vec<MonitorHandle>, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .monitor_registry()
-            .ok_or_else(|| host_unavailable("monitor registry is not enabled in this runtime"))?;
+        let (_, registry) = self.executor_feature(
+            |executor| executor.monitor_registry().cloned(),
+            "monitor registry is not enabled in this runtime",
+        )?;
         Ok(registry
             .list()
             .into_iter()
@@ -729,10 +778,10 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: MonitorReadRequest,
     ) -> Result<MonitorReadResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .monitor_registry()
-            .ok_or_else(|| host_unavailable("monitor registry is not enabled in this runtime"))?;
+        let (_, registry) = self.executor_feature(
+            |executor| executor.monitor_registry().cloned(),
+            "monitor registry is not enabled in this runtime",
+        )?;
         let read = registry
             .read(MonitorReadParams {
                 monitor_id: req.id,
@@ -749,10 +798,10 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn monitor_stop(&self, req: MonitorStopRequest) -> Result<MonitorHandle, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .monitor_registry()
-            .ok_or_else(|| host_unavailable("monitor registry is not enabled in this runtime"))?;
+        let (_, registry) = self.executor_feature(
+            |executor| executor.monitor_registry().cloned(),
+            "monitor registry is not enabled in this runtime",
+        )?;
         let stop = registry.stop(req.id.as_str()).map_err(map_monitor_error)?;
         Ok(render_monitor_handle(stop.summary))
     }
@@ -761,44 +810,37 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostStorageGetRequest,
     ) -> Result<HostStorageGetResponse, PluginError> {
-        let locator = self.storage_locator(req.scope, req.visibility)?;
-        let store = self.plugin_storage();
-        let value = store
-            .get(&locator, req.namespace.as_str(), req.key.as_str())
-            .map_err(map_storage_error)?;
+        let value = self.with_plugin_storage(req.scope, req.visibility, |store, locator| {
+            store.get(locator, req.namespace.as_str(), req.key.as_str())
+        })?;
         Ok(HostStorageGetResponse { value })
     }
 
     async fn storage_set(&self, req: HostStorageSetRequest) -> Result<(), PluginError> {
-        let locator = self.storage_locator(req.scope, req.visibility)?;
-        let store = self.plugin_storage();
-        store
-            .set(
-                &locator,
+        self.with_plugin_storage(req.scope, req.visibility, |store, locator| {
+            store.set(
+                locator,
                 req.namespace.as_str(),
                 req.key.as_str(),
                 req.value.as_str(),
             )
-            .map_err(map_storage_error)
+        })
     }
 
     async fn storage_delete(&self, req: HostStorageDeleteRequest) -> Result<(), PluginError> {
-        let locator = self.storage_locator(req.scope, req.visibility)?;
-        let store = self.plugin_storage();
-        store
-            .delete(&locator, req.namespace.as_str(), req.key.as_str())
-            .map_err(map_storage_error)
+        self.with_plugin_storage(req.scope, req.visibility, |store, locator| {
+            store.delete(locator, req.namespace.as_str(), req.key.as_str())
+        })
     }
 
     async fn storage_list(
         &self,
         req: HostStorageListRequest,
     ) -> Result<HostStorageListResponse, PluginError> {
-        let locator = self.storage_locator(req.scope, req.visibility)?;
-        let store = self.plugin_storage();
-        let entries = store
-            .list(&locator, req.namespace.as_deref(), req.prefix.as_deref())
-            .map_err(map_storage_error)?
+        let entries = self
+            .with_plugin_storage(req.scope, req.visibility, |store, locator| {
+                store.list(locator, req.namespace.as_deref(), req.prefix.as_deref())
+            })?
             .into_iter()
             .map(|entry| HostStorageEntry {
                 namespace: entry.namespace,
@@ -812,39 +854,28 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostSecretGetRequest,
     ) -> Result<HostSecretGetResponse, PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
-        let store = self.plugin_secret_store();
-        let value = store
-            .get(&plugin_id, req.name.as_str())
-            .map_err(map_storage_error)?;
+        let value = self
+            .with_plugin_secret_store(|store, plugin_id| store.get(plugin_id, req.name.as_str()))?;
         Ok(HostSecretGetResponse { value })
     }
 
     async fn secret_set(&self, req: HostSecretSetRequest) -> Result<(), PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
-        let store = self.plugin_secret_store();
-        store
-            .set(&plugin_id, req.name.as_str(), req.value.as_str())
-            .map_err(map_storage_error)
+        self.with_plugin_secret_store(|store, plugin_id| {
+            store.set(plugin_id, req.name.as_str(), req.value.as_str())
+        })
     }
 
     async fn secret_delete(&self, req: HostSecretDeleteRequest) -> Result<(), PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
-        let store = self.plugin_secret_store();
-        store
-            .delete(&plugin_id, req.name.as_str())
-            .map_err(map_storage_error)
+        self.with_plugin_secret_store(|store, plugin_id| store.delete(plugin_id, req.name.as_str()))
     }
 
     async fn secret_list(&self) -> Result<HostSecretListResponse, PluginError> {
-        let plugin_id = self.callback_plugin_id()?;
-        let store = self.plugin_secret_store();
-        let names = store.list(&plugin_id).map_err(map_storage_error)?;
+        let names = self.with_plugin_secret_store(|store, plugin_id| store.list(plugin_id))?;
         Ok(HostSecretListResponse { names })
     }
 
     async fn plugin_status_list(&self) -> Result<HostPluginStatusListResponse, PluginError> {
-        let host = self.runtime.current_snapshot().plugin_manager();
+        let host = self.plugin_manager();
         let entries = host
             .plugin_statuses()
             .into_iter()
@@ -857,17 +888,17 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostPluginStatusGetRequest,
     ) -> Result<HostPluginStatusGetResponse, PluginError> {
-        let host = self.runtime.current_snapshot().plugin_manager();
+        let host = self.plugin_manager();
         Ok(HostPluginStatusGetResponse {
             status: host.plugin_status(&req.plugin_id).map(host_status_to_sdk),
         })
     }
 
     async fn lsp_list_servers(&self) -> Result<HostLspListServersResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .lsp_registry()
-            .ok_or_else(|| host_unavailable("lsp registry is not enabled in this runtime"))?;
+        let (_, registry) = self.executor_feature(
+            |executor| executor.lsp_registry().cloned(),
+            "lsp registry is not enabled in this runtime",
+        )?;
         let specs = registry.server_specs().await;
         let servers = specs
             .into_iter()
@@ -885,10 +916,10 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostLspListDiagnosticsRequest,
     ) -> Result<HostLspListDiagnosticsResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .lsp_registry()
-            .ok_or_else(|| host_unavailable("lsp registry is not enabled in this runtime"))?;
+        let (_, registry) = self.executor_feature(
+            |executor| executor.lsp_registry().cloned(),
+            "lsp registry is not enabled in this runtime",
+        )?;
         let pairs = registry.collect_diagnostics().await;
         let mut entries = Vec::new();
         for (uri, diagnostics) in pairs {
@@ -918,10 +949,10 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn plan_list(&self) -> Result<HostPlanListResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .plan_registry()
-            .ok_or_else(|| host_unavailable("plan registry is not enabled in this runtime"))?;
+        let (_, registry) = self.executor_feature(
+            |executor| executor.plan_registry().cloned(),
+            "plan registry is not enabled in this runtime",
+        )?;
         let entries: Vec<HostPlanEntry> = registry
             .read()
             .iter()
@@ -936,10 +967,10 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn plan_get(&self, req: HostPlanGetRequest) -> Result<HostPlanGetResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .plan_registry()
-            .ok_or_else(|| host_unavailable("plan registry is not enabled in this runtime"))?;
+        let (_, registry) = self.executor_feature(
+            |executor| executor.plan_registry().cloned(),
+            "plan registry is not enabled in this runtime",
+        )?;
         let plan = registry.read().get(&req.session_id).cloned();
         let Some(plan) = plan else {
             return Ok(HostPlanGetResponse::default());
@@ -957,11 +988,11 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn worktree_list(&self) -> Result<HostWorktreeListResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let registry = executor
-            .worktree_registry()
-            .ok_or_else(|| host_unavailable("worktree registry is not enabled in this runtime"))?;
-        let entries: Vec<HostWorktreeEntry> = crate::tool::worktree_list_active(registry)
+        let (_, registry) = self.executor_feature(
+            |executor| executor.worktree_registry().cloned(),
+            "worktree registry is not enabled in this runtime",
+        )?;
+        let entries: Vec<HostWorktreeEntry> = crate::tool::worktree_list_active(&registry)
             .into_iter()
             .map(|w| HostWorktreeEntry {
                 session_id: w.session_id,
@@ -974,11 +1005,10 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn scheduler_list(&self) -> Result<HostSchedulerListResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let scheduler = executor
-            .scheduler()
-            .cloned()
-            .ok_or_else(|| host_unavailable("scheduler is not enabled in this runtime"))?;
+        let (_, scheduler) = self.executor_feature(
+            |executor| executor.scheduler().cloned(),
+            "scheduler is not enabled in this runtime",
+        )?;
         let jobs = scheduler.list().await;
         let entries = jobs.into_iter().map(scheduler_job_to_sdk).collect();
         Ok(HostSchedulerListResponse { jobs: entries })
@@ -988,11 +1018,10 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostSchedulerCreateRequest,
     ) -> Result<HostSchedulerCreateResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let scheduler = executor
-            .scheduler()
-            .cloned()
-            .ok_or_else(|| host_unavailable("scheduler is not enabled in this runtime"))?;
+        let (_, scheduler) = self.executor_feature(
+            |executor| executor.scheduler().cloned(),
+            "scheduler is not enabled in this runtime",
+        )?;
         let job = match req {
             HostSchedulerCreateRequest::Cron {
                 expression,
@@ -1034,11 +1063,10 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostSchedulerDeleteRequest,
     ) -> Result<HostSchedulerDeleteResponse, PluginError> {
-        let executor = self.tool_executor()?;
-        let scheduler = executor
-            .scheduler()
-            .cloned()
-            .ok_or_else(|| host_unavailable("scheduler is not enabled in this runtime"))?;
+        let (_, scheduler) = self.executor_feature(
+            |executor| executor.scheduler().cloned(),
+            "scheduler is not enabled in this runtime",
+        )?;
         let id = uuid::Uuid::parse_str(&req.id)
             .map_err(|err| PluginError::invalid_params(format!("invalid scheduler id: {err}")))?;
         let removed = scheduler.remove(id).await;
@@ -1127,17 +1155,14 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostAgentSwitchRequest,
     ) -> Result<HostAgentSwitchResponse, PluginError> {
-        let session_id = match req.session_id {
-            Some(id) => id,
-            None => self.callback_context()?.session_id.ok_or_else(|| {
-                host_unavailable("host callback context is missing session_id for agent.switch")
-            })?,
-        };
+        let session_id = self.callback_or_requested_session_id(req.session_id, "agent.switch")?;
         let outcome = self
-            .session_manager()?
-            .switch_session_agent(session_id, req.agent, req.push_previous)
-            .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .with_session_manager(|manager| async move {
+                manager
+                    .switch_session_agent(session_id, req.agent, req.push_previous)
+                    .await
+            })
+            .await?;
         Ok(HostAgentSwitchResponse {
             session_id: outcome.session_id,
             previous_agent: outcome.previous_agent,
@@ -1150,17 +1175,12 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostAgentRestoreRequest,
     ) -> Result<HostAgentRestoreResponse, PluginError> {
-        let session_id = match req.session_id {
-            Some(id) => id,
-            None => self.callback_context()?.session_id.ok_or_else(|| {
-                host_unavailable("host callback context is missing session_id for agent.restore")
-            })?,
-        };
+        let session_id = self.callback_or_requested_session_id(req.session_id, "agent.restore")?;
         let outcome = self
-            .session_manager()?
-            .restore_session_agent(session_id)
-            .await
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .with_session_manager(|manager| async move {
+                manager.restore_session_agent(session_id).await
+            })
+            .await?;
         Ok(HostAgentRestoreResponse {
             session_id: outcome.session_id,
             restored: outcome.restored,
@@ -1171,21 +1191,19 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn mcp_list_servers(&self) -> Result<HostMcpListServersResponse, PluginError> {
-        let manager = self
-            .runtime
-            .current_snapshot()
-            .mcp_manager()
-            .ok_or_else(|| host_unavailable("mcp manager is not enabled in this runtime"))?;
+        let manager = self.snapshot_feature(
+            |snapshot| snapshot.mcp_manager(),
+            "mcp manager is not enabled in this runtime",
+        )?;
         let servers = manager.server_names().await;
         Ok(HostMcpListServersResponse { servers })
     }
 
     async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> Result<(), PluginError> {
-        let manager = self
-            .runtime
-            .current_snapshot()
-            .mcp_manager()
-            .ok_or_else(|| host_unavailable("mcp manager is not enabled in this runtime"))?;
+        let manager = self.snapshot_feature(
+            |snapshot| snapshot.mcp_manager(),
+            "mcp manager is not enabled in this runtime",
+        )?;
         let spec = match req.spec {
             HostMcpServerSpec::Stdio {
                 command,
@@ -1245,11 +1263,10 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostMcpRemoveServerRequest,
     ) -> Result<HostMcpRemoveServerResponse, PluginError> {
-        let manager = self
-            .runtime
-            .current_snapshot()
-            .mcp_manager()
-            .ok_or_else(|| host_unavailable("mcp manager is not enabled in this runtime"))?;
+        let manager = self.snapshot_feature(
+            |snapshot| snapshot.mcp_manager(),
+            "mcp manager is not enabled in this runtime",
+        )?;
         match manager.remove_server(&req.name).await {
             Ok(()) => Ok(HostMcpRemoveServerResponse { removed: true }),
             Err(_) => Ok(HostMcpRemoveServerResponse { removed: false }),

@@ -1151,33 +1151,14 @@ fn pending_user_input_request_ids(session: &Session) -> Vec<String> {
 }
 
 fn run_options() -> SessionRunOptions {
-    SessionRunOptions {
-        model: scripted_model_ref(),
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: None,
-        temperature: None,
-        max_output_tokens: Some(128),
-        agent_profile: None,
-    }
+    SessionRunOptions::new(scripted_model_ref()).with_max_output_tokens(Some(128))
 }
 
 fn recording_run_options() -> SessionRunOptions {
-    SessionRunOptions {
-        model: recording_model_ref(),
-        thinking_mode: None,
-        speed_mode: None,
-        verbosity: None,
-        thinking: None,
-        request_override: Default::default(),
-        system: Some("system".to_string()),
-        temperature: Some(0.2),
-        max_output_tokens: Some(256),
-        agent_profile: None,
-    }
+    SessionRunOptions::new(recording_model_ref())
+        .with_system(Some("system".to_string()))
+        .with_temperature(Some(0.2))
+        .with_max_output_tokens(Some(256))
 }
 
 fn context_limit_recording_usage() -> CompletionUsage {
@@ -1396,11 +1377,11 @@ async fn streaming_tool_execution_persists_in_progress_output_impl() {
     let manager_task = Arc::clone(&manager);
     let submit = tokio::spawn(async move {
         manager_task
-            .submit_user_message(SessionUserMessageRequest {
+            .submit_user_message(SessionUserMessageRequest::new(
                 session_id,
-                options: run_options(),
-                parts: vec![crate::message::PartContent::text("stream plugin")],
-            })
+                run_options(),
+                vec![crate::message::PartContent::text("stream plugin")],
+            ))
             .await
     });
 
@@ -1484,11 +1465,11 @@ fn unsupported_tool_call_is_returned_to_model() {
             .expect("session creation should succeed");
 
         let completed = manager
-            .submit_user_message(SessionUserMessageRequest {
-                session_id: created.id,
-                options: run_options(),
-                parts: vec![crate::message::PartContent::text("unsupported tool")],
-            })
+            .submit_user_message(SessionUserMessageRequest::new(
+                created.id,
+                run_options(),
+                vec![crate::message::PartContent::text("unsupported tool")],
+            ))
             .await
             .expect("run should continue after unsupported tool call");
 
@@ -1672,11 +1653,11 @@ async fn append_only_full_turn_writes_one_row_per_event_no_overwrites() {
         .expect("create session");
 
     service
-        .submit_user_message(SessionUserMessageRequest {
-            session_id: created.id,
-            options: run_options(),
-            parts: vec![PartContent::text("hi")],
-        })
+        .submit_user_message(SessionUserMessageRequest::new(
+            created.id,
+            run_options(),
+            vec![PartContent::text("hi")],
+        ))
         .await
         .expect("submit message");
 
@@ -1753,21 +1734,21 @@ async fn auto_compact_does_not_trigger_when_context_window_unknown() {
         .expect("create session");
 
     let first = service
-        .submit_user_message(SessionUserMessageRequest {
-            session_id: created.id,
-            options: recording_run_options(),
-            parts: vec![PartContent::text("seed")],
-        })
+        .submit_user_message(SessionUserMessageRequest::new(
+            created.id,
+            recording_run_options(),
+            vec![PartContent::text("seed")],
+        ))
         .await
         .expect("first user message");
     assert!(first.runtime.prompt_window.compaction.is_none());
 
     let second = service
-        .submit_user_message(SessionUserMessageRequest {
-            session_id: created.id,
-            options: recording_run_options(),
-            parts: vec![PartContent::text("trigger compaction")],
-        })
+        .submit_user_message(SessionUserMessageRequest::new(
+            created.id,
+            recording_run_options(),
+            vec![PartContent::text("trigger compaction")],
+        ))
         .await
         .expect("second run");
 
@@ -1810,21 +1791,21 @@ fn auto_compact_triggers_at_known_context_limit() {
             .expect("create session");
 
         let first = service
-            .submit_user_message(SessionUserMessageRequest {
-                session_id: created.id,
-                options: recording_run_options(),
-                parts: vec![PartContent::text("seed")],
-            })
+            .submit_user_message(SessionUserMessageRequest::new(
+                created.id,
+                recording_run_options(),
+                vec![PartContent::text("seed")],
+            ))
             .await
             .expect("first user message");
         assert!(first.runtime.prompt_window.compaction.is_none());
 
         let second = service
-            .submit_user_message(SessionUserMessageRequest {
-                session_id: created.id,
-                options: recording_run_options(),
-                parts: vec![PartContent::text("trigger compaction")],
-            })
+            .submit_user_message(SessionUserMessageRequest::new(
+                created.id,
+                recording_run_options(),
+                vec![PartContent::text("trigger compaction")],
+            ))
             .await
             .expect("second run");
 
@@ -1909,18 +1890,8 @@ async fn restart_after_interrupted_turn_can_continue_session() {
     }
 
     fn restartable_options() -> SessionRunOptions {
-        SessionRunOptions {
-            model: ModelRef::new("restartable", "restartable-model"),
-            thinking_mode: None,
-            speed_mode: None,
-            verbosity: None,
-            thinking: None,
-            request_override: Default::default(),
-            system: None,
-            temperature: None,
-            max_output_tokens: Some(128),
-            agent_profile: None,
-        }
+        SessionRunOptions::new(ModelRef::new("restartable", "restartable-model"))
+            .with_max_output_tokens(Some(128))
     }
 
     let workspace = TempWorkspace::new();
@@ -1950,11 +1921,11 @@ async fn restart_after_interrupted_turn_can_continue_session() {
         let manager = Arc::clone(&first);
         tokio::spawn(async move {
             manager
-                .submit_user_message(SessionUserMessageRequest {
+                .submit_user_message(SessionUserMessageRequest::new(
                     session_id,
-                    options: restartable_options(),
-                    parts: vec![PartContent::text("start then restart")],
-                })
+                    restartable_options(),
+                    vec![PartContent::text("start then restart")],
+                ))
                 .await
         })
     };
@@ -2014,10 +1985,10 @@ async fn restart_after_interrupted_turn_can_continue_session() {
     resume_event_sequence(&second).await;
 
     let recovered = second
-        .continue_session(SessionContinueRequest {
+        .continue_session(SessionExecutionRequest::new(
             session_id,
-            options: restartable_options(),
-        })
+            restartable_options(),
+        ))
         .await
         .expect("continue should recover after restart");
     let history = second
@@ -2064,11 +2035,11 @@ fn blocked_permission_survives_restart_and_reply_continues() {
             .expect("create session");
         let session_id = created.id;
         let blocked = first
-            .submit_user_message(SessionUserMessageRequest {
+            .submit_user_message(SessionUserMessageRequest::new(
                 session_id,
-                options: run_options(),
-                parts: vec![PartContent::text("permission todo")],
-            })
+                run_options(),
+                vec![PartContent::text("permission todo")],
+            ))
             .await
             .expect("run should block on permission");
         let request_id = pending_permission_request_id(&blocked);
@@ -2098,17 +2069,17 @@ fn blocked_permission_survives_restart_and_reply_continues() {
         );
 
         let completed = second
-            .reply_permission(SessionPermissionReplyRequest {
+            .reply_permission(SessionPermissionReplyRequest::new(
                 session_id,
-                options: run_options(),
-                reply: PermissionReply {
+                run_options(),
+                PermissionReply {
                     request_id,
                     kind: PermissionReplyKind::AllowOnce,
                     reason: None,
                     scope: None,
                 },
-                operator: Some("test".to_string()),
-            })
+                Some("test".to_string()),
+            ))
             .await
             .expect("permission reply should continue session");
 
@@ -2149,24 +2120,24 @@ fn duplicate_permission_reply_is_idempotent() {
             .expect("create session");
 
         let blocked = manager
-            .submit_user_message(SessionUserMessageRequest {
-                session_id: created.id,
-                options: run_options(),
-                parts: vec![PartContent::text("permission todo")],
-            })
+            .submit_user_message(SessionUserMessageRequest::new(
+                created.id,
+                run_options(),
+                vec![PartContent::text("permission todo")],
+            ))
             .await
             .expect("run should block on permission");
-        let request = SessionPermissionReplyRequest {
-            session_id: created.id,
-            options: run_options(),
-            reply: PermissionReply {
+        let request = SessionPermissionReplyRequest::new(
+            created.id,
+            run_options(),
+            PermissionReply {
                 request_id: pending_permission_request_id(&blocked),
                 kind: PermissionReplyKind::AllowOnce,
                 reason: None,
                 scope: None,
             },
-            operator: Some("test".to_string()),
-        };
+            Some("test".to_string()),
+        );
 
         let (first, second) = tokio::join!(
             manager.reply_permission(request.clone()),
@@ -2303,16 +2274,16 @@ fn duplicate_user_input_reply_is_idempotent() {
             )
             .await
             .expect("user input request should persist");
-        let request = SessionUserInputReplyRequest {
-            session_id: created.id,
-            options: run_options(),
-            reply: UserInputReply {
+        let request = SessionExecutionReplyRequest::new(
+            created.id,
+            run_options(),
+            UserInputReply {
                 request_id: pending_user_input_request_id(&blocked),
                 kind: UserInputReplyKind::Submit,
                 reason: None,
                 answers: BTreeMap::from([("model_choice".to_string(), vec!["gpt-5".to_string()])]),
             },
-        };
+        );
 
         let (first, second) = tokio::join!(
             manager.reply_user_input(request.clone()),
@@ -2470,16 +2441,16 @@ fn replied_host_user_input_survives_restart_and_restores_answer_from_history() {
         resume_event_sequence(&second).await;
 
         let completed = second
-            .reply_user_input(SessionUserInputReplyRequest {
-                session_id: created.id,
-                options: run_options(),
-                reply: UserInputReply {
+            .reply_user_input(SessionExecutionReplyRequest::new(
+                created.id,
+                run_options(),
+                UserInputReply {
                     request_id: request_id.clone(),
                     kind: UserInputReplyKind::Submit,
                     reason: None,
                     answers: BTreeMap::from([("confirm".to_string(), vec!["yes".to_string()])]),
                 },
-            })
+            ))
             .await
             .expect("host user input reply should survive restart without a waiter");
         let (status, error, _) = operation_snapshot(&completed, "call_host_input_1");
@@ -2662,28 +2633,28 @@ fn concurrent_permission_replies_for_distinct_requests_are_serialized() {
             blocked.messages
         );
 
-        let first_request = SessionPermissionReplyRequest {
-            session_id: created.id,
-            options: run_options(),
-            reply: PermissionReply {
+        let first_request = SessionPermissionReplyRequest::new(
+            created.id,
+            run_options(),
+            PermissionReply {
                 request_id: request_ids[0].clone(),
                 kind: PermissionReplyKind::AllowOnce,
                 reason: None,
                 scope: None,
             },
-            operator: Some("test".to_string()),
-        };
-        let second_request = SessionPermissionReplyRequest {
-            session_id: created.id,
-            options: run_options(),
-            reply: PermissionReply {
+            Some("test".to_string()),
+        );
+        let second_request = SessionPermissionReplyRequest::new(
+            created.id,
+            run_options(),
+            PermissionReply {
                 request_id: request_ids[1].clone(),
                 kind: PermissionReplyKind::AllowOnce,
                 reason: None,
                 scope: None,
             },
-            operator: Some("test".to_string()),
-        };
+            Some("test".to_string()),
+        );
 
         let (first, second) = tokio::join!(
             manager.reply_permission(first_request),
@@ -2753,7 +2724,7 @@ fn pending_permission_request_aggregates_invocation_actions() {
         let test_executor = executor.clone();
         let manager = SessionManager::new(db, processor, executor)
             .with_config(SessionManagerConfig::default());
-        let invocation = crate::tool::ToolPayloadInput::Bash(crate::message::BashToolInput {
+        let invocation = crate::tool::ToolPayloadInput::Bash(crate::message::ShellCommandInput {
             command: "curl https://api.example.com/health && cat notes.txt".to_string(),
             description: "aggregate permission request".to_string(),
             timeout_ms: Some(5_000),
@@ -3047,10 +3018,10 @@ fn goal_runtime_resumed_session_can_continue_active_goal_after_restart() {
         resume_event_sequence(&second).await;
 
         let _ = second
-            .continue_session(SessionContinueRequest {
+            .continue_session(SessionExecutionRequest::new(
                 session_id,
-                options: recording_run_options(),
-            })
+                recording_run_options(),
+            ))
             .await
             .expect("continue after restart should observe persisted goal");
 
@@ -3117,10 +3088,10 @@ async fn goal_runtime_external_goal_clear_stops_next_continue_run() {
     );
 
     let _ = first
-        .continue_session(SessionContinueRequest {
-            session_id: created.id,
-            options: recording_run_options(),
-        })
+        .continue_session(SessionExecutionRequest::new(
+            created.id,
+            recording_run_options(),
+        ))
         .await
         .expect("continue after external clear should stop cleanly");
 
@@ -3245,18 +3216,7 @@ async fn cancel_active_run_aborts_a_running_run() {
     }
 
     fn slow_options() -> SessionRunOptions {
-        SessionRunOptions {
-            model: ModelRef::new("slow", "slow-model"),
-            thinking_mode: None,
-            speed_mode: None,
-            verbosity: None,
-            thinking: None,
-            request_override: Default::default(),
-            system: None,
-            temperature: None,
-            max_output_tokens: Some(64),
-            agent_profile: None,
-        }
+        SessionRunOptions::new(ModelRef::new("slow", "slow-model")).with_max_output_tokens(Some(64))
     }
 
     let workspace = TempWorkspace::new();
@@ -3282,11 +3242,11 @@ async fn cancel_active_run_aborts_a_running_run() {
 
     let mgr = Arc::clone(&manager);
     let submit = tokio::spawn(async move {
-        mgr.submit_user_message(SessionUserMessageRequest {
+        mgr.submit_user_message(SessionUserMessageRequest::new(
             session_id,
-            options: slow_options(),
-            parts: vec![PartContent::text("ping")],
-        })
+            slow_options(),
+            vec![PartContent::text("ping")],
+        ))
         .await
     });
 
@@ -4224,6 +4184,62 @@ mod runtime_builtin_tool_tests {
             .collect()
     }
 
+    fn runtime_tool_run_options() -> SessionRunOptions {
+        SessionRunOptions::new(ModelRef::new("runtime-tools", "runtime-tools-model"))
+            .with_max_output_tokens(Some(256))
+    }
+
+    async fn create_runtime_tool_session(manager: &SessionManager, title: &str) -> Session {
+        manager
+            .create_session(SessionCreateRequest {
+                title: title.to_string(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session")
+    }
+
+    async fn submit_runtime_tool_prompt(
+        manager: &SessionManager,
+        session_id: i64,
+        prompt: &str,
+        failure_context: &str,
+    ) -> Session {
+        match manager
+            .submit_user_message(SessionUserMessageRequest::new(
+                session_id,
+                runtime_tool_run_options(),
+                vec![PartContent::text(prompt)],
+            ))
+            .await
+        {
+            Ok(session) => session,
+            Err(err) => {
+                let failed = manager
+                    .get_session(session_id)
+                    .await
+                    .expect("failed session should reload");
+                panic!(
+                    "{failure_context}: {err:?}\noperations:\n{}",
+                    session_operation_summaries(&failed).join("\n")
+                );
+            }
+        }
+    }
+
+    fn assert_operations_completed(session: &Session, operation_ids: &[&str]) {
+        for operation_id in operation_ids {
+            let (status, error, _) = operation_snapshot(session, operation_id);
+            assert_eq!(
+                status,
+                ExecutionStatus::Completed,
+                "{operation_id} was not completed: error={error:?}\noperations:\n{}",
+                session_operation_summaries(session).join("\n")
+            );
+            assert!(error.is_none(), "{operation_id} failed: {error:?}");
+        }
+    }
+
     #[derive(Clone)]
     struct LocalWebFixture {
         base_url: String,
@@ -4670,45 +4686,15 @@ while True:
             )
             .await;
 
-            let created = manager
-                .create_session(SessionCreateRequest {
-                    title: "runtime-fs-plan-worktree".to_string(),
-                    parent_session_id: None,
-                })
-                .await
-                .expect("create session");
-
-            let result = manager
-                .submit_user_message(SessionUserMessageRequest {
-                    session_id: created.id,
-                    options: SessionRunOptions {
-                        model: ModelRef::new("runtime-tools", "runtime-tools-model"),
-                        thinking_mode: None,
-                        speed_mode: None,
-                        verbosity: None,
-                        thinking: None,
-                        request_override: Default::default(),
-                        system: None,
-                        temperature: None,
-                        max_output_tokens: Some(256),
-                        agent_profile: None,
-                    },
-                    parts: vec![PartContent::text("exercise fs plan and worktree tools")],
-                })
-                .await;
-            let session = match result {
-                Ok(session) => session,
-                Err(err) => {
-                    let failed = manager
-                        .get_session(created.id)
-                        .await
-                        .expect("failed session should reload");
-                    panic!(
-                        "runtime tool run should succeed: {err:?}\noperations:\n{}",
-                        session_operation_summaries(&failed).join("\n")
-                    );
-                }
-            };
+            let created =
+                create_runtime_tool_session(manager.as_ref(), "runtime-fs-plan-worktree").await;
+            let session = submit_runtime_tool_prompt(
+                manager.as_ref(),
+                created.id,
+                "exercise fs plan and worktree tools",
+                "runtime tool run should succeed",
+            )
+            .await;
 
             assert!(
                 session
@@ -4721,28 +4707,23 @@ while True:
                 "assistant should acknowledge the flow completion"
             );
 
-            for operation_id in [
-                "call_tools_1",
-                "call_plan_enter_1",
-                "call_plan_glob_1",
-                "call_plan_patch_1",
-                "call_plan_exit_1",
-                "call_worktree_enter_1",
-                "call_fs_patch_1",
-                "call_fs_glob_1",
-                "call_fs_grep_1",
-                "call_nb_edit_1",
-                "call_fs_read_1",
-                "call_worktree_exit_1",
-            ] {
-                let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(
-                    status,
-                    ExecutionStatus::Completed,
-                    "{operation_id} was not completed"
-                );
-                assert!(error.is_none(), "{operation_id} failed: {error:?}");
-            }
+            assert_operations_completed(
+                &session,
+                &[
+                    "call_tools_1",
+                    "call_plan_enter_1",
+                    "call_plan_glob_1",
+                    "call_plan_patch_1",
+                    "call_plan_exit_1",
+                    "call_worktree_enter_1",
+                    "call_fs_patch_1",
+                    "call_fs_glob_1",
+                    "call_fs_grep_1",
+                    "call_nb_edit_1",
+                    "call_fs_read_1",
+                    "call_worktree_exit_1",
+                ],
+            );
 
             let plan_path = std::fs::read_dir(workspace.root.join(".agena/plans"))
                 .expect("plans directory should exist")
@@ -4961,45 +4942,14 @@ while True:
                 build_runtime_tool_manager_with_provider(&workspace.root, db, ShellRuntimeProvider)
                     .await;
 
-            let created = manager
-                .create_session(SessionCreateRequest {
-                    title: "runtime-shell".to_string(),
-                    parent_session_id: None,
-                })
-                .await
-                .expect("create session");
-
-            let result = manager
-                .submit_user_message(SessionUserMessageRequest {
-                    session_id: created.id,
-                    options: SessionRunOptions {
-                        model: ModelRef::new("runtime-tools", "runtime-tools-model"),
-                        thinking_mode: None,
-                        speed_mode: None,
-                        verbosity: None,
-                        thinking: None,
-                        request_override: Default::default(),
-                        system: None,
-                        temperature: None,
-                        max_output_tokens: Some(256),
-                        agent_profile: None,
-                    },
-                    parts: vec![PartContent::text("exercise shell runtime tools")],
-                })
-                .await;
-            let session = match result {
-                Ok(session) => session,
-                Err(err) => {
-                    let failed = manager
-                        .get_session(created.id)
-                        .await
-                        .expect("failed session should reload");
-                    panic!(
-                        "runtime shell run should succeed: {err:?}\noperations:\n{}",
-                        session_operation_summaries(&failed).join("\n")
-                    );
-                }
-            };
+            let created = create_runtime_tool_session(manager.as_ref(), "runtime-shell").await;
+            let session = submit_runtime_tool_prompt(
+                manager.as_ref(),
+                created.id,
+                "exercise shell runtime tools",
+                "runtime shell run should succeed",
+            )
+            .await;
 
             assert!(
                 session
@@ -5012,22 +4962,17 @@ while True:
                 "assistant should acknowledge the shell flow completion"
             );
 
-            for operation_id in [
-                "call_tools_shell_1",
-                "call_shell_exec_1",
-                "call_monitor_start_1",
-                "call_monitor_list_1",
-                "call_monitor_read_1",
-                "call_monitor_stop_1",
-            ] {
-                let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(
-                    status,
-                    ExecutionStatus::Completed,
-                    "{operation_id} was not completed"
-                );
-                assert!(error.is_none(), "{operation_id} failed: {error:?}");
-            }
+            assert_operations_completed(
+                &session,
+                &[
+                    "call_tools_shell_1",
+                    "call_shell_exec_1",
+                    "call_monitor_start_1",
+                    "call_monitor_list_1",
+                    "call_monitor_read_1",
+                    "call_monitor_stop_1",
+                ],
+            );
 
             let (powershell_status, powershell_error, powershell_output) =
                 operation_snapshot(&session, "call_shell_powershell_1");
@@ -5229,45 +5174,14 @@ while True:
             )
             .await;
 
-            let created = manager
-                .create_session(SessionCreateRequest {
-                    title: "runtime-web".to_string(),
-                    parent_session_id: None,
-                })
-                .await
-                .expect("create session");
-
-            let result = manager
-                .submit_user_message(SessionUserMessageRequest {
-                    session_id: created.id,
-                    options: SessionRunOptions {
-                        model: ModelRef::new("runtime-tools", "runtime-tools-model"),
-                        thinking_mode: None,
-                        speed_mode: None,
-                        verbosity: None,
-                        thinking: None,
-                        request_override: Default::default(),
-                        system: None,
-                        temperature: None,
-                        max_output_tokens: Some(256),
-                        agent_profile: None,
-                    },
-                    parts: vec![PartContent::text("exercise web runtime tools")],
-                })
-                .await;
-            let session = match result {
-                Ok(session) => session,
-                Err(err) => {
-                    let failed = manager
-                        .get_session(created.id)
-                        .await
-                        .expect("failed session should reload");
-                    panic!(
-                        "runtime web run should succeed: {err:?}\noperations:\n{}",
-                        session_operation_summaries(&failed).join("\n")
-                    );
-                }
-            };
+            let created = create_runtime_tool_session(manager.as_ref(), "runtime-web").await;
+            let session = submit_runtime_tool_prompt(
+                manager.as_ref(),
+                created.id,
+                "exercise web runtime tools",
+                "runtime web run should succeed",
+            )
+            .await;
 
             assert!(
                 session
@@ -5280,21 +5194,15 @@ while True:
                 "assistant should acknowledge the web flow completion"
             );
 
-            for operation_id in [
-                "call_tools_web_1",
-                "call_web_fetch_1",
-                "call_web_fetch_2",
-                "call_web_search_1",
-            ] {
-                let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(
-                    status,
-                    ExecutionStatus::Completed,
-                    "{operation_id} was not completed: error={error:?}\noperations:\n{}",
-                    session_operation_summaries(&session).join("\n")
-                );
-                assert!(error.is_none(), "{operation_id} failed: {error:?}");
-            }
+            assert_operations_completed(
+                &session,
+                &[
+                    "call_tools_web_1",
+                    "call_web_fetch_1",
+                    "call_web_fetch_2",
+                    "call_web_search_1",
+                ],
+            );
 
             let fetch_payload = session_operation_payload(&session, "call_web_fetch_1");
             assert_eq!(fetch_payload["status"].as_u64(), Some(200));
@@ -5465,33 +5373,14 @@ while True:
                 build_runtime_tool_manager_with_provider(&workspace.root, db, TaskRuntimeProvider)
                     .await;
 
-            let created = manager
-                .create_session(SessionCreateRequest {
-                    title: "runtime-task".to_string(),
-                    parent_session_id: None,
-                })
-                .await
-                .expect("create session");
-
-            let session = manager
-                .submit_user_message(SessionUserMessageRequest {
-                    session_id: created.id,
-                    options: SessionRunOptions {
-                        model: ModelRef::new("runtime-tools", "runtime-tools-model"),
-                        thinking_mode: None,
-                        speed_mode: None,
-                        verbosity: None,
-                        thinking: None,
-                        request_override: Default::default(),
-                        system: None,
-                        temperature: None,
-                        max_output_tokens: Some(256),
-                        agent_profile: None,
-                    },
-                    parts: vec![PartContent::text("exercise task runtime tool")],
-                })
-                .await
-                .expect("runtime task run should succeed");
+            let created = create_runtime_tool_session(manager.as_ref(), "runtime-task").await;
+            let session = submit_runtime_tool_prompt(
+                manager.as_ref(),
+                created.id,
+                "exercise task runtime tool",
+                "runtime task run should succeed",
+            )
+            .await;
 
             assert!(
                 session
@@ -5504,16 +5393,7 @@ while True:
                 "assistant should acknowledge the task flow completion"
             );
 
-            for operation_id in ["call_tools_task_1", "call_task_run_1"] {
-                let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(
-                    status,
-                    ExecutionStatus::Completed,
-                    "{operation_id} was not completed: error={error:?}\noperations:\n{}",
-                    session_operation_summaries(&session).join("\n")
-                );
-                assert!(error.is_none(), "{operation_id} failed: {error:?}");
-            }
+            assert_operations_completed(&session, &["call_tools_task_1", "call_task_run_1"]);
 
             let task_payload = session_operation_payload(&session, "call_task_run_1");
             assert_eq!(
@@ -5718,33 +5598,14 @@ while True:
                 })
                 .await;
 
-            let created = manager
-                .create_session(SessionCreateRequest {
-                    title: "runtime-lsp".to_string(),
-                    parent_session_id: None,
-                })
-                .await
-                .expect("create session");
-
-            let session = manager
-                .submit_user_message(SessionUserMessageRequest {
-                    session_id: created.id,
-                    options: SessionRunOptions {
-                        model: ModelRef::new("runtime-tools", "runtime-tools-model"),
-                        thinking_mode: None,
-                        speed_mode: None,
-                        verbosity: None,
-                        thinking: None,
-                        request_override: Default::default(),
-                        system: None,
-                        temperature: None,
-                        max_output_tokens: Some(256),
-                        agent_profile: None,
-                    },
-                    parts: vec![PartContent::text("exercise lsp runtime tool")],
-                })
-                .await
-                .expect("runtime lsp run should succeed");
+            let created = create_runtime_tool_session(manager.as_ref(), "runtime-lsp").await;
+            let session = submit_runtime_tool_prompt(
+                manager.as_ref(),
+                created.id,
+                "exercise lsp runtime tool",
+                "runtime lsp run should succeed",
+            )
+            .await;
 
             assert!(
                 session
@@ -5757,22 +5618,16 @@ while True:
                 "assistant should acknowledge the lsp flow completion"
             );
 
-            for operation_id in [
-                "call_lsp_servers_1",
-                "call_lsp_definition_1",
-                "call_lsp_references_1",
-                "call_lsp_hover_1",
-                "call_lsp_diagnostics_1",
-            ] {
-                let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(
-                    status,
-                    ExecutionStatus::Completed,
-                    "{operation_id} was not completed: error={error:?}\noperations:\n{}",
-                    session_operation_summaries(&session).join("\n")
-                );
-                assert!(error.is_none(), "{operation_id} failed: {error:?}");
-            }
+            assert_operations_completed(
+                &session,
+                &[
+                    "call_lsp_servers_1",
+                    "call_lsp_definition_1",
+                    "call_lsp_references_1",
+                    "call_lsp_hover_1",
+                    "call_lsp_diagnostics_1",
+                ],
+            );
 
             let servers_payload = session_operation_payload(&session, "call_lsp_servers_1");
             let servers = servers_payload["servers"]
@@ -6011,48 +5866,15 @@ while True:
             )
             .await;
 
-            let created = manager
-                .create_session(SessionCreateRequest {
-                    title: "runtime-workflow-mutation".to_string(),
-                    parent_session_id: None,
-                })
-                .await
-                .expect("create session");
-
-            let session = manager
-                .submit_user_message(SessionUserMessageRequest {
-                    session_id: created.id,
-                    options: SessionRunOptions {
-                        model: ModelRef::new("runtime-tools", "runtime-tools-model"),
-                        thinking_mode: None,
-                        speed_mode: None,
-                        verbosity: None,
-                        thinking: None,
-                        request_override: Default::default(),
-                        system: None,
-                        temperature: None,
-                        max_output_tokens: Some(256),
-                        agent_profile: None,
-                    },
-                    parts: vec![PartContent::text(
-                        "exercise workflow mutation runtime tools",
-                    )],
-                })
-                .await;
-
-            let session = match session {
-                Ok(session) => session,
-                Err(err) => {
-                    let failed = manager
-                        .get_session(created.id)
-                        .await
-                        .expect("failed session should reload");
-                    panic!(
-                        "runtime workflow mutation run should succeed: {err:?}\noperations:\n{}",
-                        session_operation_summaries(&failed).join("\n")
-                    );
-                }
-            };
+            let created =
+                create_runtime_tool_session(manager.as_ref(), "runtime-workflow-mutation").await;
+            let session = submit_runtime_tool_prompt(
+                manager.as_ref(),
+                created.id,
+                "exercise workflow mutation runtime tools",
+                "runtime workflow mutation run should succeed",
+            )
+            .await;
 
             assert!(
                 session
@@ -6065,27 +5887,21 @@ while True:
                 "assistant should acknowledge the workflow mutation flow completion"
             );
 
-            for operation_id in [
-                "call_workflow_review_1",
-                "call_agent_restore_1",
-                "call_session_rename_1",
-                "call_goal_create_1",
-                "call_goal_complete_1",
-                "call_goal_clear_1",
-                "call_agent_switch_1",
-                "call_workflow_security_review_1",
-                "call_agent_restore_2",
-                "call_agent_restore_3",
-            ] {
-                let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(
-                    status,
-                    ExecutionStatus::Completed,
-                    "{operation_id} was not completed: error={error:?}\noperations:\n{}",
-                    session_operation_summaries(&session).join("\n")
-                );
-                assert!(error.is_none(), "{operation_id} failed: {error:?}");
-            }
+            assert_operations_completed(
+                &session,
+                &[
+                    "call_workflow_review_1",
+                    "call_agent_restore_1",
+                    "call_session_rename_1",
+                    "call_goal_create_1",
+                    "call_goal_complete_1",
+                    "call_goal_clear_1",
+                    "call_agent_switch_1",
+                    "call_workflow_security_review_1",
+                    "call_agent_restore_2",
+                    "call_agent_restore_3",
+                ],
+            );
 
             let review_text = session
                 .messages
@@ -6485,13 +6301,8 @@ while True:
             )
             .await;
 
-            let created = manager
-                .create_session(SessionCreateRequest {
-                    title: "runtime-workflow-settings".to_string(),
-                    parent_session_id: None,
-                })
-                .await
-                .expect("create session");
+            let created =
+                create_runtime_tool_session(manager.as_ref(), "runtime-workflow-settings").await;
             persist_goal_without_auto_run(
                 manager.as_ref(),
                 created.id,
@@ -6499,41 +6310,13 @@ while True:
                 None,
             )
             .await;
-
-            let result = manager
-                .submit_user_message(SessionUserMessageRequest {
-                    session_id: created.id,
-                    options: SessionRunOptions {
-                        model: ModelRef::new("runtime-tools", "runtime-tools-model"),
-                        thinking_mode: None,
-                        speed_mode: None,
-                        verbosity: None,
-                        thinking: None,
-                        request_override: Default::default(),
-                        system: None,
-                        temperature: None,
-                        max_output_tokens: Some(256),
-                        agent_profile: None,
-                    },
-                    parts: vec![PartContent::text(
-                        "exercise workflow settings schedule and host tools",
-                    )],
-                })
-                .await;
-
-            let session = match result {
-                Ok(session) => session,
-                Err(err) => {
-                    let failed = manager
-                        .get_session(created.id)
-                        .await
-                        .expect("failed session should reload");
-                    panic!(
-                        "runtime workflow run should succeed: {err:?}\noperations:\n{}",
-                        session_operation_summaries(&failed).join("\n")
-                    );
-                }
-            };
+            let session = submit_runtime_tool_prompt(
+                manager.as_ref(),
+                created.id,
+                "exercise workflow settings schedule and host tools",
+                "runtime workflow run should succeed",
+            )
+            .await;
 
             assert!(
                 session
@@ -6546,30 +6329,25 @@ while True:
                 "assistant should acknowledge the workflow flow completion"
             );
 
-            for operation_id in [
-                "call_workflow_init_1",
-                "call_tools_help_1",
-                "call_session_get_1",
-                "call_goal_get_1",
-                "call_user_1",
-                "call_todo_1",
-                "call_settings_get_1",
-                "call_settings_set_1",
-                "call_settings_validate_1",
-                "call_schedule_list_1",
-                "call_schedule_wakeup_1",
-                "call_schedule_create_1",
-                "call_schedule_list_2",
-                "call_schedule_delete_1",
-            ] {
-                let (status, error, _) = operation_snapshot(&session, operation_id);
-                assert_eq!(
-                    status,
-                    ExecutionStatus::Completed,
-                    "{operation_id} was not completed"
-                );
-                assert!(error.is_none(), "{operation_id} failed: {error:?}");
-            }
+            assert_operations_completed(
+                &session,
+                &[
+                    "call_workflow_init_1",
+                    "call_tools_help_1",
+                    "call_session_get_1",
+                    "call_goal_get_1",
+                    "call_user_1",
+                    "call_todo_1",
+                    "call_settings_get_1",
+                    "call_settings_set_1",
+                    "call_settings_validate_1",
+                    "call_schedule_list_1",
+                    "call_schedule_wakeup_1",
+                    "call_schedule_create_1",
+                    "call_schedule_list_2",
+                    "call_schedule_delete_1",
+                ],
+            );
 
             let workflow_text = session
                 .messages

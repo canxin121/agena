@@ -1,0 +1,119 @@
+use std::borrow::Cow;
+
+use ratatui::{
+    Frame,
+    layout::{Alignment, Rect},
+    style::Style,
+};
+
+use crate::{
+    DetailTextLine, DetailTextSpec, SurfaceMode, build_detail_text,
+    text_dialog::{TextDialogSpec, render_text_dialog},
+};
+
+pub struct DetailTextDialogSpec<'a> {
+    pub title: Cow<'a, str>,
+    pub footer: Option<Cow<'a, str>>,
+    pub target_width: u16,
+    pub detail_spec: DetailTextSpec<'a>,
+    pub body_height_bounds: (u16, u16),
+    pub footer_height_bounds: (u16, u16),
+    pub footer_alignment: Option<Alignment>,
+    pub footer_style: Style,
+}
+
+impl<'a> DetailTextDialogSpec<'a> {
+    pub fn new(
+        title: Cow<'a, str>,
+        target_width: u16,
+        detail_spec: DetailTextSpec<'a>,
+        body_height_bounds: (u16, u16),
+    ) -> Self {
+        Self {
+            title,
+            footer: None,
+            target_width,
+            detail_spec,
+            body_height_bounds,
+            footer_height_bounds: (0, 0),
+            footer_alignment: None,
+            footer_style: Style::default(),
+        }
+    }
+
+    pub fn with_footer(
+        mut self,
+        footer: Cow<'a, str>,
+        footer_height_bounds: (u16, u16),
+        footer_alignment: Option<Alignment>,
+        footer_style: Style,
+    ) -> Self {
+        self.footer = Some(footer);
+        self.footer_height_bounds = footer_height_bounds;
+        self.footer_alignment = footer_alignment;
+        self.footer_style = footer_style;
+        self
+    }
+}
+
+pub fn render_detail_text_dialog<'a, I>(
+    frame: &mut Frame,
+    area: Rect,
+    surface: SurfaceMode,
+    spec: &DetailTextDialogSpec<'a>,
+    lines: I,
+) where
+    I: IntoIterator<Item = DetailTextLine<'a>>,
+{
+    let body = build_detail_text(lines, &spec.detail_spec);
+    render_text_dialog(
+        frame,
+        area,
+        surface,
+        &TextDialogSpec {
+            title: spec.title.clone(),
+            body: &body,
+            footer: spec.footer.clone(),
+            target_width: spec.target_width,
+            body_wrap: true,
+            body_scroll: None,
+            body_alignment: None,
+            body_height_bounds: spec.body_height_bounds,
+            footer_height_bounds: spec.footer_height_bounds,
+            footer_alignment: spec.footer_alignment,
+            footer_style: spec.footer_style,
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use ratatui::{layout::Alignment, style::Style};
+
+    use super::DetailTextDialogSpec;
+    use crate::DetailTextSpec;
+
+    #[test]
+    fn detail_text_dialog_spec_builder_preserves_footer_configuration() {
+        let spec = DetailTextDialogSpec::new(
+            Cow::Borrowed("Detail"),
+            80,
+            DetailTextSpec::with_label_width(8),
+            (4, 12),
+        )
+        .with_footer(
+            Cow::Borrowed("Footer"),
+            (1, 2),
+            Some(Alignment::Center),
+            Style::default(),
+        );
+
+        assert_eq!(spec.title.as_ref(), "Detail");
+        assert_eq!(spec.target_width, 80);
+        assert_eq!(spec.footer.as_deref(), Some("Footer"));
+        assert_eq!(spec.footer_height_bounds, (1, 2));
+        assert_eq!(spec.footer_alignment, Some(Alignment::Center));
+    }
+}

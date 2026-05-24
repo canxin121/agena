@@ -40,10 +40,9 @@ use futures_util::StreamExt;
 use ratatui::{
     Frame, Terminal,
     backend::Backend as RatatuiBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
@@ -52,7 +51,7 @@ use tokio::{
     time::interval,
 };
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 use crate::backend::{
     Backend, ConfigJsonSources, InspectorRow, LiveEvent, ProviderConfigDraft,
@@ -73,6 +72,18 @@ use crate::ui_text;
 use agena_api_server::local_api::{
     ModelCatalogEntryResource, ModelCatalogListResponse, ModelCatalogResponse,
 };
+use agena_tui_components::{
+    ConfirmDialogState, DashboardSelectionState, DetailTextLine, DetailTextSpec, Editor,
+    EditorDialogKeyResult, EditorDialogState, InputDialogKeyResult, InputDialogState,
+    ListWorkbenchState, QuerySuggestionState, QuestionFlowScreen, QuestionFlowState, ScrollState,
+    SearchInputKeyResult, SearchListClearAction, SearchListCustomValue, SearchListItem,
+    SearchListNoCustom, SearchListOverlay, SearchListOverlayConfig, SearchListRow,
+    SearchPanelsOverlay, SectionedListFocus, SectionedListSection, SectionedListState,
+    SelectableListState, SelectionCursor, SuggestionPopupState, build_detail_document,
+    build_detail_text, drive_editor_dialog_key, drive_input_dialog_key, format_key_value_segment,
+    join_inline_segments, move_selected_index, refresh_search_list_overlay,
+    refresh_search_panels_overlay,
+};
 
 mod provider_studio;
 mod transcript_view;
@@ -91,13 +102,11 @@ const PLUGIN_INSPECTOR_LOG_LIMIT: usize = 20;
 const UI_TICK_MS: u64 = 32;
 const REFRESH_INTERVAL_MS: u64 = 250;
 const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
-const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
-const PASTE_BURST_MIN_CHARS: u16 = 3;
-const PASTE_BURST_CHAR_INTERVAL_MS: u64 = 8;
-const PASTE_ENTER_SUPPRESS_WINDOW_MS: u64 = 120;
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 const TOOL_CARD_PREVIEW_LINES: usize = 8;
 const TOOL_CARD_PREVIEW_CHARS: usize = 2_500;
+const TOOL_EXPANDED_PREVIEW_LINES: usize = 40;
+const TOOL_EXPANDED_PREVIEW_CHARS: usize = 12_000;
 const MAX_SLASH_COMMAND_SUGGESTIONS: usize = 6;
 const MAX_FILE_MENTION_SUGGESTIONS: usize = 8;
 const MAX_PROMPT_HISTORY_SEARCH_RESULTS: usize = 6;
@@ -135,107 +144,107 @@ const AWS_REGION_CHOICES: &[&str] = &[
 const SETTINGS_FIELDS: [SettingsFieldSpec; 21] = [
     SettingsFieldSpec {
         path: "default.provider",
-        description: "default provider id",
+        description_key: "settings-field-default-provider-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         path: "default.adapter",
-        description: "default adapter for the default provider",
+        description_key: "settings-field-default-adapter-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         path: "default.model",
-        description: "default configured model for the default provider adapter",
+        description_key: "settings-field-default-model-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         path: "default.agent",
-        description: "default agent name",
+        description_key: "settings-field-default-agent-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         path: "ui.locale",
-        description: "ui locale",
+        description_key: "settings-field-ui-locale-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         path: "telemetry.enabled",
-        description: "telemetry exporter enabled",
+        description_key: "settings-field-telemetry-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
         path: "telemetry.service_name",
-        description: "telemetry service name",
+        description_key: "settings-field-telemetry-service-name-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         path: "telemetry.otlp_endpoint",
-        description: "telemetry OTLP endpoint",
+        description_key: "settings-field-telemetry-otlp-endpoint-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
         path: "runtime.provider_http.timeout_secs",
-        description: "provider HTTP timeout seconds",
+        description_key: "settings-field-runtime-provider-http-timeout-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.provider_http.connect_timeout_secs",
-        description: "provider HTTP connect timeout seconds",
+        description_key: "settings-field-runtime-provider-http-connect-timeout-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.request_retry.max_retries",
-        description: "provider request retry count",
+        description_key: "settings-field-runtime-request-retry-max-retries-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.request_retry.base_delay_ms",
-        description: "provider retry base delay ms",
+        description_key: "settings-field-runtime-request-retry-base-delay-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.request_retry.max_delay_ms",
-        description: "provider retry max delay ms",
+        description_key: "settings-field-runtime-request-retry-max-delay-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.reload.enabled",
-        description: "runtime config reloader enabled",
+        description_key: "settings-field-runtime-reload-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
         path: "runtime.reload.poll_interval_secs",
-        description: "runtime reload poll interval seconds",
+        description_key: "settings-field-runtime-reload-poll-interval-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.model_catalog.cache_max_age_secs",
-        description: "model catalog cache age seconds",
+        description_key: "settings-field-runtime-model-catalog-cache-max-age-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.session_cache.max_sessions",
-        description: "session cache max entries",
+        description_key: "settings-field-runtime-session-cache-max-sessions-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.session_cache.ttl_secs",
-        description: "session cache ttl seconds",
+        description_key: "settings-field-runtime-session-cache-ttl-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "runtime.session_cache.max_bytes",
-        description: "session cache max bytes",
+        description_key: "settings-field-runtime-session-cache-max-bytes-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
         path: "plugins.list.\"agena.memory\".options.project_instructions.enabled",
-        description: "project instructions memory enabled",
+        description_key: "settings-field-plugin-memory-project-instructions-enabled-description",
         kind: SettingsFieldKind::Bool,
     },
     SettingsFieldSpec {
         path: "plugins.list.\"agena.memory\".options.project_instructions.include_global",
-        description: "project instructions include global files",
+        description_key: "settings-field-plugin-memory-project-instructions-include-global-description",
         kind: SettingsFieldKind::Bool,
     },
 ];
@@ -243,44 +252,30 @@ const SETTINGS_FIELDS: [SettingsFieldSpec; 21] = [
 const RUNTIME_SETTINGS: [RuntimeSettingSpec; 7] = [
     RuntimeSettingSpec {
         id: RuntimeSettingId::ThinkingMode,
-        label: "Thinking Mode",
-        description: "current-session thinking mode override",
         kind: SettingsFieldKind::String,
     },
     RuntimeSettingSpec {
         id: RuntimeSettingId::SpeedMode,
-        label: "Speed Mode",
-        description: "current-session speed mode override",
         kind: SettingsFieldKind::String,
     },
     RuntimeSettingSpec {
         id: RuntimeSettingId::Verbosity,
-        label: "Verbosity",
-        description: "current-session verbosity override",
         kind: SettingsFieldKind::String,
     },
     RuntimeSettingSpec {
         id: RuntimeSettingId::ParallelToolCalls,
-        label: "Parallel Tool Calls",
-        description: "current-session parallel tool calls override",
         kind: SettingsFieldKind::Bool,
     },
     RuntimeSettingSpec {
         id: RuntimeSettingId::Temperature,
-        label: "Temperature",
-        description: "current-session temperature override",
         kind: SettingsFieldKind::Float,
     },
     RuntimeSettingSpec {
         id: RuntimeSettingId::MaxOutput,
-        label: "Max Output Tokens",
-        description: "current-session max output token override",
         kind: SettingsFieldKind::Integer,
     },
     RuntimeSettingSpec {
         id: RuntimeSettingId::System,
-        label: "System Prompt",
-        description: "current-session system prompt override",
         kind: SettingsFieldKind::String,
     },
 ];
@@ -364,6 +359,7 @@ pub struct App {
     overlay_stack: Vec<Overlay>,
     seen_permission_request_ids: BTreeSet<String>,
     seen_user_input_request_ids: BTreeSet<String>,
+    pending_permission_replay: Option<PermissionReplayState>,
     flash: Option<FlashMessage>,
     sessions: SessionListState,
     transcript: TranscriptState,
@@ -404,6 +400,7 @@ pub struct App {
     status_line: Option<StatusLineState>,
     plugin_theme: Option<agena::plugin::HostThemePalette>,
     keybindings: ComposerKeyBindings,
+    transcript_motion_prefix: Option<String>,
     /// Last time the user pressed Ctrl+C; a second press within the window
     /// exits the application.
     last_ctrl_c_at: Option<Instant>,
@@ -529,14 +526,20 @@ enum AppMessage {
     },
     ProviderStudioAuthCompleted {
         request_key: String,
-        result: UiResult<crate::backend::ProviderDraftAuthActionResult>,
+        result: std::result::Result<
+            crate::backend::ProviderDraftAuthActionResult,
+            crate::backend::ProviderDraftAuthError,
+        >,
     },
     SessionModelChooserLoaded {
         result: UiResult<Vec<SessionModelChoiceItem>>,
     },
     ProviderStudioSaved {
         provider_id: String,
-        result: UiResult<String>,
+        result: std::result::Result<
+            crate::backend::ProviderStudioSaveResult,
+            crate::backend::ProviderStudioSaveError,
+        >,
     },
     ModelCatalogRefreshed {
         result: UiResult<()>,
@@ -602,6 +605,7 @@ enum Overlay {
     Choice(ChoiceOverlay),
     PermissionRuleEdit(PermissionRuleEditOverlay),
     FileAttach(FileAttachOverlay),
+    PathBrowser(PathBrowserOverlay),
     Permission(PermissionOverlay),
     UserInputReply(UserInputOverlay),
     Confirm(ConfirmOverlay),
@@ -620,6 +624,7 @@ enum Route {
     SettingsStudio(SettingsStudioOverlay),
     AgentStudio(AgentStudioOverlay),
     AgentPermissionStudio(AgentPermissionStudioOverlay),
+    PermissionRuleStudio(PermissionRuleStudioOverlay),
     SessionSearch(SessionSearchOverlay),
     Picker(PickerOverlay),
     SessionModelChooser(SessionModelChooserOverlay),
@@ -635,26 +640,15 @@ enum DialogHost {
     Overlay,
 }
 
-#[derive(Debug, Clone)]
-struct LineInputOverlay {
-    title: String,
-    prompt: String,
-    input: Editor,
-}
+type LineInputOverlay = InputDialogState<()>;
 
-#[derive(Debug, Clone, Default)]
-struct HelpOverlay {
-    scroll: u16,
-}
+type HelpOverlay = ScrollState;
 
 #[derive(Debug, Clone)]
 struct SettingsStudioOverlay {
     title: String,
     footer: String,
-    sections: Vec<SettingsStudioSection>,
-    selected_section: usize,
-    selected_item: usize,
-    focus: SettingsStudioFocus,
+    state: SectionedListState<SettingsStudioSection>,
     default_agent_name: Option<String>,
     plugins_enabled: bool,
     plugins_default_mode: String,
@@ -662,15 +656,11 @@ struct SettingsStudioOverlay {
 
 #[derive(Debug, Clone)]
 struct AgentStudioOverlay {
-    title: String,
-    footer: String,
     agent_name: String,
     profile: AgentProfile,
     editable: bool,
     default_agent_name: Option<String>,
-    items: Vec<AgentStudioItem>,
-    selected: usize,
-    editor: Option<AgentStudioEditor>,
+    workbench: ListWorkbenchState<AgentStudioItem, AgentStudioEditor>,
 }
 
 #[derive(Debug, Clone)]
@@ -705,15 +695,7 @@ enum AgentStudioField {
     DefaultModel,
 }
 
-#[derive(Debug, Clone)]
-struct AgentStudioEditor {
-    title: String,
-    prompt: String,
-    footer: String,
-    multiline: bool,
-    input: Editor,
-    action: AgentStudioEditorAction,
-}
+type AgentStudioEditor = EditorDialogState<AgentStudioEditorAction>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentStudioEditorAction {
@@ -722,14 +704,10 @@ enum AgentStudioEditorAction {
 
 #[derive(Debug, Clone)]
 struct AgentPermissionStudioOverlay {
-    title: String,
-    footer: String,
     agent_name: String,
     profile: AgentProfile,
     editable: bool,
-    items: Vec<AgentPermissionStudioItem>,
-    selected: usize,
-    editor: Option<AgentPermissionStudioEditor>,
+    workbench: ListWorkbenchState<AgentPermissionStudioItem, AgentPermissionStudioEditor>,
 }
 
 #[derive(Debug, Clone)]
@@ -757,15 +735,7 @@ enum AgentPermissionField {
     FullConfig,
 }
 
-#[derive(Debug, Clone)]
-struct AgentPermissionStudioEditor {
-    title: String,
-    prompt: String,
-    footer: String,
-    multiline: bool,
-    input: Editor,
-    action: AgentPermissionStudioEditorAction,
-}
+type AgentPermissionStudioEditor = EditorDialogState<AgentPermissionStudioEditorAction>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentPermissionStudioEditorAction {
@@ -789,10 +759,14 @@ struct SettingsStudioItem {
     action: SettingsPickerAction,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SettingsStudioFocus {
-    Navigation,
-    Items,
+type SettingsStudioFocus = SectionedListFocus;
+
+impl SectionedListSection for SettingsStudioSection {
+    type Item = SettingsStudioItem;
+
+    fn items(&self) -> &[Self::Item] {
+        self.items.as_slice()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -808,35 +782,14 @@ enum SettingsStudioSectionId {
     Files,
 }
 
-#[derive(Debug, Clone)]
-struct SettingsValueEditOverlay {
-    title: String,
-    prompt: String,
-    input: Editor,
-    field: SettingsFieldSpec,
-}
+type SettingsValueEditOverlay = InputDialogState<SettingsFieldSpec>;
+
+type RuntimeSettingEditOverlay = InputDialogState<RuntimeSettingSpec>;
 
 #[derive(Debug, Clone)]
-struct RuntimeSettingEditOverlay {
-    title: String,
-    prompt: String,
-    input: Editor,
-    field: RuntimeSettingSpec,
-}
-
-#[derive(Debug, Clone)]
-struct ChoiceOverlay {
-    title: String,
-    prompt: String,
-    footer: String,
-    empty_message: String,
-    input: Editor,
-    filter_query: String,
+struct ChoiceOverlayMeta {
+    i18n: I18n,
     all_items: Vec<ChoiceItem>,
-    items: Vec<ChoiceItem>,
-    selected: usize,
-    allow_custom: bool,
-    allow_clear: bool,
     action: ChoiceOverlayAction,
 }
 
@@ -849,23 +802,32 @@ struct ChoiceItem {
 }
 
 #[derive(Debug, Clone)]
+struct ChoiceCustomValue {
+    raw: String,
+}
+
+type ChoiceOverlay = SearchListOverlay<ChoiceItem, ChoiceCustomValue, ChoiceOverlayMeta, Editor>;
+
+#[derive(Debug, Clone)]
 enum ChoiceOverlayAction {
     SettingsField(SettingsFieldSpec),
     RuntimeSetting(RuntimeSettingSpec),
     ProviderStudioField(ProviderStudioField),
+    PermissionRuleStudio(PermissionRuleStudioChoiceField),
 }
 
-#[derive(Debug, Clone)]
-enum ChoiceRow {
-    Clear,
-    Custom(String),
-    Item(ChoiceItem),
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionRuleStudioChoiceField {
+    SubjectKind,
+    PathAccessKind,
+    Scope,
+    Mode,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct SettingsFieldSpec {
     path: &'static str,
-    description: &'static str,
+    description_key: &'static str,
     kind: SettingsFieldKind,
 }
 
@@ -902,8 +864,6 @@ enum SettingsPickerAction {
 #[derive(Debug, Clone, Copy)]
 struct RuntimeSettingSpec {
     id: RuntimeSettingId,
-    label: &'static str,
-    description: &'static str,
     kind: SettingsFieldKind,
 }
 
@@ -921,9 +881,7 @@ enum RuntimeSettingId {
 #[derive(Debug, Clone)]
 struct PermissionRuleEditOverlay {
     rule_id: Option<i64>,
-    title: String,
-    prompt: String,
-    input: Editor,
+    state: InputDialogState<()>,
     return_query: String,
     return_overlay: Option<Box<Overlay>>,
 }
@@ -952,28 +910,65 @@ enum PermissionRuleSubjectKind {
 }
 
 #[derive(Debug, Clone)]
+struct PermissionRuleStudioOverlay {
+    rule_id: Option<i64>,
+    draft: PermissionRuleDraft,
+    workbench: ListWorkbenchState<PermissionRuleStudioItem, PermissionRuleStudioEditor>,
+}
+
+#[derive(Debug, Clone)]
+struct PermissionRuleStudioItem {
+    label: String,
+    value: String,
+    detail: String,
+    action: PermissionRuleStudioAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionRuleStudioAction {
+    SubjectKind,
+    ToolName,
+    Qualifier,
+    PathAccessKind,
+    WorkspaceRoot,
+    BrowseWorkspaceRoot,
+    TargetPath,
+    BrowseTargetPath,
+    NetworkTarget,
+    Scope,
+    SessionId,
+    Mode,
+    Save,
+    Revoke,
+}
+
+type PermissionRuleStudioEditor = EditorDialogState<PermissionRuleStudioEditField>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionRuleStudioEditField {
+    ToolName,
+    Qualifier,
+    WorkspaceRoot,
+    TargetPath,
+    NetworkTarget,
+    SessionId,
+}
+
+#[derive(Debug, Clone)]
 struct UserInputOverlay {
     session_id: i64,
     request: UserInputRequest,
     answers: BTreeMap<String, UserInputAnswerDraft>,
-    selected_question: usize,
-    selected_option: usize,
-    screen: UserInputOverlayScreen,
+    state: QuestionFlowState,
     editing_custom: bool,
     custom_input: Editor,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UserInputOverlayScreen {
-    Question,
-    Review,
 }
 
 #[derive(Debug, Clone)]
 struct PermissionOverlay {
     session_id: i64,
     request: PermissionRequest,
-    selected: usize,
+    selection: SelectionCursor,
 }
 
 #[derive(Debug, Clone)]
@@ -1001,12 +996,16 @@ struct PermissionOverlayChoice {
 }
 
 #[derive(Debug, Clone)]
-struct ConfirmOverlay {
-    title: String,
-    body_lines: Vec<String>,
-    footer: String,
-    action: ConfirmAction,
+struct PermissionReplayState {
+    session_id: i64,
+    fingerprint: String,
+    last_request_id: String,
+    kind: PermissionReplyKind,
+    scope: Option<PermissionScope>,
+    label: String,
 }
+
+type ConfirmOverlay = ConfirmDialogState<ConfirmAction>;
 
 #[derive(Debug, Clone)]
 enum ConfirmAction {
@@ -1027,52 +1026,78 @@ enum ConfirmAction {
 }
 
 #[derive(Debug, Clone)]
-struct FileAttachOverlay {
-    input: Editor,
-    results: Vec<PathBuf>,
-    selected: usize,
+struct FileAttachOverlayMeta {
+    i18n: I18n,
 }
 
 #[derive(Debug, Clone)]
-struct TimelineOverlay {
-    session_id: i64,
-    title: String,
-    prompt: String,
-    empty_message: String,
-    footer: String,
-    input: Editor,
-    all_items: Vec<TimelineItem>,
-    items: Vec<TimelineItem>,
-    selected: usize,
-    loading: bool,
+struct TypedPathValue {
+    raw: String,
 }
+
+#[derive(Debug, Clone)]
+struct PathBrowserOverlayMeta {
+    i18n: I18n,
+    mode: PathBrowserMode,
+    target: PathBrowserTarget,
+}
+
+type FileAttachOverlay = SearchListOverlay<PathBuf, TypedPathValue, FileAttachOverlayMeta, Editor>;
+type PathBrowserOverlay =
+    SearchListOverlay<PathBrowserEntry, TypedPathValue, PathBrowserOverlayMeta, Editor>;
+
+#[derive(Debug, Clone)]
+struct PathBrowserEntry {
+    path: PathBuf,
+    label: String,
+    detail: String,
+    is_dir: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathBrowserMode {
+    AnyPath,
+    DirectoryOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathBrowserTarget {
+    PermissionRuleStudio(PermissionRuleStudioPathField),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionRuleStudioPathField {
+    WorkspaceRoot,
+    TargetPath,
+}
+
+#[derive(Debug, Clone)]
+struct TimelineOverlayMeta {
+    session_id: i64,
+}
+
+type TimelineOverlay = SearchPanelsOverlay<TimelineItem, TimelineOverlayMeta, Editor>;
 
 #[derive(Debug, Clone)]
 struct TimelineItem {
     summary: String,
-    detail: String,
+    detail_body: Text<'static>,
     search_text: String,
     copy_text: String,
     linked_message_id: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
-struct PluginInspectorOverlay {
-    title: String,
-    prompt: String,
-    empty_message: String,
-    footer: String,
-    input: Editor,
-    all_items: Vec<PluginInspectorItem>,
-    items: Vec<PluginInspectorItem>,
-    selected: usize,
-}
+#[derive(Debug, Clone, Default)]
+struct PluginInspectorOverlayMeta;
+
+type PluginInspectorOverlay =
+    SearchPanelsOverlay<PluginInspectorItem, PluginInspectorOverlayMeta, Editor>;
 
 #[derive(Debug, Clone)]
 struct PluginInspectorItem {
     plugin_id: String,
     summary: String,
-    detail: String,
+    detail_body: Text<'static>,
     logs: String,
     search_text: String,
     copy_text: String,
@@ -1084,16 +1109,12 @@ struct ProviderStudioOverlay {
     title: String,
     footer: String,
     show_provider_list: bool,
-    providers: Vec<ProviderStudioProviderRow>,
-    selected_provider: usize,
-    focus: ProviderStudioFocus,
-    selected_field: usize,
+    providers: SelectableListState<ProviderStudioProviderRow>,
+    selection: DashboardSelectionState<ProviderStudioFocus>,
     draft: ProviderConfigDraft,
     adapter_models: Vec<ProviderAdapterModelsResource>,
     configured_adapter_ids: BTreeSet<String>,
     adapter_candidate_ids: Vec<String>,
-    selected_adapter: usize,
-    selected_model: usize,
     adapter_selection_touched: bool,
     selected_adapter_ids: BTreeSet<String>,
     selected_model_keys: BTreeSet<String>,
@@ -1158,18 +1179,10 @@ enum ProviderStudioField {
 struct ProviderStudioDetailPage {
     title: String,
     footer: String,
-    selected_field: usize,
+    selection: SelectionCursor,
 }
 
-#[derive(Debug, Clone)]
-struct ProviderStudioEditor {
-    title: String,
-    prompt: String,
-    footer: String,
-    multiline: bool,
-    input: Editor,
-    action: ProviderStudioEditorAction,
-}
+type ProviderStudioEditor = EditorDialogState<ProviderStudioEditorAction>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ProviderStudioEditorAction {
@@ -1182,30 +1195,25 @@ enum ProviderStudioEditorAction {
 
 #[derive(Debug, Clone)]
 struct ModelCatalogStudioOverlay {
-    title: String,
-    footer: String,
     query: String,
-    items: Vec<ModelCatalogEntryResource>,
     summary: ModelCatalogResponse,
     total: usize,
     offset: usize,
     limit: usize,
     loading: bool,
-    selected: usize,
-    editor: Option<LineInputOverlay>,
+    workbench: ListWorkbenchState<ModelCatalogEntryResource, LineInputOverlay>,
 }
 
 #[derive(Debug, Clone)]
-struct SessionSearchOverlay {
-    title: String,
-    prompt: String,
-    empty_message: String,
-    footer: String,
-    input: Editor,
-    items: Vec<SessionResource>,
-    all_items: Vec<SessionResource>,
-    selected: usize,
-    loading: bool,
+struct SessionSearchItem {
+    session: SessionResource,
+    label: String,
+    detail: String,
+}
+
+#[derive(Debug, Clone)]
+struct SessionSearchOverlayMeta {
+    all_items: Vec<SessionSearchItem>,
     mode: SessionViewMode,
     scope_session_id: Option<i64>,
     page_limit: usize,
@@ -1216,33 +1224,29 @@ struct SessionSearchOverlay {
     has_more: bool,
 }
 
+type SessionSearchOverlay =
+    SearchListOverlay<SessionSearchItem, SearchListNoCustom, SessionSearchOverlayMeta, Editor>;
+
 #[derive(Debug, Clone)]
-struct PickerOverlay {
-    title: String,
-    prompt: String,
-    empty_message: String,
-    footer: String,
-    input: Editor,
+struct PickerOverlayMeta {
     all_items: Vec<PickerItem>,
-    items: Vec<PickerItem>,
-    selected: usize,
-    loading: bool,
     kind: PickerKind,
 }
 
+type PickerOverlay = SearchListOverlay<PickerItem, SearchListNoCustom, PickerOverlayMeta, Editor>;
+
 #[derive(Debug, Clone)]
-struct SessionModelChooserOverlay {
-    title: String,
-    prompt: String,
-    footer: String,
-    empty_message: String,
-    input: Editor,
-    loading: bool,
+struct SessionModelChooserOverlayMeta {
     all_items: Vec<SessionModelChoiceItem>,
-    items: Vec<SessionModelChoiceItem>,
-    selected: usize,
     page_size: usize,
 }
+
+type SessionModelChooserOverlay = SearchListOverlay<
+    SessionModelChoiceItem,
+    SearchListNoCustom,
+    SessionModelChooserOverlayMeta,
+    Editor,
+>;
 
 #[derive(Debug, Clone)]
 struct SessionModelChoiceItem {
@@ -1250,6 +1254,207 @@ struct SessionModelChoiceItem {
     detail: String,
     search_text: String,
     model: ModelRef,
+}
+
+impl SearchListItem for ChoiceItem {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        (!self.detail.trim().is_empty()).then_some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.value.clone()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        query.trim().is_empty()
+            || self
+                .search_text
+                .contains(query.trim().to_ascii_lowercase().as_str())
+    }
+}
+
+impl SearchListCustomValue<ChoiceOverlayMeta> for ChoiceCustomValue {
+    fn search_list_from_input(input: &str, _: &ChoiceOverlayMeta) -> Option<Self> {
+        let raw = input.trim().to_string();
+        (!raw.is_empty()).then_some(Self { raw })
+    }
+
+    fn search_list_label(&self, meta: &ChoiceOverlayMeta) -> String {
+        ui_text::t(&meta.i18n, "search-list-custom-value-label")
+    }
+
+    fn search_list_detail(&self, meta: &ChoiceOverlayMeta) -> Option<String> {
+        Some(meta.i18n.text_args(
+            "search-list-custom-value-detail",
+            &crate::fl_args!(
+                "value" => format_setting_value_inline(&JsonValue::String(self.raw.clone()))
+            ),
+        ))
+    }
+
+    fn search_list_input_text(&self) -> String {
+        self.raw.clone()
+    }
+}
+
+impl SearchListCustomValue<FileAttachOverlayMeta> for TypedPathValue {
+    fn search_list_from_input(input: &str, _: &FileAttachOverlayMeta) -> Option<Self> {
+        let raw = input.trim().to_string();
+        (!raw.is_empty()).then_some(Self { raw })
+    }
+
+    fn search_list_label(&self, meta: &FileAttachOverlayMeta) -> String {
+        ui_text::t(&meta.i18n, "search-list-custom-path-label")
+    }
+
+    fn search_list_detail(&self, _: &FileAttachOverlayMeta) -> Option<String> {
+        Some(self.raw.clone())
+    }
+
+    fn search_list_input_text(&self) -> String {
+        self.raw.clone()
+    }
+}
+
+impl SearchListCustomValue<PathBrowserOverlayMeta> for TypedPathValue {
+    fn search_list_from_input(input: &str, _: &PathBrowserOverlayMeta) -> Option<Self> {
+        let raw = input.trim().to_string();
+        (!raw.is_empty()).then_some(Self { raw })
+    }
+
+    fn search_list_label(&self, meta: &PathBrowserOverlayMeta) -> String {
+        ui_text::t(&meta.i18n, "search-list-custom-path-label")
+    }
+
+    fn search_list_detail(&self, _: &PathBrowserOverlayMeta) -> Option<String> {
+        Some(self.raw.clone())
+    }
+
+    fn search_list_input_text(&self) -> String {
+        self.raw.clone()
+    }
+}
+
+impl SearchListItem for PathBrowserEntry {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        Some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.path.display().to_string()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        query.trim().is_empty()
+            || self
+                .label
+                .to_ascii_lowercase()
+                .contains(query.trim().to_ascii_lowercase().as_str())
+            || self
+                .detail
+                .to_ascii_lowercase()
+                .contains(query.trim().to_ascii_lowercase().as_str())
+    }
+
+    fn search_list_label_style(&self) -> Style {
+        if self.is_dir {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        }
+    }
+}
+
+impl SearchListItem for SessionSearchItem {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        Some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.session.title.clone()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        session_matches_query(&self.session, query.trim())
+    }
+}
+
+impl SearchListItem for PickerItem {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        (!self.detail.trim().is_empty()).then_some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        let query = query.trim();
+        if query.is_empty() {
+            return true;
+        }
+        match &self.value {
+            PickerValue::Command(spec) => {
+                commands::command_matches_query(spec, query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+            }
+            PickerValue::RuntimeEntry(_) => {
+                self.label.to_ascii_lowercase().contains(query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+            }
+            PickerValue::Session(session_id) => {
+                self.label.to_ascii_lowercase().contains(query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+                    || format!("#{session_id}").contains(query)
+            }
+            PickerValue::Message(message_id) => {
+                self.label.to_ascii_lowercase().contains(query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+                    || format!("#{message_id}").contains(query)
+            }
+            _ => {
+                self.label.to_ascii_lowercase().contains(query)
+                    || self.detail.to_ascii_lowercase().contains(query)
+            }
+        }
+    }
+}
+
+impl SearchListItem for SessionModelChoiceItem {
+    fn search_list_label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_detail(&self) -> Option<String> {
+        Some(self.detail.clone())
+    }
+
+    fn search_list_fill_value(&self) -> String {
+        self.label.clone()
+    }
+
+    fn search_list_matches_query(&self, query: &str) -> bool {
+        query.trim().is_empty()
+            || self
+                .search_text
+                .contains(query.trim().to_ascii_lowercase().as_str())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1341,8 +1546,7 @@ enum FlashLevel {
 #[derive(Default)]
 struct SessionListState {
     source_items: Vec<SessionResource>,
-    items: Vec<SessionResource>,
-    selected: usize,
+    list: SelectableListState<SessionResource>,
     search_query: String,
     view_mode: SessionViewMode,
     subtree_root_id: Option<i64>,
@@ -1370,6 +1574,7 @@ struct TranscriptState {
     follow_tail: bool,
     scroll: usize,
     cursor_line: usize,
+    block_cursor: Option<TranscriptBlockCursor>,
     search_query: String,
     search_match_index: Option<usize>,
     execution: Option<SessionExecutionResource>,
@@ -1425,13 +1630,11 @@ pub struct ComposerDraftElement {
     pub range: Range<usize>,
 }
 
-#[derive(Debug, Clone)]
-struct SlashCommandSuggestionState {
-    query: String,
-    fingerprint: String,
-    items: Vec<SlashCommandSuggestionItem>,
-    selected: usize,
-}
+#[derive(Debug, Clone, Default)]
+struct SlashCommandSuggestionMeta;
+
+type SlashCommandSuggestionState =
+    SuggestionPopupState<SlashCommandSuggestionItem, SlashCommandSuggestionMeta>;
 
 #[derive(Debug, Clone)]
 struct SlashCommandSuggestionItem {
@@ -1454,13 +1657,12 @@ struct SlashCommandSuggestionContext {
 }
 
 #[derive(Debug, Clone)]
-struct FileMentionSuggestionState {
-    query: String,
-    fingerprint: String,
+struct FileMentionSuggestionMeta {
     mention_range: Range<usize>,
-    items: Vec<FileMentionSuggestionItem>,
-    selected: usize,
 }
+
+type FileMentionSuggestionState =
+    SuggestionPopupState<FileMentionSuggestionItem, FileMentionSuggestionMeta>;
 
 #[derive(Debug, Clone)]
 struct FileMentionSuggestionItem {
@@ -1477,12 +1679,12 @@ struct FileMentionSuggestionContext {
 }
 
 #[derive(Debug, Clone)]
-struct PromptHistorySearchState {
-    query: Editor,
-    results: Vec<PromptHistorySearchResult>,
-    selected: usize,
+struct PromptHistorySearchMeta {
     original: ComposerDraft,
 }
+
+type PromptHistorySearchState =
+    QuerySuggestionState<PromptHistorySearchResult, PromptHistorySearchMeta, Editor>;
 
 #[derive(Debug, Clone)]
 struct PromptHistorySearchResult {
@@ -1568,6 +1770,18 @@ struct TranscriptDetailDefaults {
     thinking_expanded: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TranscriptMoveDirection {
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TranscriptBlockCursor {
+    key: TranscriptNodeKey,
+    direction: TranscriptMoveDirection,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum TranscriptNodeKey {
     MessagePart {
@@ -1591,14 +1805,13 @@ enum TranscriptNodeKind {
     Tool,
 }
 
-impl TranscriptNodeKind {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Message => "message",
-            Self::Reasoning => "thinking block",
-            Self::Tool => "tool output",
-        }
-    }
+fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNodeKind) -> String {
+    let key = match kind {
+        TranscriptNodeKind::Message => "transcript-node-kind-message",
+        TranscriptNodeKind::Reasoning => "transcript-node-kind-reasoning",
+        TranscriptNodeKind::Tool => "transcript-node-kind-tool",
+    };
+    ui_text::t(i18n, key)
 }
 
 #[derive(Debug, Clone)]
@@ -1617,59 +1830,6 @@ struct LayoutCache {
     transcript_body: Rect,
 }
 
-#[derive(Debug, Clone, Default)]
-struct Editor {
-    text: String,
-    cursor: usize,
-    preferred_column: Option<usize>,
-    kill_buffer: String,
-    elements: Vec<EditorElement>,
-    paste_burst: PasteBurst,
-}
-
-#[derive(Debug, Clone)]
-struct EditorView {
-    lines: Vec<Line<'static>>,
-    cursor_x: u16,
-    cursor_y: u16,
-}
-
-#[derive(Debug, Clone)]
-struct EditorElement {
-    range: Range<usize>,
-}
-
-#[derive(Debug, Clone, Default)]
-struct PasteBurst {
-    last_plain_char_time: Option<Instant>,
-    consecutive_plain_char_burst: u16,
-    burst_window_until: Option<Instant>,
-    buffer: String,
-    active: bool,
-    pending_first_char: Option<(char, Instant)>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PasteCharDecision {
-    BeginBuffer { retro_chars: u16 },
-    BufferAppend,
-    RetainFirstChar,
-    BeginBufferFromPending,
-}
-
-#[derive(Debug, Clone)]
-enum PasteFlushResult {
-    Paste(String),
-    Typed(char),
-    None,
-}
-
-#[derive(Debug, Clone)]
-struct RetroGrab {
-    start_byte: usize,
-    grabbed: String,
-}
-
 fn persistent_draft_store_version() -> u32 {
     1
 }
@@ -1686,7 +1846,10 @@ impl App {
             Ok(store) => (store, None),
             Err(error) => (
                 DraftStore::default(),
-                Some(format!("failed to load composer drafts: {error}")),
+                Some(i18n.text_args(
+                    "flash-composer-drafts-load-failed",
+                    &crate::fl_args!("error" => error.to_string()),
+                )),
             ),
         };
         let prompt_history_path = default_prompt_history_path();
@@ -1695,7 +1858,10 @@ impl App {
                 Ok(history) => (history, None),
                 Err(error) => (
                     PromptHistory::default(),
-                    Some(format!("failed to load prompt history: {error}")),
+                    Some(i18n.text_args(
+                        "flash-prompt-history-load-failed",
+                        &crate::fl_args!("error" => error.to_string()),
+                    )),
                 ),
             };
         let keybindings = launch.tui_config.keybindings.clone();
@@ -1721,6 +1887,7 @@ impl App {
             overlay_stack: Vec::new(),
             seen_permission_request_ids: BTreeSet::new(),
             seen_user_input_request_ids: BTreeSet::new(),
+            pending_permission_replay: None,
             flash: None,
             sessions: SessionListState {
                 search_query: launch.initial_session_search.unwrap_or_default(),
@@ -1769,6 +1936,7 @@ impl App {
             status_line,
             plugin_theme,
             keybindings,
+            transcript_motion_prefix: None,
             last_ctrl_c_at: None,
             double_esc_window,
         };
@@ -1899,6 +2067,11 @@ impl App {
         self.flush_input_buffers_if_due(Instant::now());
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('c')) {
+            if let Some(session_id) = self.active_run_session_id() {
+                self.request_cancel_run(session_id);
+                self.last_ctrl_c_at = None;
+                return;
+            }
             let now = Instant::now();
             let double = self
                 .last_ctrl_c_at
@@ -1923,6 +2096,8 @@ impl App {
             return;
         }
 
+        self.maybe_capture_transcript_motion_prefix(key);
+
         if key.modifiers.contains(KeyModifiers::ALT)
             && matches!(key.code, KeyCode::Char('s') | KeyCode::Char('S'))
         {
@@ -1931,19 +2106,6 @@ impl App {
         }
 
         if !self.current_route_is_main() {
-            return;
-        }
-
-        // ESC while a run is in flight has global priority. Cancel the
-        // active run before falling through to focus-specific Esc.
-        if matches!(key.code, KeyCode::Esc)
-            && key.modifiers.is_empty()
-            && self.transcript.submitting
-            && let Some(session_id) = self.transcript.session_id
-        {
-            self.transcript.submitting = false;
-            self.submitting_session_ids.remove(&session_id);
-            self.request_cancel_run(session_id);
             return;
         }
 
@@ -1981,11 +2143,9 @@ impl App {
             match self.focus {
                 Focus::Sessions => self.open_resume_session_picker(),
                 Focus::Transcript => {
-                    self.overlay = Some(Overlay::TranscriptSearch(LineInputOverlay {
-                        title: ui_text::t(&self.i18n, "overlay-transcript-search-title"),
-                        prompt: ui_text::t(&self.i18n, "overlay-transcript-search-prompt"),
-                        input: Editor::from_text(self.transcript.search_query.clone()),
-                    }));
+                    self.overlay = Some(Overlay::TranscriptSearch(
+                        self.build_transcript_search_overlay(),
+                    ));
                 }
                 Focus::Composer => unreachable!("composer focus is excluded above"),
             }
@@ -1993,11 +2153,9 @@ impl App {
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && matches!(key.code, KeyCode::Char('f')) {
-            self.overlay = Some(Overlay::TranscriptSearch(LineInputOverlay {
-                title: ui_text::t(&self.i18n, "overlay-transcript-search-title"),
-                prompt: ui_text::t(&self.i18n, "overlay-transcript-search-prompt"),
-                input: Editor::from_text(self.transcript.search_query.clone()),
-            }));
+            self.overlay = Some(Overlay::TranscriptSearch(
+                self.build_transcript_search_overlay(),
+            ));
             return;
         }
 
@@ -2115,6 +2273,44 @@ impl App {
         self.maybe_auto_open_pending_interactive_overlay();
     }
 
+    fn maybe_capture_transcript_motion_prefix(&mut self, key: KeyEvent) {
+        if self.focus != Focus::Transcript
+            || !self.current_route_is_main()
+            || self.overlay.is_some()
+        {
+            self.transcript_motion_prefix = None;
+            return;
+        }
+        if !key.modifiers.is_empty() {
+            self.transcript_motion_prefix = None;
+            return;
+        }
+        match key.code {
+            KeyCode::Char(digit @ '1'..='9') => {
+                self.transcript_motion_prefix
+                    .get_or_insert_with(String::new)
+                    .push(digit);
+            }
+            KeyCode::Char(digit @ '0') if self.transcript_motion_prefix.is_some() => {
+                if let Some(prefix) = self.transcript_motion_prefix.as_mut() {
+                    prefix.push(digit);
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Char('k') | KeyCode::Char('h') | KeyCode::Char('l') => {}
+            _ => {
+                self.transcript_motion_prefix = None;
+            }
+        }
+    }
+
+    fn transcript_motion_count(&mut self) -> usize {
+        self.transcript_motion_prefix
+            .take()
+            .and_then(|prefix| prefix.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(1)
+    }
+
     fn handle_overlay_key(&mut self, key: KeyEvent) -> bool {
         let Some(mut overlay) = self.overlay.take() else {
             return false;
@@ -2136,6 +2332,7 @@ impl App {
                 self.handle_permission_rule_edit_overlay_key(key, dialog)
             }
             Overlay::FileAttach(dialog) => self.handle_file_attach_overlay_key(key, dialog),
+            Overlay::PathBrowser(dialog) => self.handle_path_browser_overlay_key(key, dialog),
             Overlay::Permission(dialog) => self.handle_permission_overlay_key(key, dialog),
             Overlay::UserInputReply(dialog) => self.handle_user_input_overlay_key(key, dialog),
             Overlay::Confirm(dialog) => self.handle_confirm_overlay_key(key, dialog),
@@ -2181,6 +2378,9 @@ impl App {
             Route::AgentPermissionStudio(dialog) => {
                 self.handle_agent_permission_studio_overlay_key(key, dialog)
             }
+            Route::PermissionRuleStudio(dialog) => {
+                self.handle_permission_rule_studio_overlay_key(key, dialog)
+            }
             Route::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
             Route::Picker(dialog) => self.handle_picker_overlay_key(key, dialog),
             Route::SessionModelChooser(dialog) => {
@@ -2216,11 +2416,10 @@ impl App {
         dialog: &mut LineInputOverlay,
         commit: OverlayCommit,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => {
-                dialog.input.flush_all_pending_input();
-                let value = dialog.input.text().trim().to_string();
+        match drive_input_dialog_key(dialog, key) {
+            InputDialogKeyResult::Close => true,
+            InputDialogKeyResult::Submit(_, value) => {
+                let value = value.trim().to_string();
                 match commit {
                     OverlayCommit::TranscriptSearch => {
                         self.transcript.set_search_query(value);
@@ -2229,10 +2428,7 @@ impl App {
                 }
                 true
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                false
-            }
+            InputDialogKeyResult::Continue => false,
         }
     }
 
@@ -2263,7 +2459,7 @@ impl App {
                     let should_advance = dialog
                         .request
                         .questions
-                        .get(dialog.selected_question)
+                        .get(dialog.state.selected_question())
                         .map(|question| committed && !question.multiple)
                         .unwrap_or(false);
                     if should_advance {
@@ -2281,9 +2477,9 @@ impl App {
             };
         }
 
-        match dialog.screen {
-            UserInputOverlayScreen::Question => self.handle_user_input_question_key(key, dialog),
-            UserInputOverlayScreen::Review => self.handle_user_input_review_key(key, dialog),
+        match dialog.state.screen() {
+            QuestionFlowScreen::Question => self.handle_user_input_question_key(key, dialog),
+            QuestionFlowScreen::Review => self.handle_user_input_review_key(key, dialog),
         }
     }
 
@@ -2315,7 +2511,7 @@ impl App {
                 false
             }
             KeyCode::Home => {
-                dialog.selected_option = 0;
+                dialog.state.move_option_home();
                 false
             }
             KeyCode::End => {
@@ -2366,23 +2562,39 @@ impl App {
                 false
             }
             KeyCode::PageUp => {
-                Self::move_user_input_question(dialog, -5);
+                let review_mode = dialog.state.screen() == QuestionFlowScreen::Review;
+                dialog
+                    .state
+                    .move_question_page(dialog.request.questions.len(), -1, 5);
+                if !review_mode {
+                    Self::sync_user_input_option_selection(dialog);
+                }
                 false
             }
             KeyCode::PageDown => {
-                Self::move_user_input_question(dialog, 5);
+                let review_mode = dialog.state.screen() == QuestionFlowScreen::Review;
+                dialog
+                    .state
+                    .move_question_page(dialog.request.questions.len(), 1, 5);
+                if !review_mode {
+                    Self::sync_user_input_option_selection(dialog);
+                }
                 false
             }
             KeyCode::Home => {
-                dialog.selected_question = 0;
+                dialog
+                    .state
+                    .move_question_home(dialog.request.questions.len());
                 false
             }
             KeyCode::End => {
-                dialog.selected_question = dialog.request.questions.len().saturating_sub(1);
+                dialog
+                    .state
+                    .move_question_end(dialog.request.questions.len());
                 false
             }
             KeyCode::Char('e') | KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                Self::focus_user_input_question(dialog, dialog.selected_question);
+                Self::focus_user_input_question(dialog, dialog.state.selected_question());
                 false
             }
             KeyCode::Char('c') | KeyCode::Delete | KeyCode::Backspace => {
@@ -2405,7 +2617,7 @@ impl App {
     }
 
     fn submit_user_input_overlay(&mut self, dialog: &mut UserInputOverlay) -> bool {
-        match Self::build_structured_user_input_reply(dialog) {
+        match Self::build_structured_user_input_reply(&self.i18n, dialog) {
             Ok(reply) => {
                 self.request_user_input_reply(dialog.session_id, reply);
                 true
@@ -2418,7 +2630,11 @@ impl App {
     }
 
     fn commit_user_input_question(&mut self, dialog: &mut UserInputOverlay) -> bool {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
             return false;
         };
         let is_custom = Self::selected_user_input_row_is_custom(dialog, question);
@@ -2441,40 +2657,42 @@ impl App {
 
     fn move_user_input_question(dialog: &mut UserInputOverlay, delta: isize) {
         if dialog.request.questions.is_empty() {
-            dialog.selected_question = 0;
-            dialog.selected_option = 0;
-            dialog.screen = UserInputOverlayScreen::Question;
+            dialog.state.clear();
             return;
         }
-        let len = dialog.request.questions.len() as isize;
-        let next = (dialog.selected_question as isize + delta).clamp(0, len - 1) as usize;
-        if dialog.screen == UserInputOverlayScreen::Review {
-            dialog.selected_question = next;
+        let review_mode = dialog.state.screen() == QuestionFlowScreen::Review;
+        dialog
+            .state
+            .move_question(dialog.request.questions.len(), delta);
+        if review_mode {
             return;
         }
-        Self::focus_user_input_question(dialog, next);
+        Self::sync_user_input_option_selection(dialog);
     }
 
     fn focus_user_input_question(dialog: &mut UserInputOverlay, index: usize) {
         if dialog.request.questions.is_empty() {
-            dialog.selected_question = 0;
-            dialog.selected_option = 0;
-            dialog.screen = UserInputOverlayScreen::Question;
+            dialog.state.clear();
             return;
         }
-        dialog.screen = UserInputOverlayScreen::Question;
-        dialog.selected_question = min(index, dialog.request.questions.len().saturating_sub(1));
+        dialog
+            .state
+            .focus_question(index, dialog.request.questions.len());
         Self::sync_user_input_option_selection(dialog);
     }
 
     fn sync_user_input_option_selection(dialog: &mut UserInputOverlay) {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
-            dialog.selected_option = 0;
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
+            dialog.state.set_selected_option(0);
             return;
         };
         let row_count = Self::user_input_option_row_count(question);
         if row_count == 0 {
-            dialog.selected_option = 0;
+            dialog.state.set_selected_option(0);
             return;
         }
         let preferred = dialog
@@ -2482,63 +2700,74 @@ impl App {
             .get(&question.id)
             .map(|draft| Self::preferred_user_input_option_row(question, draft))
             .unwrap_or(0);
-        dialog.selected_option = min(preferred, row_count.saturating_sub(1));
+        dialog.state.set_selected_option(preferred);
+        dialog.state.clamp_options(row_count);
     }
 
     fn move_user_input_option(dialog: &mut UserInputOverlay, delta: isize) {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
             return;
         };
         let row_count = Self::user_input_option_row_count(question);
         if row_count == 0 {
             return;
         }
-        let len = row_count as isize;
-        dialog.selected_option =
-            (dialog.selected_option as isize + delta).clamp(0, len - 1) as usize;
+        dialog.state.move_option(row_count, delta);
     }
 
     fn move_user_input_option_to_end(dialog: &mut UserInputOverlay) {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
             return;
         };
         let row_count = Self::user_input_option_row_count(question);
         if row_count == 0 {
-            dialog.selected_option = 0;
+            dialog.state.set_selected_option(0);
             return;
         }
-        dialog.selected_option = row_count.saturating_sub(1);
+        dialog.state.move_option_end(row_count);
     }
 
     fn move_user_input_tab(dialog: &mut UserInputOverlay, delta: isize) {
         if dialog.request.questions.is_empty() {
-            dialog.screen = UserInputOverlayScreen::Question;
+            dialog.state.clear();
             return;
         }
-        if dialog.screen == UserInputOverlayScreen::Review {
+        if dialog.state.screen() == QuestionFlowScreen::Review {
             if delta < 0 {
-                Self::focus_user_input_question(dialog, dialog.selected_question);
+                Self::focus_user_input_question(dialog, dialog.state.selected_question());
             }
             return;
         }
         let last_index = dialog.request.questions.len().saturating_sub(1);
         if delta < 0 {
-            if dialog.selected_question > 0 {
-                Self::focus_user_input_question(dialog, dialog.selected_question - 1);
+            if dialog.state.selected_question() > 0 {
+                Self::focus_user_input_question(dialog, dialog.state.selected_question() - 1);
             }
             return;
         }
-        if dialog.selected_question < last_index {
-            Self::focus_user_input_question(dialog, dialog.selected_question + 1);
+        if dialog.state.selected_question() < last_index {
+            Self::focus_user_input_question(dialog, dialog.state.selected_question() + 1);
             return;
         }
         if !Self::user_input_review_hidden(dialog) {
-            dialog.screen = UserInputOverlayScreen::Review;
+            dialog.state.focus_review(dialog.request.questions.len());
         }
     }
 
     fn toggle_user_input_option(dialog: &mut UserInputOverlay) {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
             return;
         };
         let is_custom = Self::selected_user_input_row_is_custom(dialog, question);
@@ -2553,18 +2782,22 @@ impl App {
         }
         let draft = dialog.answers.entry(question_id).or_default();
         if multiple {
-            if !draft.option_indexes.insert(dialog.selected_option) {
-                draft.option_indexes.remove(&dialog.selected_option);
+            if !draft.option_indexes.insert(dialog.state.selected_option()) {
+                draft.option_indexes.remove(&dialog.state.selected_option());
             }
         } else {
             draft.option_indexes.clear();
-            draft.option_indexes.insert(dialog.selected_option);
+            draft.option_indexes.insert(dialog.state.selected_option());
             draft.custom_values.clear();
         }
     }
 
     fn select_user_input_option(dialog: &mut UserInputOverlay) {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
             return;
         };
         if Self::selected_user_input_row_is_custom(dialog, question) {
@@ -2573,12 +2806,16 @@ impl App {
         let question_id = question.id.clone();
         let draft = dialog.answers.entry(question_id).or_default();
         draft.option_indexes.clear();
-        draft.option_indexes.insert(dialog.selected_option);
+        draft.option_indexes.insert(dialog.state.selected_option());
         draft.custom_values.clear();
     }
 
     fn begin_user_input_custom_edit(dialog: &mut UserInputOverlay) -> bool {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
             return false;
         };
         let allow_custom = question.allow_custom;
@@ -2587,8 +2824,11 @@ impl App {
         if !allow_custom {
             return false;
         }
-        dialog.screen = UserInputOverlayScreen::Question;
-        dialog.selected_option = selected_option;
+        dialog.state.focus_question(
+            dialog.state.selected_question(),
+            dialog.request.questions.len(),
+        );
+        dialog.state.set_selected_option(selected_option);
         let existing = dialog
             .answers
             .get(&question_id)
@@ -2600,7 +2840,11 @@ impl App {
     }
 
     fn commit_user_input_custom_values(dialog: &mut UserInputOverlay) -> bool {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
             dialog.editing_custom = false;
             return false;
         };
@@ -2625,13 +2869,17 @@ impl App {
         if !draft.custom_values.is_empty() && !multiple {
             draft.option_indexes.clear();
         }
-        dialog.selected_option = custom_row;
+        dialog.state.set_selected_option(custom_row);
         dialog.editing_custom = false;
         !draft.custom_values.is_empty()
     }
 
     fn clear_user_input_answer(dialog: &mut UserInputOverlay) {
-        let Some(question) = dialog.request.questions.get(dialog.selected_question) else {
+        let Some(question) = dialog
+            .request
+            .questions
+            .get(dialog.state.selected_question())
+        else {
             return;
         };
         dialog.answers.remove(&question.id);
@@ -2640,6 +2888,7 @@ impl App {
     }
 
     fn build_structured_user_input_reply(
+        i18n: &I18n,
         dialog: &mut UserInputOverlay,
     ) -> std::result::Result<UserInputReply, String> {
         let mut answers = BTreeMap::new();
@@ -2653,7 +2902,10 @@ impl App {
             if values.is_empty() {
                 let label = user_input_question_label(question).to_string();
                 Self::focus_user_input_question(dialog, index);
-                return Err(format!("missing answer for {label}"));
+                return Err(i18n.text_args(
+                    "overlay-user-input-missing-answer",
+                    &crate::fl_args!("label" => label),
+                ));
             }
             answers.insert(question.id.clone(), values);
         }
@@ -2697,7 +2949,7 @@ impl App {
         dialog: &UserInputOverlay,
         question: &UserInputQuestion,
     ) -> bool {
-        question.allow_custom && dialog.selected_option >= question.options.len()
+        question.allow_custom && dialog.state.selected_option() >= question.options.len()
     }
 
     fn handle_permission_overlay_key(
@@ -2705,26 +2957,15 @@ impl App {
         key: KeyEvent,
         dialog: &mut PermissionOverlay,
     ) -> bool {
+        let choice_count = permission_overlay_choices(&self.i18n).len();
         match key.code {
             KeyCode::Esc => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                dialog.selected = min(
-                    dialog.selected + 1,
-                    permission_overlay_choices(&self.i18n)
-                        .len()
-                        .saturating_sub(1),
-                );
-                false
-            }
+            _ if dialog.selection.handle_navigation_key(key, choice_count, 8) => false,
             KeyCode::Enter => {
-                let choice = permission_overlay_choice(dialog.selected);
-                self.request_permission_reply(
+                let choice = permission_overlay_choice(dialog.selection.selected);
+                self.submit_permission_reply(
                     dialog.session_id,
-                    dialog.request.request_id.clone(),
+                    dialog.request.clone(),
                     choice.kind,
                     choice.scope,
                     permission_overlay_choice_label(&self.i18n, choice),
@@ -2732,9 +2973,9 @@ impl App {
                 true
             }
             KeyCode::Char('a') => {
-                self.request_permission_reply(
+                self.submit_permission_reply(
                     dialog.session_id,
-                    dialog.request.request_id.clone(),
+                    dialog.request.clone(),
                     PermissionReplyKind::AllowOnce,
                     None,
                     ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::AllowOnce),
@@ -2742,9 +2983,9 @@ impl App {
                 true
             }
             KeyCode::Char('s') | KeyCode::Char('A') => {
-                self.request_permission_reply(
+                self.submit_permission_reply(
                     dialog.session_id,
-                    dialog.request.request_id.clone(),
+                    dialog.request.clone(),
                     PermissionReplyKind::AllowAlways,
                     Some(PermissionScope::Session),
                     ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::AllowAlways),
@@ -2752,9 +2993,9 @@ impl App {
                 true
             }
             KeyCode::Char('d') => {
-                self.request_permission_reply(
+                self.submit_permission_reply(
                     dialog.session_id,
-                    dialog.request.request_id.clone(),
+                    dialog.request.clone(),
                     PermissionReplyKind::DenyOnce,
                     None,
                     ui_text::permission_reply_label(&self.i18n, PermissionReplyKind::DenyOnce),
@@ -2779,16 +3020,10 @@ impl App {
         key: KeyEvent,
         dialog: &mut LineInputOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => {
-                dialog.input.flush_all_pending_input();
-                self.submit_session_rename(dialog.input.text())
-            }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                false
-            }
+        match drive_input_dialog_key(dialog, key) {
+            InputDialogKeyResult::Close => true,
+            InputDialogKeyResult::Submit(_, value) => self.submit_session_rename(value.as_str()),
+            InputDialogKeyResult::Continue => false,
         }
     }
 
@@ -2804,18 +3039,13 @@ impl App {
                 false
             }
             KeyCode::Char('d')
-                if dialog.focus == SettingsStudioFocus::Items
+                if dialog.state.focus() == SettingsStudioFocus::Items
                     && matches!(
-                        dialog.sections.get(dialog.selected_section),
+                        dialog.state.selected_section(),
                         Some(section) if section.id == SettingsStudioSectionId::Agents
                     ) =>
             {
-                let Some(item) = dialog
-                    .sections
-                    .get(dialog.selected_section)
-                    .and_then(|section| section.items.get(dialog.selected_item))
-                    .cloned()
-                else {
+                let Some(item) = dialog.state.selected_item().cloned() else {
                     return false;
                 };
                 let SettingsPickerAction::OpenAgent(agent) = item.action else {
@@ -2825,18 +3055,13 @@ impl App {
                 false
             }
             KeyCode::Char('t')
-                if dialog.focus == SettingsStudioFocus::Items
+                if dialog.state.focus() == SettingsStudioFocus::Items
                     && matches!(
-                        dialog.sections.get(dialog.selected_section),
+                        dialog.state.selected_section(),
                         Some(section) if section.id == SettingsStudioSectionId::Agents
                     ) =>
             {
-                let Some(item) = dialog
-                    .sections
-                    .get(dialog.selected_section)
-                    .and_then(|section| section.items.get(dialog.selected_item))
-                    .cloned()
-                else {
+                let Some(item) = dialog.state.selected_item().cloned() else {
                     return false;
                 };
                 let SettingsPickerAction::OpenAgent(agent) = item.action else {
@@ -2845,9 +3070,9 @@ impl App {
                 if agent.source_path.is_some()
                     || !matches!(agent.scope, agena::agents::AgentScope::Project)
                 {
-                    self.flash_warning(format!(
-                        "agent {} is not stored in the current config file; open the source file to edit it",
-                        agent.name
+                    self.flash_warning(self.i18n.text_args(
+                        "flash-agent-not-in-current-config",
+                        &crate::fl_args!("agent" => agent.name),
                     ));
                     return false;
                 }
@@ -2855,18 +3080,13 @@ impl App {
                 false
             }
             KeyCode::Char('t') | KeyCode::Char('d')
-                if dialog.focus == SettingsStudioFocus::Items
+                if dialog.state.focus() == SettingsStudioFocus::Items
                     && matches!(
-                        dialog.sections.get(dialog.selected_section),
+                        dialog.state.selected_section(),
                         Some(section) if section.id == SettingsStudioSectionId::PluginEntries
                     ) =>
             {
-                let Some(item) = dialog
-                    .sections
-                    .get(dialog.selected_section)
-                    .and_then(|section| section.items.get(dialog.selected_item))
-                    .cloned()
-                else {
+                let Some(item) = dialog.state.selected_item().cloned() else {
                     return false;
                 };
                 let SettingsPickerAction::TogglePluginEntryDisabled {
@@ -2881,39 +3101,39 @@ impl App {
                 false
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l')
-                if dialog.focus == SettingsStudioFocus::Navigation =>
+                if dialog.state.focus() == SettingsStudioFocus::Navigation =>
             {
-                dialog.focus = SettingsStudioFocus::Items;
+                dialog.state.set_focus(SettingsStudioFocus::Items);
                 false
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h')
-                if dialog.focus == SettingsStudioFocus::Items =>
+                if dialog.state.focus() == SettingsStudioFocus::Items =>
             {
-                dialog.focus = SettingsStudioFocus::Navigation;
+                dialog.state.set_focus(SettingsStudioFocus::Navigation);
                 false
             }
             KeyCode::PageUp => {
-                self.move_settings_studio_selection(dialog, -10);
+                dialog.state.move_selection_page(-1, 10);
                 false
             }
             KeyCode::PageDown => {
-                self.move_settings_studio_selection(dialog, 10);
+                dialog.state.move_selection_page(1, 10);
                 false
             }
             KeyCode::Home => {
-                self.set_settings_studio_selection(dialog, 0);
+                dialog.state.move_selection_home();
                 false
             }
             KeyCode::End => {
-                self.set_settings_studio_selection(dialog, usize::MAX);
+                dialog.state.move_selection_end();
                 false
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.move_settings_studio_selection(dialog, -1);
+                dialog.state.move_selection(-1);
                 false
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.move_settings_studio_selection(dialog, 1);
+                dialog.state.move_selection(1);
                 false
             }
             KeyCode::Enter => self.activate_settings_studio_selection(dialog),
@@ -2926,42 +3146,18 @@ impl App {
         key: KeyEvent,
         dialog: &mut AgentStudioOverlay,
     ) -> bool {
-        if dialog.editor.is_some() {
-            if matches!(key.code, KeyCode::Esc) {
-                dialog.editor = None;
-                return false;
-            }
-            let commit = if let Some(editor) = dialog.editor.as_mut() {
-                if editor.multiline {
-                    if matches!(key.code, KeyCode::Char('s'))
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-                    {
-                        editor.input.flush_all_pending_input();
-                        Some((editor.action, editor.input.text().to_string()))
-                    } else {
-                        editor.input.handle_multiline_input_key(key);
-                        None
-                    }
-                } else {
-                    match key.code {
-                        KeyCode::Enter => {
-                            editor.input.flush_all_pending_input();
-                            Some((editor.action, editor.input.text().to_string()))
-                        }
-                        _ => {
-                            editor.input.handle_line_input_key(key);
-                            None
-                        }
-                    }
+        if let Some(editor) = dialog.workbench.editor.as_mut() {
+            match drive_editor_dialog_key(editor, key) {
+                EditorDialogKeyResult::Continue => {}
+                EditorDialogKeyResult::Close => {
+                    dialog.workbench.editor = None;
                 }
-            } else {
-                None
-            };
-            if let Some((action, input)) = commit {
-                if let Err(error) = self.commit_agent_studio_editor(dialog, action, input) {
-                    self.flash_error(error);
-                } else {
-                    dialog.editor = None;
+                EditorDialogKeyResult::Submit(action, input) => {
+                    if let Err(error) = self.commit_agent_studio_editor(dialog, action, input) {
+                        self.flash_error(error);
+                    } else {
+                        dialog.workbench.editor = None;
+                    }
                 }
             }
             return false;
@@ -2985,7 +3181,10 @@ impl App {
             KeyCode::Char('d') => {
                 match self.set_default_agent_value(dialog.agent_name.as_str()) {
                     Ok(()) => {
-                        self.flash_success(format!("set default.agent to {}", dialog.agent_name));
+                        self.flash_success(default_agent_updated_message(
+                            &self.i18n,
+                            dialog.agent_name.as_str(),
+                        ));
                         self.refresh_agent_studio_overlay(dialog);
                     }
                     Err(error) => self.flash_error(error),
@@ -2994,56 +3193,24 @@ impl App {
             }
             KeyCode::Char('t') => {
                 if !dialog.editable {
-                    self.flash_warning(
-                        "this agent is file-backed; open the source file to edit hidden/visible"
-                            .to_string(),
-                    );
+                    self.flash_warning(agent_file_backed_hidden_message(&self.i18n));
                     return false;
                 }
                 let hidden = dialog.profile.frontmatter.hidden;
                 match self.set_agent_hidden_value(dialog.agent_name.as_str(), !hidden) {
                     Ok(_) => {
-                        self.flash_success(if hidden {
-                            format!("unhid agent {}", dialog.agent_name)
-                        } else {
-                            format!("hid agent {}", dialog.agent_name)
-                        });
+                        self.flash_success(agent_hidden_toggled_message(
+                            &self.i18n,
+                            dialog.agent_name.as_str(),
+                            hidden,
+                        ));
                         self.refresh_agent_studio_overlay(dialog);
                     }
                     Err(error) => self.flash_error(error),
                 }
                 false
             }
-            KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
-                false
-            }
-            KeyCode::PageDown => {
-                dialog.selected = min(
-                    dialog.selected.saturating_add(10),
-                    dialog.items.len().saturating_sub(1),
-                );
-                false
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                false
-            }
-            KeyCode::End => {
-                dialog.selected = dialog.items.len().saturating_sub(1);
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                dialog.selected = min(
-                    dialog.selected.saturating_add(1),
-                    dialog.items.len().saturating_sub(1),
-                );
-                false
-            }
+            _ if dialog.workbench.list.handle_navigation_key(key, 10) => false,
             KeyCode::Enter => self.activate_agent_studio_selection(dialog),
             _ => false,
         }
@@ -3054,42 +3221,18 @@ impl App {
         key: KeyEvent,
         dialog: &mut AgentPermissionStudioOverlay,
     ) -> bool {
-        if dialog.editor.is_some() {
-            if matches!(key.code, KeyCode::Esc) {
-                dialog.editor = None;
-                return false;
-            }
-            let commit = if let Some(editor) = dialog.editor.as_mut() {
-                if editor.multiline {
-                    if matches!(key.code, KeyCode::Char('s'))
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-                    {
-                        editor.input.flush_all_pending_input();
-                        Some((editor.action, editor.input.text().to_string()))
-                    } else {
-                        editor.input.handle_multiline_input_key(key);
-                        None
-                    }
-                } else {
-                    match key.code {
-                        KeyCode::Enter => {
-                            editor.input.flush_all_pending_input();
-                            Some((editor.action, editor.input.text().to_string()))
-                        }
-                        _ => {
-                            editor.input.handle_line_input_key(key);
-                            None
-                        }
-                    }
+        if let Some(editor) = dialog.workbench.editor.as_mut() {
+            match drive_editor_dialog_key(editor, key) {
+                EditorDialogKeyResult::Continue => {}
+                EditorDialogKeyResult::Close => {
+                    dialog.workbench.editor = None;
                 }
-            } else {
-                None
-            };
-            if let Some((action, input)) = commit {
-                if let Err(error) = self.commit_agent_permission_editor(dialog, action, input) {
-                    self.flash_error(error);
-                } else {
-                    dialog.editor = None;
+                EditorDialogKeyResult::Submit(action, input) => {
+                    if let Err(error) = self.commit_agent_permission_editor(dialog, action, input) {
+                        self.flash_error(error);
+                    } else {
+                        dialog.workbench.editor = None;
+                    }
                 }
             }
             return false;
@@ -3105,70 +3248,541 @@ impl App {
                 self.open_agent_profile_source(&dialog.profile);
                 false
             }
-            KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
-                false
-            }
-            KeyCode::PageDown => {
-                dialog.selected = min(
-                    dialog.selected.saturating_add(10),
-                    dialog.items.len().saturating_sub(1),
-                );
-                false
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                false
-            }
-            KeyCode::End => {
-                dialog.selected = dialog.items.len().saturating_sub(1);
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                dialog.selected = min(
-                    dialog.selected.saturating_add(1),
-                    dialog.items.len().saturating_sub(1),
-                );
-                false
-            }
+            _ if dialog.workbench.list.handle_navigation_key(key, 10) => false,
             KeyCode::Enter => self.activate_agent_permission_studio_selection(dialog),
             _ => false,
         }
     }
 
+    fn handle_permission_rule_studio_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PermissionRuleStudioOverlay,
+    ) -> bool {
+        if let Some(editor) = dialog.workbench.editor.as_mut() {
+            match drive_editor_dialog_key(editor, key) {
+                EditorDialogKeyResult::Continue => {}
+                EditorDialogKeyResult::Close => {
+                    dialog.workbench.editor = None;
+                }
+                EditorDialogKeyResult::Submit(action, input) => {
+                    if let Err(error) =
+                        self.commit_permission_rule_studio_editor(dialog, action, input)
+                    {
+                        self.flash_error(error);
+                    } else {
+                        dialog.workbench.editor = None;
+                    }
+                }
+            }
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Esc => true,
+            KeyCode::Char('r') => {
+                self.refresh_permission_rule_studio(dialog);
+                false
+            }
+            KeyCode::Char('b') => {
+                self.open_selected_permission_rule_path_browser(dialog);
+                false
+            }
+            _ if dialog.workbench.list.handle_navigation_key(key, 8) => false,
+            KeyCode::Enter => self.activate_permission_rule_studio_selection(dialog),
+            _ => false,
+        }
+    }
+
+    fn activate_permission_rule_studio_selection(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+    ) -> bool {
+        let Some(item) = dialog.workbench.list.selected_item().cloned() else {
+            return false;
+        };
+        match item.action {
+            PermissionRuleStudioAction::SubjectKind => self.open_permission_rule_choice_overlay(
+                dialog,
+                PermissionRuleStudioChoiceField::SubjectKind,
+            ),
+            PermissionRuleStudioAction::PathAccessKind => self.open_permission_rule_choice_overlay(
+                dialog,
+                PermissionRuleStudioChoiceField::PathAccessKind,
+            ),
+            PermissionRuleStudioAction::Scope => self.open_permission_rule_choice_overlay(
+                dialog,
+                PermissionRuleStudioChoiceField::Scope,
+            ),
+            PermissionRuleStudioAction::Mode => self
+                .open_permission_rule_choice_overlay(dialog, PermissionRuleStudioChoiceField::Mode),
+            PermissionRuleStudioAction::ToolName => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::ToolName,
+            ),
+            PermissionRuleStudioAction::Qualifier => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::Qualifier,
+            ),
+            PermissionRuleStudioAction::WorkspaceRoot => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::WorkspaceRoot,
+            ),
+            PermissionRuleStudioAction::TargetPath => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::TargetPath,
+            ),
+            PermissionRuleStudioAction::NetworkTarget => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::NetworkTarget,
+            ),
+            PermissionRuleStudioAction::SessionId => self.open_permission_rule_studio_editor(
+                dialog,
+                PermissionRuleStudioEditField::SessionId,
+            ),
+            PermissionRuleStudioAction::BrowseWorkspaceRoot => {
+                self.open_permission_rule_path_browser(
+                    dialog,
+                    PermissionRuleStudioPathField::WorkspaceRoot,
+                );
+            }
+            PermissionRuleStudioAction::BrowseTargetPath => {
+                self.open_permission_rule_path_browser(
+                    dialog,
+                    PermissionRuleStudioPathField::TargetPath,
+                );
+            }
+            PermissionRuleStudioAction::Save => {
+                if let Err(error) = self.commit_permission_rule_studio_save(dialog) {
+                    self.flash_error(error);
+                }
+            }
+            PermissionRuleStudioAction::Revoke => {
+                if let Some(rule_id) = dialog.rule_id {
+                    match self.block_on_async(self.backend.revoke_permission_rule(rule_id)) {
+                        Ok(_) => {
+                            self.flash_success(self.i18n.text_args(
+                                "flash-permission-rule-revoked",
+                                &crate::fl_args!(
+                                    "name" => permission_rule_draft_label(&self.i18n, &dialog.draft)
+                                ),
+                            ));
+                            self.current_route = self.route_stack.pop().unwrap_or(Route::Main);
+                        }
+                        Err(error) => self.flash_error(error),
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn open_permission_rule_choice_overlay(
+        &mut self,
+        dialog: &PermissionRuleStudioOverlay,
+        field: PermissionRuleStudioChoiceField,
+    ) {
+        let (title, prompt, input, all_items, allow_clear) =
+            permission_rule_choice_overlay_spec(&self.i18n, &dialog.draft, field);
+        self.open_choice_overlay(self.build_choice_overlay(
+            title,
+            prompt,
+            input,
+            all_items,
+            ChoiceOverlayAction::PermissionRuleStudio(field),
+            allow_clear,
+        ));
+    }
+
+    fn open_permission_rule_studio_editor(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+        field: PermissionRuleStudioEditField,
+    ) {
+        let (title, prompt, footer, value) =
+            permission_rule_editor_spec(&self.i18n, &dialog.draft, field);
+        dialog.workbench.editor = Some(PermissionRuleStudioEditor::new(
+            title,
+            prompt,
+            footer,
+            false,
+            Editor::from_text(value),
+            field,
+        ));
+    }
+
+    fn commit_permission_rule_studio_editor(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+        field: PermissionRuleStudioEditField,
+        input: String,
+    ) -> UiResult<()> {
+        match field {
+            PermissionRuleStudioEditField::ToolName => {
+                dialog.draft.tool_name = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::Qualifier => {
+                dialog.draft.qualifier = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::WorkspaceRoot => {
+                dialog.draft.workspace_root = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::TargetPath => {
+                dialog.draft.target_path = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::NetworkTarget => {
+                dialog.draft.network_target = input.trim().to_string();
+            }
+            PermissionRuleStudioEditField::SessionId => {
+                let trimmed = input.trim();
+                if !trimmed.is_empty() && trimmed.parse::<i64>().is_err() {
+                    return Err(ui_text::t(
+                        &self.i18n,
+                        "permission-rule-error-session-id-integer",
+                    ));
+                }
+                dialog.draft.session_id = trimmed.to_string();
+            }
+        }
+        self.refresh_permission_rule_studio(dialog);
+        Ok(())
+    }
+
+    fn commit_permission_rule_studio_save(
+        &mut self,
+        dialog: &mut PermissionRuleStudioOverlay,
+    ) -> UiResult<()> {
+        let draft = dialog.draft.clone();
+        match draft.subject_kind {
+            PermissionRuleSubjectKind::Tool if draft.tool_name.trim().is_empty() => {
+                return Err(ui_text::t(
+                    &self.i18n,
+                    "permission-rule-error-tool-name-required",
+                ));
+            }
+            PermissionRuleSubjectKind::PathAccess => {
+                if draft.path_access_kind.trim().is_empty() {
+                    return Err(ui_text::t(
+                        &self.i18n,
+                        "permission-rule-error-path-access-kind-required",
+                    ));
+                }
+                if draft.target_path.trim().is_empty() {
+                    return Err(ui_text::t(
+                        &self.i18n,
+                        "permission-rule-error-target-path-required",
+                    ));
+                }
+            }
+            PermissionRuleSubjectKind::NetworkAccess if draft.network_target.trim().is_empty() => {
+                return Err(ui_text::t(
+                    &self.i18n,
+                    "permission-rule-error-network-target-required",
+                ));
+            }
+            _ => {}
+        }
+        if draft.scope == "session" {
+            let trimmed = draft.session_id.trim();
+            if trimmed.is_empty() {
+                return Err(ui_text::t(
+                    &self.i18n,
+                    "permission-rule-error-session-id-required",
+                ));
+            }
+            trimmed
+                .parse::<i64>()
+                .map_err(|_| ui_text::t(&self.i18n, "permission-rule-error-session-id-integer"))?;
+        }
+        let params = permission_rule_params_from_draft(&draft);
+        let saved = match dialog.rule_id {
+            Some(rule_id) => self
+                .block_on_async(self.backend.replace_permission_rule(rule_id, params))
+                .map_err(|error| error.to_string())?,
+            None => self
+                .block_on_async(self.backend.create_permission_rule(params))
+                .map_err(|error| error.to_string())?,
+        };
+        dialog.rule_id = Some(saved.id);
+        dialog.workbench.title = format!(
+            "{} · {}",
+            ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
+            permission_rule_label(&self.i18n, &saved)
+        );
+        dialog.draft = permission_rule_draft_from_resource(&saved);
+        self.flash_success(self.i18n.text_args(
+            "flash-permission-rule-saved",
+            &crate::fl_args!("name" => permission_rule_label(&self.i18n, &saved)),
+        ));
+        self.refresh_permission_rule_studio(dialog);
+        Ok(())
+    }
+
+    fn open_selected_permission_rule_path_browser(&mut self, dialog: &PermissionRuleStudioOverlay) {
+        let Some(item) = dialog.workbench.list.selected_item() else {
+            return;
+        };
+        match item.action {
+            PermissionRuleStudioAction::BrowseWorkspaceRoot => self
+                .open_permission_rule_path_browser(
+                    dialog,
+                    PermissionRuleStudioPathField::WorkspaceRoot,
+                ),
+            PermissionRuleStudioAction::BrowseTargetPath => self.open_permission_rule_path_browser(
+                dialog,
+                PermissionRuleStudioPathField::TargetPath,
+            ),
+            _ => {}
+        }
+    }
+
+    fn open_permission_rule_path_browser(
+        &mut self,
+        dialog: &PermissionRuleStudioOverlay,
+        field: PermissionRuleStudioPathField,
+    ) {
+        let (title, prompt, mode, initial) =
+            permission_rule_path_browser_spec(&self.i18n, &dialog.draft, field);
+        self.overlay = Some(Overlay::PathBrowser(self.build_path_browser_overlay(
+            title,
+            prompt,
+            mode,
+            initial,
+            PathBrowserTarget::PermissionRuleStudio(field),
+        )));
+    }
+
+    fn refresh_path_browser_overlay_with_root(
+        workspace_root: &Path,
+        dialog: &mut PathBrowserOverlay,
+    ) {
+        dialog.items = Self::path_browser_entries_with_root(workspace_root, dialog);
+        dialog.clamp_selection();
+    }
+
+    fn handle_path_browser_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut PathBrowserOverlay,
+    ) -> bool {
+        match key.code {
+            KeyCode::Tab => {
+                dialog.fill_input_from_selected();
+                false
+            }
+            KeyCode::Char('h') => {
+                self.path_browser_navigate_parent(dialog);
+                false
+            }
+            KeyCode::Char('l') => {
+                self.path_browser_open_entry(dialog);
+                false
+            }
+            KeyCode::Enter => self.path_browser_activate(dialog),
+            _ => match dialog.handle_filter_input_key(key, 10) {
+                SearchInputKeyResult::Close => true,
+                SearchInputKeyResult::Navigated => false,
+                SearchInputKeyResult::Edited { changed } => {
+                    if changed {
+                        Self::refresh_path_browser_overlay_with_root(
+                            self.backend.workspace_root(),
+                            dialog,
+                        );
+                    }
+                    false
+                }
+            },
+        }
+    }
+
+    fn path_browser_activate(&mut self, dialog: &mut PathBrowserOverlay) -> bool {
+        if let Some(selection) = dialog.selected_row() {
+            return match selection {
+                SearchListRow::Item(entry) => {
+                    self.commit_path_browser_selection(dialog, entry.path)
+                }
+                SearchListRow::Custom(value) => {
+                    let path = Self::resolve_browser_input_path_with_root(
+                        self.backend.workspace_root(),
+                        value.raw.as_str(),
+                    );
+                    self.commit_path_browser_selection(dialog, path)
+                }
+                SearchListRow::Clear(_) => false,
+            };
+        }
+        let raw = dialog.input.text().trim();
+        if raw.is_empty() {
+            return false;
+        }
+        let path = Self::resolve_browser_input_path_with_root(self.backend.workspace_root(), raw);
+        self.commit_path_browser_selection(dialog, path)
+    }
+
+    fn path_browser_open_entry(&self, dialog: &mut PathBrowserOverlay) {
+        if let Some(entry) = dialog.items.get(dialog.selected) {
+            if entry.is_dir {
+                dialog.input.set_text(entry.path.display().to_string());
+                Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), dialog);
+            }
+        }
+    }
+
+    fn path_browser_navigate_parent(&self, dialog: &mut PathBrowserOverlay) {
+        let current = Self::resolve_browser_input_path_with_root(
+            self.backend.workspace_root(),
+            dialog.input.text().trim(),
+        );
+        let parent = current.parent().map(Path::to_path_buf);
+        if let Some(parent) = parent {
+            dialog.input.set_text(parent.display().to_string());
+            Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), dialog);
+        }
+    }
+
+    fn commit_path_browser_selection(
+        &mut self,
+        dialog: &PathBrowserOverlay,
+        path: PathBuf,
+    ) -> bool {
+        match dialog.meta.target {
+            PathBrowserTarget::PermissionRuleStudio(field) => {
+                let workspace_root = self.backend.workspace_root();
+                let value = match field {
+                    PermissionRuleStudioPathField::WorkspaceRoot => path.display().to_string(),
+                    PermissionRuleStudioPathField::TargetPath => path
+                        .strip_prefix(workspace_root)
+                        .ok()
+                        .map(|relative| relative.display().to_string())
+                        .filter(|relative| !relative.is_empty())
+                        .unwrap_or_else(|| path.display().to_string()),
+                };
+                match &mut self.current_route {
+                    Route::PermissionRuleStudio(route) => {
+                        match field {
+                            PermissionRuleStudioPathField::WorkspaceRoot => {
+                                route.draft.workspace_root = value;
+                            }
+                            PermissionRuleStudioPathField::TargetPath => {
+                                route.draft.target_path = value;
+                            }
+                        }
+                        refresh_permission_rule_studio_dialog(&self.i18n, route);
+                    }
+                    _ => self
+                        .flash_error(ui_text::t(&self.i18n, "flash-permission-rule-context-lost")),
+                }
+                true
+            }
+        }
+    }
+
+    fn resolve_browser_input_path_with_root(workspace_root: &Path, raw: &str) -> PathBuf {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return workspace_root.to_path_buf();
+        }
+        let path = PathBuf::from(trimmed);
+        if path.is_absolute() {
+            path
+        } else {
+            workspace_root.join(path)
+        }
+    }
+
+    fn path_browser_entries_with_root(
+        workspace_root: &Path,
+        dialog: &PathBrowserOverlay,
+    ) -> Vec<PathBrowserEntry> {
+        let raw = dialog.input.text().trim();
+        let resolved = Self::resolve_browser_input_path_with_root(workspace_root, raw);
+        let (directory, needle) = if resolved.is_dir() {
+            (resolved, String::new())
+        } else {
+            (
+                resolved
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| workspace_root.to_path_buf()),
+                resolved
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .unwrap_or_default(),
+            )
+        };
+
+        let mut entries = Vec::new();
+        if let Some(parent) = directory.parent() {
+            entries.push(PathBrowserEntry {
+                path: parent.to_path_buf(),
+                label: "../".to_string(),
+                detail: parent.display().to_string(),
+                is_dir: true,
+            });
+        }
+        let Ok(read_dir) = fs::read_dir(&directory) else {
+            return entries;
+        };
+
+        let mut children = read_dir
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let path = entry.path();
+                let is_dir = path.is_dir();
+                if matches!(dialog.meta.mode, PathBrowserMode::DirectoryOnly) && !is_dir {
+                    return None;
+                }
+                let name = entry.file_name();
+                let name = name.to_string_lossy().to_string();
+                if !needle.is_empty() && !name.to_ascii_lowercase().contains(needle.as_str()) {
+                    return None;
+                }
+                Some(PathBrowserEntry {
+                    label: if is_dir {
+                        format!("{name}/")
+                    } else {
+                        name.clone()
+                    },
+                    detail: path.display().to_string(),
+                    path,
+                    is_dir,
+                })
+            })
+            .collect::<Vec<_>>();
+        children.sort_by(|left, right| {
+            (!left.is_dir, left.label.to_ascii_lowercase())
+                .cmp(&(!right.is_dir, right.label.to_ascii_lowercase()))
+        });
+        entries.extend(children);
+        entries
+    }
+
     fn activate_agent_studio_selection(&mut self, dialog: &mut AgentStudioOverlay) -> bool {
-        let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+        let Some(item) = dialog.workbench.list.selected_item().cloned() else {
             return false;
         };
         match item.action {
             AgentStudioAction::Edit(field) => {
                 if !dialog.editable {
-                    self.flash_warning(
-                        "this agent is file-backed; open the source file to edit it".to_string(),
-                    );
+                    self.flash_warning(agent_file_backed_edit_message(&self.i18n));
                     return false;
                 }
                 self.open_agent_studio_editor(dialog, field);
             }
             AgentStudioAction::ToggleHidden => {
                 if !dialog.editable {
-                    self.flash_warning(
-                        "this agent is file-backed; open the source file to edit it".to_string(),
-                    );
+                    self.flash_warning(agent_file_backed_edit_message(&self.i18n));
                     return false;
                 }
                 let hidden = dialog.profile.frontmatter.hidden;
                 match self.set_agent_hidden_value(dialog.agent_name.as_str(), !hidden) {
                     Ok(()) => {
-                        self.flash_success(if hidden {
-                            format!("unhid agent {}", dialog.agent_name)
-                        } else {
-                            format!("hid agent {}", dialog.agent_name)
-                        });
+                        self.flash_success(agent_hidden_toggled_message(
+                            &self.i18n,
+                            dialog.agent_name.as_str(),
+                            hidden,
+                        ));
                         self.refresh_agent_studio_overlay(dialog);
                     }
                     Err(error) => self.flash_error(error),
@@ -3177,7 +3791,10 @@ impl App {
             AgentStudioAction::SetDefault => {
                 match self.set_default_agent_value(dialog.agent_name.as_str()) {
                     Ok(()) => {
-                        self.flash_success(format!("set default.agent to {}", dialog.agent_name));
+                        self.flash_success(default_agent_updated_message(
+                            &self.i18n,
+                            dialog.agent_name.as_str(),
+                        ));
                         self.refresh_agent_studio_overlay(dialog);
                     }
                     Err(error) => self.flash_error(error),
@@ -3198,15 +3815,15 @@ impl App {
         field: AgentStudioField,
     ) {
         let (title, prompt, footer, multiline, input) =
-            agent_studio_editor_config(&dialog.profile, field);
-        dialog.editor = Some(AgentStudioEditor {
+            agent_studio_editor_config(&self.i18n, &dialog.profile, field);
+        dialog.workbench.editor = Some(AgentStudioEditor::new(
             title,
             prompt,
             footer,
             multiline,
             input,
-            action: AgentStudioEditorAction::Field(field),
-        });
+            AgentStudioEditorAction::Field(field),
+        ));
     }
 
     fn commit_agent_studio_editor(
@@ -3218,6 +3835,7 @@ impl App {
         match action {
             AgentStudioEditorAction::Field(field) => {
                 let (path, value) = agent_studio_field_setting_value(
+                    &self.i18n,
                     dialog.agent_name.as_str(),
                     field,
                     input.as_str(),
@@ -3225,11 +3843,11 @@ impl App {
                 if let Some(value) = value {
                     self.block_on_async(self.backend.set_config_setting(path.as_str(), value))
                         .map_err(|error| error.to_string())?;
-                    self.flash_success(format!("updated {path}"));
+                    self.flash_success(settings_path_updated_message(&self.i18n, path.as_str()));
                 } else {
                     self.block_on_async(self.backend.delete_config_setting(path.as_str()))
                         .map_err(|error| error.to_string())?;
-                    self.flash_success(format!("cleared {path}"));
+                    self.flash_success(settings_path_cleared_message(&self.i18n, path.as_str()));
                 }
                 self.refresh_agent_studio_overlay(dialog);
             }
@@ -3241,16 +3859,13 @@ impl App {
         &mut self,
         dialog: &mut AgentPermissionStudioOverlay,
     ) -> bool {
-        let Some(item) = dialog.items.get(dialog.selected).cloned() else {
+        let Some(item) = dialog.workbench.list.selected_item().cloned() else {
             return false;
         };
         match item.action {
             AgentPermissionStudioAction::Edit(field) => {
                 if !dialog.editable {
-                    self.flash_warning(
-                        "this agent is file-backed; open the source file to edit permissions"
-                            .to_string(),
-                    );
+                    self.flash_warning(agent_file_backed_permissions_message(&self.i18n));
                     return false;
                 }
                 self.open_agent_permission_studio_editor(dialog, field);
@@ -3268,15 +3883,15 @@ impl App {
         field: AgentPermissionField,
     ) {
         let (title, prompt, footer, multiline, input) =
-            agent_permission_editor_config(&dialog.profile, field);
-        dialog.editor = Some(AgentPermissionStudioEditor {
+            agent_permission_editor_config(&self.i18n, &dialog.profile, field);
+        dialog.workbench.editor = Some(AgentPermissionStudioEditor::new(
             title,
             prompt,
             footer,
             multiline,
             input,
-            action: AgentPermissionStudioEditorAction::Field(field),
-        });
+            AgentPermissionStudioEditorAction::Field(field),
+        ));
     }
 
     fn commit_agent_permission_editor(
@@ -3288,6 +3903,7 @@ impl App {
         match action {
             AgentPermissionStudioEditorAction::Field(field) => {
                 let (path, value) = agent_permission_field_setting_value(
+                    &self.i18n,
                     dialog.agent_name.as_str(),
                     field,
                     input.as_str(),
@@ -3295,11 +3911,11 @@ impl App {
                 if let Some(value) = value {
                     self.block_on_async(self.backend.set_config_setting(path.as_str(), value))
                         .map_err(|error| error.to_string())?;
-                    self.flash_success(format!("updated {path}"));
+                    self.flash_success(settings_path_updated_message(&self.i18n, path.as_str()));
                 } else {
                     self.block_on_async(self.backend.delete_config_setting(path.as_str()))
                         .map_err(|error| error.to_string())?;
-                    self.flash_success(format!("cleared {path}"));
+                    self.flash_success(settings_path_cleared_message(&self.i18n, path.as_str()));
                 }
                 self.refresh_agent_permission_studio_overlay(dialog);
             }
@@ -3312,17 +3928,18 @@ impl App {
         key: KeyEvent,
         dialog: &mut SettingsValueEditOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => {
-                dialog.input.flush_all_pending_input();
-                let input = dialog.input.text().to_string();
-                match parse_settings_field_input(dialog.field, input.as_str()) {
+        match drive_input_dialog_key(dialog, key) {
+            InputDialogKeyResult::Close => true,
+            InputDialogKeyResult::Submit(action, input) => {
+                match parse_settings_field_input(&self.i18n, action, input.as_str()) {
                     Ok(Some(value)) => match self
-                        .block_on_async(self.backend.set_config_setting(dialog.field.path, value))
+                        .block_on_async(self.backend.set_config_setting(action.path, value))
                     {
                         Ok(_) => {
-                            self.flash_success(format!("updated {}", dialog.field.path));
+                            self.flash_success(settings_path_updated_message(
+                                &self.i18n,
+                                action.path,
+                            ));
                             self.refresh_current_route_after_local_edit();
                             true
                         }
@@ -3331,29 +3948,29 @@ impl App {
                             false
                         }
                     },
-                    Ok(None) => match self
-                        .block_on_async(self.backend.delete_config_setting(dialog.field.path))
-                    {
-                        Ok(_) => {
-                            self.flash_success(format!("cleared {}", dialog.field.path));
-                            self.refresh_current_route_after_local_edit();
-                            true
+                    Ok(None) => {
+                        match self.block_on_async(self.backend.delete_config_setting(action.path)) {
+                            Ok(_) => {
+                                self.flash_success(settings_path_cleared_message(
+                                    &self.i18n,
+                                    action.path,
+                                ));
+                                self.refresh_current_route_after_local_edit();
+                                true
+                            }
+                            Err(error) => {
+                                self.flash_error(error);
+                                false
+                            }
                         }
-                        Err(error) => {
-                            self.flash_error(error);
-                            false
-                        }
-                    },
+                    }
                     Err(error) => {
                         self.flash_warning(error);
                         false
                     }
                 }
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                false
-            }
+            InputDialogKeyResult::Continue => false,
         }
     }
 
@@ -3362,15 +3979,14 @@ impl App {
         key: KeyEvent,
         dialog: &mut RuntimeSettingEditOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => {
-                dialog.input.flush_all_pending_input();
-                let input = dialog.input.text().to_string();
-                match self
-                    .run_options
-                    .apply_runtime_setting_input(dialog.field, input.as_str())
-                {
+        match drive_input_dialog_key(dialog, key) {
+            InputDialogKeyResult::Close => true,
+            InputDialogKeyResult::Submit(action, input) => {
+                match self.run_options.apply_runtime_setting_input(
+                    &self.i18n,
+                    action,
+                    input.as_str(),
+                ) {
                     Ok(message) => {
                         self.flash_success(message);
                         self.refresh_current_route_after_local_edit();
@@ -3382,64 +3998,29 @@ impl App {
                     }
                 }
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                false
-            }
+            InputDialogKeyResult::Continue => false,
         }
     }
 
     fn handle_choice_overlay_key(&mut self, key: KeyEvent, dialog: &mut ChoiceOverlay) -> bool {
         match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let row_count = Self::choice_overlay_rows(dialog).len();
-                if row_count > 0 {
-                    dialog.selected = min(dialog.selected + 1, row_count.saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
-                false
-            }
-            KeyCode::PageDown => {
-                let row_count = Self::choice_overlay_rows(dialog).len();
-                if row_count > 0 {
-                    dialog.selected = min(dialog.selected + 10, row_count.saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                false
-            }
-            KeyCode::End => {
-                let row_count = Self::choice_overlay_rows(dialog).len();
-                if row_count > 0 {
-                    dialog.selected = row_count.saturating_sub(1);
-                }
-                false
-            }
             KeyCode::Tab => {
-                if let Some(ChoiceRow::Item(item)) =
-                    Self::choice_overlay_rows(dialog).get(dialog.selected)
-                {
-                    dialog.input.set_text(item.value.clone());
-                    Self::sync_choice_overlay_query(dialog, true);
+                if dialog.fill_input_from_selected() {
+                    Self::sync_choice_overlay_input(dialog, true);
                 }
                 false
             }
             KeyCode::Enter => self.commit_choice_overlay(dialog),
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                Self::sync_choice_overlay_query(dialog, true);
-                false
-            }
+            _ => match dialog.handle_filter_input_key(key, 10) {
+                SearchInputKeyResult::Close => true,
+                SearchInputKeyResult::Navigated => false,
+                SearchInputKeyResult::Edited { changed } => {
+                    if changed {
+                        Self::sync_choice_overlay_input(dialog, true);
+                    }
+                    false
+                }
+            },
         }
     }
 
@@ -3448,18 +4029,17 @@ impl App {
         key: KeyEvent,
         dialog: &mut PermissionRuleEditOverlay,
     ) -> bool {
-        match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Enter => {
-                dialog.input.flush_all_pending_input();
-                let draft = match parse_permission_rule_input(dialog.input.text()) {
+        match drive_input_dialog_key(&mut dialog.state, key) {
+            InputDialogKeyResult::Close => true,
+            InputDialogKeyResult::Submit(_, input) => {
+                let draft = match parse_permission_rule_input(&self.i18n, input.as_str()) {
                     Ok(parsed) => parsed,
                     Err(error) => {
                         self.flash_warning(error);
                         return false;
                     }
                 };
-                let label = permission_rule_draft_label(&draft);
+                let label = permission_rule_draft_label(&self.i18n, &draft);
                 let params = permission_rule_params_from_draft(&draft);
                 let result = match dialog.rule_id {
                     Some(rule_id) => {
@@ -3471,7 +4051,7 @@ impl App {
                     Ok(rule) => {
                         self.flash_success(self.i18n.text_args(
                             "flash-permission-rule-saved",
-                            &crate::fl_args!("name" => permission_rule_label(&rule)),
+                            &crate::fl_args!("name" => permission_rule_label(&self.i18n, &rule)),
                         ));
                         if let Some(return_overlay) = dialog.return_overlay.take() {
                             self.overlay_stack.pop();
@@ -3487,10 +4067,7 @@ impl App {
                     }
                 }
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                false
-            }
+            InputDialogKeyResult::Continue => false,
         }
     }
 
@@ -3500,30 +4077,18 @@ impl App {
         dialog: &mut FileAttachOverlay,
     ) -> bool {
         match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.results.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.results.len().saturating_sub(1));
-                }
-                false
-            }
             KeyCode::Tab => {
-                if let Some(path) = dialog.results.get(dialog.selected) {
-                    dialog.input.set_text(path.to_string_lossy().to_string());
-                }
+                dialog.fill_input_from_selected();
                 false
             }
             KeyCode::Enter => {
-                let path = dialog
-                    .results
-                    .get(dialog.selected)
-                    .cloned()
-                    .unwrap_or_else(|| PathBuf::from(dialog.input.text().trim()));
+                let Some(path) = dialog.selected_row().and_then(|selection| match selection {
+                    SearchListRow::Clear(_) => None,
+                    SearchListRow::Custom(value) => Some(PathBuf::from(value.raw)),
+                    SearchListRow::Item(path) => Some(path),
+                }) else {
+                    return false;
+                };
                 match self.stage_attachment_from_path(path.as_path(), false) {
                     Ok(()) => true,
                     Err(error) => {
@@ -3532,11 +4097,16 @@ impl App {
                     }
                 }
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                self.refresh_file_attach_overlay(dialog);
-                false
-            }
+            _ => match dialog.handle_filter_input_key(key, 10) {
+                SearchInputKeyResult::Close => true,
+                SearchInputKeyResult::Navigated => false,
+                SearchInputKeyResult::Edited { changed } => {
+                    if changed {
+                        self.refresh_file_attach_overlay(dialog);
+                    }
+                    false
+                }
+            },
         }
     }
 
@@ -3547,31 +4117,7 @@ impl App {
             .min(u16::MAX as usize) as u16;
         match key.code {
             KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.scroll = dialog.scroll.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                dialog.scroll = min(dialog.scroll.saturating_add(1), max_scroll);
-                false
-            }
-            KeyCode::PageUp => {
-                dialog.scroll = dialog.scroll.saturating_sub(8);
-                false
-            }
-            KeyCode::PageDown => {
-                dialog.scroll = min(dialog.scroll.saturating_add(8), max_scroll);
-                false
-            }
-            KeyCode::Home => {
-                dialog.scroll = 0;
-                false
-            }
-            KeyCode::End => {
-                dialog.scroll = max_scroll;
-                false
-            }
-            _ => false,
+            _ => dialog.handle_navigation_key(key, max_scroll, 8),
         }
     }
 
@@ -3581,57 +4127,29 @@ impl App {
         dialog: &mut SessionSearchOverlay,
     ) -> bool {
         match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
-                false
-            }
-            KeyCode::PageDown => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 10, dialog.items.len().saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                false
-            }
-            KeyCode::End => {
-                if !dialog.items.is_empty() {
-                    dialog.selected = dialog.items.len().saturating_sub(1);
-                }
-                false
-            }
             KeyCode::Left | KeyCode::Char('h') => {
-                if dialog.loading || dialog.page_index == 0 {
+                if dialog.loading || dialog.meta.page_index == 0 {
                     return false;
                 }
-                dialog.page_index = dialog.page_index.saturating_sub(1);
+                dialog.meta.page_index = dialog.meta.page_index.saturating_sub(1);
                 dialog.selected = 0;
-                match dialog.mode {
+                match dialog.meta.mode {
                     SessionViewMode::Subtree => {
                         self.refresh_session_search_overlay_local(dialog);
                     }
                     SessionViewMode::All | SessionViewMode::Roots => {
-                        let cursor = dialog.cursors.get(dialog.page_index).cloned().flatten();
+                        let cursor = dialog
+                            .meta
+                            .cursors
+                            .get(dialog.meta.page_index)
+                            .cloned()
+                            .flatten();
                         dialog.loading = true;
                         dialog.footer = self.session_search_footer(dialog);
                         self.request_session_search_page(
-                            dialog.mode,
+                            dialog.meta.mode,
                             dialog.input.text().trim().to_string(),
-                            dialog.page_index,
+                            dialog.meta.page_index,
                             cursor,
                         );
                     }
@@ -3639,31 +4157,31 @@ impl App {
                 false
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                if dialog.loading || !dialog.has_more {
+                if dialog.loading || !dialog.meta.has_more {
                     return false;
                 }
-                match dialog.mode {
+                match dialog.meta.mode {
                     SessionViewMode::Subtree => {
-                        dialog.page_index = dialog.page_index.saturating_add(1);
+                        dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
                         dialog.selected = 0;
                         self.refresh_session_search_overlay_local(dialog);
                     }
                     SessionViewMode::All | SessionViewMode::Roots => {
-                        let Some(cursor) = dialog.next_cursor.clone() else {
+                        let Some(cursor) = dialog.meta.next_cursor.clone() else {
                             return false;
                         };
-                        dialog.page_index = dialog.page_index.saturating_add(1);
-                        if dialog.cursors.len() <= dialog.page_index {
-                            dialog.cursors.resize(dialog.page_index + 1, None);
+                        dialog.meta.page_index = dialog.meta.page_index.saturating_add(1);
+                        if dialog.meta.cursors.len() <= dialog.meta.page_index {
+                            dialog.meta.cursors.resize(dialog.meta.page_index + 1, None);
                         }
-                        dialog.cursors[dialog.page_index] = Some(cursor.clone());
+                        dialog.meta.cursors[dialog.meta.page_index] = Some(cursor.clone());
                         dialog.selected = 0;
                         dialog.loading = true;
                         dialog.footer = self.session_search_footer(dialog);
                         self.request_session_search_page(
-                            dialog.mode,
+                            dialog.meta.mode,
                             dialog.input.text().trim().to_string(),
-                            dialog.page_index,
+                            dialog.meta.page_index,
                             Some(cursor),
                         );
                     }
@@ -3672,7 +4190,7 @@ impl App {
             }
             KeyCode::Tab => {
                 if let Some(session) = dialog.items.get(dialog.selected) {
-                    let title = session.title.clone();
+                    let title = session.session.title.clone();
                     if dialog.input.text() != title {
                         dialog.input.set_text(title.clone());
                         self.reset_session_search_query(dialog, title);
@@ -3684,71 +4202,77 @@ impl App {
                 let Some(session) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
-                self.open_session(session.id, session.title);
+                self.open_session(session.session.id, session.session.title);
                 self.focus = Focus::Composer;
                 true
             }
-            _ => {
-                let before = dialog.input.text().trim().to_string();
-                dialog.input.handle_line_input_key(key);
-                let after = dialog.input.text().trim().to_string();
-                if before != after {
-                    self.reset_session_search_query(dialog, after);
+            _ => match dialog.handle_filter_input_key(key, 10) {
+                SearchInputKeyResult::Close => true,
+                SearchInputKeyResult::Navigated => false,
+                SearchInputKeyResult::Edited { changed } => {
+                    if changed {
+                        self.reset_session_search_query(
+                            dialog,
+                            dialog.input.text().trim().to_string(),
+                        );
+                    }
+                    false
                 }
-                false
-            }
+            },
         }
     }
 
     fn reset_session_search_query(&mut self, dialog: &mut SessionSearchOverlay, query: String) {
-        dialog.page_index = 0;
+        dialog.meta.page_index = 0;
         dialog.selected = 0;
-        dialog.offset = 0;
-        dialog.cursors.clear();
-        dialog.cursors.push(None);
-        dialog.next_cursor = None;
-        dialog.has_more = false;
+        dialog.meta.offset = 0;
+        dialog.meta.cursors.clear();
+        dialog.meta.cursors.push(None);
+        dialog.meta.next_cursor = None;
+        dialog.meta.has_more = false;
         dialog.loading = true;
         dialog.footer = self.session_search_footer(dialog);
-        match dialog.mode {
+        dialog.meta.page_index = 0;
+        match dialog.meta.mode {
             SessionViewMode::Subtree => {
-                if let Some(session_id) = dialog.scope_session_id {
+                if let Some(session_id) = dialog.meta.scope_session_id {
                     self.request_session_search_subtree(session_id, query);
                 }
             }
             SessionViewMode::All | SessionViewMode::Roots => {
-                self.request_session_search_page(dialog.mode, query, 0, None);
+                self.request_session_search_page(dialog.meta.mode, query, 0, None);
             }
         }
     }
 
     fn refresh_session_search_overlay_local(&self, dialog: &mut SessionSearchOverlay) {
-        let query = dialog.input.text().trim().to_ascii_lowercase();
+        let query = dialog.input.text().trim();
         let filtered = dialog
+            .meta
             .all_items
             .iter()
-            .filter(|session| session_matches_query(session, query.as_str()))
+            .filter(|session| session.search_list_matches_query(query))
             .cloned()
             .collect::<Vec<_>>();
         let total = filtered.len();
-        let page_limit = dialog.page_limit.max(1);
+        let page_limit = dialog.meta.page_limit.max(1);
         let max_page_index = total.saturating_sub(1) / page_limit;
-        dialog.page_index = min(dialog.page_index, max_page_index);
-        dialog.offset = dialog.page_index.saturating_mul(page_limit);
+        dialog.meta.page_index = min(dialog.meta.page_index, max_page_index);
+        dialog.meta.offset = dialog.meta.page_index.saturating_mul(page_limit);
         dialog.items = filtered
             .into_iter()
-            .skip(dialog.offset)
+            .skip(dialog.meta.offset)
             .take(page_limit)
             .collect();
-        dialog.has_more = dialog.offset + dialog.items.len() < total;
-        dialog.next_cursor = None;
-        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+        dialog.meta.has_more = dialog.meta.offset + dialog.items.len() < total;
+        dialog.meta.next_cursor = None;
+        dialog.clamp_selection();
         dialog.loading = false;
         dialog.footer = self.session_search_footer(dialog);
     }
 
     fn session_search_footer(&self, dialog: &SessionSearchOverlay) -> String {
-        let scope = match dialog.mode {
+        let scope = match dialog.meta.mode {
             SessionViewMode::All => ui_text::t(&self.i18n, "overlay-session-search-scope-all"),
             SessionViewMode::Roots => ui_text::t(&self.i18n, "overlay-session-search-scope-roots"),
             SessionViewMode::Subtree => {
@@ -3758,24 +4282,20 @@ impl App {
         let start = if dialog.items.is_empty() {
             0
         } else {
-            dialog.offset.saturating_add(1)
+            dialog.meta.offset.saturating_add(1)
         };
-        let end = dialog.offset.saturating_add(dialog.items.len());
-        if dialog.mode == SessionViewMode::Subtree {
+        let end = dialog.meta.offset.saturating_add(dialog.items.len());
+        if dialog.meta.mode == SessionViewMode::Subtree {
             let total = dialog
+                .meta
                 .all_items
                 .iter()
-                .filter(|session| {
-                    session_matches_query(
-                        session,
-                        dialog.input.text().trim().to_ascii_lowercase().as_str(),
-                    )
-                })
+                .filter(|session| session.search_list_matches_query(dialog.input.text().trim()))
                 .count();
             let page_total = if total == 0 {
                 0
             } else {
-                (total + dialog.page_limit.saturating_sub(1)) / dialog.page_limit.max(1)
+                (total + dialog.meta.page_limit.saturating_sub(1)) / dialog.meta.page_limit.max(1)
             };
             return self.i18n.text_args(
                 "overlay-session-search-footer-local",
@@ -3784,13 +4304,13 @@ impl App {
                     "start" => start as i64,
                     "end" => end as i64,
                     "total" => total as i64,
-                    "page" => dialog.page_index.saturating_add(1) as i64,
+                    "page" => dialog.meta.page_index.saturating_add(1) as i64,
                     "pages" => page_total.max(1) as i64,
                 ),
             );
         }
 
-        let end_state = if dialog.has_more {
+        let end_state = if dialog.meta.has_more {
             ui_text::t(&self.i18n, "overlay-session-search-tail-more")
         } else {
             ui_text::t(&self.i18n, "overlay-session-search-tail-end")
@@ -3801,7 +4321,7 @@ impl App {
                 "scope" => scope,
                 "start" => start as i64,
                 "end" => end as i64,
-                "page" => dialog.page_index.saturating_add(1) as i64,
+                "page" => dialog.meta.page_index.saturating_add(1) as i64,
                 "tail" => end_state,
             ),
         )
@@ -3809,30 +4329,18 @@ impl App {
 
     fn handle_picker_overlay_key(&mut self, key: KeyEvent, dialog: &mut PickerOverlay) -> bool {
         match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
-                }
-                false
-            }
             KeyCode::Tab => {
-                if let Some(item) = dialog.items.get(dialog.selected) {
-                    dialog.input.set_text(item.label.clone());
+                if dialog.fill_input_from_selected() {
                     Self::refresh_picker_overlay(dialog);
                 }
                 false
             }
-            KeyCode::Char('n') if matches!(dialog.kind, PickerKind::PermissionRules) => {
-                self.open_permission_rule_editor(None, dialog.input.text(), None);
+            KeyCode::Char('n') if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
+                self.route_stack.push(Route::Picker(dialog.clone()));
+                self.open_permission_rule_studio(None, None);
                 false
             }
-            KeyCode::Char('d') if matches!(dialog.kind, PickerKind::PermissionRules) => {
+            KeyCode::Char('d') if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
@@ -3847,31 +4355,34 @@ impl App {
                 let Some(item) = dialog.items.get(dialog.selected).cloned() else {
                     return false;
                 };
-                if matches!(dialog.kind, PickerKind::PermissionRules) {
+                if matches!(dialog.meta.kind, PickerKind::PermissionRules) {
                     match item.value {
                         PickerValue::PermissionRuleCreate => {
-                            self.open_permission_rule_editor(None, dialog.input.text(), None);
+                            self.route_stack.push(Route::Picker(dialog.clone()));
+                            self.open_permission_rule_studio(None, None);
                             return false;
                         }
                         PickerValue::PermissionRule(rule) => {
-                            self.open_permission_rule_editor(
-                                Some(&rule),
-                                dialog.input.text(),
-                                None,
-                            );
+                            self.route_stack.push(Route::Picker(dialog.clone()));
+                            self.open_permission_rule_studio(Some(&rule), None);
                             return false;
                         }
                         _ => {}
                     }
                 }
-                self.handle_picker_selection(dialog.kind.clone(), item);
+                self.handle_picker_selection(dialog.meta.kind.clone(), item);
                 true
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                Self::refresh_picker_overlay(dialog);
-                false
-            }
+            _ => match dialog.handle_filter_input_key(key, 10) {
+                SearchInputKeyResult::Close => true,
+                SearchInputKeyResult::Navigated => false,
+                SearchInputKeyResult::Edited { changed } => {
+                    if changed {
+                        Self::refresh_picker_overlay(dialog);
+                    }
+                    false
+                }
+            },
         }
     }
 
@@ -3881,37 +4392,12 @@ impl App {
         dialog: &mut SessionModelChooserOverlay,
     ) -> bool {
         match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
+            KeyCode::Left => {
+                dialog.move_selection_page(-1, dialog.meta.page_size);
                 false
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::Left | KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(dialog.page_size.max(1));
-                false
-            }
-            KeyCode::Right | KeyCode::PageDown => {
-                if !dialog.items.is_empty() {
-                    dialog.selected = min(
-                        dialog.selected + dialog.page_size.max(1),
-                        dialog.items.len().saturating_sub(1),
-                    );
-                }
-                false
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                false
-            }
-            KeyCode::End => {
-                dialog.selected = dialog.items.len().saturating_sub(1);
+            KeyCode::Right => {
+                dialog.move_selection_page(1, dialog.meta.page_size);
                 false
             }
             KeyCode::Enter => {
@@ -3921,51 +4407,23 @@ impl App {
                 self.apply_model_override(item.model);
                 true
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                Self::refresh_session_model_chooser_overlay(dialog, false, None);
-                false
-            }
+            _ => match dialog.handle_filter_input_key(key, dialog.meta.page_size) {
+                SearchInputKeyResult::Close => true,
+                SearchInputKeyResult::Navigated => false,
+                SearchInputKeyResult::Edited { changed } => {
+                    if changed {
+                        Self::refresh_session_model_chooser_overlay(dialog, false, None);
+                    }
+                    false
+                }
+            },
         }
     }
 
     fn handle_timeline_overlay_key(&mut self, key: KeyEvent, dialog: &mut TimelineOverlay) -> bool {
         match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
-                false
-            }
-            KeyCode::PageDown => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 10, dialog.items.len().saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                false
-            }
-            KeyCode::End => {
-                if !dialog.items.is_empty() {
-                    dialog.selected = dialog.items.len().saturating_sub(1);
-                }
-                false
-            }
             KeyCode::Enter => {
-                if let Some(item) = dialog.items.get(dialog.selected)
+                if let Some(item) = dialog.selected_item()
                     && let Some(message_id) = item.linked_message_id
                 {
                     self.jump_to_message(message_id);
@@ -3974,7 +4432,7 @@ impl App {
                 false
             }
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(item) = dialog.items.get(dialog.selected) {
+                if let Some(item) = dialog.selected_item() {
                     match set_clipboard_text(item.copy_text.as_str()) {
                         Ok(()) => self
                             .flash_success(ui_text::t(&self.i18n, "flash-timeline-event-copied")),
@@ -3986,11 +4444,16 @@ impl App {
                 }
                 false
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                Self::refresh_timeline_overlay(dialog);
-                false
-            }
+            _ => match dialog.handle_filter_input_key(key, 10) {
+                SearchInputKeyResult::Close => true,
+                SearchInputKeyResult::Navigated => false,
+                SearchInputKeyResult::Edited { changed } => {
+                    if changed {
+                        Self::refresh_timeline_overlay(dialog);
+                    }
+                    false
+                }
+            },
         }
     }
 
@@ -4000,42 +4463,9 @@ impl App {
         dialog: &mut PluginInspectorOverlay,
     ) -> bool {
         match key.code {
-            KeyCode::Esc => true,
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 1, dialog.items.len().saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
-                false
-            }
-            KeyCode::PageDown => {
-                if !dialog.items.is_empty() {
-                    dialog.selected =
-                        min(dialog.selected + 10, dialog.items.len().saturating_sub(1));
-                }
-                false
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                false
-            }
-            KeyCode::End => {
-                if !dialog.items.is_empty() {
-                    dialog.selected = dialog.items.len().saturating_sub(1);
-                }
-                false
-            }
             KeyCode::Enter => false,
             KeyCode::Tab => {
-                if let Some(item) = dialog.items.get(dialog.selected) {
+                if let Some(item) = dialog.selected_item() {
                     dialog.input.set_text(item.plugin_id.clone());
                     Self::refresh_plugin_inspector_overlay(dialog);
                 }
@@ -4046,7 +4476,7 @@ impl App {
                 false
             }
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(item) = dialog.items.get(dialog.selected) {
+                if let Some(item) = dialog.selected_item() {
                     match set_clipboard_text(item.copy_text.as_str()) {
                         Ok(()) => self
                             .flash_success(ui_text::t(&self.i18n, "flash-timeline-event-copied")),
@@ -4058,11 +4488,16 @@ impl App {
                 }
                 false
             }
-            _ => {
-                dialog.input.handle_line_input_key(key);
-                Self::refresh_plugin_inspector_overlay(dialog);
-                false
-            }
+            _ => match dialog.handle_filter_input_key(key, 10) {
+                SearchInputKeyResult::Close => true,
+                SearchInputKeyResult::Navigated => false,
+                SearchInputKeyResult::Edited { changed } => {
+                    if changed {
+                        Self::refresh_plugin_inspector_overlay(dialog);
+                    }
+                    false
+                }
+            },
         }
     }
 
@@ -4072,67 +4507,54 @@ impl App {
         dialog: &mut ProviderStudioOverlay,
     ) -> bool {
         if let Some(editor) = dialog.editor.as_mut() {
-            if matches!(key.code, KeyCode::Esc) {
-                dialog.editor = None;
-                return false;
-            }
-
-            if editor.multiline {
-                if matches!(key.code, KeyCode::Char('s'))
-                    && key.modifiers.contains(KeyModifiers::CONTROL)
-                {
-                    editor.input.flush_all_pending_input();
-                    let value = editor.input.text().trim();
-                    let parsed = if value.is_empty() {
-                        Ok(JsonValue::Object(Default::default()))
-                    } else {
-                        serde_json::from_str::<JsonValue>(value).map_err(|error| error.to_string())
-                    };
-                    match (&editor.action, parsed) {
-                        (
-                            ProviderStudioEditorAction::ModelJson {
-                                adapter_id,
-                                model_id,
-                            },
-                            Ok(model_value),
-                        ) => {
-                            dialog.saving = true;
-                            self.request_provider_studio_save_model_value(
-                                dialog.draft.clone(),
-                                adapter_id.clone(),
-                                model_id.clone(),
-                                model_value,
-                            );
-                            dialog.editor = None;
-                        }
-                        (_, Err(error)) => self.flash_error(format!("invalid model json: {error}")),
-                        _ => {}
-                    }
+            match drive_editor_dialog_key(editor, key) {
+                EditorDialogKeyResult::Continue => return false,
+                EditorDialogKeyResult::Close => {
+                    dialog.editor = None;
                     return false;
                 }
-
-                editor.input.handle_multiline_input_key(key);
-                return false;
-            }
-
-            return match key.code {
-                KeyCode::Enter => {
-                    editor.input.flush_all_pending_input();
-                    let value = editor.input.text().trim().to_string();
-                    if let ProviderStudioEditorAction::Field(field) = editor.action
-                        && let Err(error) = self.commit_provider_studio_field(dialog, field, value)
-                    {
-                        self.flash_error(error);
+                EditorDialogKeyResult::Submit(action, input) => match action {
+                    ProviderStudioEditorAction::Field(field) => {
+                        let value = input.trim().to_string();
+                        if let Err(error) = self.commit_provider_studio_field(dialog, field, value)
+                        {
+                            self.flash_error(error);
+                            return false;
+                        }
+                        dialog.editor = None;
                         return false;
                     }
-                    dialog.editor = None;
-                    false
-                }
-                _ => {
-                    editor.input.handle_line_input_key(key);
-                    false
-                }
-            };
+                    ProviderStudioEditorAction::ModelJson {
+                        adapter_id,
+                        model_id,
+                    } => {
+                        let value = input.trim();
+                        let parsed = if value.is_empty() {
+                            Ok(JsonValue::Object(Default::default()))
+                        } else {
+                            serde_json::from_str::<JsonValue>(value)
+                                .map_err(|error| error.to_string())
+                        };
+                        match parsed {
+                            Ok(model_value) => {
+                                dialog.saving = true;
+                                self.request_provider_studio_save_model_value(
+                                    dialog.draft.clone(),
+                                    adapter_id,
+                                    model_id,
+                                    model_value,
+                                );
+                                dialog.editor = None;
+                            }
+                            Err(error) => self.flash_error(self.i18n.text_args(
+                                "flash-provider-studio-invalid-model-json",
+                                &crate::fl_args!("error" => error),
+                            )),
+                        }
+                        return false;
+                    }
+                },
+            }
         }
 
         if dialog.detail_page.is_some() {
@@ -4142,11 +4564,11 @@ impl App {
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Tab => {
-                dialog.focus = dialog.focus.next(dialog.show_provider_list);
+                dialog.selection.next_focus();
                 false
             }
             KeyCode::BackTab => {
-                dialog.focus = dialog.focus.prev(dialog.show_provider_list);
+                dialog.selection.prev_focus();
                 false
             }
             KeyCode::Char('n') => {
@@ -4182,22 +4604,22 @@ impl App {
                 self.request_provider_studio_save_selected_adapter(dialog.clone());
                 false
             }
-            KeyCode::Char('A') if dialog.focus == ProviderStudioFocus::Adapters => {
+            KeyCode::Char('A') if dialog.selection.focus() == ProviderStudioFocus::Adapters => {
                 Self::select_all_provider_studio_adapters(dialog);
                 false
             }
-            KeyCode::Char('A') if dialog.focus == ProviderStudioFocus::Models => {
+            KeyCode::Char('A') if dialog.selection.focus() == ProviderStudioFocus::Models => {
                 Self::select_all_provider_studio_models(dialog);
                 false
             }
             KeyCode::Char('c') | KeyCode::Char('C')
-                if dialog.focus == ProviderStudioFocus::Adapters =>
+                if dialog.selection.focus() == ProviderStudioFocus::Adapters =>
             {
                 Self::clear_provider_studio_selected_adapters(dialog);
                 false
             }
             KeyCode::Char('c') | KeyCode::Char('C')
-                if dialog.focus == ProviderStudioFocus::Models =>
+                if dialog.selection.focus() == ProviderStudioFocus::Models =>
             {
                 Self::clear_provider_studio_selected_models(dialog);
                 false
@@ -4214,28 +4636,28 @@ impl App {
                 self.request_provider_studio_save_selected_model(dialog.clone());
                 false
             }
-            KeyCode::Char(' ') if dialog.focus == ProviderStudioFocus::Adapters => {
+            KeyCode::Char(' ') if dialog.selection.focus() == ProviderStudioFocus::Adapters => {
                 self.toggle_provider_studio_selected_adapter(dialog);
                 false
             }
-            KeyCode::Char(' ') if dialog.focus == ProviderStudioFocus::Models => {
+            KeyCode::Char(' ') if dialog.selection.focus() == ProviderStudioFocus::Models => {
                 self.toggle_provider_studio_selected_model(dialog);
                 false
             }
             KeyCode::PageUp => {
-                self.move_provider_studio_selection(dialog, -10);
+                self.move_provider_studio_selection_page(dialog, -1, 10);
                 false
             }
             KeyCode::PageDown => {
-                self.move_provider_studio_selection(dialog, 10);
+                self.move_provider_studio_selection_page(dialog, 1, 10);
                 false
             }
             KeyCode::Home => {
-                self.set_provider_studio_selection(dialog, 0);
+                self.move_provider_studio_selection_home(dialog);
                 false
             }
             KeyCode::End => {
-                self.set_provider_studio_selection(dialog, usize::MAX);
+                self.move_provider_studio_selection_end(dialog);
                 false
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -4259,37 +4681,30 @@ impl App {
         key: KeyEvent,
         dialog: &mut ModelCatalogStudioOverlay,
     ) -> bool {
-        if let Some(editor) = dialog.editor.as_mut() {
-            return match key.code {
-                KeyCode::Esc => {
-                    dialog.editor = None;
+        if let Some(editor) = dialog.workbench.editor.as_mut() {
+            return match drive_input_dialog_key(editor, key) {
+                InputDialogKeyResult::Close => {
+                    dialog.workbench.editor = None;
                     false
                 }
-                KeyCode::Enter => {
-                    editor.input.flush_all_pending_input();
-                    dialog.query = editor.input.text().trim().to_string();
+                InputDialogKeyResult::Submit(_, value) => {
+                    dialog.query = value.trim().to_string();
                     dialog.offset = 0;
-                    dialog.selected = 0;
+                    dialog.workbench.list.selected = 0;
                     dialog.loading = true;
-                    dialog.editor = None;
+                    dialog.workbench.editor = None;
                     self.request_model_catalog_page(dialog.query.clone(), 0);
                     false
                 }
-                _ => {
-                    editor.input.handle_line_input_key(key);
-                    false
-                }
+                InputDialogKeyResult::Continue => false,
             };
         }
 
         match key.code {
             KeyCode::Esc => true,
             KeyCode::Char('/') => {
-                dialog.editor = Some(LineInputOverlay {
-                    title: ui_text::t(&self.i18n, "overlay-model-catalog-search-title"),
-                    prompt: ui_text::t(&self.i18n, "overlay-model-catalog-search-prompt"),
-                    input: Editor::from_text(dialog.query.clone()),
-                });
+                dialog.workbench.editor =
+                    Some(self.build_model_catalog_search_overlay(dialog.query.as_str()));
                 false
             }
             KeyCode::Char('R') => {
@@ -4303,51 +4718,22 @@ impl App {
                 }
                 let offset = dialog.offset.saturating_sub(dialog.limit.max(1));
                 dialog.offset = offset;
-                dialog.selected = 0;
+                dialog.workbench.list.selected = 0;
                 dialog.loading = true;
                 self.request_model_catalog_page(dialog.query.clone(), offset);
                 false
             }
             KeyCode::Right | KeyCode::Char('l') => {
-                if dialog.offset + dialog.items.len() >= dialog.total {
+                if dialog.offset + dialog.workbench.list.items.len() >= dialog.total {
                     return false;
                 }
                 dialog.offset += dialog.limit.max(1);
-                dialog.selected = 0;
+                dialog.workbench.list.selected = 0;
                 dialog.loading = true;
                 self.request_model_catalog_page(dialog.query.clone(), dialog.offset);
                 false
             }
-            KeyCode::PageUp => {
-                dialog.selected = dialog.selected.saturating_sub(10);
-                false
-            }
-            KeyCode::PageDown => {
-                dialog.selected = min(
-                    dialog.selected.saturating_add(10),
-                    dialog.items.len().saturating_sub(1),
-                );
-                false
-            }
-            KeyCode::Home => {
-                dialog.selected = 0;
-                false
-            }
-            KeyCode::End => {
-                dialog.selected = dialog.items.len().saturating_sub(1);
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                dialog.selected = dialog.selected.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                dialog.selected = min(
-                    dialog.selected.saturating_add(1),
-                    dialog.items.len().saturating_sub(1),
-                );
-                false
-            }
+            _ if dialog.workbench.list.handle_navigation_key(key, 10) => false,
             _ => false,
         }
     }
@@ -4362,14 +4748,21 @@ impl App {
                 Route::Main => {}
                 Route::Help(_) | Route::SettingsStudio(_) => {}
                 Route::AgentStudio(dialog) => {
-                    if let Some(editor) = dialog.editor.as_mut() {
+                    if let Some(editor) = dialog.workbench.editor.as_mut() {
                         editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
                     }
                 }
                 Route::AgentPermissionStudio(dialog) => {
-                    if let Some(editor) = dialog.editor.as_mut() {
+                    if let Some(editor) = dialog.workbench.editor.as_mut() {
+                        editor.input.flush_all_pending_input();
+                        editor.input.insert_str(text.as_str());
+                        handled_route = true;
+                    }
+                }
+                Route::PermissionRuleStudio(dialog) => {
+                    if let Some(editor) = dialog.workbench.editor.as_mut() {
                         editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
@@ -4381,16 +4774,16 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                     let after = dialog.input.text().trim().to_string();
                     if before != after {
-                        dialog.page_index = 0;
+                        dialog.meta.page_index = 0;
                         dialog.selected = 0;
-                        dialog.offset = 0;
-                        dialog.cursors.clear();
-                        dialog.cursors.push(None);
-                        dialog.next_cursor = None;
-                        dialog.has_more = false;
+                        dialog.meta.offset = 0;
+                        dialog.meta.cursors.clear();
+                        dialog.meta.cursors.push(None);
+                        dialog.meta.next_cursor = None;
+                        dialog.meta.has_more = false;
                         dialog.loading = true;
                         pending_session_search_request =
-                            Some((dialog.mode, dialog.scope_session_id, after));
+                            Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
                     }
                     handled_route = true;
                 }
@@ -4426,7 +4819,7 @@ impl App {
                     }
                 }
                 Route::ModelCatalogStudio(dialog) => {
-                    if let Some(editor) = dialog.editor.as_mut() {
+                    if let Some(editor) = dialog.workbench.editor.as_mut() {
                         editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                         handled_route = true;
@@ -4466,23 +4859,31 @@ impl App {
                 Overlay::Choice(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
-                    Self::sync_choice_overlay_query(dialog, true);
+                    Self::sync_choice_overlay_input(dialog, true);
                 }
                 Overlay::PermissionRuleEdit(dialog) => {
-                    dialog.input.flush_all_pending_input();
-                    dialog.input.insert_str(text.as_str());
+                    dialog.state.input.flush_all_pending_input();
+                    dialog.state.input.insert_str(text.as_str());
                 }
                 Overlay::FileAttach(dialog) => {
                     dialog.input.flush_all_pending_input();
                     dialog.input.insert_str(text.as_str());
-                    dialog.results = backend
+                    dialog.items = backend
                         .search_workspace_files(dialog.input.text(), 24)
                         .unwrap_or_default();
-                    dialog.selected = min(dialog.selected, dialog.results.len().saturating_sub(1));
+                    dialog.clamp_selection();
+                }
+                Overlay::PathBrowser(dialog) => {
+                    dialog.input.flush_all_pending_input();
+                    dialog.input.insert_str(text.as_str());
+                    Self::refresh_path_browser_overlay_with_root(
+                        self.backend.workspace_root(),
+                        dialog,
+                    );
                 }
                 Overlay::UserInputReply(dialog) => {
-                    if dialog.screen == UserInputOverlayScreen::Review {
-                        Self::focus_user_input_question(dialog, dialog.selected_question);
+                    if dialog.state.screen() == QuestionFlowScreen::Review {
+                        Self::focus_user_input_question(dialog, dialog.state.selected_question());
                     }
                     if !dialog.editing_custom && !Self::begin_user_input_custom_edit(dialog) {
                         return;
@@ -4496,16 +4897,16 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                     let after = dialog.input.text().trim().to_string();
                     if before != after {
-                        dialog.page_index = 0;
+                        dialog.meta.page_index = 0;
                         dialog.selected = 0;
-                        dialog.offset = 0;
-                        dialog.cursors.clear();
-                        dialog.cursors.push(None);
-                        dialog.next_cursor = None;
-                        dialog.has_more = false;
+                        dialog.meta.offset = 0;
+                        dialog.meta.cursors.clear();
+                        dialog.meta.cursors.push(None);
+                        dialog.meta.next_cursor = None;
+                        dialog.meta.has_more = false;
                         dialog.loading = true;
                         pending_session_search_request =
-                            Some((dialog.mode, dialog.scope_session_id, after));
+                            Some((dialog.meta.mode, dialog.meta.scope_session_id, after));
                     }
                 }
                 Overlay::Picker(dialog) => {
@@ -4525,7 +4926,7 @@ impl App {
                     }
                 }
                 Overlay::ModelCatalogStudio(dialog) => {
-                    if let Some(editor) = dialog.editor.as_mut() {
+                    if let Some(editor) = dialog.workbench.editor.as_mut() {
                         editor.input.flush_all_pending_input();
                         editor.input.insert_str(text.as_str());
                     }
@@ -4605,10 +5006,10 @@ impl App {
                     self.focus = Focus::Transcript;
                 }
             }
-            KeyCode::Home => self.sessions.selected = 0,
+            KeyCode::Home => self.sessions.list.move_selection_home(),
             KeyCode::End => {
-                if !self.sessions.items.is_empty() {
-                    self.sessions.selected = self.sessions.items.len().saturating_sub(1);
+                if !self.sessions.list.items.is_empty() {
+                    self.sessions.list.move_selection_end();
                     self.maybe_request_more_sessions();
                 }
             }
@@ -4619,7 +5020,11 @@ impl App {
     fn handle_transcript_key(&mut self, key: KeyEvent) {
         let width = self.layout.transcript_body.width;
         let height = self.layout.transcript_body.height;
-        if matches!(key.code, KeyCode::Char('i')) {
+        if matches!(key.code, KeyCode::Char('1'..='9'))
+            || matches!(key.code, KeyCode::Char('0')) && self.transcript_motion_prefix.is_some()
+        {
+            return;
+        } else if matches!(key.code, KeyCode::Char('i')) {
             self.enter_insert_mode();
         } else if matches!(key.code, KeyCode::Char('y')) {
             self.copy_transcript_cursor_node();
@@ -4634,43 +5039,74 @@ impl App {
             KeyCode::Enter | KeyCode::Char('o') | KeyCode::Char(' ')
         ) {
             self.toggle_transcript_cursor_node();
+        } else if matches!(key.code, KeyCode::Char('h')) {
+            let count = self.transcript_motion_count();
+            self.transcript
+                .move_by_blocks(width, height, TranscriptMoveDirection::Up, count);
+            self.maybe_request_older_messages();
+        } else if matches!(key.code, KeyCode::Char('l')) {
+            let count = self.transcript_motion_count();
+            self.transcript
+                .move_by_blocks(width, height, TranscriptMoveDirection::Down, count);
         } else if matches!(key.code, KeyCode::Up | KeyCode::Char('k')) {
-            self.transcript.scroll_by_lines(width, height, -1);
+            let count = self.transcript_motion_count();
+            self.transcript.scroll_by_lines_with_blocks(
+                width,
+                height,
+                TranscriptMoveDirection::Up,
+                count,
+            );
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::Down | KeyCode::Char('j')) {
-            self.transcript.scroll_by_lines(width, height, 1);
+            let count = self.transcript_motion_count();
+            self.transcript.scroll_by_lines_with_blocks(
+                width,
+                height,
+                TranscriptMoveDirection::Down,
+                count,
+            );
         } else if matches!(key.code, KeyCode::PageUp)
             || matches!(key.code, KeyCode::Char('b'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, false);
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::PageDown)
             || matches!(key.code, KeyCode::Char('f'))
                 && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, true);
         } else if matches!(key.code, KeyCode::Char(' '))
             && key.modifiers.contains(KeyModifiers::SHIFT)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, false);
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::Char(' ')) {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_page(width, height, true);
         } else if matches!(key.code, KeyCode::Char('u'))
             && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_half_page(width, height, false);
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::Char('d'))
             && key.modifiers.contains(KeyModifiers::CONTROL)
         {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_by_half_page(width, height, true);
         } else if matches!(key.code, KeyCode::Home | KeyCode::Char('g')) {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_to_top(width, height);
             self.maybe_request_older_messages();
         } else if matches!(key.code, KeyCode::End | KeyCode::Char('G')) {
+            self.transcript_motion_prefix = None;
             self.transcript.scroll_to_bottom(width, height);
+        } else {
+            self.transcript_motion_prefix = None;
         }
     }
 
@@ -4693,14 +5129,13 @@ impl App {
         self.transcript.invalidate_render();
         self.transcript.clamp_scroll(width, height);
         if node.toggleable {
-            self.flash_info(format!(
-                "{} {}",
+            self.flash_info(self.i18n.text_args(
                 if node.expanded {
-                    "collapsed"
+                    "flash-transcript-node-collapsed"
                 } else {
-                    "expanded"
+                    "flash-transcript-node-expanded"
                 },
-                node.kind.label()
+                &crate::fl_args!("kind" => transcript_node_kind_label(&self.i18n, node.kind)),
             ));
         }
     }
@@ -4711,8 +5146,14 @@ impl App {
             return;
         };
         match set_clipboard_text(node.copy_text.as_str()) {
-            Ok(()) => self.flash_success(format!("copied current {}", node.kind.label())),
-            Err(error) => self.flash_error(format!("clipboard copy failed: {error}")),
+            Ok(()) => self.flash_success(self.i18n.text_args(
+                "flash-transcript-node-copied",
+                &crate::fl_args!("kind" => transcript_node_kind_label(&self.i18n, node.kind)),
+            )),
+            Err(error) => self.flash_error(self.i18n.text_args(
+                "flash-clipboard-copy-failed",
+                &crate::fl_args!("error" => error.to_string()),
+            )),
         }
     }
 
@@ -4946,7 +5387,7 @@ impl App {
                 });
             }
             ComposerItem::LargePaste(_) => {
-                self.flash_info("large paste snippets can be removed, but do not have a file view");
+                self.flash_info(ui_text::t(&self.i18n, "flash-large-paste-no-file-view"));
             }
         }
     }
@@ -4961,7 +5402,7 @@ impl App {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.replace_composer_draft(search.original.clone());
+                self.replace_composer_draft(search.meta.original.clone());
                 true
             }
             KeyEvent {
@@ -4969,7 +5410,7 @@ impl App {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                if let Some(result) = search.results.get(search.selected).cloned() {
+                if let Some(result) = search.selected_item().cloned() {
                     self.replace_composer_draft(ComposerDraft {
                         text: result.text,
                         ..ComposerDraft::default()
@@ -4987,12 +5428,7 @@ impl App {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                if !search.results.is_empty() {
-                    search.selected = min(
-                        search.selected.saturating_add(1),
-                        search.results.len().saturating_sub(1),
-                    );
-                }
+                move_selected_index(&mut search.selected, search.items.len(), 1);
                 false
             }
             KeyEvent {
@@ -5000,7 +5436,7 @@ impl App {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                search.selected = search.selected.saturating_sub(1);
+                move_selected_index(&mut search.selected, search.items.len(), -1);
                 false
             }
             _ => {
@@ -5019,12 +5455,13 @@ impl App {
     fn open_prompt_history_search(&mut self) {
         self.composer.flush_all_pending_input();
         self.after_composer_text_mutated();
-        let mut search = PromptHistorySearchState {
-            query: Editor::default(),
-            results: Vec::new(),
-            selected: 0,
-            original: self.current_composer_draft(),
-        };
+        let mut search = PromptHistorySearchState::new(
+            Editor::default(),
+            0,
+            PromptHistorySearchMeta {
+                original: self.current_composer_draft(),
+            },
+        );
         Self::refresh_prompt_history_search(&self.prompt_history, &mut search);
         self.slash_command_suggestions = None;
         self.file_mention_suggestions = None;
@@ -5038,7 +5475,7 @@ impl App {
     ) {
         search.query.flush_all_pending_input();
         let query = search.query.text().trim().to_ascii_lowercase();
-        search.results = prompt_history
+        search.items = prompt_history
             .entries
             .iter()
             .enumerate()
@@ -5050,7 +5487,7 @@ impl App {
                 text: text.clone(),
             })
             .collect();
-        search.selected = min(search.selected, search.results.len().saturating_sub(1));
+        search.clamp_selection();
     }
 
     fn handle_file_mention_suggestion_key(&mut self, key: KeyEvent) -> bool {
@@ -5110,12 +5547,7 @@ impl App {
         let Some(state) = self.file_mention_suggestions.as_mut() else {
             return;
         };
-        if state.items.is_empty() {
-            state.selected = 0;
-            return;
-        }
-        let len = state.items.len() as isize;
-        state.selected = (state.selected as isize + delta).rem_euclid(len) as usize;
+        state.move_selection_cycle(delta);
     }
 
     fn dismiss_file_mention_suggestions(&mut self) {
@@ -5135,12 +5567,12 @@ impl App {
         self.file_mention_suggestions = None;
         self.dismissed_file_mention_suggestions_for = None;
         self.composer
-            .remove_range(state.mention_range.start, state.mention_range.end);
+            .remove_range(state.meta.mention_range.start, state.meta.mention_range.end);
         if let Err(error) = self.stage_attachment_from_path(item.path.as_path(), false) {
             self.flash_error(error);
             return;
         }
-        let after_cursor_is_space = self.composer.text()[self.composer.cursor..]
+        let after_cursor_is_space = self.composer.text()[self.composer.cursor()..]
             .chars()
             .next()
             .is_some_and(char::is_whitespace);
@@ -5174,13 +5606,15 @@ impl App {
             .filter(|state| state.query == context.query)
             .map(|state| min(state.selected, items.len().saturating_sub(1)))
             .unwrap_or(0);
-        self.file_mention_suggestions = Some(FileMentionSuggestionState {
-            query: context.query,
-            fingerprint: context.fingerprint,
-            mention_range: context.mention_range,
+        self.file_mention_suggestions = Some(FileMentionSuggestionState::new(
+            context.query,
+            context.fingerprint,
             items,
             selected,
-        });
+            FileMentionSuggestionMeta {
+                mention_range: context.mention_range,
+            },
+        ));
     }
 
     fn file_mention_suggestion_context(&self) -> Option<FileMentionSuggestionContext> {
@@ -5191,7 +5625,7 @@ impl App {
         if self.prompt_history_search.is_some() {
             return None;
         }
-        file_mention_suggestion_context_for_text(self.composer.text(), self.composer.cursor)
+        file_mention_suggestion_context_for_text(self.composer.text(), self.composer.cursor())
     }
 
     fn file_mention_suggestion_items(&self, query: &str) -> Vec<FileMentionSuggestionItem> {
@@ -5274,12 +5708,7 @@ impl App {
         let Some(state) = self.slash_command_suggestions.as_mut() else {
             return;
         };
-        if state.items.is_empty() {
-            state.selected = 0;
-            return;
-        }
-        let len = state.items.len() as isize;
-        state.selected = (state.selected as isize + delta).rem_euclid(len) as usize;
+        state.move_selection_cycle(delta);
     }
 
     fn dismiss_slash_command_suggestions(&mut self) {
@@ -5303,7 +5732,7 @@ impl App {
 
     fn selected_slash_command_suggestion(&self) -> Option<&SlashCommandSuggestionItem> {
         let state = self.slash_command_suggestions.as_ref()?;
-        state.items.get(state.selected)
+        state.selected_item()
     }
 
     fn apply_slash_command_completion(&mut self, item: &SlashCommandSuggestionItem) {
@@ -5324,7 +5753,7 @@ impl App {
         self.composer
             .insert_str_at(context.name_range.start, replacement.as_str());
 
-        let after_cursor_is_space = self.composer.text()[self.composer.cursor..]
+        let after_cursor_is_space = self.composer.text()[self.composer.cursor()..]
             .chars()
             .next()
             .is_some_and(char::is_whitespace);
@@ -5358,12 +5787,13 @@ impl App {
             .filter(|state| state.query == context.query)
             .map(|state| min(state.selected, items.len().saturating_sub(1)))
             .unwrap_or(0);
-        self.slash_command_suggestions = Some(SlashCommandSuggestionState {
-            query: context.query,
-            fingerprint: context.fingerprint,
+        self.slash_command_suggestions = Some(SlashCommandSuggestionState::new(
+            context.query,
+            context.fingerprint,
             items,
             selected,
-        });
+            SlashCommandSuggestionMeta,
+        ));
     }
 
     fn slash_command_suggestion_context(&self) -> Option<SlashCommandSuggestionContext> {
@@ -5372,8 +5802,10 @@ impl App {
             return None;
         }
 
-        let context =
-            slash_command_suggestion_context_for_text(self.composer.text(), self.composer.cursor)?;
+        let context = slash_command_suggestion_context_for_text(
+            self.composer.text(),
+            self.composer.cursor(),
+        )?;
         if !context.query.is_empty()
             && self
                 .slash_command_suggestion_items(context.query.as_str())
@@ -5653,9 +6085,10 @@ impl App {
         self.transcript.state_loading = false;
         match result {
             Ok(execution) => {
+                let session_id = execution.session.id;
                 self.apply_transcript_execution(execution);
-                self.maybe_auto_open_pending_interactive_overlay();
-                self.sessions.select_by_id(session_id);
+                self.sync_pending_interactive_after_execution(session_id);
+                self.sync_session_list_selection_to_current_execution();
             }
             Err(error) => self.flash_error(error),
         }
@@ -5707,8 +6140,10 @@ impl App {
         match result {
             Ok(refresh) => {
                 if let Some(execution) = refresh.execution {
+                    let session_id = execution.session.id;
                     self.apply_transcript_execution(execution);
-                    self.maybe_auto_open_pending_interactive_overlay();
+                    self.sync_pending_interactive_after_execution(session_id);
+                    self.sync_session_list_selection_to_current_execution();
                 }
                 if let Some(page) = refresh.latest_messages {
                     self.transcript.merge_latest_messages(
@@ -5718,7 +6153,7 @@ impl App {
                     );
                 }
                 if refresh.event_count > 0 {
-                    self.sessions.select_by_id(session_id);
+                    self.sync_session_list_selection_to_current_execution();
                 }
                 if refresh.latest_event_seq.is_some() {
                     self.transcript.last_event_seq = refresh.latest_event_seq;
@@ -5748,7 +6183,8 @@ impl App {
                     self.open_session(session_id, execution.session.title.clone());
                 }
                 self.apply_transcript_execution(execution);
-                self.maybe_auto_open_pending_interactive_overlay();
+                self.sync_pending_interactive_after_execution(session_id);
+                self.sync_session_list_selection_to_current_execution();
                 self.request_refresh(session_id, true);
                 self.request_sessions(false);
                 // Pop the next pending message and submit it after the run.
@@ -5845,7 +6281,8 @@ impl App {
         if transcript_is_target {
             self.transcript.submitting = false;
             self.apply_transcript_execution(execution);
-            self.maybe_auto_open_pending_interactive_overlay();
+            self.sync_pending_interactive_after_execution(session_id);
+            self.sync_session_list_selection_to_current_execution();
         }
         self.submitting_session_ids.remove(&session_id);
         if refresh && transcript_is_target {
@@ -5882,6 +6319,7 @@ impl App {
                 }
                 if let Some(existing) = self
                     .sessions
+                    .list
                     .items
                     .iter_mut()
                     .find(|item| item.id == session_id)
@@ -5913,7 +6351,18 @@ impl App {
     ) {
         match result {
             Ok(execution) => {
-                self.handle_session_execution_updated(session_id, execution, true);
+                let transcript_is_target = self.transcript.session_id == Some(session_id);
+                if transcript_is_target {
+                    self.transcript.submitting = false;
+                    self.apply_transcript_execution(execution);
+                    self.sync_pending_interactive_after_execution(session_id);
+                    self.sync_session_list_selection_to_current_execution();
+                }
+                self.submitting_session_ids.remove(&session_id);
+                if transcript_is_target {
+                    self.request_refresh(session_id, true);
+                }
+                self.request_sessions(false);
                 self.flash_success(self.i18n.text_args(
                     "flash-permission-reply-sent",
                     &crate::fl_args!("label" => label),
@@ -5922,6 +6371,7 @@ impl App {
             Err(error) => {
                 self.transcript.submitting = false;
                 self.submitting_session_ids.remove(&session_id);
+                self.pending_permission_replay = None;
                 self.flash_error(error);
             }
         }
@@ -5953,7 +6403,7 @@ impl App {
         let Some((host, mut dialog)) = self.take_picker_dialog() else {
             return;
         };
-        let PickerKind::Providers(current_purpose) = &dialog.kind else {
+        let PickerKind::Providers(current_purpose) = &dialog.meta.kind else {
             self.restore_picker_dialog(host, dialog);
             return;
         };
@@ -5966,14 +6416,18 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match result {
             Ok(providers) => {
-                dialog.all_items = providers
+                let fallback_adapter = settings_choice_adapter_fallback(&self.i18n);
+                dialog.meta.all_items = providers
                     .into_iter()
                     .map(|provider| PickerItem {
                         label: provider.provider_id.clone(),
-                        detail: format!(
-                            "default {} / {}",
-                            provider.default_adapter.as_deref().unwrap_or("adapter"),
-                            provider.default_model
+                        detail: settings_choice_default_provider_detail(
+                            &self.i18n,
+                            provider
+                                .default_adapter
+                                .as_deref()
+                                .unwrap_or(fallback_adapter.as_str()),
+                            provider.default_model.as_str(),
                         ),
                         value: PickerValue::Provider(provider),
                     })
@@ -5995,8 +6449,8 @@ impl App {
         let Some((host, mut dialog)) = self.take_session_search_dialog() else {
             return;
         };
-        if dialog.mode != mode
-            || dialog.page_index != page_index
+        if dialog.meta.mode != mode
+            || dialog.meta.page_index != page_index
             || dialog.input.text().trim() != query
         {
             self.restore_session_search_dialog(host, dialog);
@@ -6007,11 +6461,18 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-resume-empty");
         match result {
             Ok(page) => {
-                dialog.items = page.items;
-                dialog.offset = dialog.page_index.saturating_mul(dialog.page_limit);
-                dialog.next_cursor = page.page.next_cursor;
-                dialog.has_more = page.page.has_more;
-                dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+                dialog.items = page
+                    .items
+                    .into_iter()
+                    .map(|session| self.session_search_item(session))
+                    .collect();
+                dialog.meta.offset = dialog
+                    .meta
+                    .page_index
+                    .saturating_mul(dialog.meta.page_limit);
+                dialog.meta.next_cursor = page.page.next_cursor;
+                dialog.meta.has_more = page.page.has_more;
+                dialog.clamp_selection();
                 dialog.footer = self.session_search_footer(&dialog);
             }
             Err(error) => self.flash_error(error),
@@ -6028,8 +6489,8 @@ impl App {
         let Some((host, mut dialog)) = self.take_session_search_dialog() else {
             return;
         };
-        if dialog.mode != SessionViewMode::Subtree
-            || dialog.scope_session_id != Some(session_id)
+        if dialog.meta.mode != SessionViewMode::Subtree
+            || dialog.meta.scope_session_id != Some(session_id)
             || dialog.input.text().trim() != query
         {
             self.restore_session_search_dialog(host, dialog);
@@ -6046,7 +6507,10 @@ impl App {
                         .cmp(&left.updated_at)
                         .then_with(|| right.id.cmp(&left.id))
                 });
-                dialog.all_items = sessions;
+                dialog.meta.all_items = sessions
+                    .into_iter()
+                    .map(|session| self.session_search_item(session))
+                    .collect();
                 self.refresh_session_search_overlay_local(&mut dialog);
             }
             Err(error) => self.flash_error(error),
@@ -6073,7 +6537,7 @@ impl App {
                 };
                 let PickerKind::Lineage {
                     session_id: current_session_id,
-                } = &dialog.kind
+                } = &dialog.meta.kind
                 else {
                     self.restore_picker_dialog(host, dialog);
                     return;
@@ -6085,7 +6549,7 @@ impl App {
 
                 dialog.loading = false;
                 dialog.empty_message = ui_text::t(&self.i18n, "overlay-lineage-empty");
-                dialog.all_items = items
+                dialog.meta.all_items = items
                     .into_iter()
                     .map(|item| self.lineage_session_picker_item(item))
                     .collect();
@@ -6094,7 +6558,7 @@ impl App {
             }
             Err(error) => {
                 if let Some((host, mut dialog)) = self.take_picker_dialog() {
-                    if matches!(dialog.kind, PickerKind::Lineage { session_id: current_session_id } if current_session_id == session_id)
+                    if matches!(dialog.meta.kind, PickerKind::Lineage { session_id: current_session_id } if current_session_id == session_id)
                     {
                         dialog.loading = false;
                         dialog.empty_message = ui_text::t(&self.i18n, "overlay-lineage-empty");
@@ -6116,7 +6580,7 @@ impl App {
         };
         let PickerKind::RewindMessages {
             session_id: current_session_id,
-        } = &dialog.kind
+        } = &dialog.meta.kind
         else {
             self.restore_picker_dialog(host, dialog);
             return;
@@ -6130,7 +6594,7 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-rewind-empty");
         match result {
             Ok(messages) => {
-                dialog.all_items = messages
+                dialog.meta.all_items = messages
                     .into_iter()
                     .filter(is_rewind_target_message)
                     .rev()
@@ -6155,7 +6619,7 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match result {
             Ok(items) => {
-                dialog.all_items = items;
+                dialog.meta.all_items = items;
                 let current_model = self.current_session_model_ref();
                 Self::refresh_session_model_chooser_overlay(
                     &mut dialog,
@@ -6185,12 +6649,12 @@ impl App {
         dialog.loading = false;
         match result {
             Ok(response) => {
-                dialog.items = response.items;
+                dialog.workbench.list.items = response.items;
                 dialog.summary = response.summary;
                 dialog.total = response.total;
                 dialog.offset = response.offset;
                 dialog.limit = response.limit;
-                dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+                dialog.workbench.list.clamp_selection();
             }
             Err(error) => self.flash_error(error),
         }
@@ -6216,11 +6680,10 @@ impl App {
             Ok(response) => {
                 let preserved_model_keys = dialog.selected_model_keys.clone();
                 dialog.adapter_models = response.adapters;
-                dialog.selected_adapter = min(
-                    dialog.selected_adapter,
-                    dialog.adapter_candidate_ids.len().saturating_sub(1),
-                );
-                dialog.selected_model = 0;
+                dialog
+                    .selection
+                    .clamp_left(dialog.adapter_candidate_ids.len());
+                dialog.selection.set_right_selected(0);
                 self.reload_provider_studio_catalog_matches(&mut dialog);
                 dialog.selected_model_keys = preserved_model_keys;
                 provider_studio_restore_model_selection(&mut dialog);
@@ -6234,12 +6697,20 @@ impl App {
     fn handle_provider_studio_auth_completed(
         &mut self,
         request_key: String,
-        result: UiResult<crate::backend::ProviderDraftAuthActionResult>,
+        result: std::result::Result<
+            crate::backend::ProviderDraftAuthActionResult,
+            crate::backend::ProviderDraftAuthError,
+        >,
     ) {
         let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
             match result {
-                Ok(action) => self.flash_success(action.message),
-                Err(error) => self.flash_error(error),
+                Ok(action) => self.flash_success(provider_draft_auth_action_message(
+                    &self.i18n,
+                    &action.message,
+                )),
+                Err(error) => {
+                    self.flash_error(provider_draft_auth_error_message(&self.i18n, &error))
+                }
             }
             return;
         };
@@ -6256,20 +6727,37 @@ impl App {
                 if let Some(text) = action.clipboard_text
                     && let Err(error) = set_clipboard_text(text.as_str())
                 {
-                    self.flash_error(format!("clipboard copy failed: {error}"));
+                    self.flash_error(self.i18n.text_args(
+                        "flash-clipboard-copy-failed",
+                        &crate::fl_args!("error" => error.to_string()),
+                    ));
                 }
-                self.flash_success(action.message);
+                self.flash_success(provider_draft_auth_action_message(
+                    &self.i18n,
+                    &action.message,
+                ));
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => self.flash_error(provider_draft_auth_error_message(&self.i18n, &error)),
         }
         self.restore_provider_studio_dialog(host, dialog);
     }
 
-    fn handle_provider_studio_saved(&mut self, provider_id: String, result: UiResult<String>) {
+    fn handle_provider_studio_saved(
+        &mut self,
+        provider_id: String,
+        result: std::result::Result<
+            crate::backend::ProviderStudioSaveResult,
+            crate::backend::ProviderStudioSaveError,
+        >,
+    ) {
         let Some((host, mut dialog)) = self.take_provider_studio_dialog() else {
             match result {
-                Ok(message) => self.flash_success(message),
-                Err(error) => self.flash_error(error),
+                Ok(message) => {
+                    self.flash_success(provider_studio_save_result_message(&self.i18n, &message))
+                }
+                Err(error) => {
+                    self.flash_error(provider_studio_save_error_message(&self.i18n, &error))
+                }
             }
             return;
         };
@@ -6279,14 +6767,14 @@ impl App {
                 let preserved_selected_adapter_ids = dialog.selected_adapter_ids.clone();
                 let preserved_selected_adapter_id = provider_studio_selected_adapter_id(&dialog);
                 let preserved_selected_model_keys = dialog.selected_model_keys.clone();
-                self.flash_success(message);
+                self.flash_success(provider_studio_save_result_message(&self.i18n, &message));
                 let providers = self.backend.list_configured_providers();
-                dialog.providers = provider_studio_provider_rows(providers.as_slice());
-                dialog.selected_provider = dialog
-                    .providers
+                let provider_rows = provider_studio_provider_rows(&self.i18n, providers.as_slice());
+                let selected_provider = provider_rows
                     .iter()
                     .position(|row| row.provider_id.as_deref() == Some(provider_id.as_str()))
                     .unwrap_or(0);
+                dialog.providers = SelectableListState::new(provider_rows, selected_provider);
                 self.load_provider_studio_draft(&mut dialog, Some(provider_id.as_str()), None);
                 restore_provider_studio_adapter_selection(
                     &mut dialog,
@@ -6296,7 +6784,7 @@ impl App {
                 dialog.selected_model_keys = preserved_selected_model_keys;
                 provider_studio_ensure_default_selection(&mut dialog);
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => self.flash_error(provider_studio_save_error_message(&self.i18n, &error)),
         }
         self.restore_provider_studio_dialog(host, dialog);
     }
@@ -6321,7 +6809,7 @@ impl App {
                 ));
                 dialog.loading = true;
                 dialog.offset = 0;
-                dialog.selected = 0;
+                dialog.workbench.list.selected = 0;
                 self.request_model_catalog_page(dialog.query.clone(), 0);
             }
             Err(error) => {
@@ -6342,7 +6830,7 @@ impl App {
         };
         let PickerKind::ChildSessions {
             parent_session_id: current_parent_id,
-        } = &dialog.kind
+        } = &dialog.meta.kind
         else {
             self.restore_picker_dialog(host, dialog);
             return;
@@ -6356,7 +6844,7 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-children-empty");
         match result {
             Ok(sessions) => {
-                dialog.all_items = sessions
+                dialog.meta.all_items = sessions
                     .into_iter()
                     .map(|session| PickerItem {
                         label: session.title.clone(),
@@ -6378,7 +6866,7 @@ impl App {
         let Some((host, mut dialog)) = self.take_timeline_dialog() else {
             return;
         };
-        if dialog.session_id != session_id {
+        if dialog.meta.session_id != session_id {
             self.restore_timeline_dialog(host, dialog);
             return;
         }
@@ -6387,7 +6875,10 @@ impl App {
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-timeline-empty");
         match result {
             Ok(events) => {
-                dialog.all_items = events.iter().map(build_timeline_item).collect();
+                dialog.all_items = events
+                    .iter()
+                    .map(|event| build_timeline_item(&self.i18n, event))
+                    .collect();
                 Self::refresh_timeline_overlay(&mut dialog);
             }
             Err(error) => self.flash_error(error),
@@ -6415,7 +6906,8 @@ impl App {
                     self.persist_draft_store_with_feedback(true);
                 }
                 self.apply_transcript_execution(execution);
-                self.maybe_auto_open_pending_interactive_overlay();
+                self.sync_pending_interactive_after_execution(rewound_session_id);
+                self.sync_session_list_selection_to_current_execution();
                 self.submitting_session_ids.remove(&session_id);
                 self.focus = Focus::Composer;
                 self.request_sessions(false);
@@ -6875,6 +7367,7 @@ impl App {
         self.transcript.reset(session_id, title);
         self.seen_permission_request_ids.clear();
         self.seen_user_input_request_ids.clear();
+        self.pending_permission_replay = None;
         let _ = self.sessions.select_by_id(session_id);
         self.restore_draft_for_slot(DraftSlot::Session(session_id));
         self.persist_draft_store_with_feedback(true);
@@ -7005,7 +7498,7 @@ impl App {
         let title = submit_draft
             .as_ref()
             .and_then(draft_title_source)
-            .map(|text| derive_session_title(text.as_str()))
+            .map(|text| derive_session_title(&self.i18n, text.as_str()))
             .unwrap_or_else(|| ui_text::default_session_title(&self.i18n));
 
         let backend = self.backend.clone();
@@ -7195,13 +7688,84 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-permission-request"));
             return;
         };
-        self.request_permission_reply(
+        self.submit_permission_reply(
             session_id,
-            request.request_id,
+            request,
             kind,
             None,
             ui_text::permission_reply_label(&self.i18n, kind),
         );
+    }
+
+    fn submit_permission_reply(
+        &mut self,
+        session_id: i64,
+        request: PermissionRequest,
+        kind: PermissionReplyKind,
+        scope: Option<PermissionScope>,
+        label: String,
+    ) {
+        self.pending_permission_replay = Some(PermissionReplayState {
+            session_id,
+            fingerprint: permission_request_fingerprint(&request),
+            last_request_id: request.request_id.clone(),
+            kind,
+            scope,
+            label: label.clone(),
+        });
+        self.seen_permission_request_ids
+            .insert(request.request_id.clone());
+        self.request_permission_reply(session_id, request.request_id, kind, scope, label);
+    }
+
+    fn maybe_auto_reply_duplicate_permission_request(&mut self, session_id: i64) -> bool {
+        let Some(replay) = self.pending_permission_replay.clone() else {
+            return false;
+        };
+        if replay.session_id != session_id || self.transcript.session_id != Some(session_id) {
+            self.pending_permission_replay = None;
+            return false;
+        }
+
+        let Some((pending_session_id, request)) = self.pending_permission_overlay_target() else {
+            self.pending_permission_replay = None;
+            return false;
+        };
+        if pending_session_id != session_id {
+            self.pending_permission_replay = None;
+            return false;
+        }
+
+        if permission_request_fingerprint(&request) != replay.fingerprint {
+            self.pending_permission_replay = None;
+            return false;
+        }
+
+        if request.request_id == replay.last_request_id {
+            return false;
+        }
+
+        self.pending_permission_replay = Some(PermissionReplayState {
+            last_request_id: request.request_id.clone(),
+            ..replay.clone()
+        });
+        self.seen_permission_request_ids
+            .insert(request.request_id.clone());
+        self.overlay = None;
+        self.request_permission_reply(
+            session_id,
+            request.request_id,
+            replay.kind,
+            replay.scope,
+            replay.label,
+        );
+        true
+    }
+
+    fn sync_pending_interactive_after_execution(&mut self, session_id: i64) {
+        if !self.maybe_auto_reply_duplicate_permission_request(session_id) {
+            self.maybe_auto_open_pending_interactive_overlay();
+        }
     }
 
     fn open_user_input_overlay(&mut self) {
@@ -7245,9 +7809,7 @@ impl App {
             session_id,
             request,
             answers: BTreeMap::new(),
-            selected_question: 0,
-            selected_option: 0,
-            screen: UserInputOverlayScreen::Question,
+            state: QuestionFlowState::default(),
             editing_custom: false,
             custom_input: Editor::default(),
         };
@@ -7259,7 +7821,7 @@ impl App {
         PermissionOverlay {
             session_id,
             request,
-            selected: 0,
+            selection: SelectionCursor::default(),
         }
     }
 
@@ -7411,14 +7973,312 @@ impl App {
         )));
     }
 
-    fn open_file_attach_overlay(&mut self) {
-        let mut overlay = FileAttachOverlay {
-            input: Editor::default(),
-            results: Vec::new(),
-            selected: 0,
-        };
+    fn standard_choice_overlay_config() -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 96,
+            search_enabled: true,
+            custom_value_enabled: true,
+            fill_selected_into_input: true,
+            min_list_body_height: 3,
+            max_list_body_height: 12,
+        }
+    }
+
+    fn standard_picker_overlay_config() -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 120,
+            search_enabled: true,
+            custom_value_enabled: false,
+            fill_selected_into_input: true,
+            min_list_body_height: 4,
+            max_list_body_height: 10,
+        }
+    }
+
+    fn path_browser_overlay_config() -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 96,
+            search_enabled: false,
+            custom_value_enabled: true,
+            fill_selected_into_input: true,
+            min_list_body_height: 6,
+            max_list_body_height: 14,
+        }
+    }
+
+    fn file_attach_overlay_config() -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 88,
+            search_enabled: false,
+            custom_value_enabled: true,
+            fill_selected_into_input: true,
+            min_list_body_height: 4,
+            max_list_body_height: 10,
+        }
+    }
+
+    fn session_search_overlay_config() -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 128,
+            search_enabled: false,
+            custom_value_enabled: false,
+            fill_selected_into_input: true,
+            min_list_body_height: 5,
+            max_list_body_height: 12,
+        }
+    }
+
+    fn session_model_chooser_overlay_config() -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 128,
+            search_enabled: true,
+            custom_value_enabled: false,
+            fill_selected_into_input: false,
+            min_list_body_height: 5,
+            max_list_body_height: 12,
+        }
+    }
+
+    fn choice_overlay_clear_action(&self, action: ChoiceOverlayAction) -> SearchListClearAction {
+        SearchListClearAction {
+            label: settings_clear_label(&self.i18n),
+            detail: choice_overlay_clear_detail(&self.i18n, &action),
+        }
+    }
+
+    fn build_choice_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        input: Editor,
+        all_items: Vec<ChoiceItem>,
+        action: ChoiceOverlayAction,
+        allow_clear: bool,
+    ) -> ChoiceOverlay {
+        let clear_action = allow_clear.then(|| self.choice_overlay_clear_action(action.clone()));
+        ChoiceOverlay::new(
+            title,
+            prompt,
+            ui_text::t(&self.i18n, "overlay-choice-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            input,
+            Self::standard_choice_overlay_config(),
+            clear_action,
+            ChoiceOverlayMeta {
+                i18n: self.i18n.clone(),
+                all_items,
+                action,
+            },
+        )
+    }
+
+    fn build_picker_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        footer: String,
+        empty_message: String,
+        input: Editor,
+        all_items: Vec<PickerItem>,
+        kind: PickerKind,
+        loading: bool,
+    ) -> PickerOverlay {
+        let mut overlay = PickerOverlay::new(
+            title,
+            prompt,
+            footer,
+            empty_message,
+            input,
+            Self::standard_picker_overlay_config(),
+            None,
+            PickerOverlayMeta { all_items, kind },
+        );
+        overlay.loading = loading;
+        Self::refresh_picker_overlay(&mut overlay);
+        overlay
+    }
+
+    fn build_path_browser_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        mode: PathBrowserMode,
+        initial: String,
+        target: PathBrowserTarget,
+    ) -> PathBrowserOverlay {
+        let mut overlay = PathBrowserOverlay::new(
+            title,
+            prompt,
+            ui_text::t(&self.i18n, "overlay-permission-rule-browser-footer"),
+            ui_text::t(&self.i18n, "overlay-permission-rule-browser-empty"),
+            Editor::from_text(initial),
+            Self::path_browser_overlay_config(),
+            None,
+            PathBrowserOverlayMeta {
+                i18n: self.i18n.clone(),
+                mode,
+                target,
+            },
+        );
+        Self::refresh_path_browser_overlay_with_root(self.backend.workspace_root(), &mut overlay);
+        overlay
+    }
+
+    fn build_file_attach_overlay(&self) -> FileAttachOverlay {
+        let mut overlay = FileAttachOverlay::new(
+            ui_text::t(&self.i18n, "overlay-attach-title"),
+            ui_text::t(&self.i18n, "overlay-attach-prompt"),
+            ui_text::t(&self.i18n, "overlay-attach-footer"),
+            ui_text::t(&self.i18n, "overlay-attach-no-match"),
+            Editor::default(),
+            Self::file_attach_overlay_config(),
+            None,
+            FileAttachOverlayMeta {
+                i18n: self.i18n.clone(),
+            },
+        );
         self.refresh_file_attach_overlay(&mut overlay);
-        self.overlay = Some(Overlay::FileAttach(overlay));
+        overlay
+    }
+
+    fn build_session_search_overlay(
+        &self,
+        input: Editor,
+        mode: SessionViewMode,
+        scope_session_id: Option<i64>,
+    ) -> SessionSearchOverlay {
+        let mut dialog = SessionSearchOverlay::new(
+            ui_text::t(&self.i18n, "overlay-resume-title"),
+            ui_text::t(&self.i18n, "overlay-resume-prompt"),
+            String::new(),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            input,
+            Self::session_search_overlay_config(),
+            None,
+            SessionSearchOverlayMeta {
+                all_items: Vec::new(),
+                mode,
+                scope_session_id,
+                page_limit: 50,
+                page_index: 0,
+                offset: 0,
+                cursors: vec![None],
+                next_cursor: None,
+                has_more: false,
+            },
+        );
+        dialog.loading = true;
+        dialog.footer = self.session_search_footer(&dialog);
+        dialog
+    }
+
+    fn build_session_model_chooser_overlay(&self) -> SessionModelChooserOverlay {
+        let mut dialog = SessionModelChooserOverlay::new(
+            ui_text::t(&self.i18n, "overlay-session-model-title"),
+            ui_text::t(&self.i18n, "overlay-session-model-prompt"),
+            ui_text::t(&self.i18n, "overlay-session-model-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            Self::session_model_chooser_overlay_config(),
+            None,
+            SessionModelChooserOverlayMeta {
+                all_items: Vec::new(),
+                page_size: 18,
+            },
+        );
+        dialog.loading = true;
+        dialog
+    }
+
+    fn build_line_input_overlay(
+        &self,
+        title: String,
+        prompt: String,
+        input: Editor,
+    ) -> LineInputOverlay {
+        LineInputOverlay::new(title, prompt, input, ())
+    }
+
+    fn build_transcript_search_overlay(&self) -> LineInputOverlay {
+        self.build_line_input_overlay(
+            ui_text::t(&self.i18n, "overlay-transcript-search-title"),
+            ui_text::t(&self.i18n, "overlay-transcript-search-prompt"),
+            Editor::from_text(self.transcript.search_query.clone()),
+        )
+    }
+
+    fn build_model_catalog_search_overlay(&self, query: &str) -> LineInputOverlay {
+        self.build_line_input_overlay(
+            ui_text::t(&self.i18n, "overlay-model-catalog-search-title"),
+            ui_text::t(&self.i18n, "overlay-model-catalog-search-prompt"),
+            Editor::from_text(query.to_string()),
+        )
+    }
+
+    fn build_session_rename_overlay(&self, title: String) -> LineInputOverlay {
+        self.build_line_input_overlay(
+            ui_text::t(&self.i18n, "overlay-rename-title"),
+            ui_text::t(&self.i18n, "overlay-rename-prompt"),
+            Editor::from_text(title),
+        )
+    }
+
+    fn build_confirm_overlay(
+        &self,
+        title: String,
+        body_lines: Vec<String>,
+        action: ConfirmAction,
+    ) -> ConfirmOverlay {
+        ConfirmDialogState::new(
+            title,
+            body_lines,
+            ui_text::t(&self.i18n, "overlay-confirm-footer"),
+            action,
+        )
+    }
+
+    fn build_search_panels_overlay<TItem, TMeta>(
+        &self,
+        title: String,
+        prompt: String,
+        empty_message: String,
+        footer: String,
+        input: Editor,
+        loading: bool,
+        meta: TMeta,
+    ) -> SearchPanelsOverlay<TItem, TMeta, Editor> {
+        SearchPanelsOverlay::new(title, prompt, empty_message, footer, input, loading, meta)
+    }
+
+    fn build_timeline_overlay(&self, session_id: i64) -> TimelineOverlay {
+        self.build_search_panels_overlay(
+            self.i18n.text_args(
+                "overlay-timeline-title",
+                &crate::fl_args!("session" => session_id),
+            ),
+            ui_text::t(&self.i18n, "overlay-timeline-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            ui_text::t(&self.i18n, "overlay-timeline-footer"),
+            Editor::default(),
+            true,
+            TimelineOverlayMeta { session_id },
+        )
+    }
+
+    fn build_plugin_inspector_overlay(&self, query: &str) -> PluginInspectorOverlay {
+        self.build_search_panels_overlay(
+            ui_text::t(&self.i18n, "overlay-plugins-title"),
+            ui_text::t(&self.i18n, "overlay-plugins-prompt"),
+            ui_text::t(&self.i18n, "overlay-plugins-empty"),
+            ui_text::t(&self.i18n, "overlay-plugins-footer"),
+            Editor::from_text(query.to_string()),
+            false,
+            PluginInspectorOverlayMeta,
+        )
+    }
+
+    fn open_file_attach_overlay(&mut self) {
+        self.overlay = Some(Overlay::FileAttach(self.build_file_attach_overlay()));
     }
 
     fn open_rename_session_overlay(&mut self) {
@@ -7426,11 +8286,9 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.overlay = Some(Overlay::SessionRename(LineInputOverlay {
-            title: ui_text::t(&self.i18n, "overlay-rename-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-rename-prompt"),
-            input: Editor::from_text(title),
-        }));
+        self.overlay = Some(Overlay::SessionRename(
+            self.build_session_rename_overlay(title),
+        ));
     }
 
     fn open_timeline_overlay(&mut self, limit: u64) {
@@ -7438,35 +8296,12 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.current_route = Route::Timeline(TimelineOverlay {
-            session_id,
-            title: self.i18n.text_args(
-                "overlay-timeline-title",
-                &crate::fl_args!("session" => session_id),
-            ),
-            prompt: ui_text::t(&self.i18n, "overlay-timeline-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-timeline-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-        });
+        self.current_route = Route::Timeline(self.build_timeline_overlay(session_id));
         self.request_timeline(session_id, limit);
     }
 
     fn open_plugin_inspector_overlay(&mut self, query: &str) {
-        let mut dialog = PluginInspectorOverlay {
-            title: ui_text::t(&self.i18n, "overlay-plugins-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-plugins-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-plugins-empty"),
-            footer: ui_text::t(&self.i18n, "overlay-plugins-footer"),
-            input: Editor::from_text(query.to_string()),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-        };
+        let mut dialog = self.build_plugin_inspector_overlay(query);
         self.reload_plugin_inspector_overlay(&mut dialog);
         self.current_route = Route::PluginInspector(dialog);
     }
@@ -7496,8 +8331,11 @@ impl App {
         let default_agent = self.backend.default_agent_name();
         let plugins_enabled = settings_studio_plugins_enabled(&sources);
         let plugins_default_mode = settings_studio_plugins_default_mode(&sources);
-        let plugin_entry_items =
-            settings_studio_plugin_entry_items(&sources, &self.backend.plugin_statuses());
+        let plugin_entry_items = settings_studio_plugin_entry_items(
+            &self.i18n,
+            &sources,
+            &self.backend.plugin_statuses(),
+        );
         let configured_providers = self.backend.list_configured_providers();
         let permission_rule_count = self
             .block_on_async(self.backend.list_permission_rules())
@@ -7508,13 +8346,14 @@ impl App {
             .list_model_catalog_entries("", 0, 1)
             .map_err(|error| error.to_string())?;
 
-        let general_items = settings_studio_general_items(&sources);
-        let runtime_items = settings_studio_runtime_items(&self.run_options);
-        let plugin_items = settings_studio_plugin_items(&sources);
-        let agent_items = settings_studio_agent_items(&agents, default_agent.as_deref());
-        let provider_items = settings_studio_provider_items(&configured_providers);
-        let model_catalog_items = settings_studio_model_catalog_items(&model_catalog);
-        let file_items = settings_studio_file_items(&sources);
+        let general_items = settings_studio_general_items(&self.i18n, &sources);
+        let runtime_items = settings_studio_runtime_items(&self.i18n, &self.run_options);
+        let plugin_items = settings_studio_plugin_items(&self.i18n, &sources);
+        let agent_items =
+            settings_studio_agent_items(&self.i18n, &agents, default_agent.as_deref());
+        let provider_items = settings_studio_provider_items(&self.i18n, &configured_providers);
+        let model_catalog_items = settings_studio_model_catalog_items(&self.i18n, &model_catalog);
+        let file_items = settings_studio_file_items(&self.i18n, &sources);
         let agent_count = agents.len();
         let agent_primary_count = agents
             .iter()
@@ -7528,111 +8367,136 @@ impl App {
         let mut sections = vec![
             SettingsStudioSection {
                 id: SettingsStudioSectionId::General,
-                label: "General".to_string(),
-                summary: format!("{} agena.json fields", general_items.len()),
-                description:
-                    "Persistent agena.json settings. Enter edits the selected field and writes the file override."
-                        .to_string(),
+                label: ui_text::t(&self.i18n, "overlay-settings-section-general-label"),
+                summary: self.i18n.text_args(
+                    "overlay-settings-section-general-summary",
+                    &crate::fl_args!("count" => general_items.len() as i64),
+                ),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-general-description"),
                 items: general_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Runtime,
-                label: "Runtime".to_string(),
-                summary: "Session-scoped provider, model, and generation overrides".to_string(),
-                description:
-                    "These settings affect the current session only. Provider and model actions open the existing pickers."
-                        .to_string(),
+                label: ui_text::t(&self.i18n, "overlay-settings-section-runtime-label"),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-runtime-summary"),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-runtime-description"),
                 items: runtime_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Plugins,
-                label: "Plugins".to_string(),
-                summary: format!(
-                    "{} · default {}",
-                    if plugins_enabled { "enabled" } else { "disabled" },
-                    plugins_default_mode
+                label: ui_text::t(&self.i18n, "overlay-settings-section-plugins-label"),
+                summary: self.i18n.text_args(
+                    "overlay-settings-section-plugins-summary",
+                    &crate::fl_args!(
+                        "state" => if plugins_enabled {
+                            ui_text::t(&self.i18n, "value-enabled")
+                        } else {
+                            ui_text::t(&self.i18n, "value-disabled")
+                        },
+                        "mode" => settings_studio_tool_description_mode_label(
+                            &self.i18n,
+                            plugins_default_mode.as_str(),
+                        ),
+                    ),
                 ),
-                description:
-                    "Control global plugin loading and the model-visible tool description mode."
-                        .to_string(),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-plugins-description"),
                 items: plugin_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::PluginEntries,
-                label: "Plugin Entries".to_string(),
-                summary: format!(
-                    "{} entries · {} disabled",
-                    plugin_entry_items.len(),
-                    settings_studio_plugin_entry_disabled_count(&plugin_entry_items)
+                label: ui_text::t(&self.i18n, "overlay-settings-section-plugin-entries-label"),
+                summary: self.i18n.text_args(
+                    "overlay-settings-section-plugin-entries-summary",
+                    &crate::fl_args!(
+                        "count" => plugin_entry_items.len() as i64,
+                        "disabled" => settings_studio_plugin_entry_disabled_count(
+                            &plugin_entry_items
+                        ) as i64,
+                    ),
                 ),
-                description:
-                    "Toggle individual plugins.list entries. Disabled entries stay in config and are skipped on reload."
-                        .to_string(),
+                description: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-plugin-entries-description",
+                ),
                 items: plugin_entry_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Agents,
-                label: "Agents".to_string(),
+                label: ui_text::t(&self.i18n, "overlay-settings-section-agents-label"),
                 summary: match default_agent.as_deref() {
-                    Some(default) => format!(
-                        "{} agent profiles · default {} · {} hidden",
-                        agent_count, default, agent_hidden_count
+                    Some(default) => self.i18n.text_args(
+                        "overlay-settings-section-agents-summary-default",
+                        &crate::fl_args!(
+                            "count" => agent_count as i64,
+                            "default" => default.to_string(),
+                            "hidden" => agent_hidden_count as i64,
+                        ),
                     ),
-                    None => format!(
-                        "{} agent profiles · {} primary · {} subagent · {} hidden",
-                        agent_count, agent_primary_count, agent_subagent_count, agent_hidden_count
+                    None => self.i18n.text_args(
+                        "overlay-settings-section-agents-summary",
+                        &crate::fl_args!(
+                            "count" => agent_count as i64,
+                            "primary" => agent_primary_count as i64,
+                            "subagent" => agent_subagent_count as i64,
+                            "hidden" => agent_hidden_count as i64,
+                        ),
                     ),
                 },
-                description:
-                    "Browse discovered agent profiles. Enter opens the dedicated workbench, d makes the selected agent default, and t toggles hidden for config-owned profiles."
-                        .to_string(),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-agents-description"),
                 items: agent_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Providers,
-                label: "Providers".to_string(),
-                summary: format!(
-                    "{} configured provider{}",
-                    configured_providers.len(),
-                    if configured_providers.len() == 1 { "" } else { "s" }
+                label: ui_text::t(&self.i18n, "overlay-settings-section-providers-label"),
+                summary: self.i18n.text_args(
+                    "overlay-settings-section-providers-summary",
+                    &crate::fl_args!("count" => configured_providers.len() as i64),
                 ),
-                description:
-                    "Saved providers, auth modes, adapter discovery, and per-model configuration. Enter opens the provider studio."
-                        .to_string(),
+                description: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-providers-description",
+                ),
                 items: provider_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::ModelCatalog,
-                label: "Model Catalog".to_string(),
-                summary: format!("{} entries", model_catalog.summary.entry_count),
-                description:
-                    "Browse the resolved model catalog, inspect entry metadata, and refresh the local cache."
-                        .to_string(),
+                label: ui_text::t(&self.i18n, "overlay-settings-section-model-catalog-label"),
+                summary: self.i18n.text_args(
+                    "overlay-settings-section-model-catalog-summary",
+                    &crate::fl_args!("count" => model_catalog.summary.entry_count as i64),
+                ),
+                description: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-model-catalog-description",
+                ),
                 items: model_catalog_items,
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Permissions,
-                label: "Permissions".to_string(),
-                summary: format!("{permission_rule_count} persisted permission rule(s)"),
-                description:
-                    "Permission policies are managed in the existing rules workbench. Enter opens it and Esc returns here."
-                        .to_string(),
+                label: ui_text::t(&self.i18n, "overlay-settings-section-permissions-label"),
+                summary: self.i18n.text_args(
+                    "overlay-settings-section-permissions-summary",
+                    &crate::fl_args!("count" => permission_rule_count as i64),
+                ),
+                description: ui_text::t(
+                    &self.i18n,
+                    "overlay-settings-section-permissions-description",
+                ),
                 items: vec![SettingsStudioItem {
-                    label: "Manage Permission Rules".to_string(),
+                    label: ui_text::t(&self.i18n, "overlay-settings-manage-permission-rules"),
                     value: permission_rule_count.to_string(),
-                    detail:
-                        "Create, inspect, edit, or revoke persisted permission rules."
-                            .to_string(),
+                    detail: ui_text::t(
+                        &self.i18n,
+                        "overlay-settings-manage-permission-rules-detail",
+                    ),
                     action: SettingsPickerAction::OpenPermissionRules,
                 }],
             },
             SettingsStudioSection {
                 id: SettingsStudioSectionId::Files,
-                label: "Files".to_string(),
-                summary: "Open raw configuration files".to_string(),
-                description:
-                    "Direct file access when visual editing is not enough."
-                        .to_string(),
+                label: ui_text::t(&self.i18n, "overlay-settings-section-files-label"),
+                summary: ui_text::t(&self.i18n, "overlay-settings-section-files-summary"),
+                description: ui_text::t(&self.i18n, "overlay-settings-section-files-description"),
                 items: file_items,
             },
         ];
@@ -7660,14 +8524,14 @@ impl App {
         }
 
         Ok(SettingsStudioOverlay {
-            title: "Configuration".to_string(),
-            footer:
-                "Left/Right switch pane | Up/Down move | Enter edit/open | r refresh | Esc close"
-                    .to_string(),
-            sections: std::mem::take(&mut sections),
-            selected_section,
-            selected_item,
-            focus,
+            title: ui_text::t(&self.i18n, "overlay-settings-title"),
+            footer: ui_text::t(&self.i18n, "overlay-settings-footer"),
+            state: SectionedListState::new(
+                std::mem::take(&mut sections),
+                selected_section,
+                selected_item,
+                focus,
+            ),
             default_agent_name: default_agent,
             plugins_enabled,
             plugins_default_mode,
@@ -7675,16 +8539,13 @@ impl App {
     }
 
     fn refresh_settings_studio_overlay(&mut self, dialog: &mut SettingsStudioOverlay) {
-        let preferred_section = dialog
-            .sections
-            .get(dialog.selected_section)
-            .map(|section| section.id);
-        let preferred_item = dialog
-            .sections
-            .get(dialog.selected_section)
-            .and_then(|section| section.items.get(dialog.selected_item))
-            .map(|item| item.label.as_str());
-        match self.build_settings_studio_overlay(preferred_section, preferred_item, dialog.focus) {
+        let preferred_section = dialog.state.selected_section().map(|section| section.id);
+        let preferred_item = dialog.state.selected_item().map(|item| item.label.as_str());
+        match self.build_settings_studio_overlay(
+            preferred_section,
+            preferred_item,
+            dialog.state.focus(),
+        ) {
             Ok(updated) => *dialog = updated,
             Err(error) => self.flash_error(error),
         }
@@ -7708,28 +8569,39 @@ impl App {
             .ok_or_else(|| format!("agent not found: {agent_name}"))?;
         let editable = agent_profile_editable(&profile);
         let default_agent_name = self.backend.default_agent_name();
-        let mut items = agent_studio_items(&profile, editable, default_agent_name.as_deref());
-        let item_len = items.len();
+        let items = agent_studio_items(
+            &self.i18n,
+            &profile,
+            editable,
+            default_agent_name.as_deref(),
+        );
         let selected = preferred_item_label
             .and_then(|label| items.iter().position(|item| item.label == label))
             .unwrap_or(0);
+        let title = format!(
+            "{} · {}",
+            ui_text::t(&self.i18n, "overlay-agent-studio-title"),
+            profile.name
+        );
+        let footer = ui_text::t(&self.i18n, "overlay-agent-studio-footer");
         Ok(AgentStudioOverlay {
-            title: format!("Agent · {}", profile.name),
-            footer: "Up/Down move | Enter edit/open | p permissions | d default | t hidden | o source | r refresh | Esc back".to_string(),
             agent_name: profile.name.clone(),
             profile,
             editable,
             default_agent_name,
-            items: std::mem::take(&mut items),
-            selected: min(selected, item_len.saturating_sub(1)),
-            editor: None,
+            workbench: ListWorkbenchState::new(
+                title,
+                footer,
+                SelectableListState::new(items, selected),
+            ),
         })
     }
 
     fn refresh_agent_studio_overlay(&mut self, dialog: &mut AgentStudioOverlay) {
         let preferred_item = dialog
-            .items
-            .get(dialog.selected)
+            .workbench
+            .list
+            .selected_item()
             .map(|item| item.label.as_str());
         match self.build_agent_studio_overlay(dialog.agent_name.as_str(), preferred_item) {
             Ok(updated) => *dialog = updated,
@@ -7754,20 +8626,25 @@ impl App {
             .get_agent_profile(agent_name)
             .ok_or_else(|| format!("agent not found: {agent_name}"))?;
         let editable = agent_profile_editable(&profile);
-        let mut items = agent_permission_studio_items(&profile, editable);
-        let item_len = items.len();
+        let items = agent_permission_studio_items(&self.i18n, &profile, editable);
         let selected = preferred_item_label
             .and_then(|label| items.iter().position(|item| item.label == label))
             .unwrap_or(0);
+        let title = format!(
+            "{} · {}",
+            ui_text::t(&self.i18n, "overlay-agent-permission-title"),
+            profile.name
+        );
+        let footer = ui_text::t(&self.i18n, "overlay-agent-permission-footer");
         Ok(AgentPermissionStudioOverlay {
-            title: format!("Permission · {}", profile.name),
-            footer: "Up/Down move | Enter edit/open | o source | r refresh | Esc back".to_string(),
             agent_name: profile.name.clone(),
             profile,
             editable,
-            items: std::mem::take(&mut items),
-            selected: min(selected, item_len.saturating_sub(1)),
-            editor: None,
+            workbench: ListWorkbenchState::new(
+                title,
+                footer,
+                SelectableListState::new(items, selected),
+            ),
         })
     }
 
@@ -7776,8 +8653,9 @@ impl App {
         dialog: &mut AgentPermissionStudioOverlay,
     ) {
         let preferred_item = dialog
-            .items
-            .get(dialog.selected)
+            .workbench
+            .list
+            .selected_item()
             .map(|item| item.label.as_str());
         match self.build_agent_permission_studio_overlay(dialog.agent_name.as_str(), preferred_item)
         {
@@ -7791,7 +8669,7 @@ impl App {
         if query.is_empty() {
             return;
         }
-        for (section_index, section) in dialog.sections.iter().enumerate() {
+        for (section_index, section) in dialog.state.sections().iter().enumerate() {
             for (item_index, item) in section.items.iter().enumerate() {
                 if section.label.to_ascii_lowercase().contains(query.as_str())
                     || section
@@ -7806,63 +8684,20 @@ impl App {
                     || item.value.to_ascii_lowercase().contains(query.as_str())
                     || item.detail.to_ascii_lowercase().contains(query.as_str())
                 {
-                    dialog.selected_section = section_index;
-                    dialog.selected_item = item_index;
-                    dialog.focus = SettingsStudioFocus::Items;
+                    dialog.state.set_indices(section_index, item_index);
+                    dialog.state.set_focus(SettingsStudioFocus::Items);
                     return;
                 }
             }
         }
     }
 
-    fn set_settings_studio_selection(&mut self, dialog: &mut SettingsStudioOverlay, target: usize) {
-        match dialog.focus {
-            SettingsStudioFocus::Navigation => {
-                dialog.selected_section = min(target, dialog.sections.len().saturating_sub(1));
-                dialog.selected_item = min(
-                    dialog.selected_item,
-                    dialog
-                        .sections
-                        .get(dialog.selected_section)
-                        .map(|section| section.items.len().saturating_sub(1))
-                        .unwrap_or_default(),
-                );
-            }
-            SettingsStudioFocus::Items => {
-                let max_index = dialog
-                    .sections
-                    .get(dialog.selected_section)
-                    .map(|section| section.items.len().saturating_sub(1))
-                    .unwrap_or_default();
-                dialog.selected_item = min(target, max_index);
-            }
-        }
-    }
-
-    fn move_settings_studio_selection(&mut self, dialog: &mut SettingsStudioOverlay, delta: isize) {
-        let current = match dialog.focus {
-            SettingsStudioFocus::Navigation => dialog.selected_section,
-            SettingsStudioFocus::Items => dialog.selected_item,
-        };
-        let next = if delta.is_negative() {
-            current.saturating_sub(delta.unsigned_abs())
-        } else {
-            current.saturating_add(delta as usize)
-        };
-        self.set_settings_studio_selection(dialog, next);
-    }
-
     fn activate_settings_studio_selection(&mut self, dialog: &mut SettingsStudioOverlay) -> bool {
-        if dialog.focus == SettingsStudioFocus::Navigation {
-            dialog.focus = SettingsStudioFocus::Items;
+        if dialog.state.focus() == SettingsStudioFocus::Navigation {
+            dialog.state.set_focus(SettingsStudioFocus::Items);
             return false;
         }
-        let Some(item) = dialog
-            .sections
-            .get(dialog.selected_section)
-            .and_then(|section| section.items.get(dialog.selected_item))
-            .cloned()
-        else {
+        let Some(item) = dialog.state.selected_item().cloned() else {
             return false;
         };
         match item.action {
@@ -7922,7 +8757,7 @@ impl App {
             }
             SettingsPickerAction::ClearRuntimeModelStack => {
                 self.clear_provider_model_overrides();
-                self.flash_success("cleared provider/model runtime override stack");
+                self.flash_success(ui_text::t(&self.i18n, "flash-runtime-model-stack-cleared"));
                 self.refresh_settings_studio_overlay(dialog);
                 false
             }
@@ -7942,16 +8777,9 @@ impl App {
         match route {
             Route::SettingsStudio(dialog) => self
                 .build_settings_studio_overlay(
-                    dialog
-                        .sections
-                        .get(dialog.selected_section)
-                        .map(|section| section.id),
-                    dialog
-                        .sections
-                        .get(dialog.selected_section)
-                        .and_then(|section| section.items.get(dialog.selected_item))
-                        .map(|item| item.label.as_str()),
-                    dialog.focus,
+                    dialog.state.selected_section().map(|section| section.id),
+                    dialog.state.selected_item().map(|item| item.label.as_str()),
+                    dialog.state.focus(),
                 )
                 .map(Route::SettingsStudio)
                 .unwrap_or(Route::SettingsStudio(dialog)),
@@ -7959,8 +8787,9 @@ impl App {
                 .build_agent_studio_overlay(
                     dialog.agent_name.as_str(),
                     dialog
-                        .items
-                        .get(dialog.selected)
+                        .workbench
+                        .list
+                        .selected_item()
                         .map(|item| item.label.as_str()),
                 )
                 .map(Route::AgentStudio)
@@ -7969,12 +8798,18 @@ impl App {
                 .build_agent_permission_studio_overlay(
                     dialog.agent_name.as_str(),
                     dialog
-                        .items
-                        .get(dialog.selected)
+                        .workbench
+                        .list
+                        .selected_item()
                         .map(|item| item.label.as_str()),
                 )
                 .map(Route::AgentPermissionStudio)
                 .unwrap_or(Route::AgentPermissionStudio(dialog)),
+            Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::PermissionRules) => {
+                self.build_permission_rule_picker_overlay(dialog.input.text())
+                    .map(Route::Picker)
+                    .unwrap_or(Route::Picker(dialog))
+            }
             other => other,
         }
     }
@@ -7987,7 +8822,7 @@ impl App {
         let route_query = query.to_string();
         let should_refresh_current = matches!(
             &self.current_route,
-            Route::Picker(dialog) if matches!(dialog.kind, PickerKind::PermissionRules)
+            Route::Picker(dialog) if matches!(dialog.meta.kind, PickerKind::PermissionRules)
         );
         if should_refresh_current {
             self.open_permission_rule_picker(route_query.as_str());
@@ -8160,42 +8995,15 @@ impl App {
     }
 
     fn refresh_choice_overlay(dialog: &mut ChoiceOverlay) {
-        let search = dialog.filter_query.trim().to_lowercase();
-        dialog.items = dialog
-            .all_items
-            .iter()
-            .filter(|item| search.is_empty() || item.search_text.contains(search.as_str()))
-            .cloned()
-            .collect();
-        let row_count = Self::choice_overlay_rows(dialog).len();
-        if row_count == 0 {
-            dialog.selected = 0;
-        } else {
-            dialog.selected = min(dialog.selected, row_count.saturating_sub(1));
-        }
+        let all_items = dialog.meta.all_items.clone();
+        refresh_search_list_overlay(dialog, all_items.as_slice());
     }
 
-    fn sync_choice_overlay_query(dialog: &mut ChoiceOverlay, prefer_input_value: bool) {
-        let next_query = dialog.input.text().to_string();
-        let changed = dialog.filter_query != next_query;
-        dialog.filter_query = next_query;
+    fn sync_choice_overlay_input(dialog: &mut ChoiceOverlay, prefer_input_value: bool) {
         Self::refresh_choice_overlay(dialog);
-        if prefer_input_value && changed {
+        if prefer_input_value {
             dialog.selected = Self::preferred_choice_overlay_selection(dialog);
         }
-    }
-
-    fn choice_overlay_rows(dialog: &ChoiceOverlay) -> Vec<ChoiceRow> {
-        let mut rows = Vec::new();
-        if dialog.allow_clear {
-            rows.push(ChoiceRow::Clear);
-        }
-        let trimmed = dialog.input.text().trim();
-        if dialog.allow_custom && !trimmed.is_empty() {
-            rows.push(ChoiceRow::Custom(trimmed.to_string()));
-        }
-        rows.extend(dialog.items.iter().cloned().map(ChoiceRow::Item));
-        rows
     }
 
     fn preferred_choice_overlay_selection(dialog: &ChoiceOverlay) -> usize {
@@ -8204,43 +9012,39 @@ impl App {
             return 0;
         }
 
-        let clear_offset = usize::from(dialog.allow_clear);
-        if dialog.allow_custom {
-            if let Some(index) = dialog.items.iter().position(|item| {
-                item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
-            }) {
-                return clear_offset + usize::from(dialog.allow_custom) + index;
-            }
-            return clear_offset;
-        }
-
+        let clear_offset = usize::from(dialog.clear_action.is_some());
         if let Some(index) = dialog.items.iter().position(|item| {
             item.value.eq_ignore_ascii_case(trimmed) || item.label.eq_ignore_ascii_case(trimmed)
         }) {
-            return clear_offset + index;
+            let custom_offset = usize::from(
+                ChoiceCustomValue::search_list_from_input(dialog.input.text(), &dialog.meta)
+                    .is_some(),
+            );
+            return clear_offset + custom_offset + index;
         }
 
-        0
+        clear_offset.min(dialog.row_count().saturating_sub(1))
     }
 
     fn commit_choice_overlay(&mut self, dialog: &mut ChoiceOverlay) -> bool {
-        let rows = Self::choice_overlay_rows(dialog);
-        let Some(selection) = rows.get(dialog.selected).cloned() else {
+        let Some(selection) = dialog.selected_row() else {
             return false;
         };
-        match dialog.action.clone() {
+        match dialog.meta.action.clone() {
             ChoiceOverlayAction::SettingsField(field) => {
                 let input = match selection {
-                    ChoiceRow::Clear => String::new(),
-                    ChoiceRow::Custom(value) => value,
-                    ChoiceRow::Item(item) => item.value,
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
                 };
-                match parse_settings_field_input(field, input.as_str()) {
+                match parse_settings_field_input(&self.i18n, field, input.as_str()) {
                     Ok(Some(value)) => match self
                         .block_on_async(self.backend.set_config_setting(field.path, value))
                     {
                         Ok(_) => {
-                            self.flash_success(format!("updated {}", field.path));
+                            self.flash_success(settings_path_updated_message(
+                                &self.i18n, field.path,
+                            ));
                             self.refresh_current_route_after_local_edit();
                             true
                         }
@@ -8252,7 +9056,9 @@ impl App {
                     Ok(None) => {
                         match self.block_on_async(self.backend.delete_config_setting(field.path)) {
                             Ok(_) => {
-                                self.flash_success(format!("cleared {}", field.path));
+                                self.flash_success(settings_path_cleared_message(
+                                    &self.i18n, field.path,
+                                ));
                                 self.refresh_current_route_after_local_edit();
                                 true
                             }
@@ -8270,14 +9076,15 @@ impl App {
             }
             ChoiceOverlayAction::RuntimeSetting(field) => {
                 let input = match selection {
-                    ChoiceRow::Clear => String::new(),
-                    ChoiceRow::Custom(value) => value,
-                    ChoiceRow::Item(item) => item.value,
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
                 };
-                match self
-                    .run_options
-                    .apply_runtime_setting_input(field, input.as_str())
-                {
+                match self.run_options.apply_runtime_setting_input(
+                    &self.i18n,
+                    field,
+                    input.as_str(),
+                ) {
                     Ok(message) => {
                         self.flash_success(message);
                         self.refresh_current_route_after_local_edit();
@@ -8291,12 +9098,12 @@ impl App {
             }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = match selection {
-                    ChoiceRow::Clear => String::new(),
-                    ChoiceRow::Custom(value) => value,
-                    ChoiceRow::Item(item) => item.value,
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
                 };
                 let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
-                    self.flash_error("provider studio context was lost");
+                    self.flash_error(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
                     return true;
                 };
                 match self.commit_provider_studio_field(&mut parent, field, value) {
@@ -8308,6 +9115,62 @@ impl App {
                         self.restore_provider_studio_dialog(host, parent);
                         self.flash_error(error);
                         false
+                    }
+                }
+            }
+            ChoiceOverlayAction::PermissionRuleStudio(field) => {
+                let value = match selection {
+                    SearchListRow::Clear(_) => String::new(),
+                    SearchListRow::Custom(value) => value.raw,
+                    SearchListRow::Item(item) => item.value,
+                };
+                let current_session_id = self.current_or_selected_session_id();
+                match &mut self.current_route {
+                    Route::PermissionRuleStudio(parent) => {
+                        match field {
+                            PermissionRuleStudioChoiceField::SubjectKind => {
+                                parent.draft.subject_kind = match value.as_str() {
+                                    "path_access" => PermissionRuleSubjectKind::PathAccess,
+                                    "network_access" => PermissionRuleSubjectKind::NetworkAccess,
+                                    _ => PermissionRuleSubjectKind::Tool,
+                                };
+                            }
+                            PermissionRuleStudioChoiceField::PathAccessKind => {
+                                if !value.trim().is_empty() {
+                                    parent.draft.path_access_kind = value;
+                                }
+                            }
+                            PermissionRuleStudioChoiceField::Scope => {
+                                parent.draft.scope = if value.trim().is_empty() {
+                                    "workspace".to_string()
+                                } else {
+                                    value
+                                };
+                                if parent.draft.scope != "session" {
+                                    parent.draft.session_id.clear();
+                                } else if parent.draft.session_id.trim().is_empty()
+                                    && let Some(session_id) = current_session_id
+                                {
+                                    parent.draft.session_id = session_id.to_string();
+                                }
+                            }
+                            PermissionRuleStudioChoiceField::Mode => {
+                                parent.draft.mode = match value.as_str() {
+                                    "allow" => PermissionMode::Allow,
+                                    "deny" => PermissionMode::Deny,
+                                    _ => PermissionMode::Ask,
+                                };
+                            }
+                        }
+                        refresh_permission_rule_studio_dialog(&self.i18n, parent);
+                        true
+                    }
+                    _ => {
+                        self.flash_error(ui_text::t(
+                            &self.i18n,
+                            "flash-permission-rule-context-lost",
+                        ));
+                        true
                     }
                 }
             }
@@ -8331,82 +9194,84 @@ impl App {
             JsonValue::Null
         };
         if let Some(all_items) = self.settings_field_choice_items(field) {
-            self.open_choice_overlay(ChoiceOverlay {
-                title: format!("Edit {}", field.path),
-                prompt: settings_value_edit_prompt(field, &file_value, &effective_value),
-                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
-                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                input: Editor::from_text(setting_value_input_text(&prefill)),
-                filter_query: String::new(),
+            self.open_choice_overlay(self.build_choice_overlay(
+                settings_edit_title(&self.i18n, field.path),
+                settings_value_edit_prompt(&self.i18n, field, &file_value, &effective_value),
+                Editor::from_text(setting_value_input_text(&prefill)),
                 all_items,
-                items: Vec::new(),
-                selected: 0,
-                allow_custom: true,
-                allow_clear: true,
-                action: ChoiceOverlayAction::SettingsField(field),
-            });
+                ChoiceOverlayAction::SettingsField(field),
+                true,
+            ));
             return;
         }
-        self.overlay = Some(Overlay::SettingsValueEdit(SettingsValueEditOverlay {
-            title: format!("Edit {}", field.path),
-            prompt: settings_value_edit_prompt(field, &file_value, &effective_value),
-            input: Editor::from_text(setting_value_input_text(&prefill)),
+        self.overlay = Some(Overlay::SettingsValueEdit(SettingsValueEditOverlay::new(
+            settings_edit_title(&self.i18n, field.path),
+            settings_value_edit_prompt(&self.i18n, field, &file_value, &effective_value),
+            Editor::from_text(setting_value_input_text(&prefill)),
             field,
-        }));
+        )));
     }
 
     fn open_runtime_setting_editor(&mut self, field: RuntimeSettingSpec, _return_query: &str) {
-        let current_summary = self.run_options.runtime_setting_summary(field);
+        let current_summary = self.run_options.runtime_setting_summary(&self.i18n, field);
         if let Some(all_items) = self.runtime_setting_choice_items(field) {
-            self.open_choice_overlay(ChoiceOverlay {
-                title: format!("Edit {}", field.label),
-                prompt: runtime_setting_edit_prompt(field, current_summary.as_str()),
-                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
-                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                input: Editor::from_text(self.run_options.runtime_setting_input_text(field)),
-                filter_query: String::new(),
+            self.open_choice_overlay(self.build_choice_overlay(
+                settings_edit_title(
+                    &self.i18n,
+                    runtime_setting_display_label(&self.i18n, field).as_str(),
+                ),
+                runtime_setting_edit_prompt(&self.i18n, field, current_summary.as_str()),
+                Editor::from_text(self.run_options.runtime_setting_input_text(field)),
                 all_items,
-                items: Vec::new(),
-                selected: 0,
-                allow_custom: true,
-                allow_clear: true,
-                action: ChoiceOverlayAction::RuntimeSetting(field),
-            });
+                ChoiceOverlayAction::RuntimeSetting(field),
+                true,
+            ));
             return;
         }
-        self.overlay = Some(Overlay::RuntimeSettingEdit(RuntimeSettingEditOverlay {
-            title: format!("Edit {}", field.label),
-            prompt: runtime_setting_edit_prompt(field, current_summary.as_str()),
-            input: Editor::from_text(self.run_options.runtime_setting_input_text(field)),
+        self.overlay = Some(Overlay::RuntimeSettingEdit(RuntimeSettingEditOverlay::new(
+            settings_edit_title(
+                &self.i18n,
+                runtime_setting_display_label(&self.i18n, field).as_str(),
+            ),
+            runtime_setting_edit_prompt(&self.i18n, field, current_summary.as_str()),
+            Editor::from_text(self.run_options.runtime_setting_input_text(field)),
             field,
-        }));
+        )));
     }
 
     fn settings_field_choice_items(&self, field: SettingsFieldSpec) -> Option<Vec<ChoiceItem>> {
         match field.path {
-            "default.provider" => Some(
-                self.backend
-                    .list_providers()
-                    .into_iter()
-                    .map(|provider| {
-                        choice_item(
-                            provider.provider_id,
-                            format!(
-                                "default {}/{}",
-                                provider.default_adapter.as_deref().unwrap_or("adapter"),
-                                provider.default_model
-                            ),
-                        )
-                    })
-                    .collect(),
-            ),
+            "default.provider" => {
+                let fallback_adapter = settings_choice_adapter_fallback(&self.i18n);
+                Some(
+                    self.backend
+                        .list_providers()
+                        .into_iter()
+                        .map(|provider| {
+                            choice_item(
+                                provider.provider_id,
+                                settings_choice_default_provider_detail(
+                                    &self.i18n,
+                                    provider
+                                        .default_adapter
+                                        .as_deref()
+                                        .unwrap_or(fallback_adapter.as_str()),
+                                    provider.default_model.as_str(),
+                                ),
+                            )
+                        })
+                        .collect(),
+                )
+            }
             "default.adapter" => Some(self.default_adapter_choice_items()),
             "default.model" => Some(self.default_model_choice_items()),
             "default.agent" => Some(
                 self.backend
                     .list_agent_names()
                     .into_iter()
-                    .map(|agent| choice_item(agent, "registered agent profile"))
+                    .map(|agent| {
+                        choice_item(agent, settings_choice_registered_agent_detail(&self.i18n))
+                    })
                     .collect(),
             ),
             "ui.locale" => Some(
@@ -8415,9 +9280,9 @@ impl App {
                     .map(|(code, detail)| choice_item(*code, *detail))
                     .collect(),
             ),
-            _ if matches!(field.kind, SettingsFieldKind::Bool) => {
-                Some(boolean_choice_items("write a boolean override"))
-            }
+            _ if matches!(field.kind, SettingsFieldKind::Bool) => Some(boolean_choice_items(
+                settings_choice_bool_override_detail(&self.i18n).as_str(),
+            )),
             _ => None,
         }
     }
@@ -8454,7 +9319,12 @@ impl App {
                 Ok(values) => Some(
                     values
                         .into_iter()
-                        .map(|value| choice_item(value, "supported by the current model"))
+                        .map(|value| {
+                            choice_item(
+                                value,
+                                runtime_setting_choice_supported_model_detail(&self.i18n),
+                            )
+                        })
                         .collect(),
                 ),
                 Err(error) => {
@@ -8462,9 +9332,9 @@ impl App {
                     Some(Vec::new())
                 }
             },
-            RuntimeSettingId::ParallelToolCalls => {
-                Some(boolean_choice_items("apply a parallel-tool-calls override"))
-            }
+            RuntimeSettingId::ParallelToolCalls => Some(boolean_choice_items(
+                runtime_setting_choice_parallel_detail(&self.i18n).as_str(),
+            )),
             RuntimeSettingId::Temperature
             | RuntimeSettingId::MaxOutput
             | RuntimeSettingId::System => None,
@@ -8481,10 +9351,11 @@ impl App {
                         .adapter_id
                         .as_ref()
                         .map(ToString::to_string)
-                        .unwrap_or_else(|| "adapter".to_owned());
-                    let mut detail_parts = vec![format!(
-                        "configured on {}/{}",
-                        model.provider_id, adapter_id
+                        .unwrap_or_else(|| settings_choice_adapter_fallback(&self.i18n));
+                    let mut detail_parts = vec![settings_choice_configured_model_detail(
+                        &self.i18n,
+                        model.provider_id.as_str(),
+                        adapter_id.as_str(),
                     )];
                     if let Some(display_name) = model
                         .display_name
@@ -8494,7 +9365,7 @@ impl App {
                     {
                         detail_parts.push(display_name.to_owned());
                     }
-                    choice_item(model.id.to_string(), detail_parts.join(" · "))
+                    choice_item(model.id.to_string(), join_inline_segments(detail_parts))
                 })
                 .collect(),
         )
@@ -8505,16 +9376,11 @@ impl App {
             .default_adapter_options()
             .into_iter()
             .map(|adapter| {
-                let model_label = if adapter.configured_model_count == 1 {
-                    "configured model"
-                } else {
-                    "configured models"
-                };
                 choice_item(
                     adapter.adapter_id,
-                    format!(
-                        "enabled on default provider · {} {}",
-                        adapter.configured_model_count, model_label
+                    settings_choice_default_adapter_detail(
+                        &self.i18n,
+                        adapter.configured_model_count,
                     ),
                 )
             })
@@ -8528,53 +9394,88 @@ impl App {
     ) -> Option<Vec<ChoiceItem>> {
         match field {
             ProviderStudioField::AuthMode => Some(vec![
-                choice_item("none", "disable provider auth metadata"),
-                choice_item("api", "API key or endpoint-based provider auth"),
+                choice_item(
+                    "none",
+                    ui_text::t(&self.i18n, "provider-auth-mode-none-detail"),
+                ),
+                choice_item(
+                    "api",
+                    ui_text::t(&self.i18n, "provider-auth-mode-api-detail"),
+                ),
                 choice_item(
                     "gitlab_api",
-                    "GitLab token auth routed through openai or anthropic",
+                    ui_text::t(&self.i18n, "provider-auth-mode-gitlab-api-detail"),
                 ),
                 choice_item(
                     "credential",
-                    "credential-backed auth resolved from a local issuer",
+                    ui_text::t(&self.i18n, "provider-auth-mode-credential-detail"),
                 ),
-                choice_item("bedrock_sigv4", "AWS Bedrock SigV4 signing"),
+                choice_item(
+                    "bedrock_sigv4",
+                    ui_text::t(&self.i18n, "provider-auth-mode-bedrock-detail"),
+                ),
             ]),
             ProviderStudioField::CredentialIssuer => Some(vec![
-                choice_item("openai_chatgpt", "OpenAI ChatGPT credentials"),
-                choice_item("github_copilot", "GitHub Copilot credentials"),
-                choice_item("gitlab", "GitLab OAuth credentials"),
-                choice_item("google_adc", "Google Application Default Credentials"),
-                choice_item("sap_ai_core", "SAP AI Core service key auth"),
-                choice_item("atomgit", "AtomGit credentials"),
+                choice_item(
+                    "openai_chatgpt",
+                    ui_text::t(&self.i18n, "provider-issuer-openai-chatgpt-detail"),
+                ),
+                choice_item(
+                    "github_copilot",
+                    ui_text::t(&self.i18n, "provider-issuer-github-copilot-detail"),
+                ),
+                choice_item(
+                    "gitlab",
+                    ui_text::t(&self.i18n, "provider-issuer-gitlab-detail"),
+                ),
+                choice_item(
+                    "google_adc",
+                    ui_text::t(&self.i18n, "provider-issuer-google-adc-detail"),
+                ),
+                choice_item(
+                    "sap_ai_core",
+                    ui_text::t(&self.i18n, "provider-issuer-sap-ai-core-detail"),
+                ),
+                choice_item(
+                    "atomgit",
+                    ui_text::t(&self.i18n, "provider-issuer-atomgit-detail"),
+                ),
             ]),
             ProviderStudioField::InstanceUrl => Some(vec![choice_item(
                 "https://gitlab.com",
-                "GitLab.com browser OAuth endpoint",
+                ui_text::t(&self.i18n, "provider-instance-url-gitlab-detail"),
             )]),
             ProviderStudioField::RedirectUri => Some(vec![
                 choice_item(
                     "http://127.0.0.1:1455/callback",
-                    "localhost callback URL for copy/paste OAuth redirects",
+                    ui_text::t(&self.i18n, "provider-redirect-local-copy-detail"),
                 ),
                 choice_item(
                     "http://127.0.0.1:1455/auth/callback",
-                    "localhost callback URL that matches the Studio web route",
+                    ui_text::t(&self.i18n, "provider-redirect-local-studio-detail"),
                 ),
             ]),
             ProviderStudioField::Region => Some(
                 AWS_REGION_CHOICES
                     .iter()
-                    .map(|region| choice_item(*region, "AWS region"))
+                    .map(|region| {
+                        choice_item(
+                            *region,
+                            ui_text::t(&self.i18n, "provider-region-choice-detail"),
+                        )
+                    })
                     .collect(),
             ),
-            ProviderStudioField::Profile => {
-                Some(provider_studio_profile_choice_items(&self.backend))
+            ProviderStudioField::Profile => Some(provider_studio_profile_choice_items(
+                &self.i18n,
+                &self.backend,
+            )),
+            ProviderStudioField::ApiKeyEnv => {
+                Some(provider_studio_api_key_env_choice_items(&self.i18n))
             }
-            ProviderStudioField::ApiKeyEnv => Some(provider_studio_api_key_env_choice_items()),
             ProviderStudioField::ServiceKeyEnv => Some(vec![choice_item(
                 "AICORE_SERVICE_KEY",
-                "default SAP AI Core service key env var",
+                ui_text::t(&self.i18n, "provider-service-key-env-detail"),
             )]),
             ProviderStudioField::DefaultAdapter => Some(
                 dialog
@@ -8583,27 +9484,33 @@ impl App {
                     .map(|adapter_id| {
                         let detail = provider_studio_adapter_rule(dialog, adapter_id.as_str())
                             .map(|rule| {
-                                let mut parts = vec![rule.detail.to_owned()];
+                                let mut parts =
+                                    vec![provider_studio_adapter_rule_detail(&self.i18n, rule)];
                                 if dialog.configured_adapter_ids.contains(adapter_id) {
-                                    parts.push("configured".to_owned());
+                                    parts.push(ui_text::t(
+                                        &self.i18n,
+                                        "overlay-provider-studio-configured",
+                                    ));
                                 }
-                                parts.join(" · ")
+                                join_inline_segments(parts)
                             })
                             .unwrap_or_else(|| {
                                 if dialog.configured_adapter_ids.contains(adapter_id) {
-                                    "configured on disk; not part of the current auth contract"
-                                        .to_owned()
+                                    ui_text::t(
+                                        &self.i18n,
+                                        "overlay-provider-studio-configured-disk",
+                                    )
                                 } else {
-                                    "not supported by the current auth contract".to_owned()
+                                    ui_text::t(&self.i18n, "overlay-provider-studio-not-supported")
                                 }
                             });
                         choice_item(adapter_id.clone(), detail)
                     })
                     .collect(),
             ),
-            ProviderStudioField::DefaultModel => {
-                Some(provider_studio_default_model_choice_items(dialog))
-            }
+            ProviderStudioField::DefaultModel => Some(provider_studio_default_model_choice_items(
+                &self.i18n, dialog,
+            )),
             _ => None,
         }
     }
@@ -8614,16 +9521,22 @@ impl App {
             if let Some(parent) = path.parent()
                 && let Err(error) = fs::create_dir_all(parent)
             {
-                self.flash_error(format!(
-                    "failed to prepare config directory {}: {error}",
-                    parent.display()
+                self.flash_error(self.i18n.text_args(
+                    "flash-config-dir-prepare-failed",
+                    &crate::fl_args!(
+                        "path" => parent.display().to_string(),
+                        "error" => error.to_string(),
+                    ),
                 ));
                 return;
             }
             if let Err(error) = fs::write(&path, "") {
-                self.flash_error(format!(
-                    "failed to create config file {}: {error}",
-                    path.display()
+                self.flash_error(self.i18n.text_args(
+                    "flash-config-file-create-failed",
+                    &crate::fl_args!(
+                        "path" => path.display().to_string(),
+                        "error" => error.to_string(),
+                    ),
                 ));
                 return;
             }
@@ -8646,11 +9559,14 @@ impl App {
                 .set_config_setting("plugins.enabled", JsonValue::Bool(next)),
         ) {
             Ok(_) => {
-                self.flash_success(if next {
-                    "enabled plugins"
-                } else {
-                    "disabled plugins"
-                });
+                self.flash_success(ui_text::t(
+                    &self.i18n,
+                    if next {
+                        "flash-plugins-enabled"
+                    } else {
+                        "flash-plugins-disabled"
+                    },
+                ));
                 self.refresh_settings_studio_overlay(dialog);
             }
             Err(error) => self.flash_error(error),
@@ -8668,7 +9584,10 @@ impl App {
             JsonValue::String(next.to_string()),
         )) {
             Ok(_) => {
-                self.flash_success(format!("set tool description mode to {next}"));
+                self.flash_success(self.i18n.text_args(
+                    "flash-tool-description-mode-set",
+                    &crate::fl_args!("mode" => next),
+                ));
                 self.refresh_settings_studio_overlay(dialog);
             }
             Err(error) => self.flash_error(error),
@@ -8683,8 +9602,9 @@ impl App {
         dialog: &mut SettingsStudioOverlay,
     ) {
         let Some(mut entry_object) = entry.as_object().cloned() else {
-            self.flash_error(format!(
-                "plugin entry {plugin_id} is not a JSON object and cannot be rewritten"
+            self.flash_error(self.i18n.text_args(
+                "flash-plugin-entry-not-object",
+                &crate::fl_args!("plugin_id" => plugin_id),
             ));
             return;
         };
@@ -8694,11 +9614,14 @@ impl App {
             JsonValue::Object(entry_object),
         )) {
             Ok(_) => {
-                self.flash_success(if disabled {
-                    format!("enabled plugin {plugin_id}; config kept and runtime reloaded")
-                } else {
-                    format!("disabled plugin {plugin_id}; config kept and runtime reloaded")
-                });
+                self.flash_success(self.i18n.text_args(
+                    if disabled {
+                        "flash-plugin-entry-enabled"
+                    } else {
+                        "flash-plugin-entry-disabled"
+                    },
+                    &crate::fl_args!("plugin_id" => plugin_id),
+                ));
                 self.refresh_settings_studio_overlay(dialog);
             }
             Err(error) => self.flash_error(error),
@@ -8716,7 +9639,7 @@ impl App {
     fn set_default_agent(&mut self, agent_name: &str, dialog: &mut SettingsStudioOverlay) {
         match self.set_default_agent_value(agent_name) {
             Ok(()) => {
-                self.flash_success(format!("set default.agent to {agent_name}"));
+                self.flash_success(default_agent_updated_message(&self.i18n, agent_name));
                 self.refresh_settings_studio_overlay(dialog);
             }
             Err(error) => self.flash_error(error),
@@ -8736,11 +9659,7 @@ impl App {
     ) {
         match self.set_agent_hidden_value(agent_name, !hidden) {
             Ok(()) => {
-                self.flash_success(if hidden {
-                    format!("unhid agent {agent_name}")
-                } else {
-                    format!("hid agent {agent_name}")
-                });
+                self.flash_success(agent_hidden_toggled_message(&self.i18n, agent_name, hidden));
                 self.refresh_settings_studio_overlay(dialog);
             }
             Err(error) => self.flash_error(error),
@@ -8754,95 +9673,145 @@ impl App {
         query: &str,
         rows: Vec<crate::backend::InspectorRow>,
     ) {
-        let mut overlay = PickerOverlay {
+        let overlay = self.build_picker_overlay(
             title,
             prompt,
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::from_text(query.to_string()),
-            all_items: rows
-                .into_iter()
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            Editor::from_text(query.to_string()),
+            rows.into_iter()
                 .map(|row| PickerItem {
                     label: row.label,
                     detail: row.detail,
                     value: PickerValue::Inspector,
                 })
                 .collect(),
-            items: Vec::new(),
-            selected: 0,
-            loading: false,
-            kind: PickerKind::Inspector,
-        };
-        Self::refresh_picker_overlay(&mut overlay);
+            PickerKind::Inspector,
+            false,
+        );
         self.current_route = Route::Picker(overlay);
     }
 
     fn open_permission_rule_picker(&mut self, query: &str) {
-        match self.block_on_async(self.backend.list_permission_rules()) {
-            Ok(rules) => {
-                let mut all_items = vec![PickerItem {
-                    label: ui_text::t(&self.i18n, "permission-rule-create-label"),
-                    detail: ui_text::t(&self.i18n, "permission-rule-create-detail"),
-                    value: PickerValue::PermissionRuleCreate,
-                }];
-                all_items.extend(rules.into_iter().map(|rule| PickerItem {
-                    label: permission_rule_label(&rule),
-                    detail: permission_rule_detail(&rule),
-                    value: PickerValue::PermissionRule(Box::new(rule)),
-                }));
-                let mut overlay = PickerOverlay {
-                    title: ui_text::t(&self.i18n, "overlay-permission-rules-title"),
-                    prompt: ui_text::t(&self.i18n, "overlay-permission-rules-prompt"),
-                    empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                    footer: ui_text::t(&self.i18n, "overlay-permission-rules-footer"),
-                    input: Editor::from_text(query.to_string()),
-                    all_items,
-                    items: Vec::new(),
-                    selected: 0,
-                    loading: false,
-                    kind: PickerKind::PermissionRules,
-                };
-                Self::refresh_picker_overlay(&mut overlay);
-                self.current_route = Route::Picker(overlay);
-            }
+        match self.build_permission_rule_picker_overlay(query) {
+            Ok(overlay) => self.current_route = Route::Picker(overlay),
             Err(error) => self.flash_error(error),
         }
     }
 
-    fn open_permission_rule_editor(
+    fn build_permission_rule_picker_overlay(&self, query: &str) -> UiResult<PickerOverlay> {
+        let rules = self
+            .block_on_async(self.backend.list_permission_rules())
+            .map_err(|error| error.to_string())?;
+        let mut all_items = vec![PickerItem {
+            label: ui_text::t(&self.i18n, "permission-rule-create-label"),
+            detail: ui_text::t(&self.i18n, "permission-rule-create-detail"),
+            value: PickerValue::PermissionRuleCreate,
+        }];
+        all_items.extend(rules.into_iter().map(|rule| PickerItem {
+            label: permission_rule_label(&self.i18n, &rule),
+            detail: permission_rule_detail(&self.i18n, &rule),
+            value: PickerValue::PermissionRule(Box::new(rule)),
+        }));
+        let overlay = self.build_picker_overlay(
+            ui_text::t(&self.i18n, "overlay-permission-rules-title"),
+            ui_text::t(&self.i18n, "overlay-permission-rules-prompt"),
+            ui_text::t(&self.i18n, "overlay-permission-rules-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            Editor::from_text(query.to_string()),
+            all_items,
+            PickerKind::PermissionRules,
+            false,
+        );
+        Ok(overlay)
+    }
+
+    fn current_session_permission_rule_draft(&self) -> PermissionRuleDraft {
+        let session_id = self.current_or_selected_session_id();
+        PermissionRuleDraft {
+            subject_kind: PermissionRuleSubjectKind::PathAccess,
+            path_access_kind: "read".to_string(),
+            workspace_root: self.backend.workspace_root().display().to_string(),
+            scope: if session_id.is_some() {
+                "session".to_string()
+            } else {
+                "workspace".to_string()
+            },
+            session_id: session_id
+                .map(|session_id| session_id.to_string())
+                .unwrap_or_default(),
+            ..PermissionRuleDraft::default()
+        }
+    }
+
+    fn build_permission_rule_studio_overlay(
+        &self,
+        rule_id: Option<i64>,
+        title: String,
+        draft: PermissionRuleDraft,
+        preferred_item_label: Option<&str>,
+    ) -> PermissionRuleStudioOverlay {
+        let items = permission_rule_studio_items(&self.i18n, &draft, rule_id);
+        let selected = preferred_item_label
+            .and_then(|label| items.iter().position(|item| item.label == label))
+            .unwrap_or(0);
+        let footer = ui_text::t(&self.i18n, "overlay-permission-rule-studio-footer");
+        PermissionRuleStudioOverlay {
+            rule_id,
+            draft,
+            workbench: ListWorkbenchState::new(
+                title,
+                footer,
+                SelectableListState::new(items, selected),
+            ),
+        }
+    }
+
+    fn open_current_session_permission_studio(&mut self) {
+        let draft = self.current_session_permission_rule_draft();
+        self.route_stack.clear();
+        self.current_route =
+            Route::PermissionRuleStudio(self.build_permission_rule_studio_overlay(
+                None,
+                ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
+                draft,
+                None,
+            ));
+    }
+
+    fn open_permission_rule_studio(
         &mut self,
         rule: Option<&PermissionRuleResource>,
-        return_query: &str,
-        return_overlay: Option<Overlay>,
+        draft_override: Option<PermissionRuleDraft>,
     ) {
-        let (rule_id, title, input) = match rule {
-            Some(rule) => {
-                let draft = permission_rule_draft_from_resource(rule);
-                let input = Editor::from_text(render_permission_rule_draft(&draft));
-                (
-                    Some(rule.id),
-                    ui_text::t(&self.i18n, "overlay-permission-rule-edit-title"),
-                    input,
-                )
-            }
-            None => {
-                let draft = PermissionRuleDraft::default();
-                let input = Editor::from_text(render_permission_rule_draft(&draft));
-                (
-                    None,
-                    ui_text::t(&self.i18n, "overlay-permission-rule-create-title"),
-                    input,
-                )
-            }
+        let (rule_id, title, draft) = match (rule, draft_override) {
+            (_, Some(draft)) => (
+                rule.map(|rule| rule.id),
+                ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
+                draft,
+            ),
+            (Some(rule), None) => (
+                Some(rule.id),
+                format!(
+                    "{} · {}",
+                    ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
+                    permission_rule_label(&self.i18n, rule)
+                ),
+                permission_rule_draft_from_resource(rule),
+            ),
+            (None, None) => (
+                None,
+                ui_text::t(&self.i18n, "overlay-permission-rule-workbench-title"),
+                PermissionRuleDraft::default(),
+            ),
         };
-        self.overlay = Some(Overlay::PermissionRuleEdit(PermissionRuleEditOverlay {
-            rule_id,
-            title,
-            prompt: ui_text::t(&self.i18n, "overlay-permission-rule-prompt"),
-            input,
-            return_query: return_query.to_string(),
-            return_overlay: return_overlay.map(Box::new),
-        }));
+        self.current_route = Route::PermissionRuleStudio(
+            self.build_permission_rule_studio_overlay(rule_id, title, draft, None),
+        );
+    }
+
+    fn refresh_permission_rule_studio(&mut self, dialog: &mut PermissionRuleStudioOverlay) {
+        refresh_permission_rule_studio_dialog(&self.i18n, dialog);
     }
 
     fn open_permission_rule_editor_from_request(&mut self, request: &PermissionRequest) {
@@ -8850,9 +9819,12 @@ impl App {
         let input = Editor::from_text(render_permission_rule_draft(&draft));
         self.overlay = Some(Overlay::PermissionRuleEdit(PermissionRuleEditOverlay {
             rule_id: None,
-            title: ui_text::t(&self.i18n, "overlay-permission-rule-create-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-permission-rule-prompt"),
-            input,
+            state: InputDialogState::new(
+                ui_text::t(&self.i18n, "overlay-permission-rule-create-title"),
+                ui_text::t(&self.i18n, "overlay-permission-rule-prompt"),
+                input,
+                (),
+            ),
             return_query: String::new(),
             return_overlay: None,
         }));
@@ -8863,20 +9835,19 @@ impl App {
         rule: &PermissionRuleResource,
         return_query: &str,
     ) {
-        let label = permission_rule_label(rule);
-        self.overlay = Some(Overlay::Confirm(ConfirmOverlay {
-            title: ui_text::t(&self.i18n, "overlay-permission-rule-delete-title"),
-            body_lines: vec![self.i18n.text_args(
+        let label = permission_rule_label(&self.i18n, rule);
+        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
+            ui_text::t(&self.i18n, "overlay-permission-rule-delete-title"),
+            vec![self.i18n.text_args(
                 "overlay-permission-rule-delete-body",
                 &crate::fl_args!("name" => label.clone()),
             )],
-            footer: ui_text::t(&self.i18n, "overlay-confirm-footer"),
-            action: ConfirmAction::RevokePermissionRule {
+            ConfirmAction::RevokePermissionRule {
                 rule_id: rule.id,
                 label,
                 return_query: return_query.to_string(),
             },
-        }));
+        )));
     }
 
     fn open_worktree_remove_confirm(&mut self, session_id: i64, discard_changes: bool) {
@@ -8884,15 +9855,14 @@ impl App {
         if discard_changes {
             body_lines.push(ui_text::t(&self.i18n, "overlay-worktree-remove-force"));
         }
-        self.overlay = Some(Overlay::Confirm(ConfirmOverlay {
-            title: ui_text::t(&self.i18n, "overlay-worktree-remove-title"),
+        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
+            ui_text::t(&self.i18n, "overlay-worktree-remove-title"),
             body_lines,
-            footer: ui_text::t(&self.i18n, "overlay-confirm-footer"),
-            action: ConfirmAction::ExitWorktree {
+            ConfirmAction::ExitWorktree {
                 session_id,
                 discard_changes,
             },
-        }));
+        )));
     }
 
     fn open_command_palette(&mut self) {
@@ -8913,19 +9883,16 @@ impl App {
                     value: PickerValue::RuntimeEntry(entry.label),
                 }),
         );
-        let mut overlay = PickerOverlay {
-            title: ui_text::t(&self.i18n, "overlay-commands-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-commands-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
+        let overlay = self.build_picker_overlay(
+            ui_text::t(&self.i18n, "overlay-commands-title"),
+            ui_text::t(&self.i18n, "overlay-commands-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            Editor::default(),
             all_items,
-            items: Vec::new(),
-            selected: 0,
-            loading: false,
-            kind: PickerKind::Commands,
-        };
-        Self::refresh_picker_overlay(&mut overlay);
+            PickerKind::Commands,
+            false,
+        );
         self.current_route = Route::Picker(overlay);
     }
 
@@ -8942,34 +9909,15 @@ impl App {
     }
 
     fn open_resume_session_picker_with_query(&mut self, query: &str) {
-        let mut input = Editor::from_text(query.trim().to_string());
-        input.cursor = input.text().len();
+        let input = Editor::from_text(query.trim().to_string());
         let scope_session_id = (self.sessions.view_mode == SessionViewMode::Subtree)
             .then(|| self.current_or_selected_session_id())
             .flatten();
-        let mut dialog = SessionSearchOverlay {
-            title: ui_text::t(&self.i18n, "overlay-resume-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-resume-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: String::new(),
-            input,
-            items: Vec::new(),
-            all_items: Vec::new(),
-            selected: 0,
-            loading: true,
-            mode: self.sessions.view_mode,
-            scope_session_id,
-            page_limit: 50,
-            page_index: 0,
-            offset: 0,
-            cursors: vec![None],
-            next_cursor: None,
-            has_more: false,
-        };
-        dialog.footer = self.session_search_footer(&dialog);
-        match dialog.mode {
+        let dialog =
+            self.build_session_search_overlay(input, self.sessions.view_mode, scope_session_id);
+        match dialog.meta.mode {
             SessionViewMode::Subtree => {
-                let Some(session_id) = dialog.scope_session_id else {
+                let Some(session_id) = dialog.meta.scope_session_id else {
                     self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
                     return;
                 };
@@ -8980,7 +9928,7 @@ impl App {
             }
             SessionViewMode::All | SessionViewMode::Roots => {
                 self.request_session_search_page(
-                    dialog.mode,
+                    dialog.meta.mode,
                     dialog.input.text().trim().to_string(),
                     0,
                     None,
@@ -8995,21 +9943,20 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.current_route = Route::Picker(PickerOverlay {
-            title: self.i18n.text_args(
+        let dialog = self.build_picker_overlay(
+            self.i18n.text_args(
                 "overlay-lineage-title",
                 &crate::fl_args!("session" => session_id),
             ),
-            prompt: ui_text::t(&self.i18n, "overlay-lineage-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-            kind: PickerKind::Lineage { session_id },
-        });
+            ui_text::t(&self.i18n, "overlay-lineage-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            Vec::new(),
+            PickerKind::Lineage { session_id },
+            true,
+        );
+        self.current_route = Route::Picker(dialog);
         self.request_lineage(session_id);
     }
 
@@ -9025,60 +9972,47 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
             return;
         }
-        self.current_route = Route::Picker(PickerOverlay {
-            title: self.i18n.text_args(
+        let dialog = self.build_picker_overlay(
+            self.i18n.text_args(
                 "overlay-rewind-title",
                 &crate::fl_args!("session" => session_id),
             ),
-            prompt: ui_text::t(&self.i18n, "overlay-rewind-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-            kind: PickerKind::RewindMessages { session_id },
-        });
+            ui_text::t(&self.i18n, "overlay-rewind-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            Vec::new(),
+            PickerKind::RewindMessages { session_id },
+            true,
+        );
+        self.current_route = Route::Picker(dialog);
         self.request_rewind_messages(session_id);
     }
 
     fn open_provider_picker(&mut self, purpose: ProviderPickerPurpose) {
-        self.current_route = Route::Picker(PickerOverlay {
-            title: ui_text::t(&self.i18n, "overlay-providers-title"),
-            prompt: ui_text::t(&self.i18n, "overlay-providers-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-            kind: PickerKind::Providers(purpose),
-        });
+        let dialog = self.build_picker_overlay(
+            ui_text::t(&self.i18n, "overlay-providers-title"),
+            ui_text::t(&self.i18n, "overlay-providers-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            Vec::new(),
+            PickerKind::Providers(purpose),
+            true,
+        );
+        self.current_route = Route::Picker(dialog);
         self.request_providers(purpose);
     }
 
     fn open_session_model_chooser(&mut self) {
-        self.current_route = Route::SessionModelChooser(SessionModelChooserOverlay {
-            title: "Session Model".to_string(),
-            prompt: "Search provider, adapter, or model".to_string(),
-            footer: "Type filter | Up/Down move | Left/Right page | Enter select | Esc close"
-                .to_string(),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            input: Editor::default(),
-            loading: true,
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            page_size: 18,
-        });
+        let dialog = self.build_session_model_chooser_overlay();
+        self.current_route = Route::SessionModelChooser(dialog);
         self.request_session_model_chooser_items();
     }
 
     fn open_provider_studio(&mut self, initial_provider: Option<&str>) {
         let providers = self.backend.list_configured_providers();
-        let provider_rows = provider_studio_provider_rows(providers.as_slice());
+        let provider_rows = provider_studio_provider_rows(&self.i18n, providers.as_slice());
         let selected_provider = initial_provider
             .and_then(|provider_id| {
                 provider_rows
@@ -9099,10 +10033,18 @@ impl App {
             title: ui_text::t(&self.i18n, "overlay-provider-studio-title"),
             footer: ui_text::t(&self.i18n, "overlay-provider-studio-footer"),
             show_provider_list: false,
-            providers: provider_rows,
-            selected_provider,
-            focus: ProviderStudioFocus::Fields,
-            selected_field: 0,
+            providers: SelectableListState::new(provider_rows, selected_provider),
+            selection: DashboardSelectionState::new(
+                [
+                    ProviderStudioFocus::Fields,
+                    ProviderStudioFocus::Adapters,
+                    ProviderStudioFocus::Models,
+                ],
+                ProviderStudioFocus::Fields,
+                0,
+                0,
+                0,
+            ),
             draft: self
                 .backend
                 .provider_config_draft(None)
@@ -9122,8 +10064,6 @@ impl App {
             adapter_models: Vec::new(),
             configured_adapter_ids: BTreeSet::new(),
             adapter_candidate_ids: Vec::new(),
-            selected_adapter: 0,
-            selected_model: 0,
             adapter_selection_touched: false,
             selected_adapter_ids: BTreeSet::new(),
             selected_model_keys: BTreeSet::new(),
@@ -9137,7 +10077,7 @@ impl App {
         };
         let selected_id = overlay
             .providers
-            .get(overlay.selected_provider)
+            .selected_item()
             .and_then(|row| row.provider_id.clone());
         self.load_provider_studio_draft(&mut overlay, selected_id.as_deref(), draft_prefill);
         self.current_route = Route::ProviderStudio(Box::new(overlay));
@@ -9157,7 +10097,7 @@ impl App {
                     draft.provider_id = prefill;
                 }
                 dialog.draft = draft;
-                dialog.selected_field = 0;
+                dialog.selection.set_top_selected(0);
                 dialog.adapter_models =
                     self.backend.configured_provider_adapter_models(provider_id);
                 let configured_adapter_ids = provider_id
@@ -9176,8 +10116,8 @@ impl App {
                     })
                     .unwrap_or_default();
                 dialog.configured_adapter_ids = configured_adapter_ids.clone();
-                dialog.selected_adapter = 0;
-                dialog.selected_model = 0;
+                dialog.selection.set_left_selected(0);
+                dialog.selection.set_right_selected(0);
                 dialog.pending_adapter_models_key = None;
                 dialog.pending_auth_key = None;
                 dialog.detail_page = None;
@@ -9200,13 +10140,13 @@ impl App {
                     .iter()
                     .position(|candidate| candidate == dialog.draft.default_adapter.trim())
                 {
-                    dialog.selected_adapter = index;
+                    dialog.selection.set_left_selected(index);
                 } else if let Some(first_selected) = dialog
                     .adapter_candidate_ids
                     .iter()
                     .position(|candidate| dialog.selected_adapter_ids.contains(candidate.as_str()))
                 {
-                    dialog.selected_adapter = first_selected;
+                    dialog.selection.set_left_selected(first_selected);
                 }
             }
             Err(error) => self.flash_error(error.to_string()),
@@ -9215,10 +10155,7 @@ impl App {
 
     fn open_model_catalog_studio(&mut self) {
         let dialog = ModelCatalogStudioOverlay {
-            title: "Model Catalog".to_string(),
-            footer: ui_text::t(&self.i18n, "overlay-model-catalog-footer"),
             query: String::new(),
-            items: Vec::new(),
             summary: ModelCatalogResponse {
                 refreshing: false,
                 last_refresh_at: None,
@@ -9230,8 +10167,11 @@ impl App {
             offset: 0,
             limit: 50,
             loading: true,
-            selected: 0,
-            editor: None,
+            workbench: ListWorkbenchState::new(
+                ui_text::t(&self.i18n, "overlay-model-catalog-title"),
+                ui_text::t(&self.i18n, "overlay-model-catalog-footer"),
+                SelectableListState::new(Vec::new(), 0),
+            ),
         };
         self.request_model_catalog_page(String::new(), 0);
         self.current_route = Route::ModelCatalogStudio(dialog.clone());
@@ -9274,9 +10214,9 @@ impl App {
             return;
         }
         if !provider_studio_can_request_adapter_models(dialog) {
-            self.flash_warning(format!(
-                "live model listing is unavailable for auth {}",
-                dialog.draft.auth_kind.label()
+            self.flash_warning(provider_studio_live_listing_unavailable_message(
+                &self.i18n,
+                &dialog.draft.auth_kind,
             ));
             return;
         }
@@ -9292,9 +10232,9 @@ impl App {
                 .cloned()
                 .collect::<Vec<_>>();
             if !unsupported.is_empty() {
-                self.flash_error(format!(
-                    "Draft model listing only supports live HTTP adapters. Unsupported: {}",
-                    unsupported.join(", ")
+                self.flash_error(provider_studio_draft_listing_unsupported_message(
+                    &self.i18n,
+                    unsupported.as_slice(),
                 ));
                 return;
             }
@@ -9304,6 +10244,7 @@ impl App {
         dialog.pending_adapter_models_key = Some(request_key.clone());
         dialog.listing_adapter_models = true;
         let backend = self.backend.clone();
+        let i18n = self.i18n.clone();
         let tx = self.tx.clone();
         let draft = dialog.draft.clone();
         tokio::spawn(async move {
@@ -9318,9 +10259,9 @@ impl App {
                     .await
                     .map_err(|error| error.to_string())
             } else {
-                Err(format!(
-                    "listing adapter models requires api/gitlab_api auth or an existing saved provider; current auth is {}",
-                    draft.auth_kind.label()
+                Err(provider_studio_listing_auth_required_message(
+                    &i18n,
+                    &draft.auth_kind,
                 ))
             };
             let _ = tx.send(AppMessage::ProviderStudioAdapterModelsLoaded {
@@ -9337,10 +10278,7 @@ impl App {
         let tx = self.tx.clone();
         let draft = dialog.draft.clone();
         tokio::spawn(async move {
-            let result = backend
-                .start_provider_draft_auth(draft)
-                .await
-                .map_err(|error| error.to_string());
+            let result = backend.start_provider_draft_auth(draft).await;
             let _ = tx.send(AppMessage::ProviderStudioAuthCompleted {
                 request_key,
                 result,
@@ -9355,10 +10293,7 @@ impl App {
         let tx = self.tx.clone();
         let draft = dialog.draft.clone();
         tokio::spawn(async move {
-            let result = backend
-                .continue_provider_draft_auth(draft)
-                .await
-                .map_err(|error| error.to_string());
+            let result = backend.continue_provider_draft_auth(draft).await;
             let _ = tx.send(AppMessage::ProviderStudioAuthCompleted {
                 request_key,
                 result,
@@ -9368,6 +10303,7 @@ impl App {
 
     fn request_session_model_chooser_items(&mut self) {
         let backend = self.backend.clone();
+        let i18n = self.i18n.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = async {
@@ -9382,6 +10318,7 @@ impl App {
                         .map_err(|error| error.to_string())?;
                     for model in models {
                         items.push(session_model_choice_item(
+                            &i18n,
                             provider_id.as_str(),
                             default_adapter.as_deref(),
                             model,
@@ -9428,8 +10365,7 @@ impl App {
                     &adapter_ids,
                     &dialog.selected_model_keys,
                 )
-                .await
-                .map_err(|error| error.to_string());
+                .await;
             let _ = tx.send(AppMessage::ProviderStudioSaved {
                 provider_id: dialog.draft.provider_id.clone(),
                 result,
@@ -9450,8 +10386,7 @@ impl App {
         tokio::spawn(async move {
             let result = backend
                 .save_provider_adapter_matches(dialog.draft.clone(), adapter_models)
-                .await
-                .map_err(|error| error.to_string());
+                .await;
             let _ = tx.send(AppMessage::ProviderStudioSaved {
                 provider_id: dialog.draft.provider_id.clone(),
                 result,
@@ -9480,8 +10415,7 @@ impl App {
                     provider_model,
                     true,
                 )
-                .await
-                .map_err(|error| error.to_string());
+                .await;
             let _ = tx.send(AppMessage::ProviderStudioSaved {
                 provider_id: dialog.draft.provider_id.clone(),
                 result,
@@ -9507,8 +10441,7 @@ impl App {
                     model_value,
                     false,
                 )
-                .await
-                .map_err(|error| error.to_string());
+                .await;
             let _ = tx.send(AppMessage::ProviderStudioSaved {
                 provider_id: draft.provider_id.clone(),
                 result,
@@ -9517,61 +10450,116 @@ impl App {
     }
 
     fn move_provider_studio_selection(&mut self, dialog: &mut ProviderStudioOverlay, delta: isize) {
-        let current = self.current_provider_studio_selection(dialog);
-        let next = if delta.is_negative() {
-            current.saturating_sub(delta.unsigned_abs())
-        } else {
-            current.saturating_add(delta as usize)
-        };
-        self.set_provider_studio_selection(dialog, next);
+        match dialog.selection.focus() {
+            ProviderStudioFocus::Fields => dialog
+                .selection
+                .move_top(provider_studio_visible_fields(dialog).len(), delta),
+            ProviderStudioFocus::Adapters => {
+                dialog
+                    .selection
+                    .move_left(dialog.adapter_candidate_ids.len(), delta);
+                dialog.selection.clamp_right(
+                    provider_studio_selected_adapter_models(dialog)
+                        .map(|adapter| adapter.models.len())
+                        .unwrap_or_default(),
+                );
+            }
+            ProviderStudioFocus::Models => dialog.selection.move_right(
+                provider_studio_selected_adapter_models(dialog)
+                    .map(|adapter| adapter.models.len())
+                    .unwrap_or_default(),
+                delta,
+            ),
+        }
     }
 
-    fn set_provider_studio_selection(&mut self, dialog: &mut ProviderStudioOverlay, target: usize) {
-        match dialog.focus {
+    fn move_provider_studio_selection_page(
+        &mut self,
+        dialog: &mut ProviderStudioOverlay,
+        delta: isize,
+        page_size: usize,
+    ) {
+        match dialog.selection.focus() {
             ProviderStudioFocus::Fields => {
-                dialog.selected_field = min(
-                    target,
-                    provider_studio_visible_fields(dialog)
-                        .len()
-                        .saturating_sub(1),
+                dialog.selection.move_top_page(
+                    provider_studio_visible_fields(dialog).len(),
+                    delta,
+                    page_size,
                 );
             }
             ProviderStudioFocus::Adapters => {
-                dialog.selected_adapter =
-                    min(target, dialog.adapter_candidate_ids.len().saturating_sub(1));
-                dialog.selected_model = min(
-                    dialog.selected_model,
+                dialog.selection.move_left_page(
+                    dialog.adapter_candidate_ids.len(),
+                    delta,
+                    page_size,
+                );
+                dialog.selection.clamp_right(
                     provider_studio_selected_adapter_models(dialog)
-                        .map(|adapter| adapter.models.len().saturating_sub(1))
+                        .map(|adapter| adapter.models.len())
                         .unwrap_or_default(),
                 );
             }
             ProviderStudioFocus::Models => {
-                let max_index = provider_studio_selected_adapter_models(dialog)
-                    .map(|adapter| adapter.models.len().saturating_sub(1))
-                    .unwrap_or_default();
-                dialog.selected_model = min(target, max_index);
+                dialog.selection.move_right_page(
+                    provider_studio_selected_adapter_models(dialog)
+                        .map(|adapter| adapter.models.len())
+                        .unwrap_or_default(),
+                    delta,
+                    page_size,
+                );
             }
         }
     }
 
-    fn current_provider_studio_selection(&self, dialog: &ProviderStudioOverlay) -> usize {
-        match dialog.focus {
-            ProviderStudioFocus::Fields => dialog.selected_field,
-            ProviderStudioFocus::Adapters => dialog.selected_adapter,
-            ProviderStudioFocus::Models => dialog.selected_model,
+    fn move_provider_studio_selection_home(&mut self, dialog: &mut ProviderStudioOverlay) {
+        match dialog.selection.focus() {
+            ProviderStudioFocus::Fields => dialog.selection.move_top_home(),
+            ProviderStudioFocus::Adapters => {
+                dialog.selection.move_left_home();
+                dialog.selection.clamp_right(
+                    provider_studio_selected_adapter_models(dialog)
+                        .map(|adapter| adapter.models.len())
+                        .unwrap_or_default(),
+                );
+            }
+            ProviderStudioFocus::Models => dialog.selection.move_right_home(),
+        }
+    }
+
+    fn move_provider_studio_selection_end(&mut self, dialog: &mut ProviderStudioOverlay) {
+        match dialog.selection.focus() {
+            ProviderStudioFocus::Fields => dialog
+                .selection
+                .move_top_end(provider_studio_visible_fields(dialog).len()),
+            ProviderStudioFocus::Adapters => {
+                dialog
+                    .selection
+                    .move_left_end(dialog.adapter_candidate_ids.len());
+                dialog.selection.clamp_right(
+                    provider_studio_selected_adapter_models(dialog)
+                        .map(|adapter| adapter.models.len())
+                        .unwrap_or_default(),
+                );
+            }
+            ProviderStudioFocus::Models => {
+                dialog.selection.move_right_end(
+                    provider_studio_selected_adapter_models(dialog)
+                        .map(|adapter| adapter.models.len())
+                        .unwrap_or_default(),
+                );
+            }
         }
     }
 
     fn open_provider_studio_detail_page(&mut self, dialog: &mut ProviderStudioOverlay) {
         if provider_studio_detail_fields(dialog).is_empty() {
-            self.flash_warning("no auth details are available for the current auth mode");
+            self.flash_warning(provider_studio_no_auth_details_message(&self.i18n));
             return;
         }
         dialog.detail_page = Some(ProviderStudioDetailPage {
             title: ui_text::t(&self.i18n, "overlay-provider-studio-detail"),
             footer: ui_text::t(&self.i18n, "overlay-provider-studio-detail-footer"),
-            selected_field: 0,
+            selection: SelectionCursor::default(),
         });
     }
 
@@ -9584,37 +10572,34 @@ impl App {
             return;
         }
         if let Some(all_items) = self.provider_studio_field_choice_items(dialog, field) {
-            self.open_choice_overlay(ChoiceOverlay {
-                title: ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
-                prompt: provider_studio_field_prompt(&self.i18n, field),
-                footer: ui_text::t(&self.i18n, "overlay-choice-footer"),
-                empty_message: ui_text::t(&self.i18n, "overlay-picker-empty"),
-                input: Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
-                filter_query: String::new(),
+            self.open_choice_overlay(self.build_choice_overlay(
+                ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
+                provider_studio_field_prompt(&self.i18n, field),
+                Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
                 all_items,
-                items: Vec::new(),
-                selected: 0,
-                allow_custom: true,
-                allow_clear: provider_studio_field_allows_clear(field),
-                action: ChoiceOverlayAction::ProviderStudioField(field),
-            });
+                ChoiceOverlayAction::ProviderStudioField(field),
+                provider_studio_field_allows_clear(field),
+            ));
             return;
         }
-        dialog.editor = Some(ProviderStudioEditor {
-            title: ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
-            prompt: provider_studio_field_prompt(&self.i18n, field),
-            footer: ui_text::t(&self.i18n, "overlay-provider-studio-edit-footer"),
-            multiline: false,
-            input: Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
-            action: ProviderStudioEditorAction::Field(field),
-        });
+        dialog.editor = Some(ProviderStudioEditor::new(
+            ui_text::t(&self.i18n, "overlay-provider-studio-edit-title"),
+            provider_studio_field_prompt(&self.i18n, field),
+            ui_text::t(&self.i18n, "overlay-provider-studio-edit-footer"),
+            false,
+            Editor::from_text(provider_studio_field_value(&dialog.draft, field)),
+            ProviderStudioEditorAction::Field(field),
+        ));
     }
 
     fn activate_provider_studio_detail_page_selection(
         &mut self,
         dialog: &mut ProviderStudioOverlay,
     ) {
-        let Some(selected_field) = dialog.detail_page.as_ref().map(|page| page.selected_field)
+        let Some(selected_field) = dialog
+            .detail_page
+            .as_ref()
+            .map(|page| page.selection.selected)
         else {
             return;
         };
@@ -9651,34 +10636,10 @@ impl App {
                 self.activate_provider_studio_detail_page_selection(dialog);
                 false
             }
-            KeyCode::PageUp => {
-                detail_page.selected_field = detail_page.selected_field.saturating_sub(10);
-                false
-            }
-            KeyCode::PageDown => {
-                detail_page.selected_field = min(
-                    detail_page.selected_field.saturating_add(10),
-                    field_count.saturating_sub(1),
-                );
-                false
-            }
-            KeyCode::Home => {
-                detail_page.selected_field = 0;
-                false
-            }
-            KeyCode::End => {
-                detail_page.selected_field = field_count.saturating_sub(1);
-                false
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                detail_page.selected_field = detail_page.selected_field.saturating_sub(1);
-                false
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                detail_page.selected_field = min(
-                    detail_page.selected_field.saturating_add(1),
-                    field_count.saturating_sub(1),
-                );
+            _ if detail_page
+                .selection
+                .handle_navigation_key(key, field_count, 10) =>
+            {
                 false
             }
             _ => false,
@@ -9686,10 +10647,10 @@ impl App {
     }
 
     fn activate_provider_studio_focus(&mut self, dialog: &mut ProviderStudioOverlay) {
-        match dialog.focus {
+        match dialog.selection.focus() {
             ProviderStudioFocus::Fields => {
                 let fields = provider_studio_visible_fields(dialog);
-                let Some(field) = fields.get(dialog.selected_field).copied() else {
+                let Some(field) = fields.get(dialog.selection.top_selected()).copied() else {
                     return;
                 };
                 match field {
@@ -9714,7 +10675,10 @@ impl App {
             }
             ProviderStudioFocus::Models => {
                 if let Some(adapter_models) = provider_studio_selected_adapter_models(dialog)
-                    && let Some(model) = adapter_models.models.get(dialog.selected_model).cloned()
+                    && let Some(model) = adapter_models
+                        .models
+                        .get(dialog.selection.right_selected())
+                        .cloned()
                 {
                     let adapter_id = adapter_models.adapter_id.clone();
                     match self.backend.provider_model_draft_value(
@@ -9726,20 +10690,23 @@ impl App {
                         Ok(model_value) => {
                             let text = serde_json::to_string_pretty(&model_value)
                                 .unwrap_or_else(|_| "{}".to_owned());
-                            dialog.editor = Some(ProviderStudioEditor {
-                                title: format!("Model Config · {adapter_id}/{}", model.id),
-                                prompt: "Edit the persisted provider model JSON.".to_string(),
-                                footer: ui_text::t(
-                                    &self.i18n,
-                                    "overlay-provider-studio-model-edit-footer",
+                            dialog.editor = Some(ProviderStudioEditor::new(
+                                self.i18n.text_args(
+                                    "overlay-provider-studio-model-json-title",
+                                    &crate::fl_args!(
+                                        "adapter" => adapter_id.clone(),
+                                        "model" => model.id.to_string(),
+                                    ),
                                 ),
-                                multiline: true,
-                                input: Editor::from_text(text),
-                                action: ProviderStudioEditorAction::ModelJson {
+                                ui_text::t(&self.i18n, "overlay-provider-studio-model-json-prompt"),
+                                ui_text::t(&self.i18n, "overlay-provider-studio-model-edit-footer"),
+                                true,
+                                Editor::from_text(text),
+                                ProviderStudioEditorAction::ModelJson {
                                     adapter_id,
                                     model_id: model.id.to_string(),
                                 },
-                            });
+                            ));
                         }
                         Err(error) => self.flash_error(error.to_string()),
                     }
@@ -9959,18 +10926,12 @@ impl App {
             .filter(|adapter_id| provider_studio_adapter_selectable(dialog, adapter_id.as_str()))
             .cloned()
             .collect::<BTreeSet<_>>();
-        dialog.selected_field = min(
-            dialog.selected_field,
-            provider_studio_visible_fields(dialog)
-                .len()
-                .saturating_sub(1),
-        );
+        dialog
+            .selection
+            .clamp_top(provider_studio_visible_fields(dialog).len());
         let detail_field_count = provider_studio_detail_fields(dialog).len();
         if let Some(detail_page) = dialog.detail_page.as_mut() {
-            detail_page.selected_field = min(
-                detail_page.selected_field,
-                detail_field_count.saturating_sub(1),
-            );
+            detail_page.selection.clamp(detail_field_count);
         }
         dialog.selected_adapter_ids.retain(|adapter_id| {
             dialog
@@ -9982,14 +10943,12 @@ impl App {
         if !dialog.adapter_selection_touched && dialog.selected_adapter_ids.is_empty() {
             dialog.selected_adapter_ids = selectable_adapter_ids.clone();
         }
-        dialog.selected_adapter = min(
-            dialog.selected_adapter,
-            dialog.adapter_candidate_ids.len().saturating_sub(1),
-        );
-        dialog.selected_model = min(
-            dialog.selected_model,
+        dialog
+            .selection
+            .clamp_left(dialog.adapter_candidate_ids.len());
+        dialog.selection.clamp_right(
             provider_studio_selected_adapter_models(dialog)
-                .map(|adapter| adapter.models.len().saturating_sub(1))
+                .map(|adapter| adapter.models.len())
                 .unwrap_or_default(),
         );
         if !dialog.adapter_models.is_empty() {
@@ -10036,7 +10995,7 @@ impl App {
         dialog.selected_model_keys.clear();
         dialog.catalog_matches.clear();
         self.sync_provider_studio_shape(dialog);
-        dialog.selected_model = 0;
+        dialog.selection.set_right_selected(0);
         dialog.pending_adapter_models_key = None;
         dialog.listing_adapter_models = false;
     }
@@ -10046,28 +11005,27 @@ impl App {
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         };
-        self.current_route = Route::Picker(PickerOverlay {
-            title: self.i18n.text_args(
+        let dialog = self.build_picker_overlay(
+            self.i18n.text_args(
                 "overlay-children-title",
                 &crate::fl_args!("session" => parent_session_id),
             ),
-            prompt: ui_text::t(&self.i18n, "overlay-children-prompt"),
-            empty_message: ui_text::t(&self.i18n, "overlay-picker-loading"),
-            footer: ui_text::t(&self.i18n, "overlay-picker-footer"),
-            input: Editor::default(),
-            all_items: Vec::new(),
-            items: Vec::new(),
-            selected: 0,
-            loading: true,
-            kind: PickerKind::ChildSessions { parent_session_id },
-        });
+            ui_text::t(&self.i18n, "overlay-children-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-loading"),
+            Editor::default(),
+            Vec::new(),
+            PickerKind::ChildSessions { parent_session_id },
+            true,
+        );
+        self.current_route = Route::Picker(dialog);
         self.request_child_sessions(parent_session_id);
     }
 
     fn open_rewind_confirm_overlay(&mut self, session_id: i64, message_id: i64, target: String) {
-        self.overlay = Some(Overlay::Confirm(ConfirmOverlay {
-            title: ui_text::t(&self.i18n, "overlay-rewind-confirm-title"),
-            body_lines: vec![
+        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
+            ui_text::t(&self.i18n, "overlay-rewind-confirm-title"),
+            vec![
                 self.i18n.text_args(
                     "overlay-rewind-confirm-keep",
                     &crate::fl_args!("target" => target.clone()),
@@ -10075,13 +11033,12 @@ impl App {
                 ui_text::t(&self.i18n, "overlay-rewind-confirm-warning"),
                 ui_text::t(&self.i18n, "overlay-rewind-confirm-draft"),
             ],
-            footer: ui_text::t(&self.i18n, "overlay-confirm-footer"),
-            action: ConfirmAction::Rewind {
+            ConfirmAction::Rewind {
                 session_id,
                 message_id,
                 target,
             },
-        }));
+        )));
     }
 
     fn lineage_session_picker_item(&self, item: LineageSessionItem) -> PickerItem {
@@ -10124,6 +11081,36 @@ impl App {
         }
     }
 
+    fn session_search_item(&self, session: SessionResource) -> SessionSearchItem {
+        let mut detail_parts = vec![ui_text::session_meta(
+            &self.i18n,
+            session.id,
+            session.message_count,
+            session.updated_at,
+        )];
+        if self.transcript.session_id == Some(session.id) {
+            detail_parts.push(ui_text::t(&self.i18n, "session-tag-current"));
+        }
+        if let Some(parent_id) = session.parent_id {
+            detail_parts.push(self.i18n.text_args(
+                "session-summary-parent",
+                &crate::fl_args!("id" => parent_id),
+            ));
+        }
+        if session.child_session_count > 0 {
+            detail_parts.push(self.i18n.text_args(
+                "session-summary-children",
+                &crate::fl_args!("count" => session.child_session_count as i64),
+            ));
+        }
+
+        SessionSearchItem {
+            label: session.title.clone(),
+            detail: detail_parts.join(" | "),
+            session,
+        }
+    }
+
     fn rewind_message_picker_item(&self, message: MessageResource) -> PickerItem {
         PickerItem {
             label: self.rewind_message_target_label(&message),
@@ -10146,14 +11133,8 @@ impl App {
     }
 
     fn refresh_picker_overlay(dialog: &mut PickerOverlay) {
-        let query = dialog.input.text().trim().to_ascii_lowercase();
-        dialog.items = dialog
-            .all_items
-            .iter()
-            .filter(|item| Self::picker_item_matches(&dialog.kind, item, query.as_str()))
-            .cloned()
-            .collect();
-        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+        let all_items = dialog.meta.all_items.clone();
+        refresh_search_list_overlay(dialog, all_items.as_slice());
     }
 
     fn refresh_session_model_chooser_overlay(
@@ -10167,6 +11148,7 @@ impl App {
             .get(dialog.selected)
             .map(|item| item.model.clone());
         dialog.items = dialog
+            .meta
             .all_items
             .iter()
             .filter(|item| query.is_empty() || item.search_text.contains(query.as_str()))
@@ -10202,14 +11184,7 @@ impl App {
     }
 
     fn refresh_timeline_overlay(dialog: &mut TimelineOverlay) {
-        let query = dialog.input.text().trim().to_ascii_lowercase();
-        dialog.items = dialog
-            .all_items
-            .iter()
-            .filter(|item| query.is_empty() || item.search_text.contains(query.as_str()))
-            .cloned()
-            .collect();
-        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
+        refresh_search_panels_overlay(dialog, |item, query| item.search_text.contains(query));
     }
 
     fn reload_plugin_inspector_overlay(&self, dialog: &mut PluginInspectorOverlay) {
@@ -10223,51 +11198,14 @@ impl App {
                 let logs =
                     self.backend
                         .plugin_logs(plugin_id.as_str(), None, PLUGIN_INSPECTOR_LOG_LIMIT);
-                build_plugin_inspector_item(status, inspect, logs)
+                build_plugin_inspector_item(&self.i18n, status, inspect, logs)
             })
             .collect();
         Self::refresh_plugin_inspector_overlay(dialog);
     }
 
     fn refresh_plugin_inspector_overlay(dialog: &mut PluginInspectorOverlay) {
-        let query = dialog.input.text().trim().to_ascii_lowercase();
-        dialog.items = dialog
-            .all_items
-            .iter()
-            .filter(|item| query.is_empty() || item.search_text.contains(query.as_str()))
-            .cloned()
-            .collect();
-        dialog.selected = min(dialog.selected, dialog.items.len().saturating_sub(1));
-    }
-
-    fn picker_item_matches(kind: &PickerKind, item: &PickerItem, query: &str) -> bool {
-        if query.is_empty() {
-            return true;
-        }
-        match (kind, &item.value) {
-            (PickerKind::Commands, PickerValue::Command(spec)) => {
-                commands::command_matches_query(spec, query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-            }
-            (PickerKind::Commands, PickerValue::RuntimeEntry(_)) => {
-                item.label.to_ascii_lowercase().contains(query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-            }
-            (PickerKind::Lineage { .. }, PickerValue::Session(session_id)) => {
-                item.label.to_ascii_lowercase().contains(query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-                    || format!("#{session_id}").contains(query)
-            }
-            (PickerKind::RewindMessages { .. }, PickerValue::Message(message_id)) => {
-                item.label.to_ascii_lowercase().contains(query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-                    || format!("#{message_id}").contains(query)
-            }
-            _ => {
-                item.label.to_ascii_lowercase().contains(query)
-                    || item.detail.to_ascii_lowercase().contains(query)
-            }
-        }
+        refresh_search_panels_overlay(dialog, |item, query| item.search_text.contains(query));
     }
 
     fn handle_picker_selection(&mut self, kind: PickerKind, item: PickerItem) {
@@ -10310,10 +11248,10 @@ impl App {
                 self.focus = Focus::Transcript;
             }
             (PickerKind::PermissionRules, PickerValue::PermissionRuleCreate) => {
-                self.open_permission_rule_editor(None, "", None);
+                self.open_permission_rule_studio(None, None);
             }
             (PickerKind::PermissionRules, PickerValue::PermissionRule(rule)) => {
-                self.open_permission_rule_editor(Some(&rule), "", None);
+                self.open_permission_rule_studio(Some(&rule), None);
             }
             (PickerKind::Inspector, PickerValue::Inspector) => {}
             _ => {}
@@ -10370,9 +11308,24 @@ impl App {
         }
     }
 
+    fn current_transcript_has_active_run(&self) -> bool {
+        self.transcript.submitting
+            || self.transcript.execution.as_ref().is_some_and(|execution| {
+                execution.run_state != SessionRunState::Idle
+                    && pending_interactive_kind_for_execution(execution).is_none()
+            })
+    }
+
+    fn active_run_session_id(&self) -> Option<i64> {
+        self.transcript
+            .session_id
+            .filter(|_| self.current_transcript_has_active_run())
+    }
+
     fn session_is_busy(&self, session_id: i64) -> bool {
         self.submitting_session_ids.contains(&session_id)
-            || (self.transcript.session_id == Some(session_id) && self.transcript.submitting)
+            || (self.transcript.session_id == Some(session_id)
+                && self.current_transcript_has_active_run())
     }
 
     fn current_or_selected_session_title(&self) -> Option<String> {
@@ -10395,6 +11348,21 @@ impl App {
 
     fn current_parent_session_id(&self) -> Option<i64> {
         self.transcript.execution.as_ref()?.session.parent_id
+    }
+
+    fn sync_session_list_selection_to_current_execution(&mut self) {
+        let Some(execution) = self.transcript.execution.as_ref() else {
+            return;
+        };
+        if self.transcript.session_id != Some(execution.session.id) {
+            return;
+        }
+        if let Some(session_id) = preferred_visible_session_selection(
+            &execution.session,
+            self.sessions.list.items.as_slice(),
+        ) {
+            let _ = self.sessions.select_by_id(session_id);
+        }
     }
 
     fn current_lineage_context_parts(&self) -> Vec<String> {
@@ -10504,10 +11472,10 @@ impl App {
                 .backend
                 .exit_worktree(session_id, "remove".to_string(), discard_changes)
             {
-                Ok(output) => self.flash_success(format!(
-                    "worktree {}: {}",
-                    output.action.as_deref().unwrap_or("exited"),
-                    output.path
+                Ok(output) => self.flash_success(ui_text::worktree_exit_message(
+                    &self.i18n,
+                    output.action.as_deref(),
+                    output.path.as_str(),
                 )),
                 Err(error) => self.flash_error(error.to_string()),
             },
@@ -10528,11 +11496,9 @@ impl App {
             CommandId::Find => {
                 self.focus = Focus::Transcript;
                 if args.trim().is_empty() {
-                    self.overlay = Some(Overlay::TranscriptSearch(LineInputOverlay {
-                        title: ui_text::t(&self.i18n, "overlay-transcript-search-title"),
-                        prompt: ui_text::t(&self.i18n, "overlay-transcript-search-prompt"),
-                        input: Editor::from_text(self.transcript.search_query.clone()),
-                    }));
+                    self.overlay = Some(Overlay::TranscriptSearch(
+                        self.build_transcript_search_overlay(),
+                    ));
                 } else {
                     self.transcript.set_search_query(args.trim().to_string());
                     self.jump_search_match(true);
@@ -10542,6 +11508,7 @@ impl App {
             CommandId::Timeline => self.handle_timeline_command(spec, args),
             CommandId::Plugins => self.handle_plugins_command(spec, args),
             CommandId::Settings => self.handle_settings_command(args),
+            CommandId::Permissions => self.handle_permissions_command(args),
             CommandId::Model => self.open_session_model_chooser(),
             CommandId::Review => self.handle_review_command(args),
             CommandId::Worktree => self.handle_worktree_command(args),
@@ -10642,7 +11609,7 @@ impl App {
             .transcript
             .session_id
             .or_else(|| self.sessions.current_selected_id());
-        let title = format!("btw: {}", derive_session_title(question));
+        let title = format!("btw: {}", derive_session_title(&self.i18n, question));
         let prompt = question.to_string();
         let backend = self.backend.clone();
         let tx = self.tx.clone();
@@ -10769,6 +11736,17 @@ impl App {
         self.open_settings_studio(args.trim());
     }
 
+    fn handle_permissions_command(&mut self, args: &str) {
+        match args.trim() {
+            "" | "new" | "session" | "current" => self.open_current_session_permission_studio(),
+            "list" | "rules" | "manage" => self.open_permission_rule_picker(""),
+            other => self.flash_warning(self.i18n.text_args(
+                "flash-command-usage",
+                &crate::fl_args!("usage" => format!("/permissions [new|list] · got `{other}`")),
+            )),
+        }
+    }
+
     fn handle_review_command(&mut self, args: &str) {
         self.execute_runtime_entry_prompt("review", args);
     }
@@ -10777,8 +11755,8 @@ impl App {
         let trimmed = args.trim();
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("list") {
             self.open_inspector_picker(
-                "Worktree".to_string(),
-                "Inspect active and managed worktrees".to_string(),
+                ui_text::worktree_picker_title(&self.i18n),
+                ui_text::worktree_picker_prompt(&self.i18n),
                 "",
                 self.backend.worktree_inspector_rows(),
             );
@@ -10800,10 +11778,10 @@ impl App {
                         .enter_worktree(session_id, Some(argument.to_string()), None)
                 };
                 match result {
-                    Ok(output) => self.flash_success(format!(
-                        "worktree ready: {} ({})",
-                        output.path,
-                        output.branch.as_deref().unwrap_or("unknown")
+                    Ok(output) => self.flash_success(ui_text::worktree_ready_message(
+                        &self.i18n,
+                        output.path.as_str(),
+                        output.branch.as_deref(),
                     )),
                     Err(error) => self.flash_error(error.to_string()),
                 }
@@ -10821,10 +11799,10 @@ impl App {
                     .backend
                     .enter_worktree(session_id, None, Some(path.to_string()))
                 {
-                    Ok(output) => self.flash_success(format!(
-                        "worktree attached: {} ({})",
-                        output.path,
-                        output.branch.as_deref().unwrap_or("unknown")
+                    Ok(output) => self.flash_success(ui_text::worktree_attached_message(
+                        &self.i18n,
+                        output.path.as_str(),
+                        output.branch.as_deref(),
                     )),
                     Err(error) => self.flash_error(error.to_string()),
                 }
@@ -10834,10 +11812,10 @@ impl App {
                 let (mode, extra) = split_command_args_once(exit_args).unwrap_or((exit_args, ""));
                 match mode.to_ascii_lowercase().as_str() {
                     "" | "keep" => match self.backend.exit_worktree(session_id, "keep".to_string(), false) {
-                        Ok(output) => self.flash_success(format!(
-                            "worktree {}: {}",
-                            output.action.as_deref().unwrap_or("exited"),
-                            output.path
+                        Ok(output) => self.flash_success(ui_text::worktree_exit_message(
+                            &self.i18n,
+                            output.action.as_deref(),
+                            output.path.as_str(),
                         )),
                         Err(error) => self.flash_error(error.to_string()),
                     },
@@ -10873,10 +11851,10 @@ impl App {
 
         match self.block_on_async(self.backend.create_commit(message.to_string())) {
             Ok((commit, summary)) => {
-                self.flash_success(format!(
-                    "commit created: {} {}",
+                self.flash_success(ui_text::commit_created_message(
+                    &self.i18n,
                     &commit[..commit.len().min(12)],
-                    summary
+                    summary.as_str(),
                 ));
             }
             Err(error) => self.flash_error(error),
@@ -10905,7 +11883,10 @@ impl App {
         };
 
         match self.block_on_async(self.backend.create_pr(title, body, base, head)) {
-            Ok(url) => self.flash_success(format!("pull request created: {url}")),
+            Ok(url) => self.flash_success(ui_text::pull_request_created_message(
+                &self.i18n,
+                url.as_str(),
+            )),
             Err(error) => self.flash_error(error),
         }
     }
@@ -11002,7 +11983,7 @@ impl App {
     }
 
     fn rebuild_visible_sessions(&mut self, preferred_id: Option<i64>) {
-        self.sessions.items = build_visible_session_items(
+        self.sessions.list.items = build_visible_session_items(
             self.sessions.source_items.as_slice(),
             self.sessions.view_mode,
             self.sessions.search_query.as_str(),
@@ -11063,34 +12044,43 @@ impl App {
     fn current_runtime_status_summary(&self) -> String {
         let mut parts = vec![
             self.run_options
-                .summary()
+                .summary(&self.i18n)
                 .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default")),
         ];
-        parts.extend(
-            self.current_execution_context_parts()
-                .into_iter()
-                .filter(|part| !part.starts_with("cwd=")),
-        );
+        parts.extend(self.current_execution_context_parts(false));
         parts.push(self.workspace_context_label());
-        parts.push(format!(
-            "keys q={} send={}",
-            self.keybindings.queue.len(),
-            self.keybindings.submit.len()
+        parts.push(self.i18n.text_args(
+            "runtime-status-keys",
+            &crate::fl_args!(
+                "queue" => self.keybindings.queue.len() as i64,
+                "send" => self.keybindings.submit.len() as i64,
+            ),
         ));
-        parts.push(format!(
-            "statusline {}",
-            if self.backend.plugin_statusline_segments().is_empty() {
-                "default"
-            } else {
-                "plugin"
-            }
+        parts.push(self.i18n.text_args(
+            "runtime-status-statusline",
+            &crate::fl_args!(
+                "value" => ui_text::t(
+                    &self.i18n,
+                    if self.backend.plugin_statusline_segments().is_empty() {
+                        "runtime-status-statusline-default"
+                    } else {
+                        "runtime-status-statusline-plugin"
+                    },
+                )
+            ),
         ));
         let tui_blocks = self.backend.plugin_tui_content_blocks().len();
         if tui_blocks > 0 {
-            parts.push(format!("tui_blocks {tui_blocks}"));
+            parts.push(self.i18n.text_args(
+                "runtime-status-tui-blocks",
+                &crate::fl_args!("count" => tui_blocks as i64),
+            ));
         }
         if let Some(theme) = self.plugin_theme.as_ref() {
-            parts.push(format!("theme {}", theme.id));
+            parts.push(self.i18n.text_args(
+                "runtime-status-theme",
+                &crate::fl_args!("value" => theme.id.clone()),
+            ));
         }
         self.i18n.text_args(
             "flash-runtime-status",
@@ -11101,7 +12091,7 @@ impl App {
     fn current_diagnostics_summary(&self) -> String {
         let runtime = self
             .run_options
-            .summary()
+            .summary(&self.i18n)
             .unwrap_or_else(|| ui_text::t(&self.i18n, "runtime-status-default"));
         let cwd = self.backend.workspace_root().display().to_string();
         let session = self
@@ -11127,70 +12117,121 @@ impl App {
     }
 
     fn workspace_context_label(&self) -> String {
-        format!("ws {}", self.backend.workspace_name())
+        self.i18n.text_args(
+            "status-part-workspace",
+            &crate::fl_args!("value" => self.backend.workspace_name()),
+        )
     }
 
-    fn current_execution_context_parts(&self) -> Vec<String> {
+    fn current_execution_context_parts(&self, include_workspace_root: bool) -> Vec<String> {
         let Some(execution) = self.transcript.execution.as_ref() else {
             return Vec::new();
         };
 
         let mut parts = Vec::new();
-        parts.push(format!("state={}", session_workflow_state_label(execution)));
+        parts.push(self.i18n.text_args(
+            "status-part-state",
+            &crate::fl_args!(
+                "value" => ui_text::session_workflow_state_label(&self.i18n, execution)
+            ),
+        ));
         if let Some(agent_profile) = execution.execution.agent_profile.as_deref()
             && !agent_profile.trim().is_empty()
         {
-            parts.push(format!("agent={agent_profile}"));
+            parts.push(self.i18n.text_args(
+                "status-part-agent",
+                &crate::fl_args!("value" => agent_profile),
+            ));
         }
         if let Some(skill_name) = execution.execution.active_skill_name.as_deref()
             && !skill_name.trim().is_empty()
         {
-            parts.push(format!("skill={skill_name}"));
+            parts.push(
+                self.i18n
+                    .text_args("status-part-skill", &crate::fl_args!("value" => skill_name)),
+            );
         }
         if let Some(task_id) = execution.execution.task_id.as_deref()
             && !task_id.trim().is_empty()
         {
-            parts.push(format!("task={task_id}"));
+            parts.push(
+                self.i18n
+                    .text_args("status-part-task", &crate::fl_args!("value" => task_id)),
+            );
         }
         if let Some(model_label) = execution_model_status_label(&execution.execution) {
-            parts.push(format!("model={model_label}"));
+            parts.push(self.i18n.text_args(
+                "status-part-model",
+                &crate::fl_args!("value" => model_label),
+            ));
         }
         if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
         {
-            parts.push(format!("thinking={thinking_mode}"));
+            parts.push(self.i18n.text_args(
+                "status-part-thinking",
+                &crate::fl_args!("value" => thinking_mode),
+            ));
         }
         if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
             && !speed_mode.trim().is_empty()
         {
-            parts.push(format!("speed={speed_mode}"));
+            parts.push(
+                self.i18n
+                    .text_args("status-part-speed", &crate::fl_args!("value" => speed_mode)),
+            );
         }
         if let Some(verbosity) = execution.execution.model_verbosity.as_deref()
             && !verbosity.trim().is_empty()
         {
-            parts.push(format!("verbosity={verbosity}"));
+            parts.push(self.i18n.text_args(
+                "status-part-verbosity",
+                &crate::fl_args!("value" => verbosity),
+            ));
         }
         if let Some(parallel_tool_calls) = execution.execution.model_parallel_tool_calls {
-            parts.push(format!(
-                "parallel_tools={}",
-                if parallel_tool_calls { "on" } else { "off" }
+            parts.push(self.i18n.text_args(
+                "status-part-parallel-tools",
+                &crate::fl_args!(
+                    "value" => ui_text::t(
+                        &self.i18n,
+                        if parallel_tool_calls {
+                            "value-on"
+                        } else {
+                            "value-off"
+                        },
+                    )
+                ),
             ));
         }
         if let Some(workspace_root) = execution.execution.effective_workspace_root.as_deref()
             && !workspace_root.trim().is_empty()
+            && include_workspace_root
         {
-            parts.push(format!("cwd={workspace_root}"));
+            parts.push(self.i18n.text_args(
+                "status-part-cwd",
+                &crate::fl_args!("value" => workspace_root),
+            ));
         }
         if !execution.execution.allowed_tools.is_empty() {
-            parts.push(format!("tools={}", execution.execution.allowed_tools.len()));
+            parts.push(self.i18n.text_args(
+                "status-part-tools",
+                &crate::fl_args!("count" => execution.execution.allowed_tools.len() as i64),
+            ));
         }
         let (permission_count, user_input_count) =
             pending_interactive_counts_for_execution(execution);
         if permission_count > 0 {
-            parts.push(format!("perm={permission_count}"));
+            parts.push(self.i18n.text_args(
+                "status-part-permissions",
+                &crate::fl_args!("count" => permission_count as i64),
+            ));
         }
         if user_input_count > 0 {
-            parts.push(format!("input={user_input_count}"));
+            parts.push(self.i18n.text_args(
+                "status-part-user-input",
+                &crate::fl_args!("count" => user_input_count as i64),
+            ));
         }
         parts
     }
@@ -11228,12 +12269,18 @@ impl App {
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
                 && !thinking_mode.trim().is_empty()
             {
-                parts.push(format!("thinking {thinking_mode}"));
+                parts.push(self.i18n.text_args(
+                    "session-status-thinking",
+                    &crate::fl_args!("value" => thinking_mode),
+                ));
             }
             if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
                 && !speed_mode.trim().is_empty()
             {
-                parts.push(format!("speed {speed_mode}"));
+                parts.push(self.i18n.text_args(
+                    "session-status-speed",
+                    &crate::fl_args!("value" => speed_mode),
+                ));
             }
             if !parts.is_empty() {
                 return parts;
@@ -11255,12 +12302,18 @@ impl App {
         if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
             && !thinking_mode.trim().is_empty()
         {
-            parts.push(format!("thinking {thinking_mode}"));
+            parts.push(self.i18n.text_args(
+                "session-status-thinking",
+                &crate::fl_args!("value" => thinking_mode),
+            ));
         }
         if let Some(speed_mode) = self.run_options.speed_mode.as_deref()
             && !speed_mode.trim().is_empty()
         {
-            parts.push(format!("speed {speed_mode}"));
+            parts.push(self.i18n.text_args(
+                "session-status-speed",
+                &crate::fl_args!("value" => speed_mode),
+            ));
         }
         parts
     }
@@ -11294,12 +12347,17 @@ impl App {
             Route::Help(_) => {}
             Route::SettingsStudio(_) => {}
             Route::AgentStudio(dialog) => {
-                if let Some(editor) = dialog.editor.as_mut() {
+                if let Some(editor) = dialog.workbench.editor.as_mut() {
                     editor.input.flush_pending_input_if_due(now);
                 }
             }
             Route::AgentPermissionStudio(dialog) => {
-                if let Some(editor) = dialog.editor.as_mut() {
+                if let Some(editor) = dialog.workbench.editor.as_mut() {
+                    editor.input.flush_pending_input_if_due(now);
+                }
+            }
+            Route::PermissionRuleStudio(dialog) => {
+                if let Some(editor) = dialog.workbench.editor.as_mut() {
                     editor.input.flush_pending_input_if_due(now);
                 }
             }
@@ -11317,7 +12375,7 @@ impl App {
                 }
             }
             Route::ModelCatalogStudio(dialog) => {
-                if let Some(editor) = dialog.editor.as_mut() {
+                if let Some(editor) = dialog.workbench.editor.as_mut() {
                     editor.input.flush_pending_input_if_due(now);
                 }
             }
@@ -11335,12 +12393,19 @@ impl App {
                 }
                 Overlay::Choice(dialog) => {
                     dialog.input.flush_pending_input_if_due(now);
-                    Self::sync_choice_overlay_query(dialog, true);
+                    Self::sync_choice_overlay_input(dialog, true);
                 }
                 Overlay::PermissionRuleEdit(dialog) => {
-                    dialog.input.flush_pending_input_if_due(now);
+                    dialog.state.input.flush_pending_input_if_due(now);
                 }
                 Overlay::FileAttach(dialog) => dialog.input.flush_pending_input_if_due(now),
+                Overlay::PathBrowser(dialog) => {
+                    dialog.input.flush_pending_input_if_due(now);
+                    Self::refresh_path_browser_overlay_with_root(
+                        self.backend.workspace_root(),
+                        dialog,
+                    );
+                }
                 Overlay::UserInputReply(dialog) => {
                     if dialog.editing_custom {
                         dialog.custom_input.flush_pending_input_if_due(now);
@@ -11359,7 +12424,7 @@ impl App {
                     }
                 }
                 Overlay::ModelCatalogStudio(dialog) => {
-                    if let Some(editor) = dialog.editor.as_mut() {
+                    if let Some(editor) = dialog.workbench.editor.as_mut() {
                         editor.input.flush_pending_input_if_due(now);
                     }
                 }
@@ -11370,11 +12435,11 @@ impl App {
     }
 
     fn refresh_file_attach_overlay(&self, dialog: &mut FileAttachOverlay) {
-        dialog.results = self
+        dialog.items = self
             .backend
             .search_workspace_files(dialog.input.text(), 24)
             .unwrap_or_default();
-        dialog.selected = min(dialog.selected, dialog.results.len().saturating_sub(1));
+        dialog.clamp_selection();
     }
 
     fn try_stage_pasted_path(&mut self, pasted: &str) -> bool {
@@ -11414,9 +12479,10 @@ impl App {
     fn stage_attachment_from_path(&mut self, path: &Path, is_temp: bool) -> UiResult<()> {
         let resolved = self.backend.resolve_workspace_path(path);
         let metadata = std::fs::metadata(&resolved).map_err(|error| {
-            format!(
-                "failed to inspect attachment {}: {error}",
-                resolved.display()
+            ui_text::attachment_inspect_failed_message(
+                &self.i18n,
+                resolved.as_path(),
+                error.to_string().as_str(),
             )
         })?;
         let prepared = self
@@ -11596,7 +12662,9 @@ impl App {
 
         self.draft_store
             .persist(&self.draft_store_path)
-            .map_err(|error| format!("failed to save composer drafts: {error}"))?;
+            .map_err(|error| {
+                ui_text::composer_drafts_save_failed_message(&self.i18n, error.to_string().as_str())
+            })?;
         self.draft_store_dirty = false;
         self.draft_store_last_persist_at = Instant::now();
         self.draft_store_reported_error = None;
@@ -11629,7 +12697,10 @@ impl App {
             return;
         }
         if let Err(error) = self.prompt_history.persist(&self.prompt_history_path) {
-            self.report_prompt_history_error(format!("failed to save prompt history: {error}"));
+            self.report_prompt_history_error(ui_text::prompt_history_save_failed_message(
+                &self.i18n,
+                error.to_string().as_str(),
+            ));
         } else {
             self.prompt_history_reported_error = None;
         }
@@ -11801,14 +12872,19 @@ impl App {
             let actual_placeholder = draft
                 .text
                 .get(start..end)
-                .ok_or_else(|| "composer placeholder range is invalid".to_string())?;
+                .ok_or_else(|| ui_text::composer_placeholder_range_invalid_error(&self.i18n))?;
             if actual_placeholder != element.placeholder {
-                return Err("composer placeholder state is out of sync".to_string());
+                return Err(ui_text::composer_placeholder_out_of_sync_error(&self.i18n));
             }
 
             let item = items_by_placeholder
                 .remove(element.placeholder.as_str())
-                .ok_or_else(|| format!("missing staged item for {}", element.placeholder))?;
+                .ok_or_else(|| {
+                    ui_text::composer_missing_staged_item_error(
+                        &self.i18n,
+                        element.placeholder.as_str(),
+                    )
+                })?;
             match item {
                 ComposerItem::Attachment(attachment) => {
                     let prepared = self
@@ -12113,7 +13189,7 @@ impl App {
         }
         meta.extend(self.current_lineage_context_parts());
         meta.push(self.current_session_view_summary());
-        if let Some(summary) = self.run_options.summary() {
+        if let Some(summary) = self.run_options.summary(&self.i18n) {
             meta.push(summary);
         }
         if !meta.is_empty() {
@@ -12138,7 +13214,9 @@ impl App {
     fn resolve_transcript_export_path(&self, requested_path: Option<&Path>) -> UiResult<PathBuf> {
         if let Some(path) = requested_path {
             if path.exists() && path.is_dir() {
-                return Err(format!("export path is a directory: {}", path.display()));
+                return Err(ui_text::transcript_export_path_is_directory_error(
+                    &self.i18n, path,
+                ));
             }
             return Ok(path.to_path_buf());
         }
@@ -12152,11 +13230,7 @@ impl App {
         let width = self.layout.transcript_body.width.max(1);
         let height = self.layout.transcript_body.height.max(1) as usize;
         if self.transcript.session_id.is_none() {
-            return [
-                "No session selected.",
-                "Press Alt+S to pick a session, or start typing in the composer to create one.",
-            ]
-            .join("\n");
+            return ui_text::no_session_selected_text(&self.i18n);
         }
 
         let rendered = self.transcript.rendered(width).clone();
@@ -12213,7 +13287,564 @@ enum OverlayCommit {
     TranscriptSearch,
 }
 
-fn settings_studio_general_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
+fn settings_edit_title(i18n: &I18n, field: &str) -> String {
+    i18n.text_args(
+        "overlay-settings-edit-title",
+        &crate::fl_args!("field" => field),
+    )
+}
+
+fn editor_save_footer(i18n: &I18n, multiline: bool) -> String {
+    ui_text::t(
+        i18n,
+        if multiline {
+            "overlay-editor-footer-multiline"
+        } else {
+            "overlay-editor-footer-single-line"
+        },
+    )
+}
+
+fn settings_clear_label(i18n: &I18n) -> String {
+    ui_text::t(i18n, "overlay-choice-clear-value")
+}
+
+fn settings_path_updated_message(i18n: &I18n, path: &str) -> String {
+    i18n.text_args("flash-settings-updated", &crate::fl_args!("path" => path))
+}
+
+fn settings_path_cleared_message(i18n: &I18n, path: &str) -> String {
+    i18n.text_args("flash-settings-cleared", &crate::fl_args!("path" => path))
+}
+
+fn default_agent_updated_message(i18n: &I18n, agent_name: &str) -> String {
+    i18n.text_args(
+        "flash-default-agent-updated",
+        &crate::fl_args!("agent" => agent_name),
+    )
+}
+
+fn agent_file_backed_edit_message(i18n: &I18n) -> String {
+    ui_text::t(i18n, "flash-agent-file-backed-edit")
+}
+
+fn agent_file_backed_hidden_message(i18n: &I18n) -> String {
+    ui_text::t(i18n, "flash-agent-file-backed-hidden")
+}
+
+fn agent_file_backed_permissions_message(i18n: &I18n) -> String {
+    ui_text::t(i18n, "flash-agent-file-backed-permissions")
+}
+
+fn agent_hidden_toggled_message(i18n: &I18n, agent_name: &str, was_hidden: bool) -> String {
+    i18n.text_args(
+        if was_hidden {
+            "flash-agent-unhidden"
+        } else {
+            "flash-agent-hidden"
+        },
+        &crate::fl_args!("agent" => agent_name),
+    )
+}
+
+fn provider_studio_no_auth_details_message(i18n: &I18n) -> String {
+    ui_text::t(i18n, "flash-provider-studio-no-auth-details")
+}
+
+fn provider_draft_auth_action_message(
+    i18n: &I18n,
+    message: &crate::backend::ProviderDraftAuthMessage,
+) -> String {
+    match message {
+        crate::backend::ProviderDraftAuthMessage::OpenaiBrowserStarted => {
+            ui_text::t(i18n, "flash-provider-auth-openai-browser-started")
+        }
+        crate::backend::ProviderDraftAuthMessage::CopilotDeviceStarted { user_code } => i18n
+            .text_args(
+                "flash-provider-auth-copilot-device-started",
+                &crate::fl_args!("code" => user_code.clone()),
+            ),
+        crate::backend::ProviderDraftAuthMessage::GitlabBrowserStarted => {
+            ui_text::t(i18n, "flash-provider-auth-gitlab-browser-started")
+        }
+        crate::backend::ProviderDraftAuthMessage::AtomGitBrowserStarted => {
+            ui_text::t(i18n, "flash-provider-auth-atomgit-browser-started")
+        }
+        crate::backend::ProviderDraftAuthMessage::OpenaiCredentialCaptured => {
+            ui_text::t(i18n, "flash-provider-auth-openai-captured")
+        }
+        crate::backend::ProviderDraftAuthMessage::CopilotPending => {
+            ui_text::t(i18n, "flash-provider-auth-copilot-pending")
+        }
+        crate::backend::ProviderDraftAuthMessage::CopilotCredentialCaptured => {
+            ui_text::t(i18n, "flash-provider-auth-copilot-captured")
+        }
+        crate::backend::ProviderDraftAuthMessage::GitlabCredentialCaptured => {
+            ui_text::t(i18n, "flash-provider-auth-gitlab-captured")
+        }
+        crate::backend::ProviderDraftAuthMessage::AtomGitPending => {
+            ui_text::t(i18n, "flash-provider-auth-atomgit-pending")
+        }
+        crate::backend::ProviderDraftAuthMessage::AtomGitCredentialCaptured => {
+            ui_text::t(i18n, "flash-provider-auth-atomgit-captured")
+        }
+    }
+}
+
+fn provider_draft_auth_error_message(
+    i18n: &I18n,
+    error: &crate::backend::ProviderDraftAuthError,
+) -> String {
+    match error {
+        crate::backend::ProviderDraftAuthError::UnsupportedInteractiveLogin => {
+            ui_text::t(i18n, "flash-provider-auth-error-unsupported")
+        }
+        crate::backend::ProviderDraftAuthError::StartBrowserAuthFirst => {
+            ui_text::t(i18n, "flash-provider-auth-error-start-browser-first")
+        }
+        crate::backend::ProviderDraftAuthError::StartDeviceAuthFirst => {
+            ui_text::t(i18n, "flash-provider-auth-error-start-device-first")
+        }
+        crate::backend::ProviderDraftAuthError::RequiredField(field) => i18n.text_args(
+            "flash-provider-auth-error-required-field",
+            &crate::fl_args!("field" => provider_draft_auth_field_label(i18n, field)),
+        ),
+        crate::backend::ProviderDraftAuthError::Other(error) => error.clone(),
+    }
+}
+
+fn provider_draft_auth_field_label(
+    i18n: &I18n,
+    field: &crate::backend::ProviderDraftAuthField,
+) -> String {
+    ui_text::t(
+        i18n,
+        match field {
+            crate::backend::ProviderDraftAuthField::RedirectUri => "provider-field-redirect-uri",
+            crate::backend::ProviderDraftAuthField::InstanceUrl => "provider-field-instance-url",
+            crate::backend::ProviderDraftAuthField::CallbackUrl => "provider-field-callback-url",
+        },
+    )
+}
+
+fn provider_studio_save_result_message(
+    i18n: &I18n,
+    result: &crate::backend::ProviderStudioSaveResult,
+) -> String {
+    match result {
+        crate::backend::ProviderStudioSaveResult::ProviderDraftSaved {
+            provider_id,
+            default_adapter,
+            default_model,
+        } => i18n.text_args(
+            "flash-provider-save-draft",
+            &crate::fl_args!(
+                "provider" => provider_id.clone(),
+                "adapter" => default_adapter.clone(),
+                "model" => default_model.clone(),
+            ),
+        ),
+        crate::backend::ProviderStudioSaveResult::AdapterMatchesSaved {
+            provider_id,
+            adapter_id,
+            listed_model_count,
+            matched_model_count,
+        } => i18n.text_args(
+            "flash-provider-save-adapter-matches",
+            &crate::fl_args!(
+                "provider" => provider_id.clone(),
+                "adapter" => adapter_id.clone(),
+                "listed" => *listed_model_count as i64,
+                "matched" => *matched_model_count as i64,
+            ),
+        ),
+        crate::backend::ProviderStudioSaveResult::ModelSaved {
+            provider_id,
+            adapter_id,
+            model_id,
+        } => i18n.text_args(
+            "flash-provider-save-model",
+            &crate::fl_args!(
+                "provider" => provider_id.clone(),
+                "adapter" => adapter_id.clone(),
+                "model" => model_id.clone(),
+            ),
+        ),
+        crate::backend::ProviderStudioSaveResult::ConfiguredModelSaved {
+            provider_id,
+            adapter_id,
+            model_id,
+        } => i18n.text_args(
+            "flash-provider-save-configured-model",
+            &crate::fl_args!(
+                "provider" => provider_id.clone(),
+                "adapter" => adapter_id.clone(),
+                "model" => model_id.clone(),
+            ),
+        ),
+    }
+}
+
+fn provider_studio_save_error_message(
+    i18n: &I18n,
+    error: &crate::backend::ProviderStudioSaveError,
+) -> String {
+    match error {
+        crate::backend::ProviderStudioSaveError::Validation(error) => {
+            provider_studio_save_validation_error_message(i18n, error)
+        }
+        crate::backend::ProviderStudioSaveError::ExistingProviderSettingsMustBeObject => {
+            ui_text::t(i18n, "flash-provider-save-error-settings-object")
+        }
+        crate::backend::ProviderStudioSaveError::ProviderAdapterMustBeObject { adapter_id } => i18n
+            .text_args(
+                "flash-provider-save-error-adapter-object",
+                &crate::fl_args!("adapter" => adapter_id.clone()),
+            ),
+        crate::backend::ProviderStudioSaveError::ProviderModelConfigMustBeObject => {
+            ui_text::t(i18n, "flash-provider-save-error-model-object")
+        }
+        crate::backend::ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject => {
+            ui_text::t(i18n, "flash-provider-save-error-configured-adapter-object")
+        }
+        crate::backend::ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject => {
+            ui_text::t(i18n, "flash-provider-save-error-configured-models-object")
+        }
+        crate::backend::ProviderStudioSaveError::Other(error) => error.clone(),
+    }
+}
+
+fn provider_studio_save_validation_error_message(
+    i18n: &I18n,
+    error: &crate::backend::ProviderStudioSaveValidationError,
+) -> String {
+    match error {
+        crate::backend::ProviderStudioSaveValidationError::FieldRequired(field) => i18n.text_args(
+            "flash-provider-save-error-required-field",
+            &crate::fl_args!("field" => provider_studio_save_field_label(i18n, field)),
+        ),
+        crate::backend::ProviderStudioSaveValidationError::UnsupportedDefaultAdapter {
+            auth_kind,
+            adapter,
+            supported,
+        } => i18n.text_args(
+            "flash-provider-save-error-unsupported-default-adapter",
+            &crate::fl_args!(
+                "auth" => provider_draft_auth_kind_label(i18n, auth_kind),
+                "adapter" => adapter.clone(),
+                "supported" => supported.clone(),
+            ),
+        ),
+        crate::backend::ProviderStudioSaveValidationError::UnsupportedAdapters {
+            auth_kind,
+            adapters,
+            supported,
+        } => i18n.text_args(
+            "flash-provider-save-error-unsupported-adapters",
+            &crate::fl_args!(
+                "auth" => provider_draft_auth_kind_label(i18n, auth_kind),
+                "adapters" => adapters.join(", "),
+                "supported" => supported.clone(),
+            ),
+        ),
+        crate::backend::ProviderStudioSaveValidationError::ApiBaseUrlRequired => {
+            ui_text::t(i18n, "flash-provider-save-error-api-base-url")
+        }
+        crate::backend::ProviderStudioSaveValidationError::GitlabApiKeyOrEnvRequired => {
+            ui_text::t(i18n, "flash-provider-save-error-gitlab-token")
+        }
+        crate::backend::ProviderStudioSaveValidationError::CredentialBaseUrlRequired { issuer } => {
+            i18n.text_args(
+                "flash-provider-save-error-credential-base-url",
+                &crate::fl_args!(
+                    "issuer" => provider_credential_issuer_label_localized(i18n, *issuer),
+                ),
+            )
+        }
+        crate::backend::ProviderStudioSaveValidationError::CredentialServiceKeyEnvRequired {
+            issuer,
+        } => i18n.text_args(
+            "flash-provider-save-error-credential-service-key-env",
+            &crate::fl_args!(
+                "issuer" => provider_credential_issuer_label_localized(i18n, *issuer),
+            ),
+        ),
+        crate::backend::ProviderStudioSaveValidationError::BedrockKeyPairRequired => {
+            ui_text::t(i18n, "flash-provider-save-error-bedrock-key-pair")
+        }
+        crate::backend::ProviderStudioSaveValidationError::SelectAtLeastOneModel => {
+            ui_text::t(i18n, "flash-provider-save-error-select-model")
+        }
+    }
+}
+
+fn provider_studio_save_field_label(
+    i18n: &I18n,
+    field: &crate::backend::ProviderStudioSaveField,
+) -> String {
+    ui_text::t(
+        i18n,
+        match field {
+            crate::backend::ProviderStudioSaveField::ProviderId => "provider-field-provider-id",
+            crate::backend::ProviderStudioSaveField::DefaultAdapter => {
+                "provider-field-default-adapter"
+            }
+            crate::backend::ProviderStudioSaveField::AdapterId => "provider-field-adapter-id",
+            crate::backend::ProviderStudioSaveField::ModelId => "provider-field-model-id",
+            crate::backend::ProviderStudioSaveField::AuthMode => "provider-field-auth-mode",
+            crate::backend::ProviderStudioSaveField::CredentialIssuer => {
+                "provider-field-credential-issuer"
+            }
+        },
+    )
+}
+
+fn provider_credential_issuer_label_localized(i18n: &I18n, issuer: CredentialIssuer) -> String {
+    ui_text::t(
+        i18n,
+        match issuer {
+            CredentialIssuer::OpenaiChatgpt => "provider-issuer-openai-chatgpt-label",
+            CredentialIssuer::GithubCopilot => "provider-issuer-github-copilot-label",
+            CredentialIssuer::Gitlab => "provider-issuer-gitlab-label",
+            CredentialIssuer::GoogleAdc => "provider-issuer-google-adc-label",
+            CredentialIssuer::SapAiCore => "provider-issuer-sap-ai-core-label",
+            CredentialIssuer::AtomGit => "provider-issuer-atomgit-label",
+        },
+    )
+}
+
+fn provider_draft_auth_kind_label(i18n: &I18n, auth_kind: &ProviderDraftAuthKind) -> String {
+    match auth_kind {
+        ProviderDraftAuthKind::Unset => ui_text::t(i18n, "provider-auth-kind-unset"),
+        ProviderDraftAuthKind::None => ui_text::t(i18n, "provider-auth-kind-none"),
+        ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-kind-api"),
+        ProviderDraftAuthKind::Gitlab => ui_text::t(i18n, "provider-auth-kind-gitlab"),
+        ProviderDraftAuthKind::Credential(Some(issuer)) => i18n.text_args(
+            "provider-auth-kind-credential-with-issuer",
+            &crate::fl_args!(
+                "issuer" => provider_credential_issuer_label_localized(i18n, *issuer)
+            ),
+        ),
+        ProviderDraftAuthKind::Credential(None) => {
+            ui_text::t(i18n, "provider-auth-kind-credential")
+        }
+        ProviderDraftAuthKind::BedrockSigv4 => ui_text::t(i18n, "provider-auth-kind-bedrock"),
+    }
+}
+
+fn provider_draft_auth_mode_label(i18n: &I18n, auth_kind: &ProviderDraftAuthKind) -> String {
+    match auth_kind {
+        ProviderDraftAuthKind::Unset => ui_text::t(i18n, "provider-auth-kind-unset"),
+        ProviderDraftAuthKind::None => ui_text::t(i18n, "provider-auth-kind-none"),
+        ProviderDraftAuthKind::Api => ui_text::t(i18n, "provider-auth-kind-api"),
+        ProviderDraftAuthKind::Gitlab => ui_text::t(i18n, "provider-auth-kind-gitlab"),
+        ProviderDraftAuthKind::Credential(_) => ui_text::t(i18n, "provider-auth-kind-credential"),
+        ProviderDraftAuthKind::BedrockSigv4 => ui_text::t(i18n, "provider-auth-kind-bedrock"),
+    }
+}
+
+fn provider_studio_adapter_rule_detail(i18n: &I18n, rule: &ProviderDraftAdapterRule) -> String {
+    ui_text::t(i18n, rule.detail_key)
+}
+
+fn provider_studio_model_count_label(i18n: &I18n, count: usize) -> String {
+    i18n.text_args(
+        "overlay-provider-studio-model-count",
+        &crate::fl_args!("count" => count as i64),
+    )
+}
+
+fn provider_studio_catalog_match_label(i18n: &I18n, model_id: Option<&str>) -> String {
+    model_id
+        .map(|model| {
+            i18n.text_args(
+                "overlay-provider-studio-catalog-match",
+                &crate::fl_args!("model" => model.to_string()),
+            )
+        })
+        .unwrap_or_else(|| ui_text::t(i18n, "overlay-provider-studio-catalog-unmatched"))
+}
+
+fn provider_studio_model_list_detail(
+    i18n: &I18n,
+    dialog: &ProviderStudioOverlay,
+    adapter_id: &str,
+    model_id: &str,
+) -> String {
+    let key = provider_studio_model_key(adapter_id, model_id);
+    let mut parts = vec![provider_studio_catalog_match_label(
+        i18n,
+        dialog
+            .catalog_matches
+            .get(key.as_str())
+            .map(|entry| entry.model_id.as_str()),
+    )];
+    if dialog.draft.default_adapter == adapter_id && dialog.draft.default_model == model_id {
+        parts.push(ui_text::t(i18n, "overlay-provider-studio-default"));
+    }
+    join_inline_segments(parts)
+}
+
+fn provider_studio_adapter_list_detail(
+    i18n: &I18n,
+    dialog: &ProviderStudioOverlay,
+    adapter_id: &str,
+) -> String {
+    if let Some(adapter) = dialog
+        .adapter_models
+        .iter()
+        .find(|adapter_models| adapter_models.adapter_id == adapter_id)
+    {
+        if adapter.error.is_none() {
+            return join_inline_segments(vec![
+                provider_studio_model_count_label(i18n, adapter.models.len()),
+                adapter
+                    .resolved_base_url
+                    .clone()
+                    .unwrap_or_else(|| ui_text::t(i18n, "overlay-provider-studio-loaded")),
+            ]);
+        }
+        return adapter
+            .error
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| ui_text::t(i18n, "overlay-provider-studio-error"));
+    }
+    if let Some(rule) = provider_studio_adapter_rule(dialog, adapter_id) {
+        let mut parts = vec![provider_studio_adapter_rule_detail(i18n, rule)];
+        if rule.supports_draft_model_listing {
+            parts.push(ui_text::t(i18n, "overlay-provider-studio-live-list"));
+        }
+        if dialog.configured_adapter_ids.contains(adapter_id) {
+            parts.push(ui_text::t(i18n, "overlay-provider-studio-configured"));
+        }
+        return join_inline_segments(parts);
+    }
+    if dialog.configured_adapter_ids.contains(adapter_id) {
+        ui_text::t(i18n, "overlay-provider-studio-configured-disk")
+    } else {
+        ui_text::t(i18n, "overlay-provider-studio-not-listed")
+    }
+}
+
+fn provider_studio_live_listing_unavailable_message(
+    i18n: &I18n,
+    auth_kind: &ProviderDraftAuthKind,
+) -> String {
+    i18n.text_args(
+        "flash-provider-studio-live-listing-unavailable",
+        &crate::fl_args!("auth" => provider_draft_auth_kind_label(i18n, auth_kind)),
+    )
+}
+
+fn provider_studio_draft_listing_unsupported_message(
+    i18n: &I18n,
+    unsupported: &[String],
+) -> String {
+    i18n.text_args(
+        "flash-provider-studio-draft-listing-unsupported",
+        &crate::fl_args!("adapters" => unsupported.join(", ")),
+    )
+}
+
+fn provider_studio_listing_auth_required_message(
+    i18n: &I18n,
+    auth_kind: &ProviderDraftAuthKind,
+) -> String {
+    i18n.text_args(
+        "flash-provider-studio-listing-auth-required",
+        &crate::fl_args!("auth" => provider_draft_auth_kind_label(i18n, auth_kind)),
+    )
+}
+
+fn settings_field_display_description(i18n: &I18n, field: SettingsFieldSpec) -> String {
+    ui_text::t(i18n, field.description_key)
+}
+
+fn runtime_setting_display_label(i18n: &I18n, field: RuntimeSettingSpec) -> String {
+    let key = match field.id {
+        RuntimeSettingId::ThinkingMode => "settings-runtime-thinking-label",
+        RuntimeSettingId::SpeedMode => "settings-runtime-speed-label",
+        RuntimeSettingId::Verbosity => "settings-runtime-verbosity-label",
+        RuntimeSettingId::ParallelToolCalls => "settings-runtime-parallel-label",
+        RuntimeSettingId::Temperature => "settings-runtime-temperature-label",
+        RuntimeSettingId::MaxOutput => "settings-runtime-max-output-label",
+        RuntimeSettingId::System => "settings-runtime-system-label",
+    };
+    ui_text::t(i18n, key)
+}
+
+fn runtime_setting_display_description(i18n: &I18n, field: RuntimeSettingSpec) -> String {
+    let key = match field.id {
+        RuntimeSettingId::ThinkingMode => "settings-runtime-thinking-description",
+        RuntimeSettingId::SpeedMode => "settings-runtime-speed-description",
+        RuntimeSettingId::Verbosity => "settings-runtime-verbosity-description",
+        RuntimeSettingId::ParallelToolCalls => "settings-runtime-parallel-description",
+        RuntimeSettingId::Temperature => "settings-runtime-temperature-description",
+        RuntimeSettingId::MaxOutput => "settings-runtime-max-output-description",
+        RuntimeSettingId::System => "settings-runtime-system-description",
+    };
+    ui_text::t(i18n, key)
+}
+
+fn settings_choice_adapter_fallback(i18n: &I18n) -> String {
+    ui_text::t(i18n, "settings-choice-adapter-fallback")
+}
+
+fn settings_choice_default_provider_detail(i18n: &I18n, adapter: &str, model: &str) -> String {
+    i18n.text_args(
+        "settings-choice-default-provider-detail",
+        &crate::fl_args!("adapter" => adapter, "model" => model),
+    )
+}
+
+fn settings_choice_registered_agent_detail(i18n: &I18n) -> String {
+    ui_text::t(i18n, "settings-choice-agent-profile-detail")
+}
+
+fn settings_choice_bool_override_detail(i18n: &I18n) -> String {
+    ui_text::t(i18n, "settings-choice-bool-override")
+}
+
+fn runtime_setting_choice_supported_model_detail(i18n: &I18n) -> String {
+    ui_text::t(i18n, "runtime-setting-choice-supported-model")
+}
+
+fn runtime_setting_choice_parallel_detail(i18n: &I18n) -> String {
+    ui_text::t(i18n, "runtime-setting-choice-parallel-detail")
+}
+
+fn runtime_setting_override_summary(i18n: &I18n, value: &str) -> String {
+    i18n.text_args(
+        "runtime-setting-summary-override-value",
+        &crate::fl_args!("value" => value),
+    )
+}
+
+fn settings_choice_configured_model_detail(i18n: &I18n, provider: &str, adapter: &str) -> String {
+    i18n.text_args(
+        "settings-choice-default-model-detail",
+        &crate::fl_args!("provider" => provider, "adapter" => adapter),
+    )
+}
+
+fn settings_choice_default_adapter_detail(i18n: &I18n, configured_model_count: usize) -> String {
+    let key = if configured_model_count == 1 {
+        "settings-choice-default-adapter-detail-one"
+    } else {
+        "settings-choice-default-adapter-detail-many"
+    };
+    i18n.text_args(
+        key,
+        &crate::fl_args!("count" => configured_model_count as i64),
+    )
+}
+
+fn settings_studio_general_items(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+) -> Vec<SettingsStudioItem> {
     SETTINGS_FIELDS
         .iter()
         .map(|field| {
@@ -12226,7 +13857,7 @@ fn settings_studio_general_items(sources: &ConfigJsonSources) -> Vec<SettingsStu
                 value: format_setting_value_inline(&effective_value),
                 detail: format!(
                     "{} · {}",
-                    field.description,
+                    settings_field_display_description(i18n, *field),
                     format_setting_field_summary(&file_value, &effective_value)
                 ),
                 action: SettingsPickerAction::EditField(*field),
@@ -12235,54 +13866,53 @@ fn settings_studio_general_items(sources: &ConfigJsonSources) -> Vec<SettingsStu
         .collect()
 }
 
-fn settings_studio_runtime_items(run_options: &RunOptionsState) -> Vec<SettingsStudioItem> {
+fn settings_studio_runtime_items(
+    i18n: &I18n,
+    run_options: &RunOptionsState,
+) -> Vec<SettingsStudioItem> {
     let runtime_model = run_options
         .model
         .as_ref()
         .map(|model| format!("{}/{}", model.provider_id, model.model_id))
-        .unwrap_or_else(|| "default".to_string());
+        .unwrap_or_else(|| ui_text::t(i18n, "value-default"));
     let runtime_provider = run_options
         .model
         .as_ref()
         .map(|model| model.provider_id.to_string())
-        .unwrap_or_else(|| "default".to_string());
+        .unwrap_or_else(|| ui_text::t(i18n, "value-default"));
     let mut items = vec![
         SettingsStudioItem {
-            label: "Provider Override".to_string(),
+            label: ui_text::t(i18n, "settings-runtime-provider-override-label"),
             value: runtime_provider,
-            detail: "Choose the current session provider override with the provider picker."
-                .to_string(),
+            detail: ui_text::t(i18n, "settings-runtime-provider-override-detail"),
             action: SettingsPickerAction::OpenRuntimeProviderOverride,
         },
         SettingsStudioItem {
-            label: "Model Override".to_string(),
+            label: ui_text::t(i18n, "settings-runtime-model-override-label"),
             value: runtime_model,
-            detail: "Choose the current session model override with the model picker."
-                .to_string(),
+            detail: ui_text::t(i18n, "settings-runtime-model-override-detail"),
             action: SettingsPickerAction::OpenRuntimeModelOverride,
         },
         SettingsStudioItem {
-            label: "Clear Runtime Stack".to_string(),
-            value: "reset".to_string(),
-            detail:
-                "Clear provider/model plus thinking, speed, verbosity, and parallel-tool-call overrides."
-                    .to_string(),
+            label: ui_text::t(i18n, "settings-runtime-clear-stack-label"),
+            value: ui_text::t(i18n, "value-reset"),
+            detail: ui_text::t(i18n, "settings-runtime-clear-stack-detail"),
             action: SettingsPickerAction::ClearRuntimeModelStack,
         },
     ];
     items.extend(RUNTIME_SETTINGS.iter().map(|field| SettingsStudioItem {
-        label: field.label.to_string(),
-        value: run_options.runtime_setting_summary(*field),
-        detail: field.description.to_string(),
+        label: runtime_setting_display_label(i18n, *field),
+        value: run_options.runtime_setting_summary(i18n, *field),
+        detail: runtime_setting_display_description(i18n, *field),
         action: SettingsPickerAction::EditRuntimeSetting(*field),
     }));
     items
 }
 
-fn settings_studio_tool_description_mode_label(mode: &str) -> &'static str {
+fn settings_studio_tool_description_mode_label<'a>(i18n: &'a I18n, mode: &str) -> String {
     match mode {
-        "help" => "help",
-        _ => "detailed",
+        "help" => ui_text::t(i18n, "settings-plugin-mode-help"),
+        _ => ui_text::t(i18n, "settings-plugin-mode-detailed"),
     }
 }
 
@@ -12317,6 +13947,7 @@ fn settings_studio_plugins_count(sources: &ConfigJsonSources, path: &str) -> usi
 }
 
 fn settings_studio_plugin_entry_items(
+    i18n: &I18n,
     sources: &ConfigJsonSources,
     runtime_statuses: &[agena::plugin::status::PluginStatus],
 ) -> Vec<SettingsStudioItem> {
@@ -12359,21 +13990,32 @@ fn settings_studio_plugin_entry_items(
                 .get("disabled")
                 .and_then(JsonValue::as_bool)
                 .unwrap_or(false);
-            let value = [
-                status.kind.to_string(),
-                source.clone(),
-                status.state.as_str().to_string(),
-                if disabled {
-                    "disabled · skipped on reload".to_string()
-                } else {
-                    "enabled · loads on reload".to_string()
-                },
-            ]
-            .join(" · ");
+            let value = i18n.text_args(
+                "settings-plugin-entry-value",
+                &crate::fl_args!(
+                    "kind" => status.kind.to_string(),
+                    "source" => settings_plugin_entry_source_label(i18n, source.as_str()),
+                    "state" => status.state.as_str().to_string(),
+                    "status" => ui_text::t(
+                        i18n,
+                        if disabled {
+                            "settings-plugin-entry-status-disabled"
+                        } else {
+                            "settings-plugin-entry-status-enabled"
+                        },
+                    )
+                ),
+            );
             Some(SettingsStudioItem {
                 label: status.plugin_id.clone(),
                 value,
-                detail: plugin_entry_detail_text(status, entry_object, source.as_str(), disabled),
+                detail: plugin_entry_detail_text(
+                    i18n,
+                    status,
+                    entry_object,
+                    source.as_str(),
+                    disabled,
+                ),
                 action: SettingsPickerAction::TogglePluginEntryDisabled {
                     plugin_id: status.plugin_id.clone(),
                     entry,
@@ -12386,22 +14028,50 @@ fn settings_studio_plugin_entry_items(
     items
 }
 
+fn settings_plugin_entry_source_label(i18n: &I18n, source: &str) -> String {
+    ui_text::t(
+        i18n,
+        match source {
+            "file" => "settings-plugin-entry-source-file",
+            "runtime" => "settings-plugin-entry-source-runtime",
+            "builtin" => "settings-plugin-entry-source-builtin",
+            _ => "value-unknown",
+        },
+    )
+}
+
 fn plugin_entry_detail_text(
+    i18n: &I18n,
     status: &agena::plugin::status::PluginStatus,
     entry: &JsonMap<String, JsonValue>,
     source: &str,
     disabled: bool,
 ) -> String {
     let mut parts = vec![
-        format!("kind={}", status.kind),
-        format!("source={source}"),
-        format!("state={}", status.state.as_str()),
+        i18n.text_args(
+            "settings-plugin-entry-detail-kind",
+            &crate::fl_args!("kind" => status.kind.to_string()),
+        ),
+        i18n.text_args(
+            "settings-plugin-entry-detail-source",
+            &crate::fl_args!("source" => settings_plugin_entry_source_label(i18n, source)),
+        ),
+        i18n.text_args(
+            "settings-plugin-entry-detail-state",
+            &crate::fl_args!("state" => status.state.as_str().to_string()),
+        ),
     ];
     if let Some(pid) = status.pid {
-        parts.push(format!("pid={pid}"));
+        parts.push(i18n.text_args(
+            "settings-plugin-entry-detail-pid",
+            &crate::fl_args!("pid" => pid.to_string()),
+        ));
     }
     if status.restart_count > 0 {
-        parts.push(format!("restarts={}", status.restart_count));
+        parts.push(i18n.text_args(
+            "settings-plugin-entry-detail-restarts",
+            &crate::fl_args!("count" => status.restart_count as i64),
+        ));
     }
     if let Some(error) = status
         .last_error
@@ -12409,31 +14079,37 @@ fn plugin_entry_detail_text(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        parts.push(format!("last_error={error}"));
+        parts.push(i18n.text_args(
+            "settings-plugin-entry-detail-last-error",
+            &crate::fl_args!("error" => error.to_string()),
+        ));
     }
     parts.push(if disabled {
-        "disabled entries stay in config and are skipped on reload".to_string()
+        ui_text::t(i18n, "settings-plugin-entry-detail-disabled")
     } else {
-        "enabled entries load on the next runtime reload".to_string()
+        ui_text::t(i18n, "settings-plugin-entry-detail-enabled")
     });
     if source == "builtin" {
-        parts.push(
-            "This built-in plugin is registered by the runtime even when the config file omits it."
-                .to_string(),
-        );
+        parts.push(ui_text::t(i18n, "settings-plugin-entry-detail-builtin"));
     }
     if entry
         .get("options")
         .and_then(JsonValue::as_object)
         .is_some_and(|options| !options.is_empty())
     {
-        parts.push("custom options configured".to_string());
+        parts.push(ui_text::t(
+            i18n,
+            "settings-plugin-entry-detail-custom-options",
+        ));
     }
-    parts.push("Enter or t toggles the entry".to_string());
-    parts.join(" · ")
+    parts.push(ui_text::t(i18n, "settings-plugin-entry-detail-toggle"));
+    join_inline_segments(parts)
 }
 
-fn settings_studio_plugin_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
+fn settings_studio_plugin_items(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+) -> Vec<SettingsStudioItem> {
     let enabled = settings_studio_plugins_enabled(sources);
     let default_mode = settings_studio_plugins_default_mode(sources);
     let plugin_override_count =
@@ -12443,34 +14119,30 @@ fn settings_studio_plugin_items(sources: &ConfigJsonSources) -> Vec<SettingsStud
     vec![
         SettingsStudioItem {
             label: "plugins.enabled".to_string(),
-            value: if enabled { "on".to_string() } else { "off".to_string() },
-            detail:
-                "Turns all plugin hooks and tools on or off. The runtime reloads after the change."
-                    .to_string(),
+            value: if enabled {
+                ui_text::t(i18n, "value-on")
+            } else {
+                ui_text::t(i18n, "value-off")
+            },
+            detail: ui_text::t(i18n, "settings-plugin-enabled-detail"),
             action: SettingsPickerAction::TogglePluginsEnabled,
         },
         SettingsStudioItem {
             label: "plugins.tool_presentation.default_mode".to_string(),
-            value: settings_studio_tool_description_mode_label(default_mode.as_str()).to_string(),
-            detail:
-                "Sets the default tool description mode. Help stays short and moves details into help output."
-                    .to_string(),
+            value: settings_studio_tool_description_mode_label(i18n, default_mode.as_str()),
+            detail: ui_text::t(i18n, "settings-plugin-default-mode-detail"),
             action: SettingsPickerAction::ToggleToolDescriptionMode,
         },
         SettingsStudioItem {
             label: "plugins.tool_presentation.plugins".to_string(),
             value: format!("{plugin_override_count} override(s)"),
-            detail:
-                "Per-plugin description mode overrides. Edit the raw config file for individual entries."
-                    .to_string(),
+            detail: ui_text::t(i18n, "settings-plugin-per-plugin-detail"),
             action: SettingsPickerAction::OpenConfigFile,
         },
         SettingsStudioItem {
             label: "plugins.tool_presentation.tools".to_string(),
             value: format!("{tool_override_count} override(s)"),
-            detail:
-                "Per-tool description mode overrides. Edit the raw config file for individual entries."
-                    .to_string(),
+            detail: ui_text::t(i18n, "settings-plugin-per-tool-detail"),
             action: SettingsPickerAction::OpenConfigFile,
         },
     ]
@@ -12496,121 +14168,176 @@ fn agent_mode_label(mode: agena::agent::AgentMode) -> &'static str {
     }
 }
 
-fn agent_default_summary(default: &agena::agents::AgentDefaultModelConfig) -> String {
+fn agent_default_summary(i18n: &I18n, default: &agena::agents::AgentDefaultModelConfig) -> String {
     let mut parts = Vec::new();
     if let Some(provider) = default
         .provider
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        parts.push(format!("provider={provider}"));
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-provider").as_str(),
+            provider,
+        ));
     }
     if let Some(adapter) = default
         .adapter
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        parts.push(format!("adapter={adapter}"));
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-adapter").as_str(),
+            adapter,
+        ));
     }
     if let Some(model) = default
         .model
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        parts.push(format!("model={model}"));
+        parts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-model").as_str(),
+            model,
+        ));
     }
     if parts.is_empty() {
-        "inherits runtime model defaults".to_string()
+        ui_text::t(i18n, "value-inherits-runtime-model-defaults")
     } else {
-        parts.join(" · ")
+        join_inline_segments(parts)
     }
 }
 
-fn agent_permission_summary(permission: &agena::agent::AgentPermissionConfig) -> String {
+fn agent_permission_summary(
+    i18n: &I18n,
+    permission: &agena::agent::AgentPermissionConfig,
+) -> String {
     if permission.is_empty() {
-        return "inherits runtime defaults".to_string();
+        return ui_text::t(i18n, "value-inherits-runtime-defaults");
     }
 
     let mut parts = Vec::new();
     let inherit_off = [
-        (!permission.inherit.path(), "path"),
-        (!permission.inherit.tools(), "tools"),
-        (!permission.inherit.network(), "network"),
-        (!permission.inherit.plugin_tools(), "plugin-tools"),
+        (!permission.inherit.path(), ui_text::t(i18n, "value-path")),
+        (!permission.inherit.tools(), ui_text::t(i18n, "value-tools")),
+        (
+            !permission.inherit.network(),
+            ui_text::t(i18n, "value-network"),
+        ),
+        (
+            !permission.inherit.plugin_tools(),
+            ui_text::t(i18n, "value-plugin-tools"),
+        ),
     ]
     .into_iter()
     .filter_map(|(disabled, label)| disabled.then_some(label))
     .collect::<Vec<_>>();
     if !inherit_off.is_empty() {
-        parts.push(format!("inherit off: {}", inherit_off.join(", ")));
+        parts.push(i18n.text_args(
+            "value-inherit-off",
+            &crate::fl_args!("sections" => inherit_off.join(", ")),
+        ));
     }
 
     if let Some(path) = permission.path.as_ref() {
         let mut detail: Vec<String> = Vec::new();
         if path.workspace.is_some() {
-            detail.push("workspace".to_string());
+            detail.push(ui_text::t(i18n, "value-workspace"));
         }
         if path.external.is_some() {
-            detail.push("external".to_string());
+            detail.push(ui_text::t(i18n, "value-external"));
         }
         if !path.rules.is_empty() {
-            detail.push(format!("{} rule(s)", path.rules.len()));
+            detail.push(i18n.text_args(
+                "value-rule-count",
+                &crate::fl_args!("count" => path.rules.len() as i64),
+            ));
         }
-        parts.push(format!(
-            "path={}",
-            if detail.is_empty() {
-                "custom".to_string()
-            } else {
-                detail.join(" · ")
-            }
+        parts.push(i18n.text_args(
+            "value-path-summary",
+            &crate::fl_args!(
+                "detail" => if detail.is_empty() {
+                    ui_text::t(i18n, "value-custom")
+                } else {
+                    join_inline_segments(detail)
+                }
+            ),
         ));
     }
     if let Some(network) = permission.network.as_ref() {
         let mut detail: Vec<String> = Vec::new();
-        if !network.rules.is_empty() {
-            detail.push(format!("{} rule(s)", network.rules.len()));
+        if network.internet.is_some() {
+            detail.push(ui_text::t(i18n, "value-internet"));
         }
-        parts.push(format!(
-            "network={}",
-            if detail.is_empty() {
-                "custom".to_string()
-            } else {
-                detail.join(" · ")
-            }
+        if network.private.is_some() {
+            detail.push(ui_text::t(i18n, "value-private"));
+        }
+        if network.loopback.is_some() {
+            detail.push(ui_text::t(i18n, "value-loopback"));
+        }
+        if !network.rules.is_empty() {
+            detail.push(i18n.text_args(
+                "value-rule-count",
+                &crate::fl_args!("count" => network.rules.len() as i64),
+            ));
+        }
+        parts.push(i18n.text_args(
+            "value-network-summary",
+            &crate::fl_args!(
+                "detail" => if detail.is_empty() {
+                    ui_text::t(i18n, "value-custom")
+                } else {
+                    join_inline_segments(detail)
+                }
+            ),
         ));
     }
     if let Some(tools) = permission.tools.as_ref() {
         let mut detail: Vec<String> = Vec::new();
         if !tools.tags.is_empty() {
-            detail.push(format!("{} tag(s)", tools.tags.len()));
+            detail.push(i18n.text_args(
+                "value-tag-count",
+                &crate::fl_args!("count" => tools.tags.len() as i64),
+            ));
         }
         if !tools.names.is_empty() {
-            detail.push(format!("{} name(s)", tools.names.len()));
+            detail.push(i18n.text_args(
+                "value-name-count",
+                &crate::fl_args!("count" => tools.names.len() as i64),
+            ));
         }
         if !tools.plugin.is_empty() {
-            detail.push(format!("{} plugin override(s)", tools.plugin.len()));
+            detail.push(i18n.text_args(
+                "value-plugin-override-count",
+                &crate::fl_args!("count" => tools.plugin.len() as i64),
+            ));
         }
         if !tools.rules.is_empty() {
-            detail.push(format!("{} rule set(s)", tools.rules.len()));
+            detail.push(i18n.text_args(
+                "value-rule-set-count",
+                &crate::fl_args!("count" => tools.rules.len() as i64),
+            ));
         }
-        parts.push(format!(
-            "tools={}",
-            if detail.is_empty() {
-                "custom".to_string()
-            } else {
-                detail.join(" · ")
-            }
+        parts.push(i18n.text_args(
+            "value-tools-summary",
+            &crate::fl_args!(
+                "detail" => if detail.is_empty() {
+                    ui_text::t(i18n, "value-custom")
+                } else {
+                    join_inline_segments(detail)
+                }
+            ),
         ));
     }
 
     if parts.is_empty() {
-        "inherits runtime defaults".to_string()
+        ui_text::t(i18n, "value-inherits-runtime-defaults")
     } else {
-        parts.join(" · ")
+        join_inline_segments(parts)
     }
 }
 
 fn settings_studio_agent_items(
+    i18n: &I18n,
     agents: &[AgentDescriptor],
     default_agent: Option<&str>,
 ) -> Vec<SettingsStudioItem> {
@@ -12621,22 +14348,31 @@ fn settings_studio_agent_items(
                 .source_path
                 .as_ref()
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "runtime config".to_string());
+                .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config"));
             let mut badges = vec![
                 agent.scope.as_str().to_string(),
-                agent_mode_label(agent.mode).to_string(),
+                agent_mode_display_label(i18n, agent.mode),
             ];
             if agent.hidden {
-                badges.push("hidden".to_string());
+                badges.push(ui_text::t(i18n, "value-hidden"));
             }
             if default_agent.is_some_and(|name| name == agent.name.as_str()) {
-                badges.push("default".to_string());
+                badges.push(ui_text::t(i18n, "value-default"));
             }
-            let value = badges.join(" · ");
+            let value = join_inline_segments(badges);
             let detail = if agent.description.trim().is_empty() {
-                format!("No description provided. source={source}")
+                i18n.text_args(
+                    "settings-agent-no-description",
+                    &crate::fl_args!("source" => source),
+                )
             } else {
-                format!("{} · source={source}", agent.description)
+                i18n.text_args(
+                    "settings-agent-description-with-source",
+                    &crate::fl_args!(
+                        "description" => agent.description.clone(),
+                        "source" => source
+                    ),
+                )
             };
             SettingsStudioItem {
                 label: agent.name.clone(),
@@ -12651,99 +14387,126 @@ fn settings_studio_agent_items(
 }
 
 fn settings_studio_agent_detail_text(
+    i18n: &I18n,
     agent: &AgentDescriptor,
     default_agent: Option<&str>,
-) -> String {
+) -> Text<'static> {
     let mut lines = vec![
-        format!("scope: {}", agent.scope.as_str()),
-        format!("mode: {}", agent_mode_label(agent.mode)),
-        format!(
-            "visibility: {}",
-            if agent.hidden { "hidden" } else { "visible" }
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-scope"),
+            agent.scope.as_str().to_string(),
         ),
-        format!(
-            "default: {}",
-            if default_agent.is_some_and(|name| name == agent.name.as_str()) {
-                "yes"
-            } else {
-                "no"
-            }
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-mode"),
+            agent_mode_display_label(i18n, agent.mode),
         ),
-        format!(
-            "source: {}",
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-visibility"),
+            localized_visibility(i18n, agent.hidden),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-settings-agent-detail-default"),
+            localized_yes_no(
+                i18n,
+                default_agent.is_some_and(|name| name == agent.name.as_str()),
+            ),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-source"),
             agent
                 .source_path
                 .as_ref()
                 .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "runtime config".to_string())
+                .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config")),
         ),
-        format!(
-            "permission: {}",
-            agent_permission_summary(&agent.permission)
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-permission"),
+            agent_permission_summary(i18n, &agent.permission),
         ),
-        format!("model: {}", agent_default_summary(&agent.default)),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-settings-agent-detail-model"),
+            agent_default_summary(i18n, &agent.default),
+        ),
     ];
     if !agent.aliases.is_empty() {
-        lines.push(format!("aliases: {}", agent.aliases.join(", ")));
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-settings-agent-detail-aliases"),
+            agent.aliases.join(", "),
+        ));
     }
     if !agent.allowed_tools.is_empty() {
-        lines.push(format!("tools: {}", agent.allowed_tools.join(", ")));
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-settings-agent-detail-tools"),
+            agent.allowed_tools.join(", "),
+        ));
     }
     if !agent.description.trim().is_empty() {
-        lines.push(String::new());
-        lines.push(agent.description.clone());
+        lines.push(app_detail_plain_line(String::new()));
+        lines.push(app_detail_plain_line(agent.description.clone()));
     }
-    lines.push(String::new());
-    lines.push(
-        "Enter opens the dedicated agent workbench. d makes this the default agent. t toggles hidden when the profile is owned by the current config file.".to_string(),
-    );
-    lines.join("\n")
+    lines.push(app_detail_plain_line(String::new()));
+    lines.push(app_detail_plain_line(ui_text::t(
+        i18n,
+        "overlay-settings-agent-detail-hint",
+    )));
+    build_app_detail_text(lines)
 }
 
 fn agent_profile_editable(profile: &AgentProfile) -> bool {
     profile.source_path.is_none() && matches!(profile.scope, agena::agents::AgentScope::Project)
 }
 
-fn agent_profile_source_label(profile: &AgentProfile) -> String {
+fn agent_profile_source_label_localized(i18n: &I18n, profile: &AgentProfile) -> String {
     profile
         .source_path
         .as_ref()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "runtime config (agena.json)".to_string())
+        .unwrap_or_else(|| ui_text::t(i18n, "value-runtime-config-file"))
 }
 
-fn agent_prompt_summary(prompt: &str) -> String {
+fn agent_prompt_summary(i18n: &I18n, prompt: &str) -> String {
     if prompt.trim().is_empty() {
-        "unset".to_string()
+        ui_text::t(i18n, "value-unset")
     } else {
-        format!("{} chars", prompt.chars().count())
+        i18n.text_args(
+            "value-char-count",
+            &crate::fl_args!("count" => prompt.chars().count() as i64),
+        )
     }
 }
 
-fn agent_list_summary(values: &[String], empty: &str) -> String {
+fn agent_list_summary(i18n: &I18n, values: &[String], empty_key: &str) -> String {
     if values.is_empty() {
-        empty.to_string()
+        ui_text::t(i18n, empty_key)
     } else if values.len() <= 3 {
         values.join(", ")
     } else {
-        format!("{} items", values.len())
+        i18n.text_args(
+            "value-item-count",
+            &crate::fl_args!("count" => values.len() as i64),
+        )
     }
 }
 
-fn agent_optional_string_summary(value: Option<&str>, empty: &str) -> String {
+fn agent_optional_string_summary(i18n: &I18n, value: Option<&str>, empty_key: &str) -> String {
     value
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| empty.to_string())
+        .unwrap_or_else(|| ui_text::t(i18n, empty_key))
 }
 
-fn agent_optional_number_summary<T: ToString>(value: Option<T>, empty: &str) -> String {
+fn agent_optional_number_summary<T: ToString>(
+    i18n: &I18n,
+    value: Option<T>,
+    empty_key: &str,
+) -> String {
     value
         .map(|value| value.to_string())
-        .unwrap_or_else(|| empty.to_string())
+        .unwrap_or_else(|| ui_text::t(i18n, empty_key))
 }
 
 fn agent_studio_items(
+    i18n: &I18n,
     profile: &AgentProfile,
     editable: bool,
     default_agent_name: Option<&str>,
@@ -12751,130 +14514,141 @@ fn agent_studio_items(
     let is_default = default_agent_name.is_some_and(|name| name == profile.name.as_str());
     vec![
         AgentStudioItem {
-            label: "Description".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-description"),
             value: agent_optional_string_summary(
+                i18n,
                 (!profile.frontmatter.description.trim().is_empty())
                     .then_some(profile.frontmatter.description.as_str()),
-                "unset",
+                "value-unset",
             ),
-            detail: "Short listing summary for the agent profile.".to_string(),
+            detail: ui_text::t(i18n, "agent-studio-item-description-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::Description),
         },
         AgentStudioItem {
-            label: "Prompt".to_string(),
-            value: agent_prompt_summary(profile.prompt.as_str()),
-            detail: "Main prompt body. Opens a multiline editor.".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-prompt"),
+            value: agent_prompt_summary(i18n, profile.prompt.as_str()),
+            detail: ui_text::t(i18n, "agent-studio-item-prompt-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::Prompt),
         },
         AgentStudioItem {
-            label: "Mode".to_string(),
-            value: agent_mode_label(profile.frontmatter.mode).to_string(),
-            detail: "Whether this profile is available as a primary agent, a subagent, or both."
-                .to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-mode"),
+            value: agent_mode_display_label(i18n, profile.frontmatter.mode),
+            detail: ui_text::t(i18n, "agent-studio-item-mode-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::Mode),
         },
         AgentStudioItem {
-            label: "Hidden".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-hidden"),
             value: if profile.frontmatter.hidden {
-                "yes".to_string()
+                ui_text::t(i18n, "value-yes")
             } else {
-                "no".to_string()
+                ui_text::t(i18n, "value-no")
             },
             detail: if editable {
-                "Toggles whether this agent stays out of default agent pickers.".to_string()
+                ui_text::t(i18n, "agent-studio-item-hidden-detail")
             } else {
-                "Read-only here because this profile is backed by a markdown file.".to_string()
+                ui_text::t(i18n, "agent-studio-item-hidden-read-only-detail")
             },
             action: AgentStudioAction::ToggleHidden,
         },
         AgentStudioItem {
-            label: "Aliases".to_string(),
-            value: agent_list_summary(&profile.frontmatter.aliases, "none"),
-            detail: "Alternate names that resolve to this profile.".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-aliases"),
+            value: agent_list_summary(i18n, &profile.frontmatter.aliases, "value-none"),
+            detail: ui_text::t(i18n, "agent-studio-item-aliases-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::Aliases),
         },
         AgentStudioItem {
-            label: "Allowed Entries".to_string(),
-            value: agent_list_summary(&profile.frontmatter.allowed_tools, "unrestricted"),
-            detail: "Optional allowlist for runtime entries/tools.".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-allowed-entries"),
+            value: agent_list_summary(
+                i18n,
+                &profile.frontmatter.allowed_tools,
+                "value-unrestricted",
+            ),
+            detail: ui_text::t(i18n, "agent-studio-item-allowed-entries-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::AllowedEntries),
         },
         AgentStudioItem {
-            label: "Temperature".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-temperature"),
             value: profile
                 .frontmatter
                 .temperature
                 .map(|value| value.0.to_string())
-                .unwrap_or_else(|| "inherit".to_string()),
-            detail: "Optional model temperature override for this agent.".to_string(),
+                .unwrap_or_else(|| ui_text::t(i18n, "value-inherit")),
+            detail: ui_text::t(i18n, "agent-studio-item-temperature-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::Temperature),
         },
         AgentStudioItem {
-            label: "Max Output Tokens".to_string(),
-            value: agent_optional_number_summary(profile.frontmatter.max_output_tokens, "inherit"),
-            detail: "Optional output token budget for this agent.".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-max-output-tokens"),
+            value: agent_optional_number_summary(
+                i18n,
+                profile.frontmatter.max_output_tokens,
+                "value-inherit",
+            ),
+            detail: ui_text::t(i18n, "agent-studio-item-max-output-tokens-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::MaxOutputTokens),
         },
         AgentStudioItem {
-            label: "Steps".to_string(),
-            value: agent_optional_number_summary(profile.frontmatter.steps, "inherit"),
-            detail: "Optional step cap for this agent.".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-steps"),
+            value: agent_optional_number_summary(i18n, profile.frontmatter.steps, "value-inherit"),
+            detail: ui_text::t(i18n, "agent-studio-item-steps-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::Steps),
         },
         AgentStudioItem {
-            label: "Default Provider".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-default-provider"),
             value: agent_optional_string_summary(
+                i18n,
                 profile.frontmatter.default.provider.as_deref(),
-                "inherit",
+                "value-inherit",
             ),
-            detail: "Agent-scoped default provider override.".to_string(),
+            detail: ui_text::t(i18n, "agent-studio-item-default-provider-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::DefaultProvider),
         },
         AgentStudioItem {
-            label: "Default Adapter".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-default-adapter"),
             value: agent_optional_string_summary(
+                i18n,
                 profile.frontmatter.default.adapter.as_deref(),
-                "inherit",
+                "value-inherit",
             ),
-            detail: "Agent-scoped default adapter override.".to_string(),
+            detail: ui_text::t(i18n, "agent-studio-item-default-adapter-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::DefaultAdapter),
         },
         AgentStudioItem {
-            label: "Default Model".to_string(),
+            label: ui_text::t(i18n, "agent-studio-field-default-model"),
             value: agent_optional_string_summary(
+                i18n,
                 profile.frontmatter.default.model.as_deref(),
-                "inherit",
+                "value-inherit",
             ),
-            detail: "Agent-scoped default model override.".to_string(),
+            detail: ui_text::t(i18n, "agent-studio-item-default-model-detail"),
             action: AgentStudioAction::Edit(AgentStudioField::DefaultModel),
         },
         AgentStudioItem {
-            label: "Permission Policy".to_string(),
-            value: agent_permission_summary(&profile.frontmatter.permission),
-            detail: "Open the dedicated permission workbench for this agent.".to_string(),
+            label: ui_text::t(i18n, "agent-studio-item-permission-policy-label"),
+            value: agent_permission_summary(i18n, &profile.frontmatter.permission),
+            detail: ui_text::t(i18n, "agent-studio-item-permission-policy-detail"),
             action: AgentStudioAction::OpenPermissionWorkbench,
         },
         AgentStudioItem {
-            label: "Default Agent".to_string(),
+            label: ui_text::t(i18n, "agent-studio-item-default-agent-label"),
             value: if is_default {
-                "selected".to_string()
+                ui_text::t(i18n, "value-selected")
             } else {
-                "inactive".to_string()
+                ui_text::t(i18n, "value-inactive")
             },
-            detail: "Sets default.agent to this profile when activated.".to_string(),
+            detail: ui_text::t(i18n, "agent-studio-item-default-agent-detail"),
             action: AgentStudioAction::SetDefault,
         },
         AgentStudioItem {
             label: if profile.source_path.is_some() {
-                "Open Source File".to_string()
+                ui_text::t(i18n, "agent-studio-item-open-source-file")
             } else {
-                "Open Config File".to_string()
+                ui_text::t(i18n, "agent-studio-item-open-config-file")
             },
-            value: agent_profile_source_label(profile),
+            value: agent_profile_source_label_localized(i18n, profile),
             detail: if editable {
-                "Open the raw config file for direct inspection.".to_string()
+                ui_text::t(i18n, "agent-studio-item-open-config-detail")
             } else {
-                "Open the markdown profile backing this agent.".to_string()
+                ui_text::t(i18n, "agent-studio-item-open-source-detail")
             },
             action: AgentStudioAction::OpenSource,
         },
@@ -12882,180 +14656,311 @@ fn agent_studio_items(
 }
 
 fn agent_studio_item_detail_text(
+    i18n: &I18n,
     profile: &AgentProfile,
     item: &AgentStudioItem,
     editable: bool,
     default_agent_name: Option<&str>,
-) -> String {
+) -> Text<'static> {
     match &item.action {
         AgentStudioAction::Edit(AgentStudioField::Description) => {
-            let mut lines = vec![
-                "The description is shown in agent listings and pickers.".to_string(),
-                String::new(),
-            ];
+            let mut lines = vec![app_detail_plain_line(ui_text::t(
+                i18n,
+                "overlay-agent-detail-description-help",
+            ))];
+            lines.push(app_detail_plain_line(String::new()));
             if profile.frontmatter.description.trim().is_empty() {
-                lines.push("Description is currently unset.".to_string());
+                lines.push(app_detail_plain_line(ui_text::t(
+                    i18n,
+                    "overlay-agent-detail-description-unset",
+                )));
             } else {
-                lines.push(profile.frontmatter.description.clone());
+                lines.push(app_detail_plain_line(
+                    profile.frontmatter.description.clone(),
+                ));
             }
-            lines.push(String::new());
-            lines.push(agent_editability_hint(editable));
-            lines.join("\n")
+            lines.push(app_detail_plain_line(String::new()));
+            lines.push(app_detail_plain_line(agent_editability_hint(
+                i18n, editable,
+            )));
+            build_app_detail_text(lines)
         }
         AgentStudioAction::Edit(AgentStudioField::Prompt) => {
-            let mut lines = vec![
-                format!("Prompt length: {} chars", profile.prompt.chars().count()),
-                String::new(),
-            ];
+            let mut lines = vec![app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-detail-prompt-length"),
+                i18n.text_args(
+                    "overlay-agent-detail-prompt-chars",
+                    &crate::fl_args!("count" => profile.prompt.chars().count() as i64),
+                ),
+            )];
+            lines.push(app_detail_plain_line(String::new()));
             if profile.prompt.trim().is_empty() {
-                lines.push("Prompt is currently unset.".to_string());
+                lines.push(app_detail_plain_line(ui_text::t(
+                    i18n,
+                    "overlay-agent-detail-prompt-unset",
+                )));
             } else {
-                lines.push(profile.prompt.clone());
+                lines.push(app_detail_plain_line(profile.prompt.clone()));
             }
-            lines.push(String::new());
-            lines.push(agent_editability_hint(editable));
-            lines.join("\n")
+            lines.push(app_detail_plain_line(String::new()));
+            lines.push(app_detail_plain_line(agent_editability_hint(
+                i18n, editable,
+            )));
+            build_app_detail_text(lines)
         }
         AgentStudioAction::Edit(AgentStudioField::Aliases) => {
-            let mut lines = vec![
-                "Alternate names for invoking this agent.".to_string(),
-                String::new(),
-            ];
+            let mut lines = vec![app_detail_plain_line(ui_text::t(
+                i18n,
+                "overlay-agent-detail-aliases-help",
+            ))];
+            lines.push(app_detail_plain_line(String::new()));
             if profile.frontmatter.aliases.is_empty() {
-                lines.push("No aliases configured.".to_string());
+                lines.push(app_detail_plain_line(ui_text::t(
+                    i18n,
+                    "overlay-agent-detail-aliases-empty",
+                )));
             } else {
-                lines.extend(profile.frontmatter.aliases.iter().cloned());
+                lines.extend(
+                    profile
+                        .frontmatter
+                        .aliases
+                        .iter()
+                        .cloned()
+                        .map(app_detail_plain_line),
+                );
             }
-            lines.push(String::new());
-            lines.push(agent_editability_hint(editable));
-            lines.join("\n")
+            lines.push(app_detail_plain_line(String::new()));
+            lines.push(app_detail_plain_line(agent_editability_hint(
+                i18n, editable,
+            )));
+            build_app_detail_text(lines)
         }
         AgentStudioAction::Edit(AgentStudioField::AllowedEntries) => {
-            let mut lines = vec![
-                "When empty, the agent can use the normal runtime tool surface.".to_string(),
-                String::new(),
-            ];
+            let mut lines = vec![app_detail_plain_line(ui_text::t(
+                i18n,
+                "overlay-agent-detail-allowed-entries-help",
+            ))];
+            lines.push(app_detail_plain_line(String::new()));
             if profile.frontmatter.allowed_tools.is_empty() {
-                lines.push("No allowlist configured.".to_string());
+                lines.push(app_detail_plain_line(ui_text::t(
+                    i18n,
+                    "overlay-agent-detail-allowed-entries-empty",
+                )));
             } else {
-                lines.extend(profile.frontmatter.allowed_tools.iter().cloned());
+                lines.extend(
+                    profile
+                        .frontmatter
+                        .allowed_tools
+                        .iter()
+                        .cloned()
+                        .map(app_detail_plain_line),
+                );
             }
-            lines.push(String::new());
-            lines.push(agent_editability_hint(editable));
-            lines.join("\n")
+            lines.push(app_detail_plain_line(String::new()));
+            lines.push(app_detail_plain_line(agent_editability_hint(
+                i18n, editable,
+            )));
+            build_app_detail_text(lines)
         }
-        AgentStudioAction::OpenPermissionWorkbench => {
-            let lines = vec![
-                format!(
-                    "Summary: {}",
-                    agent_permission_summary(&profile.frontmatter.permission)
-                ),
-                String::new(),
-                permission_pretty_document(&profile.frontmatter.permission),
-                String::new(),
+        AgentStudioAction::OpenPermissionWorkbench => build_app_detail_text(vec![
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-overview-permission"),
+                agent_permission_summary(i18n, &profile.frontmatter.permission),
+            ),
+            app_detail_plain_line(String::new()),
+            app_detail_plain_line(permission_pretty_document_localized(
+                i18n,
+                &profile.frontmatter.permission,
+            )),
+            app_detail_plain_line(String::new()),
+            app_detail_plain_line(ui_text::t(
+                i18n,
                 if editable {
-                    "Enter or p opens the permission workbench.".to_string()
+                    "overlay-agent-detail-open-permission"
                 } else {
-                    "Enter or p opens a read-only permission view for this file-backed profile."
-                        .to_string()
+                    "overlay-agent-detail-open-permission-read-only"
                 },
-            ];
-            lines.join("\n")
-        }
-        AgentStudioAction::SetDefault => format!(
-            "Current default agent: {}\n\nEnter or d sets default.agent to this profile.",
-            default_agent_name.unwrap_or("unset")
-        ),
-        AgentStudioAction::ToggleHidden => {
-            let current = if profile.frontmatter.hidden {
-                "hidden"
-            } else {
-                "visible"
-            };
-            format!(
-                "Current visibility: {current}\nScope: {}\nSource: {}\n\n{}",
-                profile.scope.as_str(),
-                agent_profile_source_label(profile),
+            )),
+        ]),
+        AgentStudioAction::SetDefault => build_app_detail_text(vec![
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-detail-current-default-agent"),
+                default_agent_name
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| ui_text::t(i18n, "value-unset")),
+            ),
+            app_detail_plain_line(String::new()),
+            app_detail_plain_line(ui_text::t(i18n, "overlay-agent-detail-set-default-hint")),
+        ]),
+        AgentStudioAction::ToggleHidden => build_app_detail_text(vec![
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-overview-visibility"),
+                localized_visibility(i18n, profile.frontmatter.hidden),
+            ),
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-overview-scope"),
+                profile.scope.as_str().to_string(),
+            ),
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-overview-source"),
+                agent_profile_source_label_localized(i18n, profile),
+            ),
+            app_detail_plain_line(String::new()),
+            app_detail_plain_line(ui_text::t(
+                i18n,
                 if editable {
-                    "Enter or t toggles hidden/visible and persists the config override."
+                    "overlay-agent-detail-toggle-hidden-hint"
                 } else {
-                    "This profile is file-backed, so hidden/visible must be edited in the source file."
-                }
-            )
-        }
-        AgentStudioAction::OpenSource => format!(
-            "Source: {}\nScope: {}\n\nEnter or o opens the raw source/config file.",
-            agent_profile_source_label(profile),
-            profile.scope.as_str(),
-        ),
-        AgentStudioAction::Edit(_) => format!(
-            "{}\nCurrent value: {}\n\n{}",
-            item.detail,
-            item.value,
-            agent_editability_hint(editable),
-        ),
+                    "overlay-agent-detail-toggle-hidden-read-only"
+                },
+            )),
+        ]),
+        AgentStudioAction::OpenSource => build_app_detail_text(vec![
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-overview-source"),
+                agent_profile_source_label_localized(i18n, profile),
+            ),
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-overview-scope"),
+                profile.scope.as_str().to_string(),
+            ),
+            app_detail_plain_line(String::new()),
+            app_detail_plain_line(ui_text::t(i18n, "overlay-agent-detail-open-source-hint")),
+        ]),
+        AgentStudioAction::Edit(_) => build_app_detail_text(vec![
+            app_detail_plain_line(item.detail.clone()),
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-detail-current-value"),
+                item.value.clone(),
+            ),
+            app_detail_plain_line(String::new()),
+            app_detail_plain_line(agent_editability_hint(i18n, editable)),
+        ]),
     }
 }
 
 fn agent_studio_overview_text(
+    i18n: &I18n,
     profile: &AgentProfile,
     default_agent_name: Option<&str>,
     editable: bool,
-) -> String {
+) -> Text<'static> {
     let mut lines = vec![
-        format!("name: {}", profile.name),
-        format!("scope: {}", profile.scope.as_str()),
-        format!("mode: {}", agent_mode_label(profile.frontmatter.mode)),
-        format!(
-            "visibility: {}",
-            if profile.frontmatter.hidden {
-                "hidden"
-            } else {
-                "visible"
-            }
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-name"),
+            profile.name.clone(),
         ),
-        format!(
-            "default agent: {}",
-            if default_agent_name.is_some_and(|name| name == profile.name.as_str()) {
-                "yes"
-            } else {
-                "no"
-            }
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-scope"),
+            profile.scope.as_str().to_string(),
         ),
-        format!("source: {}", agent_profile_source_label(profile)),
-        format!(
-            "permission: {}",
-            agent_permission_summary(&profile.frontmatter.permission)
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-mode"),
+            agent_mode_display_label(i18n, profile.frontmatter.mode),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-visibility"),
+            localized_visibility(i18n, profile.frontmatter.hidden),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-default-agent"),
+            localized_yes_no(
+                i18n,
+                default_agent_name.is_some_and(|name| name == profile.name.as_str()),
+            ),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-source"),
+            agent_profile_source_label_localized(i18n, profile),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-permission"),
+            agent_permission_summary(i18n, &profile.frontmatter.permission),
         ),
     ];
     if !profile.frontmatter.default.is_empty() {
-        lines.push(format!(
-            "model defaults: {}",
-            agent_default_summary(&profile.frontmatter.default)
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-agent-overview-model-defaults"),
+            agent_default_summary(i18n, &profile.frontmatter.default),
         ));
     }
     if !profile.frontmatter.description.trim().is_empty() {
-        lines.push(String::new());
-        lines.push(profile.frontmatter.description.clone());
+        lines.push(app_detail_plain_line(String::new()));
+        lines.push(app_detail_plain_line(
+            profile.frontmatter.description.clone(),
+        ));
     }
-    lines.push(String::new());
-    lines.push(if editable {
-        "This profile is backed by agena.json and can be edited directly in the TUI.".to_string()
-    } else {
-        "This profile is backed by a markdown source file and is read-only in the TUI.".to_string()
-    });
-    lines.join("\n")
+    lines.push(app_detail_plain_line(String::new()));
+    lines.push(app_detail_plain_line(ui_text::t(
+        i18n,
+        if editable {
+            "overlay-agent-overview-editable"
+        } else {
+            "overlay-agent-overview-read-only"
+        },
+    )));
+    build_app_detail_text(lines)
 }
 
-fn agent_editability_hint(editable: bool) -> String {
+fn build_app_detail_text(lines: Vec<DetailTextLine<'static>>) -> Text<'static> {
+    build_detail_text(lines, &DetailTextSpec::with_label_width(14))
+}
+
+fn app_detail_labeled_line(
+    label: impl Into<String>,
+    value: impl Into<String>,
+) -> DetailTextLine<'static> {
+    let label = label.into();
+    let value = value.into();
+    DetailTextLine::labeled(
+        label,
+        sanitize_terminal_text(value.as_str()),
+        Style::default().fg(Color::DarkGray),
+        Style::default(),
+    )
+}
+
+fn app_detail_plain_line(text: impl Into<String>) -> DetailTextLine<'static> {
+    let text = text.into();
+    DetailTextLine::plain(sanitize_terminal_text(text.as_str()), Style::default())
+}
+
+fn localized_yes_no(i18n: &I18n, value: bool) -> String {
+    ui_text::t(i18n, if value { "value-yes" } else { "value-no" })
+}
+
+fn agent_mode_display_label(i18n: &I18n, mode: agena::agent::AgentMode) -> String {
+    ui_text::t(
+        i18n,
+        match mode {
+            agena::agent::AgentMode::Primary => "value-agent-mode-primary",
+            agena::agent::AgentMode::Subagent => "value-agent-mode-subagent",
+            agena::agent::AgentMode::All => "value-agent-mode-all",
+        },
+    )
+}
+
+fn localized_visibility(i18n: &I18n, hidden: bool) -> String {
+    ui_text::t(
+        i18n,
+        if hidden {
+            "value-hidden"
+        } else {
+            "value-visible"
+        },
+    )
+}
+
+fn agent_editability_hint(i18n: &I18n, editable: bool) -> String {
     if editable {
-        "Enter edits this field in agena.json.".to_string()
+        ui_text::t(i18n, "overlay-agent-detail-editable-hint")
     } else {
-        "This profile is read-only in the TUI because it is backed by a markdown file.".to_string()
+        ui_text::t(i18n, "overlay-agent-detail-read-only-hint")
     }
 }
 
 fn agent_studio_editor_config(
+    i18n: &I18n,
     profile: &AgentProfile,
     field: AgentStudioField,
 ) -> (String, String, String, bool, Editor) {
@@ -13066,53 +14971,49 @@ fn agent_studio_editor_config(
             | AgentStudioField::Aliases
             | AgentStudioField::AllowedEntries
     );
-    let title = format!("Edit {}", agent_studio_field_label(field));
-    let prompt = agent_studio_field_prompt(field).to_string();
-    let footer = if multiline {
-        "Ctrl+S save | Esc cancel".to_string()
-    } else {
-        "Enter save | Esc cancel".to_string()
-    };
+    let title = settings_edit_title(i18n, agent_studio_field_label(i18n, field).as_str());
+    let prompt = agent_studio_field_prompt(i18n, field);
+    let footer = editor_save_footer(i18n, multiline);
     let input = Editor::from_text(agent_studio_field_input_text(profile, field));
     (title, prompt, footer, multiline, input)
 }
 
-fn agent_studio_field_label(field: AgentStudioField) -> &'static str {
-    match field {
-        AgentStudioField::Description => "Description",
-        AgentStudioField::Prompt => "Prompt",
-        AgentStudioField::Mode => "Mode",
-        AgentStudioField::Aliases => "Aliases",
-        AgentStudioField::AllowedEntries => "Allowed Entries",
-        AgentStudioField::Temperature => "Temperature",
-        AgentStudioField::MaxOutputTokens => "Max Output Tokens",
-        AgentStudioField::Steps => "Steps",
-        AgentStudioField::DefaultProvider => "Default Provider",
-        AgentStudioField::DefaultAdapter => "Default Adapter",
-        AgentStudioField::DefaultModel => "Default Model",
-    }
+fn agent_studio_field_label(i18n: &I18n, field: AgentStudioField) -> String {
+    ui_text::t(
+        i18n,
+        match field {
+            AgentStudioField::Description => "agent-studio-field-description",
+            AgentStudioField::Prompt => "agent-studio-field-prompt",
+            AgentStudioField::Mode => "agent-studio-field-mode",
+            AgentStudioField::Aliases => "agent-studio-field-aliases",
+            AgentStudioField::AllowedEntries => "agent-studio-field-allowed-entries",
+            AgentStudioField::Temperature => "agent-studio-field-temperature",
+            AgentStudioField::MaxOutputTokens => "agent-studio-field-max-output-tokens",
+            AgentStudioField::Steps => "agent-studio-field-steps",
+            AgentStudioField::DefaultProvider => "agent-studio-field-default-provider",
+            AgentStudioField::DefaultAdapter => "agent-studio-field-default-adapter",
+            AgentStudioField::DefaultModel => "agent-studio-field-default-model",
+        },
+    )
 }
 
-fn agent_studio_field_prompt(field: AgentStudioField) -> &'static str {
-    match field {
-        AgentStudioField::Description => "Multiline description. Leave blank to clear.",
-        AgentStudioField::Prompt => "Multiline prompt body. Leave blank to clear.",
-        AgentStudioField::Mode => "Enter primary, subagent, or all. Leave blank to clear.",
-        AgentStudioField::Aliases => {
-            "One alias per line. Commas are also accepted. Leave blank to clear."
-        }
-        AgentStudioField::AllowedEntries => {
-            "One runtime entry/tool name per line. Commas are also accepted. Leave blank to clear."
-        }
-        AgentStudioField::Temperature => "Enter a floating-point value. Leave blank to clear.",
-        AgentStudioField::MaxOutputTokens => {
-            "Enter a positive integer token limit. Leave blank to clear."
-        }
-        AgentStudioField::Steps => "Enter a positive integer step cap. Leave blank to clear.",
-        AgentStudioField::DefaultProvider => "Provider id override. Leave blank to clear.",
-        AgentStudioField::DefaultAdapter => "Adapter id override. Leave blank to clear.",
-        AgentStudioField::DefaultModel => "Model id override. Leave blank to clear.",
-    }
+fn agent_studio_field_prompt(i18n: &I18n, field: AgentStudioField) -> String {
+    ui_text::t(
+        i18n,
+        match field {
+            AgentStudioField::Description => "agent-studio-field-prompt-description",
+            AgentStudioField::Prompt => "agent-studio-field-prompt-prompt",
+            AgentStudioField::Mode => "agent-studio-field-prompt-mode",
+            AgentStudioField::Aliases => "agent-studio-field-prompt-aliases",
+            AgentStudioField::AllowedEntries => "agent-studio-field-prompt-allowed-entries",
+            AgentStudioField::Temperature => "agent-studio-field-prompt-temperature",
+            AgentStudioField::MaxOutputTokens => "agent-studio-field-prompt-max-output-tokens",
+            AgentStudioField::Steps => "agent-studio-field-prompt-steps",
+            AgentStudioField::DefaultProvider => "agent-studio-field-prompt-default-provider",
+            AgentStudioField::DefaultAdapter => "agent-studio-field-prompt-default-adapter",
+            AgentStudioField::DefaultModel => "agent-studio-field-prompt-default-model",
+        },
+    )
 }
 
 fn agent_studio_field_input_text(profile: &AgentProfile, field: AgentStudioField) -> String {
@@ -13159,11 +15060,13 @@ fn agent_studio_field_input_text(profile: &AgentProfile, field: AgentStudioField
 }
 
 fn agent_studio_field_setting_value(
+    i18n: &I18n,
     agent_name: &str,
     field: AgentStudioField,
     input: &str,
 ) -> UiResult<(String, Option<JsonValue>)> {
     let trimmed = input.trim();
+    let field_label = agent_studio_field_label(i18n, field);
     let path = match field {
         AgentStudioField::Description => agent_config_path(agent_name, "description"),
         AgentStudioField::Prompt => agent_config_path(agent_name, "prompt"),
@@ -13189,8 +15092,9 @@ fn agent_studio_field_setting_value(
                 match normalized.as_str() {
                     "primary" | "subagent" | "all" => Some(JsonValue::String(normalized)),
                     other => {
-                        return Err(format!(
-                            "invalid mode `{other}`; expected primary, subagent, or all"
+                        return Err(i18n.text_args(
+                            "agent-studio-field-parse-mode",
+                            &crate::fl_args!("field" => field_label.as_str(), "value" => other),
                         ));
                     }
                 }
@@ -13206,11 +15110,17 @@ fn agent_studio_field_setting_value(
             if trimmed.is_empty() {
                 None
             } else {
-                let parsed = trimmed
-                    .parse::<f32>()
-                    .map_err(|error| format!("invalid temperature: {error}"))?;
+                let parsed = trimmed.parse::<f32>().map_err(|_| {
+                    i18n.text_args(
+                        "agent-studio-field-parse-temperature",
+                        &crate::fl_args!("field" => field_label.as_str()),
+                    )
+                })?;
                 if !parsed.is_finite() {
-                    return Err("temperature must be finite".to_string());
+                    return Err(i18n.text_args(
+                        "agent-studio-field-parse-temperature-finite",
+                        &crate::fl_args!("field" => field_label.as_str()),
+                    ));
                 }
                 Some(json!(parsed))
             }
@@ -13219,20 +15129,24 @@ fn agent_studio_field_setting_value(
             if trimmed.is_empty() {
                 None
             } else {
-                Some(json!(trimmed.parse::<u32>().map_err(|error| format!(
-                    "invalid max_output_tokens: {error}"
-                ))?))
+                Some(json!(trimmed.parse::<u32>().map_err(|_| {
+                    i18n.text_args(
+                        "agent-studio-field-parse-max-output-tokens",
+                        &crate::fl_args!("field" => field_label.as_str()),
+                    )
+                })?))
             }
         }
         AgentStudioField::Steps => {
             if trimmed.is_empty() {
                 None
             } else {
-                Some(json!(
-                    trimmed
-                        .parse::<usize>()
-                        .map_err(|error| format!("invalid steps: {error}"))?
-                ))
+                Some(json!(trimmed.parse::<usize>().map_err(|_| {
+                    i18n.text_args(
+                        "agent-studio-field-parse-steps",
+                        &crate::fl_args!("field" => field_label.as_str()),
+                    )
+                })?))
             }
         }
         AgentStudioField::DefaultProvider
@@ -13245,66 +15159,77 @@ fn agent_studio_field_setting_value(
 }
 
 fn agent_permission_studio_items(
+    i18n: &I18n,
     profile: &AgentProfile,
     editable: bool,
 ) -> Vec<AgentPermissionStudioItem> {
     let permission = &profile.frontmatter.permission;
     vec![
         AgentPermissionStudioItem {
-            label: "Inherit Path".to_string(),
-            value: permission_inherit_value_label(permission, AgentPermissionField::InheritPath),
-            detail: "Controls whether path defaults flow in from runtime permissions.".to_string(),
+            label: ui_text::t(i18n, "agent-permission-field-inherit-path"),
+            value: permission_inherit_value_label(
+                i18n,
+                permission,
+                AgentPermissionField::InheritPath,
+            ),
+            detail: ui_text::t(i18n, "agent-permission-item-inherit-path-detail"),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritPath),
         },
         AgentPermissionStudioItem {
-            label: "Inherit Network".to_string(),
-            value: permission_inherit_value_label(permission, AgentPermissionField::InheritNetwork),
-            detail: "Controls whether network defaults flow in from runtime permissions."
-                .to_string(),
+            label: ui_text::t(i18n, "agent-permission-field-inherit-network"),
+            value: permission_inherit_value_label(
+                i18n,
+                permission,
+                AgentPermissionField::InheritNetwork,
+            ),
+            detail: ui_text::t(i18n, "agent-permission-item-inherit-network-detail"),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritNetwork),
         },
         AgentPermissionStudioItem {
-            label: "Inherit Entries".to_string(),
-            value: permission_inherit_value_label(permission, AgentPermissionField::InheritEntries),
-            detail: "Controls whether tool/entry defaults flow in from runtime permissions."
-                .to_string(),
+            label: ui_text::t(i18n, "agent-permission-field-inherit-entries"),
+            value: permission_inherit_value_label(
+                i18n,
+                permission,
+                AgentPermissionField::InheritEntries,
+            ),
+            detail: ui_text::t(i18n, "agent-permission-item-inherit-entries-detail"),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::InheritEntries),
         },
         AgentPermissionStudioItem {
-            label: "Path Section".to_string(),
-            value: agent_path_permission_summary(permission.path.as_ref()),
-            detail: "Structured path policy override as JSON.".to_string(),
+            label: ui_text::t(i18n, "agent-permission-field-path-section"),
+            value: agent_path_permission_summary(i18n, permission.path.as_ref()),
+            detail: ui_text::t(i18n, "agent-permission-item-path-section-detail"),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::PathConfig),
         },
         AgentPermissionStudioItem {
-            label: "Network Section".to_string(),
-            value: agent_network_permission_summary(permission.network.as_ref()),
-            detail: "Structured network policy override as JSON.".to_string(),
+            label: ui_text::t(i18n, "agent-permission-field-network-section"),
+            value: agent_network_permission_summary(i18n, permission.network.as_ref()),
+            detail: ui_text::t(i18n, "agent-permission-item-network-section-detail"),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::NetworkConfig),
         },
         AgentPermissionStudioItem {
-            label: "Entry Section".to_string(),
-            value: agent_tool_permission_summary(permission.tools.as_ref()),
-            detail: "Structured runtime entry/tool policy override as JSON.".to_string(),
+            label: ui_text::t(i18n, "agent-permission-field-entry-section"),
+            value: agent_tool_permission_summary(i18n, permission.tools.as_ref()),
+            detail: ui_text::t(i18n, "agent-permission-item-entry-section-detail"),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::EntryConfig),
         },
         AgentPermissionStudioItem {
-            label: "Full Permission Document".to_string(),
-            value: agent_permission_summary(permission),
-            detail: "Edit the whole agent permission document as JSON.".to_string(),
+            label: ui_text::t(i18n, "agent-permission-field-full-config"),
+            value: agent_permission_summary(i18n, permission),
+            detail: ui_text::t(i18n, "agent-permission-item-full-config-detail"),
             action: AgentPermissionStudioAction::Edit(AgentPermissionField::FullConfig),
         },
         AgentPermissionStudioItem {
             label: if profile.source_path.is_some() {
-                "Open Source File".to_string()
+                ui_text::t(i18n, "agent-studio-item-open-source-file")
             } else {
-                "Open Config File".to_string()
+                ui_text::t(i18n, "agent-studio-item-open-config-file")
             },
-            value: agent_profile_source_label(profile),
+            value: agent_profile_source_label_localized(i18n, profile),
             detail: if editable {
-                "Open agena.json for direct inspection.".to_string()
+                ui_text::t(i18n, "agent-permission-item-open-config-detail")
             } else {
-                "Open the markdown profile backing this agent.".to_string()
+                ui_text::t(i18n, "agent-studio-item-open-source-detail")
             },
             action: AgentPermissionStudioAction::OpenSource,
         },
@@ -13312,85 +15237,134 @@ fn agent_permission_studio_items(
 }
 
 fn agent_permission_studio_item_detail_text(
+    i18n: &I18n,
     profile: &AgentProfile,
     item: &AgentPermissionStudioItem,
     editable: bool,
-) -> String {
+) -> Text<'static> {
     match item.action {
         AgentPermissionStudioAction::Edit(AgentPermissionField::InheritPath)
         | AgentPermissionStudioAction::Edit(AgentPermissionField::InheritNetwork)
         | AgentPermissionStudioAction::Edit(AgentPermissionField::InheritEntries) => {
-            format!(
-                "{}\nCurrent value: {}\n\n{}",
-                item.detail,
-                item.value,
-                if editable {
-                    "Enter edits this inheritance override. Leave the input blank to clear it."
-                } else {
-                    "This profile is read-only here because it is backed by a markdown file."
-                }
-            )
+            build_app_detail_text(vec![
+                app_detail_plain_line(item.detail.clone()),
+                app_detail_labeled_line(
+                    ui_text::t(i18n, "overlay-detail-current-value"),
+                    item.value.clone(),
+                ),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(ui_text::t(
+                    i18n,
+                    if editable {
+                        "overlay-agent-permission-detail-inherit-editable"
+                    } else {
+                        "overlay-agent-permission-detail-inherit-read-only"
+                    },
+                )),
+            ])
         }
         AgentPermissionStudioAction::Edit(AgentPermissionField::PathConfig) => {
-            format!(
-                "{}\n\n{}\n\n{}",
-                item.detail,
-                pretty_json_optional(profile.frontmatter.permission.path.as_ref())
-                    .unwrap_or_else(|| "Section is currently unset.".to_string()),
-                if editable {
-                    "Enter opens a multiline JSON editor for this section."
-                } else {
-                    "This section is read-only here because the profile is file-backed."
-                }
-            )
+            build_app_detail_text(vec![
+                app_detail_plain_line(item.detail.clone()),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(
+                    pretty_json_optional(profile.frontmatter.permission.path.as_ref())
+                        .unwrap_or_else(|| {
+                            ui_text::t(i18n, "overlay-agent-permission-section-unset")
+                        }),
+                ),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(ui_text::t(
+                    i18n,
+                    if editable {
+                        "overlay-agent-permission-detail-section-editable"
+                    } else {
+                        "overlay-agent-permission-detail-section-read-only"
+                    },
+                )),
+            ])
         }
         AgentPermissionStudioAction::Edit(AgentPermissionField::NetworkConfig) => {
-            format!(
-                "{}\n\n{}\n\n{}",
-                item.detail,
-                pretty_json_optional(profile.frontmatter.permission.network.as_ref())
-                    .unwrap_or_else(|| "Section is currently unset.".to_string()),
-                if editable {
-                    "Enter opens a multiline JSON editor for this section."
-                } else {
-                    "This section is read-only here because the profile is file-backed."
-                }
-            )
+            build_app_detail_text(vec![
+                app_detail_plain_line(item.detail.clone()),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(
+                    pretty_json_optional(profile.frontmatter.permission.network.as_ref())
+                        .unwrap_or_else(|| {
+                            ui_text::t(i18n, "overlay-agent-permission-section-unset")
+                        }),
+                ),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(ui_text::t(
+                    i18n,
+                    if editable {
+                        "overlay-agent-permission-detail-section-editable"
+                    } else {
+                        "overlay-agent-permission-detail-section-read-only"
+                    },
+                )),
+            ])
         }
         AgentPermissionStudioAction::Edit(AgentPermissionField::EntryConfig) => {
-            format!(
-                "{}\n\n{}\n\n{}",
-                item.detail,
-                pretty_json_optional(profile.frontmatter.permission.tools.as_ref())
-                    .unwrap_or_else(|| "Section is currently unset.".to_string()),
-                if editable {
-                    "Enter opens a multiline JSON editor for this section."
-                } else {
-                    "This section is read-only here because the profile is file-backed."
-                }
-            )
+            build_app_detail_text(vec![
+                app_detail_plain_line(item.detail.clone()),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(
+                    pretty_json_optional(profile.frontmatter.permission.tools.as_ref())
+                        .unwrap_or_else(|| {
+                            ui_text::t(i18n, "overlay-agent-permission-section-unset")
+                        }),
+                ),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(ui_text::t(
+                    i18n,
+                    if editable {
+                        "overlay-agent-permission-detail-section-editable"
+                    } else {
+                        "overlay-agent-permission-detail-section-read-only"
+                    },
+                )),
+            ])
         }
         AgentPermissionStudioAction::Edit(AgentPermissionField::FullConfig) => {
-            format!(
-                "{}\n\n{}\n\n{}",
-                item.detail,
-                permission_pretty_document(&profile.frontmatter.permission),
-                if editable {
-                    "Enter opens a multiline JSON editor for the full permission document."
-                } else {
-                    "This permission document is read-only here because the profile is file-backed."
-                }
-            )
+            build_app_detail_text(vec![
+                app_detail_plain_line(item.detail.clone()),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(permission_pretty_document_localized(
+                    i18n,
+                    &profile.frontmatter.permission,
+                )),
+                app_detail_plain_line(String::new()),
+                app_detail_plain_line(ui_text::t(
+                    i18n,
+                    if editable {
+                        "overlay-agent-permission-detail-full-editable"
+                    } else {
+                        "overlay-agent-permission-detail-full-read-only"
+                    },
+                )),
+            ])
         }
-        AgentPermissionStudioAction::OpenSource => format!(
-            "Source: {}\nScope: {}\n\nEnter or o opens the raw source/config file.",
-            agent_profile_source_label(profile),
-            profile.scope.as_str(),
-        ),
+        AgentPermissionStudioAction::OpenSource => build_app_detail_text(vec![
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-overview-source"),
+                agent_profile_source_label_localized(i18n, profile),
+            ),
+            app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-agent-overview-scope"),
+                profile.scope.as_str().to_string(),
+            ),
+            app_detail_plain_line(String::new()),
+            app_detail_plain_line(ui_text::t(
+                i18n,
+                "overlay-agent-permission-detail-open-source-hint",
+            )),
+        ]),
     }
 }
 
 fn agent_permission_editor_config(
+    i18n: &I18n,
     profile: &AgentProfile,
     field: AgentPermissionField,
 ) -> (String, String, String, bool, Editor) {
@@ -13401,49 +15375,41 @@ fn agent_permission_editor_config(
             | AgentPermissionField::EntryConfig
             | AgentPermissionField::FullConfig
     );
-    let title = format!("Edit {}", agent_permission_field_label(field));
-    let prompt = agent_permission_field_prompt(field).to_string();
-    let footer = if multiline {
-        "Ctrl+S save | Esc cancel".to_string()
-    } else {
-        "Enter save | Esc cancel".to_string()
-    };
+    let title = settings_edit_title(i18n, agent_permission_field_label(i18n, field).as_str());
+    let prompt = agent_permission_field_prompt(i18n, field);
+    let footer = editor_save_footer(i18n, multiline);
     let input = Editor::from_text(agent_permission_field_input_text(profile, field));
     (title, prompt, footer, multiline, input)
 }
 
-fn agent_permission_field_label(field: AgentPermissionField) -> &'static str {
-    match field {
-        AgentPermissionField::InheritPath => "Inherit Path",
-        AgentPermissionField::InheritNetwork => "Inherit Network",
-        AgentPermissionField::InheritEntries => "Inherit Entries",
-        AgentPermissionField::PathConfig => "Path Section",
-        AgentPermissionField::NetworkConfig => "Network Section",
-        AgentPermissionField::EntryConfig => "Entry Section",
-        AgentPermissionField::FullConfig => "Full Permission Document",
-    }
+fn agent_permission_field_label(i18n: &I18n, field: AgentPermissionField) -> String {
+    ui_text::t(
+        i18n,
+        match field {
+            AgentPermissionField::InheritPath => "agent-permission-field-inherit-path",
+            AgentPermissionField::InheritNetwork => "agent-permission-field-inherit-network",
+            AgentPermissionField::InheritEntries => "agent-permission-field-inherit-entries",
+            AgentPermissionField::PathConfig => "agent-permission-field-path-section",
+            AgentPermissionField::NetworkConfig => "agent-permission-field-network-section",
+            AgentPermissionField::EntryConfig => "agent-permission-field-entry-section",
+            AgentPermissionField::FullConfig => "agent-permission-field-full-config",
+        },
+    )
 }
 
-fn agent_permission_field_prompt(field: AgentPermissionField) -> &'static str {
-    match field {
-        AgentPermissionField::InheritPath
-        | AgentPermissionField::InheritNetwork
-        | AgentPermissionField::InheritEntries => {
-            "Enter true or false. Leave blank to clear the override."
-        }
-        AgentPermissionField::PathConfig => {
-            "Enter a JSON object matching PathPermissionConfig. Leave blank to clear the section."
-        }
-        AgentPermissionField::NetworkConfig => {
-            "Enter a JSON object matching NetworkPermissionConfig. Leave blank to clear the section."
-        }
-        AgentPermissionField::EntryConfig => {
-            "Enter a JSON object matching ToolPermissionConfig. Leave blank to clear the section."
-        }
-        AgentPermissionField::FullConfig => {
-            "Enter a JSON object matching AgentPermissionConfig. Leave blank to clear the whole permission override."
-        }
-    }
+fn agent_permission_field_prompt(i18n: &I18n, field: AgentPermissionField) -> String {
+    ui_text::t(
+        i18n,
+        match field {
+            AgentPermissionField::InheritPath
+            | AgentPermissionField::InheritNetwork
+            | AgentPermissionField::InheritEntries => "agent-permission-field-prompt-inherit",
+            AgentPermissionField::PathConfig => "agent-permission-field-prompt-path-section",
+            AgentPermissionField::NetworkConfig => "agent-permission-field-prompt-network-section",
+            AgentPermissionField::EntryConfig => "agent-permission-field-prompt-entry-section",
+            AgentPermissionField::FullConfig => "agent-permission-field-prompt-full-config",
+        },
+    )
 }
 
 fn agent_permission_field_input_text(
@@ -13490,30 +15456,32 @@ fn agent_permission_field_input_text(
 }
 
 fn agent_permission_field_setting_value(
+    i18n: &I18n,
     agent_name: &str,
     field: AgentPermissionField,
     input: &str,
 ) -> UiResult<(String, Option<JsonValue>)> {
     let path = agent_permission_path(agent_name, field);
     let trimmed = input.trim();
+    let field_label = agent_permission_field_label(i18n, field);
     let value = match field {
         AgentPermissionField::InheritPath
         | AgentPermissionField::InheritNetwork
         | AgentPermissionField::InheritEntries => {
-            parse_optional_bool_input(trimmed)?.map(JsonValue::Bool)
+            parse_optional_bool_input(i18n, field_label.as_str(), trimmed)?.map(JsonValue::Bool)
         }
-        AgentPermissionField::PathConfig => {
-            parse_optional_json_config::<agena::agent::PathPermissionConfig>(trimmed)?
-        }
-        AgentPermissionField::NetworkConfig => {
-            parse_optional_json_config::<agena::agent::NetworkPermissionConfig>(trimmed)?
-        }
-        AgentPermissionField::EntryConfig => {
-            parse_optional_json_config::<agena::agent::ToolPermissionConfig>(trimmed)?
-        }
-        AgentPermissionField::FullConfig => {
-            parse_optional_json_config::<agena::agent::AgentPermissionConfig>(trimmed)?
-        }
+        AgentPermissionField::PathConfig => parse_optional_json_config::<
+            agena::agent::PathPermissionConfig,
+        >(i18n, field_label.as_str(), trimmed)?,
+        AgentPermissionField::NetworkConfig => parse_optional_json_config::<
+            agena::agent::NetworkPermissionConfig,
+        >(i18n, field_label.as_str(), trimmed)?,
+        AgentPermissionField::EntryConfig => parse_optional_json_config::<
+            agena::agent::ToolPermissionConfig,
+        >(i18n, field_label.as_str(), trimmed)?,
+        AgentPermissionField::FullConfig => parse_optional_json_config::<
+            agena::agent::AgentPermissionConfig,
+        >(i18n, field_label.as_str(), trimmed)?,
     };
     Ok((path, value))
 }
@@ -13521,6 +15489,17 @@ fn agent_permission_field_setting_value(
 fn permission_pretty_document(permission: &agena::agent::AgentPermissionConfig) -> String {
     if permission.is_empty() {
         "Permission override is currently unset.".to_string()
+    } else {
+        pretty_json(permission)
+    }
+}
+
+fn permission_pretty_document_localized(
+    i18n: &I18n,
+    permission: &agena::agent::AgentPermissionConfig,
+) -> String {
+    if permission.is_empty() {
+        ui_text::t(i18n, "overlay-agent-permission-document-unset")
     } else {
         pretty_json(permission)
     }
@@ -13542,80 +15521,103 @@ fn permission_inherit_setting_value(
 }
 
 fn permission_inherit_value_label(
+    i18n: &I18n,
     permission: &agena::agent::AgentPermissionConfig,
     field: AgentPermissionField,
 ) -> String {
     match permission_inherit_setting_value(permission, field) {
-        Some(value) => value.to_string(),
-        None => "default(true)".to_string(),
+        Some(value) => localized_yes_no(i18n, value),
+        None => ui_text::t(i18n, "value-default-true"),
     }
 }
 
-fn agent_path_permission_summary(path: Option<&agena::agent::PathPermissionConfig>) -> String {
+fn agent_path_permission_summary(
+    i18n: &I18n,
+    path: Option<&agena::agent::PathPermissionConfig>,
+) -> String {
     let Some(path) = path else {
-        return "unset".to_string();
+        return ui_text::t(i18n, "value-unset");
     };
     let mut parts = Vec::new();
     if path.workspace.is_some() {
-        parts.push("workspace".to_string());
+        parts.push(ui_text::t(i18n, "value-workspace"));
     }
     if path.external.is_some() {
-        parts.push("external".to_string());
+        parts.push(ui_text::t(i18n, "value-external"));
     }
     if !path.rules.is_empty() {
-        parts.push(format!("{} rule(s)", path.rules.len()));
+        parts.push(i18n.text_args(
+            "value-rule-count",
+            &crate::fl_args!("count" => path.rules.len() as i64),
+        ));
     }
     if parts.is_empty() {
-        "custom".to_string()
+        ui_text::t(i18n, "value-custom")
     } else {
-        parts.join(" · ")
+        join_inline_segments(parts)
     }
 }
 
 fn agent_network_permission_summary(
+    i18n: &I18n,
     network: Option<&agena::agent::NetworkPermissionConfig>,
 ) -> String {
     let Some(network) = network else {
-        return "unset".to_string();
+        return ui_text::t(i18n, "value-unset");
     };
     let mut parts = Vec::new();
     if network.internet.is_some() {
-        parts.push("internet".to_string());
+        parts.push(ui_text::t(i18n, "value-internet"));
     }
     if network.private.is_some() {
-        parts.push("private".to_string());
+        parts.push(ui_text::t(i18n, "value-private"));
     }
     if network.loopback.is_some() {
-        parts.push("loopback".to_string());
+        parts.push(ui_text::t(i18n, "value-loopback"));
     }
     if !network.rules.is_empty() {
-        parts.push(format!("{} rule(s)", network.rules.len()));
+        parts.push(i18n.text_args(
+            "value-rule-count",
+            &crate::fl_args!("count" => network.rules.len() as i64),
+        ));
     }
     if parts.is_empty() {
-        "custom".to_string()
+        ui_text::t(i18n, "value-custom")
     } else {
-        parts.join(" · ")
+        join_inline_segments(parts)
     }
 }
 
-fn agent_tool_permission_summary(tools: Option<&agena::agent::ToolPermissionConfig>) -> String {
+fn agent_tool_permission_summary(
+    i18n: &I18n,
+    tools: Option<&agena::agent::ToolPermissionConfig>,
+) -> String {
     let Some(tools) = tools else {
-        return "unset".to_string();
+        return ui_text::t(i18n, "value-unset");
     };
     let mut parts = Vec::new();
     if !tools.tags.is_empty() {
-        parts.push(format!("{} tag(s)", tools.tags.len()));
+        parts.push(i18n.text_args(
+            "value-tag-count",
+            &crate::fl_args!("count" => tools.tags.len() as i64),
+        ));
     }
     if !tools.names.is_empty() {
-        parts.push(format!("{} name(s)", tools.names.len()));
+        parts.push(i18n.text_args(
+            "value-name-count",
+            &crate::fl_args!("count" => tools.names.len() as i64),
+        ));
     }
     if !tools.rules.is_empty() {
-        parts.push(format!("{} rule set(s)", tools.rules.len()));
+        parts.push(i18n.text_args(
+            "value-rule-set-count",
+            &crate::fl_args!("count" => tools.rules.len() as i64),
+        ));
     }
     if parts.is_empty() {
-        "custom".to_string()
+        ui_text::t(i18n, "value-custom")
     } else {
-        parts.join(" · ")
+        join_inline_segments(parts)
     }
 }
 
@@ -13627,29 +15629,38 @@ fn pretty_json<T: Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn parse_optional_json_config<T>(input: &str) -> UiResult<Option<JsonValue>>
+fn parse_optional_json_config<T>(
+    i18n: &I18n,
+    field: &str,
+    input: &str,
+) -> UiResult<Option<JsonValue>>
 where
     T: serde::de::DeserializeOwned + Serialize,
 {
     if input.trim().is_empty() {
         return Ok(None);
     }
-    let parsed =
-        serde_json::from_str::<T>(input).map_err(|error| format!("invalid json: {error}"))?;
+    let parsed = serde_json::from_str::<T>(input).map_err(|error| {
+        i18n.text_args(
+            "agent-permission-field-parse-json",
+            &crate::fl_args!("field" => field, "error" => error.to_string()),
+        )
+    })?;
     serde_json::to_value(parsed)
         .map(Some)
         .map_err(|error| error.to_string())
 }
 
-fn parse_optional_bool_input(input: &str) -> UiResult<Option<bool>> {
+fn parse_optional_bool_input(i18n: &I18n, field: &str, input: &str) -> UiResult<Option<bool>> {
     if input.trim().is_empty() {
         return Ok(None);
     }
     match input.trim().to_ascii_lowercase().as_str() {
         "true" | "yes" | "on" => Ok(Some(true)),
         "false" | "no" | "off" => Ok(Some(false)),
-        other => Err(format!(
-            "invalid boolean `{other}`; expected true/false, yes/no, or on/off"
+        _ => Err(i18n.text_args(
+            "agent-permission-field-parse-bool",
+            &crate::fl_args!("field" => field),
         )),
     }
 }
@@ -13693,14 +15704,13 @@ fn agent_permission_path(agent_name: &str, field: AgentPermissionField) -> Strin
 }
 
 fn settings_studio_provider_items(
+    i18n: &I18n,
     providers: &[ProviderSummaryResource],
 ) -> Vec<SettingsStudioItem> {
     let mut items = vec![SettingsStudioItem {
-        label: "+ New provider".to_string(),
+        label: ui_text::t(i18n, "settings-provider-new-label"),
         value: String::new(),
-        detail:
-            "Create a new provider, list live adapter models, and edit the persisted default route."
-                .to_string(),
+        detail: ui_text::t(i18n, "settings-provider-new-detail"),
         action: SettingsPickerAction::OpenProviderWorkbench,
     }];
     items.extend(providers.iter().map(|provider| SettingsStudioItem {
@@ -13710,14 +15720,9 @@ fn settings_studio_provider_items(
             provider.default_adapter.as_deref().unwrap_or("adapter"),
             provider.default_model
         ),
-        detail: format!(
-            "{} adapter{} configured",
-            provider.adapters.len(),
-            if provider.adapters.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
+        detail: i18n.text_args(
+            "settings-provider-existing-detail",
+            &crate::fl_args!("count" => provider.adapters.len() as i64),
         ),
         action: SettingsPickerAction::OpenProviderWorkbenchFor(provider.provider_id.clone()),
     }));
@@ -13725,24 +15730,24 @@ fn settings_studio_provider_items(
 }
 
 fn settings_studio_model_catalog_items(
+    i18n: &I18n,
     response: &ModelCatalogListResponse,
 ) -> Vec<SettingsStudioItem> {
     vec![SettingsStudioItem {
-        label: "Open Model Catalog".to_string(),
+        label: ui_text::t(i18n, "settings-model-catalog-open-label"),
         value: response.summary.entry_count.to_string(),
-        detail: "Inspect resolved catalog entries and refresh the local model catalog cache."
-            .to_string(),
+        detail: ui_text::t(i18n, "settings-model-catalog-open-detail"),
         action: SettingsPickerAction::OpenModelCatalogWorkbench,
     }]
 }
 
-fn settings_studio_file_items(sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
+fn settings_studio_file_items(i18n: &I18n, sources: &ConfigJsonSources) -> Vec<SettingsStudioItem> {
     vec![SettingsStudioItem {
-        label: "Open agena.json".to_string(),
+        label: ui_text::t(i18n, "settings-files-open-config-label"),
         value: if sources.config_found {
-            "present".to_string()
+            ui_text::t(i18n, "settings-files-open-config-present")
         } else {
-            "create on open".to_string()
+            ui_text::t(i18n, "settings-files-open-config-create")
         },
         detail: sources.config_path.display().to_string(),
         action: SettingsPickerAction::OpenConfigFile,
@@ -13804,55 +15809,55 @@ fn setting_value_input_text(value: &JsonValue) -> String {
 }
 
 fn settings_value_edit_prompt(
+    i18n: &I18n,
     field: SettingsFieldSpec,
     file_value: &JsonValue,
     effective_value: &JsonValue,
 ) -> String {
-    let mut lines = vec![field.description.to_string()];
+    let mut lines = vec![settings_field_display_description(i18n, field)];
     if !file_value.is_null() {
-        lines.push(format!(
-            "File override: {}",
-            format_setting_value_inline(file_value)
+        lines.push(i18n.text_args(
+            "overlay-settings-edit-file-value",
+            &crate::fl_args!("value" => format_setting_value_inline(file_value)),
         ));
         if file_value != effective_value {
-            lines.push(format!(
-                "Effective value: {}",
-                format_setting_value_inline(effective_value)
+            lines.push(i18n.text_args(
+                "overlay-settings-edit-effective-value",
+                &crate::fl_args!("value" => format_setting_value_inline(effective_value)),
             ));
         }
     } else {
-        lines.push(format!(
-            "Effective value: {}",
-            format_setting_value_inline(effective_value)
+        lines.push(i18n.text_args(
+            "overlay-settings-edit-effective-value",
+            &crate::fl_args!("value" => format_setting_value_inline(effective_value)),
         ));
     }
-    lines.push(settings_field_help_suffix(field.kind).to_string());
+    lines.push(settings_field_help_suffix(i18n, field.kind));
     lines.join("\n")
 }
 
-fn runtime_setting_edit_prompt(field: RuntimeSettingSpec, current_summary: &str) -> String {
-    format!(
-        "{}\nCurrent override: {}\n{}",
-        field.description,
-        current_summary,
-        settings_field_help_suffix(field.kind)
-    )
+fn runtime_setting_edit_prompt(
+    i18n: &I18n,
+    field: RuntimeSettingSpec,
+    current_summary: &str,
+) -> String {
+    [
+        runtime_setting_display_description(i18n, field),
+        i18n.text_args(
+            "overlay-runtime-setting-current-value",
+            &crate::fl_args!("value" => current_summary.to_string()),
+        ),
+        settings_field_help_suffix(i18n, field.kind),
+    ]
+    .join("\n")
 }
 
-fn settings_field_help_suffix(kind: SettingsFieldKind) -> &'static str {
+fn settings_field_help_suffix(i18n: &I18n, kind: SettingsFieldKind) -> String {
     match kind {
-        SettingsFieldKind::String => {
-            "Enter text. Leave empty or type `clear` to remove the file override."
-        }
-        SettingsFieldKind::Bool => {
-            "Enter true/false, on/off, yes/no, or 1/0. Leave empty or type `clear` to remove the file override."
-        }
-        SettingsFieldKind::Integer => {
-            "Enter a whole number. Leave empty or type `clear` to remove the file override."
-        }
-        SettingsFieldKind::Float => {
-            "Enter a number. Leave empty or type `clear` to remove the override."
-        }
+        SettingsFieldKind::String => ui_text::t(i18n, "overlay-settings-help-string"),
+        SettingsFieldKind::Bool => ui_text::t(i18n, "overlay-settings-help-bool"),
+        SettingsFieldKind::Integer => ui_text::t(i18n, "overlay-settings-help-integer"),
+        SettingsFieldKind::Float => ui_text::t(i18n, "overlay-settings-help-float"),
     }
 }
 
@@ -13889,7 +15894,10 @@ fn boolean_choice_items(detail: &str) -> Vec<ChoiceItem> {
     vec![choice_item("true", detail), choice_item("false", detail)]
 }
 
-fn provider_studio_default_model_choice_items(dialog: &ProviderStudioOverlay) -> Vec<ChoiceItem> {
+fn provider_studio_default_model_choice_items(
+    i18n: &I18n,
+    dialog: &ProviderStudioOverlay,
+) -> Vec<ChoiceItem> {
     let mut preferred_adapter_id = dialog.draft.default_adapter.trim().to_owned();
     if preferred_adapter_id.is_empty() {
         preferred_adapter_id = provider_studio_selected_adapter_id(dialog).unwrap_or_default();
@@ -13923,41 +15931,70 @@ fn provider_studio_default_model_choice_items(dialog: &ProviderStudioOverlay) ->
             }
             let key =
                 provider_studio_model_key(adapter_models.adapter_id.as_str(), model.id.as_str());
-            if let Some(entry) = dialog.catalog_matches.get(key.as_str()) {
-                detail_parts.push(format!("catalog {}", entry.model_id));
-            } else {
-                detail_parts.push("no catalog match".to_owned());
-            }
-            items.push(choice_item(model.id.to_string(), detail_parts.join(" · ")));
+            detail_parts.push(provider_studio_catalog_match_label(
+                i18n,
+                dialog
+                    .catalog_matches
+                    .get(key.as_str())
+                    .map(|entry| entry.model_id.as_str()),
+            ));
+            items.push(choice_item(
+                model.id.to_string(),
+                join_inline_segments(detail_parts),
+            ));
         }
     }
     dedupe_choice_items(items)
 }
 
-fn provider_studio_profile_choice_items(backend: &Backend) -> Vec<ChoiceItem> {
+fn provider_studio_profile_choice_items(i18n: &I18n, backend: &Backend) -> Vec<ChoiceItem> {
     let mut items = backend
         .list_aws_profile_names()
         .into_iter()
-        .map(|profile| choice_item(profile, "AWS shared config profile"))
+        .map(|profile| choice_item(profile, ui_text::t(i18n, "provider-profile-choice-detail")))
         .collect::<Vec<_>>();
     if !items.iter().any(|item| item.value == "default") {
-        items.insert(0, choice_item("default", "AWS default profile"));
+        items.insert(
+            0,
+            choice_item(
+                "default",
+                ui_text::t(i18n, "provider-profile-default-detail"),
+            ),
+        );
     }
     dedupe_choice_items(items)
 }
 
-fn provider_studio_api_key_env_choice_items() -> Vec<ChoiceItem> {
+fn provider_studio_api_key_env_choice_items(i18n: &I18n) -> Vec<ChoiceItem> {
     let items = vec![
-        choice_item("OPENAI_API_KEY", "OpenAI-compatible API key env var"),
-        choice_item("ANTHROPIC_API_KEY", "Anthropic API key env var"),
-        choice_item("GEMINI_API_KEY", "Gemini API key env var"),
-        choice_item("GITLAB_TOKEN", "GitLab token env var"),
+        choice_item(
+            "OPENAI_API_KEY",
+            ui_text::t(i18n, "provider-api-key-env-openai-detail"),
+        ),
+        choice_item(
+            "ANTHROPIC_API_KEY",
+            ui_text::t(i18n, "provider-api-key-env-anthropic-detail"),
+        ),
+        choice_item(
+            "GEMINI_API_KEY",
+            ui_text::t(i18n, "provider-api-key-env-gemini-detail"),
+        ),
+        choice_item(
+            "GITLAB_TOKEN",
+            ui_text::t(i18n, "provider-api-key-env-gitlab-detail"),
+        ),
         choice_item(
             "GOOGLE_VERTEX_ACCESS_TOKEN",
-            "Google Vertex access token env var",
+            ui_text::t(i18n, "provider-api-key-env-vertex-detail"),
         ),
-        choice_item("SHARED_GATEWAY_API_KEY", "shared gateway API key env var"),
-        choice_item("OPENCODE_API_KEY", "Opencode API key env var"),
+        choice_item(
+            "SHARED_GATEWAY_API_KEY",
+            ui_text::t(i18n, "provider-api-key-env-shared-gateway-detail"),
+        ),
+        choice_item(
+            "OPENCODE_API_KEY",
+            ui_text::t(i18n, "provider-api-key-env-opencode-detail"),
+        ),
     ];
     dedupe_choice_items(items)
 }
@@ -13993,22 +16030,39 @@ fn provider_studio_field_allows_clear(field: ProviderStudioField) -> bool {
     )
 }
 
-fn choice_overlay_clear_detail(action: &ChoiceOverlayAction) -> String {
+fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAction) -> String {
     match action {
-        ChoiceOverlayAction::SettingsField(field) => {
-            format!("Remove the file override for {}.", field.path)
-        }
-        ChoiceOverlayAction::RuntimeSetting(field) => {
-            format!("Remove the current-session override for {}.", field.label)
-        }
-        ChoiceOverlayAction::ProviderStudioField(field) => format!(
-            "Set {} to an empty draft value.",
-            provider_studio_field_label(*field)
+        ChoiceOverlayAction::SettingsField(field) => i18n.text_args(
+            "overlay-choice-clear-settings-detail",
+            &crate::fl_args!("field" => field.path),
         ),
+        ChoiceOverlayAction::RuntimeSetting(field) => i18n.text_args(
+            "overlay-choice-clear-runtime-detail",
+            &crate::fl_args!("field" => runtime_setting_display_label(i18n, *field)),
+        ),
+        ChoiceOverlayAction::ProviderStudioField(field) => i18n.text_args(
+            "overlay-choice-clear-provider-detail",
+            &crate::fl_args!("field" => provider_studio_field_label(i18n, *field)),
+        ),
+        ChoiceOverlayAction::PermissionRuleStudio(field) => match field {
+            PermissionRuleStudioChoiceField::SubjectKind => {
+                ui_text::t(i18n, "overlay-choice-clear-permission-subject")
+            }
+            PermissionRuleStudioChoiceField::PathAccessKind => {
+                ui_text::t(i18n, "overlay-choice-clear-permission-access-kind")
+            }
+            PermissionRuleStudioChoiceField::Scope => {
+                ui_text::t(i18n, "overlay-choice-clear-permission-scope")
+            }
+            PermissionRuleStudioChoiceField::Mode => {
+                ui_text::t(i18n, "overlay-choice-clear-permission-mode")
+            }
+        },
     }
 }
 
 fn parse_settings_field_input(
+    i18n: &I18n,
     field: SettingsFieldSpec,
     input: &str,
 ) -> std::result::Result<Option<JsonValue>, String> {
@@ -14023,80 +16077,64 @@ fn parse_settings_field_input(
                 "true" | "on" | "yes" | "1" => true,
                 "false" | "off" | "no" | "0" => false,
                 _ => {
-                    return Err(format!(
-                        "{} expects a boolean like true/false or on/off",
-                        field.path
+                    return Err(i18n.text_args(
+                        "settings-field-parse-bool",
+                        &crate::fl_args!("field" => field.path),
                     ));
                 }
             };
             Ok(Some(JsonValue::Bool(value)))
         }
         SettingsFieldKind::Integer => {
-            let value = trimmed
-                .parse::<u64>()
-                .map_err(|_| format!("{} expects an unsigned integer value", field.path))?;
+            let value = trimmed.parse::<u64>().map_err(|_| {
+                i18n.text_args(
+                    "settings-field-parse-integer",
+                    &crate::fl_args!("field" => field.path),
+                )
+            })?;
             Ok(Some(JsonValue::from(value)))
         }
         SettingsFieldKind::Float => {
-            let value = trimmed
-                .parse::<f64>()
-                .map_err(|_| format!("{} expects a numeric value", field.path))?;
+            let value = trimmed.parse::<f64>().map_err(|_| {
+                i18n.text_args(
+                    "settings-field-parse-float",
+                    &crate::fl_args!("field" => field.path),
+                )
+            })?;
             Ok(Some(JsonValue::from(value)))
-        }
-    }
-}
-
-impl ProviderStudioFocus {
-    fn next(self, show_provider_list: bool) -> Self {
-        match (show_provider_list, self) {
-            (true, Self::Fields) => Self::Adapters,
-            (true, Self::Adapters) => Self::Models,
-            (true, Self::Models) => Self::Fields,
-            (false, Self::Fields) => Self::Adapters,
-            (false, Self::Adapters) => Self::Models,
-            (false, Self::Models) => Self::Fields,
-        }
-    }
-
-    fn prev(self, show_provider_list: bool) -> Self {
-        match (show_provider_list, self) {
-            (true, Self::Fields) => Self::Models,
-            (true, Self::Adapters) => Self::Fields,
-            (true, Self::Models) => Self::Adapters,
-            (false, Self::Fields) => Self::Models,
-            (false, Self::Adapters) => Self::Fields,
-            (false, Self::Models) => Self::Adapters,
         }
     }
 }
 
 fn provider_studio_provider_rows(
+    i18n: &I18n,
     providers: &[ProviderSummaryResource],
 ) -> Vec<ProviderStudioProviderRow> {
     let mut rows = vec![ProviderStudioProviderRow {
         provider_id: None,
-        label: "+ New provider".to_owned(),
-        detail: "Empty provider draft".to_owned(),
+        label: ui_text::t(i18n, "settings-provider-new-label"),
+        detail: ui_text::t(i18n, "overlay-provider-studio-new-provider-detail"),
     }];
     rows.extend(providers.iter().map(|provider| ProviderStudioProviderRow {
         provider_id: Some(provider.provider_id.clone()),
         label: provider.provider_id.clone(),
-        detail: format!(
-            "{} / {} · {} adapter{}",
-            provider.default_adapter.as_deref().unwrap_or("adapter"),
-            provider.default_model,
-            provider.adapters.len(),
-            if provider.adapters.len() == 1 {
-                ""
-            } else {
-                "s"
-            }
+        detail: i18n.text_args(
+            "overlay-provider-studio-provider-row-detail",
+            &crate::fl_args!(
+                "adapter" => provider
+                    .default_adapter
+                    .clone()
+                    .unwrap_or_else(|| settings_choice_adapter_fallback(i18n)),
+                "model" => provider.default_model.clone(),
+                "count" => provider.adapters.len() as i64,
+            ),
         ),
     }));
     rows
 }
 
 fn session_model_choice_item(
+    i18n: &I18n,
     provider_id: &str,
     default_adapter: Option<&str>,
     model: ProviderModel,
@@ -14119,13 +16157,23 @@ fn session_model_choice_item(
         .to_owned();
     let adapter_label = adapter_id
         .clone()
-        .unwrap_or_else(|| default_adapter.unwrap_or("default").to_owned());
+        .unwrap_or_else(|| ui_text::t(i18n, "value-default"));
     let context_window = model
         .metadata
         .limits
         .context_window_tokens
-        .map(|value| format!("ctx {value}"))
-        .unwrap_or_else(|| "ctx ?".to_string());
+        .map(|value| {
+            i18n.text_args(
+                "session-model-context-window",
+                &crate::fl_args!("value" => value as i64),
+            )
+        })
+        .unwrap_or_else(|| {
+            i18n.text_args(
+                "session-model-context-window",
+                &crate::fl_args!("value" => ui_text::t(i18n, "value-unknown")),
+            )
+        });
     let mut detail_parts = vec![provider_id.to_owned(), adapter_label, context_window];
     if !display_name.is_empty() && display_name != model.id.as_str() {
         detail_parts.push(display_name.clone());
@@ -14149,10 +16197,10 @@ fn session_model_choice_item(
                 .adapter_id
                 .as_ref()
                 .map(ToString::to_string)
-                .unwrap_or_else(|| "default".to_owned()),
+                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             model.id
         ),
-        detail: detail_parts.join(" · "),
+        detail: join_inline_segments(detail_parts),
         search_text,
         model: model_ref,
     }
@@ -14208,7 +16256,7 @@ impl SessionViewMode {
 
 impl SessionListState {
     fn current_selected(&self) -> Option<&SessionResource> {
-        self.items.get(self.selected)
+        self.list.selected_item()
     }
 
     fn current_selected_id(&self) -> Option<i64> {
@@ -14216,22 +16264,11 @@ impl SessionListState {
     }
 
     fn clamp_selection(&mut self) {
-        if self.items.is_empty() {
-            self.selected = 0;
-        } else {
-            self.selected = min(self.selected, self.items.len().saturating_sub(1));
-        }
+        self.list.clamp_selection();
     }
 
     fn move_selection(&mut self, delta: isize) {
-        if self.items.is_empty() {
-            self.selected = 0;
-            return;
-        }
-
-        let last = self.items.len().saturating_sub(1) as isize;
-        let next = (self.selected as isize + delta).clamp(0, last);
-        self.selected = next as usize;
+        self.list.move_selection(delta);
     }
 
     fn should_load_more(&self) -> bool {
@@ -14239,8 +16276,13 @@ impl SessionListState {
     }
 
     fn select_by_id(&mut self, session_id: i64) -> bool {
-        if let Some(index) = self.items.iter().position(|item| item.id == session_id) {
-            self.selected = index;
+        if let Some(index) = self
+            .list
+            .items
+            .iter()
+            .position(|item| item.id == session_id)
+        {
+            self.list.selected = index;
             true
         } else {
             false
@@ -14612,6 +16654,7 @@ impl TranscriptState {
             follow_tail: true,
             scroll: 0,
             cursor_line: 0,
+            block_cursor: None,
             search_query: String::new(),
             search_match_index: None,
             execution: None,
@@ -14637,6 +16680,7 @@ impl TranscriptState {
         self.follow_tail = true;
         self.scroll = 0;
         self.cursor_line = 0;
+        self.block_cursor = None;
         self.execution = None;
         self.last_event_seq = None;
         self.search_query.clear();
@@ -14813,6 +16857,140 @@ impl TranscriptState {
         self.set_cursor_line(width, height, line);
     }
 
+    fn highlighted_block_key(&self) -> Option<TranscriptNodeKey> {
+        self.block_cursor.as_ref().map(|cursor| cursor.key.clone())
+    }
+
+    fn highlighted_block_range(&mut self, width: u16) -> Option<Range<usize>> {
+        let key = self.highlighted_block_key()?;
+        let rendered = self.rendered(width);
+        rendered
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .map(|node| node.start_line..node.end_line)
+    }
+
+    fn step_line_with_block_selection(
+        &mut self,
+        width: u16,
+        height: u16,
+        direction: TranscriptMoveDirection,
+    ) {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            self.block_cursor = None;
+            self.cursor_line = 0;
+            return;
+        }
+
+        let current_line = min(self.cursor_line, total_lines.saturating_sub(1));
+        if let Some(block_cursor) = self.block_cursor.as_ref() {
+            let highlighted_key = block_cursor.key.clone();
+            let highlighted_direction = block_cursor.direction;
+            if let Some(current_node) = self.current_cursor_node_cloned(width) {
+                if current_node.key == highlighted_key && highlighted_direction == direction {
+                    self.block_cursor = None;
+                    self.set_cursor_line(width, height, current_line);
+                    return;
+                }
+            }
+        }
+
+        let next_line = match direction {
+            TranscriptMoveDirection::Up => current_line.saturating_sub(1),
+            TranscriptMoveDirection::Down => min(
+                current_line.saturating_add(1),
+                total_lines.saturating_sub(1),
+            ),
+        };
+        if next_line == current_line {
+            self.block_cursor = None;
+            self.set_cursor_line(width, height, current_line);
+            return;
+        }
+
+        let (current_node, next_node) = {
+            let rendered = self.rendered(width);
+            (
+                rendered
+                    .line_nodes
+                    .get(current_line)
+                    .and_then(|value| *value),
+                rendered.line_nodes.get(next_line).and_then(|value| *value),
+            )
+        };
+        if let Some(next_node_index) = next_node
+            && current_node != Some(next_node_index)
+        {
+            self.set_block_cursor(width, height, next_node_index, direction);
+            return;
+        }
+
+        self.block_cursor = None;
+        self.set_cursor_line(width, height, next_line);
+    }
+
+    fn step_block(&mut self, width: u16, height: u16, direction: TranscriptMoveDirection) {
+        let target_node = match self.current_highlighted_node_index(width) {
+            Some(current) => {
+                let rendered = self.rendered(width);
+                match direction {
+                    TranscriptMoveDirection::Up => current.checked_sub(1),
+                    TranscriptMoveDirection::Down => {
+                        (current + 1 < rendered.nodes.len()).then_some(current + 1)
+                    }
+                }
+            }
+            None => {
+                let cursor_line = self.cursor_line;
+                let rendered = self.rendered(width);
+                match direction {
+                    TranscriptMoveDirection::Up => rendered
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(_, node)| node.end_line <= cursor_line)
+                        .map(|(index, _)| index),
+                    TranscriptMoveDirection::Down => rendered
+                        .nodes
+                        .iter()
+                        .enumerate()
+                        .find(|(_, node)| node.start_line > cursor_line)
+                        .map(|(index, _)| index),
+                }
+            }
+        };
+        if let Some(target_node) = target_node {
+            self.set_block_cursor(width, height, target_node, direction);
+        }
+    }
+
+    fn move_by_blocks(
+        &mut self,
+        width: u16,
+        height: u16,
+        direction: TranscriptMoveDirection,
+        count: usize,
+    ) {
+        for _ in 0..count.max(1) {
+            self.step_block(width, height, direction);
+        }
+    }
+
+    fn scroll_by_lines_with_blocks(
+        &mut self,
+        width: u16,
+        height: u16,
+        direction: TranscriptMoveDirection,
+        count: usize,
+    ) {
+        for _ in 0..count.max(1) {
+            self.step_line_with_block_selection(width, height, direction);
+        }
+    }
+
     fn should_load_older(&self) -> bool {
         self.session_id.is_some()
             && self.has_more_older
@@ -14929,22 +17107,28 @@ impl TranscriptState {
             self.cursor_line,
             self.rendered(width).lines.len().saturating_sub(1),
         );
+        if self.current_highlighted_node_index(width).is_none() {
+            self.block_cursor = None;
+        }
     }
 
     fn scroll_to_bottom(&mut self, width: u16, height: u16) {
         self.scroll = self.max_scroll(width, height);
         self.follow_tail = true;
         self.cursor_line = self.rendered(width).lines.len().saturating_sub(1);
+        self.block_cursor = None;
     }
 
     fn scroll_to_top(&mut self, width: u16, height: u16) {
         self.scroll = 0;
         self.cursor_line = 0;
+        self.block_cursor = None;
         self.follow_tail = self.is_at_bottom(width, height);
     }
 
     fn scroll_by_lines(&mut self, width: u16, height: u16, delta: isize) {
         self.follow_tail = false;
+        self.block_cursor = None;
         let next = if delta.is_negative() {
             self.cursor_line.saturating_sub(delta.unsigned_abs())
         } else {
@@ -14995,6 +17179,7 @@ impl TranscriptState {
         } else {
             min(target, total_lines.saturating_sub(1))
         };
+        self.block_cursor = None;
         self.follow_tail = false;
         let visible = height.max(1) as usize;
         if self.cursor_line < self.scroll {
@@ -15007,17 +17192,61 @@ impl TranscriptState {
     }
 
     fn current_cursor_node<'a>(&'a mut self, width: u16) -> Option<&'a RenderedTranscriptNode> {
-        let cursor_line = self.cursor_line;
+        let node_index = self.current_highlighted_node_index(width)?;
         let rendered = self.rendered(width);
-        let node_index = rendered
-            .line_nodes
-            .get(cursor_line)
-            .and_then(|value| *value)?;
         rendered.nodes.get(node_index)
     }
 
     fn current_cursor_node_cloned(&mut self, width: u16) -> Option<RenderedTranscriptNode> {
         self.current_cursor_node(width).cloned()
+    }
+
+    fn current_highlighted_node_index(&mut self, width: u16) -> Option<usize> {
+        if let Some(block_cursor) = self.block_cursor.as_ref() {
+            let highlighted_key = block_cursor.key.clone();
+            let block_index = {
+                let rendered = self.rendered(width);
+                rendered
+                    .nodes
+                    .iter()
+                    .position(|node| node.key == highlighted_key)
+            };
+            if let Some(index) = block_index {
+                return Some(index);
+            }
+            self.block_cursor = None;
+        }
+        let cursor_line = self.cursor_line;
+        let rendered = self.rendered(width);
+        rendered
+            .line_nodes
+            .get(cursor_line)
+            .and_then(|value| *value)
+    }
+
+    fn set_block_cursor(
+        &mut self,
+        width: u16,
+        height: u16,
+        node_index: usize,
+        direction: TranscriptMoveDirection,
+    ) {
+        let target_line = {
+            let rendered = self.rendered(width);
+            let Some(node) = rendered.nodes.get(node_index) else {
+                return;
+            };
+            match direction {
+                TranscriptMoveDirection::Up => node.end_line.saturating_sub(1),
+                TranscriptMoveDirection::Down => node.start_line,
+            }
+        };
+        self.set_cursor_line(width, height, target_line);
+        let key = {
+            let rendered = self.rendered(width);
+            rendered.nodes.get(node_index).map(|node| node.key.clone())
+        };
+        self.block_cursor = key.map(|key| TranscriptBlockCursor { key, direction });
     }
 }
 
@@ -15047,881 +17276,6 @@ impl RenderedLine {
 
     fn dim(text: impl Into<String>) -> Self {
         Self::plain(text, Style::default().fg(Color::DarkGray))
-    }
-}
-
-impl Editor {
-    fn from_text(text: String) -> Self {
-        let mut editor = Self::default();
-        editor.set_text(text);
-        editor
-    }
-
-    fn text(&self) -> &str {
-        &self.text
-    }
-
-    fn set_text(&mut self, text: String) {
-        self.text = text;
-        self.cursor = self.text.len();
-        self.preferred_column = None;
-        self.elements.clear();
-        self.paste_burst = PasteBurst::default();
-    }
-
-    fn set_elements(&mut self, elements: Vec<Range<usize>>) {
-        let mut normalized = elements
-            .into_iter()
-            .filter_map(|range| {
-                let start = min(range.start, self.text.len());
-                let end = min(range.end, self.text.len());
-                (start < end).then_some(EditorElement { range: start..end })
-            })
-            .collect::<Vec<_>>();
-        normalized.sort_by_key(|element| element.range.start);
-        normalized.dedup_by(|a, b| a.range == b.range);
-        self.elements = normalized;
-        self.cursor = self.clamp_pos_to_nearest_boundary(self.cursor);
-    }
-
-    fn draft_elements(&self) -> Vec<Range<usize>> {
-        self.elements
-            .iter()
-            .map(|element| element.range.clone())
-            .collect()
-    }
-
-    fn element_texts(&self) -> Vec<String> {
-        self.elements
-            .iter()
-            .filter_map(|element| self.text.get(element.range.clone()).map(str::to_owned))
-            .collect()
-    }
-
-    fn clear(&mut self) {
-        self.text.clear();
-        self.cursor = 0;
-        self.preferred_column = None;
-        self.elements.clear();
-        self.paste_burst = PasteBurst::default();
-    }
-
-    fn insert_char(&mut self, ch: char) {
-        let mut buffer = [0_u8; 4];
-        self.insert_str(ch.encode_utf8(&mut buffer));
-    }
-
-    fn insert_str(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        let at = self.clamp_pos_for_insertion(self.cursor);
-        self.insert_str_at(at, text);
-    }
-
-    fn insert_newline(&mut self) {
-        self.insert_char('\n');
-    }
-
-    fn insert_element(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        let start = self.clamp_pos_for_insertion(self.cursor);
-        self.insert_str_at(start, text);
-        let end = start + text.len();
-        self.elements.push(EditorElement { range: start..end });
-        self.elements.sort_by_key(|element| element.range.start);
-        self.cursor = end;
-        self.preferred_column = None;
-    }
-
-    fn logical_line_count(&self) -> usize {
-        split_editor_lines_with_offsets(self.text.as_str()).len()
-    }
-
-    fn handle_line_input_key(&mut self, key: KeyEvent) {
-        self.handle_input_key(key, false);
-    }
-
-    fn handle_multiline_input_key(&mut self, key: KeyEvent) {
-        self.handle_input_key(key, true);
-    }
-
-    fn render_view(&self, width: u16, height: u16) -> EditorView {
-        let width = max(width as usize, 1);
-        let height = max(height as usize, 1);
-        let lines = split_editor_lines_with_offsets(self.text.as_str());
-        let current_line_index = self.current_line_index();
-        let current_col = self.current_display_column();
-        let hscroll = current_col.saturating_sub(width.saturating_sub(1));
-        let vscroll = current_line_index.saturating_sub(height.saturating_sub(1));
-        let visible_lines = lines
-            .iter()
-            .skip(vscroll)
-            .take(height)
-            .map(|range| {
-                slice_display_window_styled(
-                    self.text.as_str(),
-                    range.clone(),
-                    hscroll,
-                    width,
-                    self.elements.as_slice(),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        EditorView {
-            lines: visible_lines,
-            cursor_x: min(current_col.saturating_sub(hscroll), u16::MAX as usize) as u16,
-            cursor_y: min(
-                current_line_index.saturating_sub(vscroll),
-                u16::MAX as usize,
-            ) as u16,
-        }
-    }
-
-    fn handle_input_key(&mut self, key: KeyEvent, multiline: bool) {
-        let now = Instant::now();
-        self.flush_pending_input_if_due(now);
-
-        match key {
-            KeyEvent {
-                code: KeyCode::Char('\u{0001}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('a'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.move_home(true);
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0002}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Left,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.move_left();
-            }
-            KeyEvent {
-                code: KeyCode::Left,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL)
-                || (modifiers.contains(KeyModifiers::ALT) && !is_altgr(modifiers)) =>
-            {
-                self.prepare_for_command();
-                self.move_word_left();
-            }
-            KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
-                self.prepare_for_command();
-                self.move_word_left();
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0005}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('e'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.move_end(true);
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0006}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('f'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Right,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.move_right();
-            }
-            KeyEvent {
-                code: KeyCode::Right,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::CONTROL)
-                || (modifiers.contains(KeyModifiers::ALT) && !is_altgr(modifiers)) =>
-            {
-                self.prepare_for_command();
-                self.move_word_right();
-            }
-            KeyEvent {
-                code: KeyCode::Char('f'),
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
-                self.prepare_for_command();
-                self.move_word_right();
-            }
-            KeyEvent {
-                code: KeyCode::Up,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if multiline => {
-                self.prepare_for_command();
-                self.move_up();
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0010}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('p'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } if multiline => {
-                self.prepare_for_command();
-                self.move_up();
-            }
-            KeyEvent {
-                code: KeyCode::Down,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } if multiline => {
-                self.prepare_for_command();
-                self.move_down();
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{000e}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('n'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } if multiline => {
-                self.prepare_for_command();
-                self.move_down();
-            }
-            KeyEvent {
-                code: KeyCode::Home,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.move_home(false);
-            }
-            KeyEvent {
-                code: KeyCode::End, ..
-            } => {
-                self.prepare_for_command();
-                self.move_end(false);
-            }
-            KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers,
-                ..
-            } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.prepare_for_command();
-                self.delete_backward_word();
-            }
-            KeyEvent {
-                code: KeyCode::Backspace,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
-                self.prepare_for_command();
-                self.delete_backward_word();
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0008}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Backspace,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.backspace();
-            }
-            KeyEvent {
-                code: KeyCode::Delete,
-                modifiers,
-                ..
-            } if modifiers.contains(KeyModifiers::ALT) => {
-                self.prepare_for_command();
-                self.delete_forward_word();
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0004}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Delete,
-                modifiers: KeyModifiers::NONE,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.delete();
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0017}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('w'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.delete_backward_word();
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0015}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('u'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.kill_to_start_of_line(multiline);
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{000b}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('k'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.kill_to_end_of_line(multiline);
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{0019}'),
-                modifiers: KeyModifiers::NONE,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('y'),
-                modifiers: KeyModifiers::CONTROL,
-                ..
-            } => {
-                self.prepare_for_command();
-                self.yank();
-            }
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers,
-                ..
-            } if is_altgr(modifiers) => {
-                self.handle_plain_char(c, now);
-            }
-            KeyEvent {
-                code: KeyCode::Char(c),
-                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
-                ..
-            } => {
-                self.handle_plain_char(c, now);
-            }
-            _ => {}
-        }
-    }
-
-    fn should_insert_newline_on_enter(&mut self) -> bool {
-        let now = Instant::now();
-        self.flush_pending_input_if_due(now);
-        self.paste_burst
-            .newline_should_insert_instead_of_submit(now)
-    }
-
-    fn insert_explicit_newline(&mut self) {
-        self.flush_all_pending_input();
-        self.insert_newline();
-        self.paste_burst.clear_window_after_non_char();
-    }
-
-    fn insert_newline_from_enter(&mut self) {
-        let now = Instant::now();
-        self.flush_pending_input_if_due(now);
-        if self.paste_burst.append_newline_if_active(now) {
-            return;
-        }
-        self.flush_all_pending_input();
-        self.insert_newline();
-        self.paste_burst.clear_window_after_non_char();
-    }
-
-    fn flush_pending_input_if_due(&mut self, now: Instant) {
-        match self.paste_burst.flush_if_due(now) {
-            PasteFlushResult::Paste(text) => self.insert_str(text.as_str()),
-            PasteFlushResult::Typed(ch) => self.insert_char(ch),
-            PasteFlushResult::None => {}
-        }
-    }
-
-    fn flush_all_pending_input(&mut self) {
-        match self.paste_burst.flush_now() {
-            PasteFlushResult::Paste(text) => self.insert_str(text.as_str()),
-            PasteFlushResult::Typed(ch) => self.insert_char(ch),
-            PasteFlushResult::None => {}
-        }
-    }
-
-    fn prepare_for_command(&mut self) {
-        self.flush_all_pending_input();
-        self.paste_burst.clear_window_after_non_char();
-    }
-
-    fn handle_plain_char(&mut self, ch: char, now: Instant) {
-        match self.paste_burst.on_plain_char(ch, now) {
-            PasteCharDecision::RetainFirstChar => {}
-            PasteCharDecision::BufferAppend | PasteCharDecision::BeginBufferFromPending => {
-                self.paste_burst.append_char_to_buffer(ch, now);
-            }
-            PasteCharDecision::BeginBuffer { retro_chars } => {
-                if let Some(retro) = self.decide_retro_grab(retro_chars as usize) {
-                    self.remove_range(retro.start_byte, self.cursor);
-                    self.paste_burst
-                        .begin_with_retro_grabbed(retro.grabbed, now);
-                    self.paste_burst.append_char_to_buffer(ch, now);
-                } else {
-                    self.flush_all_pending_input();
-                    self.insert_char(ch);
-                }
-            }
-        }
-    }
-
-    fn move_left(&mut self) {
-        self.cursor = self.prev_atomic_boundary(self.cursor);
-        self.preferred_column = None;
-    }
-
-    fn move_right(&mut self) {
-        self.cursor = self.next_atomic_boundary(self.cursor);
-        self.preferred_column = None;
-    }
-
-    fn move_word_left(&mut self) {
-        self.cursor = self.beginning_of_previous_word();
-        self.preferred_column = None;
-    }
-
-    fn move_word_right(&mut self) {
-        self.cursor = self.end_of_next_word();
-        self.preferred_column = None;
-    }
-
-    fn move_home(&mut self, move_up_at_bol: bool) {
-        let bol = self.current_line_start();
-        if move_up_at_bol && self.cursor == bol && bol > 0 {
-            self.cursor = self.clamp_pos_to_nearest_boundary(self.beginning_of_line(bol - 1));
-        } else {
-            self.cursor = self.clamp_pos_to_nearest_boundary(bol);
-        }
-        self.preferred_column = None;
-    }
-
-    fn move_end(&mut self, move_down_at_eol: bool) {
-        let eol = self.current_line_end();
-        if move_down_at_eol && self.cursor == eol && eol < self.text.len() {
-            self.cursor = self.clamp_pos_to_nearest_boundary(self.end_of_line(eol + 1));
-        } else {
-            self.cursor = self.clamp_pos_to_nearest_boundary(eol);
-        }
-        self.preferred_column = None;
-    }
-
-    fn move_up(&mut self) {
-        let current_start = self.current_line_start();
-        if current_start == 0 {
-            return;
-        }
-        let target_end = current_start.saturating_sub(1);
-        let target_start = self.text[..target_end]
-            .rfind('\n')
-            .map(|index| index + 1)
-            .unwrap_or(0);
-        let target_col = self
-            .preferred_column
-            .unwrap_or_else(|| self.current_display_column());
-        self.cursor = byte_index_at_display_column(
-            &self.text[target_start..target_end],
-            target_start,
-            target_col,
-        );
-        self.cursor = self.clamp_pos_to_nearest_boundary(self.cursor);
-        self.preferred_column = Some(target_col);
-    }
-
-    fn move_down(&mut self) {
-        let current_end = self.current_line_end();
-        if current_end >= self.text.len() {
-            return;
-        }
-        let target_start = current_end + 1;
-        let target_end = self.text[target_start..]
-            .find('\n')
-            .map(|index| target_start + index)
-            .unwrap_or(self.text.len());
-        let target_col = self
-            .preferred_column
-            .unwrap_or_else(|| self.current_display_column());
-        self.cursor = byte_index_at_display_column(
-            &self.text[target_start..target_end],
-            target_start,
-            target_col,
-        );
-        self.cursor = self.clamp_pos_to_nearest_boundary(self.cursor);
-        self.preferred_column = Some(target_col);
-    }
-
-    fn backspace(&mut self) {
-        let previous = self.prev_atomic_boundary(self.cursor);
-        if previous < self.cursor {
-            self.remove_range(previous, self.cursor);
-        }
-    }
-
-    fn delete(&mut self) {
-        let next = self.next_atomic_boundary(self.cursor);
-        if next > self.cursor {
-            self.remove_range(self.cursor, next);
-        }
-    }
-
-    fn delete_backward_word(&mut self) {
-        let start = self.beginning_of_previous_word();
-        self.kill_buffer = self.remove_range(start, self.cursor);
-    }
-
-    fn delete_forward_word(&mut self) {
-        let end = self.end_of_next_word();
-        self.kill_buffer = self.remove_range(self.cursor, end);
-    }
-
-    fn kill_to_start_of_line(&mut self, multiline: bool) {
-        let start = self.current_line_start();
-        if self.cursor == start && multiline && start > 0 {
-            self.kill_buffer = self.remove_range(start - 1, start);
-        } else {
-            self.kill_buffer = self.remove_range(start, self.cursor);
-        }
-    }
-
-    fn kill_to_end_of_line(&mut self, multiline: bool) {
-        let end = self.current_line_end();
-        if self.cursor == end && multiline && end < self.text.len() {
-            self.kill_buffer = self.remove_range(self.cursor, end + 1);
-        } else {
-            self.kill_buffer = self.remove_range(self.cursor, end);
-        }
-    }
-
-    fn yank(&mut self) {
-        if !self.kill_buffer.is_empty() {
-            let text = self.kill_buffer.clone();
-            self.insert_str(text.as_str());
-        }
-    }
-
-    fn remove_range(&mut self, start: usize, end: usize) -> String {
-        let range = self.expand_range_to_element_boundaries(
-            min(start, self.text.len())..min(end, self.text.len()),
-        );
-        if range.start >= range.end {
-            return String::new();
-        }
-        let removed = self.text[range.clone()].to_string();
-        self.text.replace_range(range.clone(), "");
-        self.update_elements_after_replace(range.start, range.end, 0);
-        self.cursor = self.clamp_pos_to_nearest_boundary(range.start);
-        self.preferred_column = None;
-        removed
-    }
-
-    fn current_line_index(&self) -> usize {
-        self.text[..self.cursor]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count()
-    }
-
-    /// True when there's no preceding newline before the cursor — used by
-    /// the queue-edit shortcut so UP only steals the keystroke when the
-    /// user is on the editor's first line.
-    fn cursor_on_first_line(&self) -> bool {
-        self.current_line_index() == 0
-    }
-
-    fn current_line_start(&self) -> usize {
-        self.text[..self.cursor]
-            .rfind('\n')
-            .map(|index| index + 1)
-            .unwrap_or(0)
-    }
-
-    fn current_line_end(&self) -> usize {
-        self.text[self.cursor..]
-            .find('\n')
-            .map(|index| self.cursor + index)
-            .unwrap_or(self.text.len())
-    }
-
-    fn beginning_of_line(&self, pos: usize) -> usize {
-        let pos = min(pos, self.text.len());
-        self.text[..pos]
-            .rfind('\n')
-            .map(|index| index + 1)
-            .unwrap_or(0)
-    }
-
-    fn end_of_line(&self, pos: usize) -> usize {
-        let pos = min(pos, self.text.len());
-        self.text[pos..]
-            .find('\n')
-            .map(|index| pos + index)
-            .unwrap_or(self.text.len())
-    }
-
-    fn current_display_column(&self) -> usize {
-        UnicodeWidthStr::width(&self.text[self.current_line_start()..self.cursor])
-    }
-
-    fn beginning_of_previous_word(&self) -> usize {
-        let mut pos = self.cursor;
-        while pos > 0 {
-            let start = self.prev_atomic_boundary(pos);
-            if is_word_grapheme(&self.text[start..pos]) {
-                break;
-            }
-            pos = start;
-        }
-        while pos > 0 {
-            let start = self.prev_atomic_boundary(pos);
-            if !is_word_grapheme(&self.text[start..pos]) {
-                break;
-            }
-            pos = start;
-        }
-        self.adjust_pos_out_of_elements(pos, true)
-    }
-
-    fn end_of_next_word(&self) -> usize {
-        let mut pos = self.cursor;
-        while pos < self.text.len() {
-            let end = self.next_atomic_boundary(pos);
-            if is_word_grapheme(&self.text[pos..end]) {
-                break;
-            }
-            pos = end;
-        }
-        while pos < self.text.len() {
-            let end = self.next_atomic_boundary(pos);
-            if !is_word_grapheme(&self.text[pos..end]) {
-                break;
-            }
-            pos = end;
-        }
-        self.adjust_pos_out_of_elements(pos, false)
-    }
-
-    fn decide_retro_grab(&self, retro_chars: usize) -> Option<RetroGrab> {
-        let before = &self.text[..self.cursor];
-        let start_byte = retro_start_index(before, retro_chars);
-        if self.range_intersects_element(start_byte..self.cursor) {
-            return None;
-        }
-        let grabbed = before[start_byte..].to_string();
-        let looks_pastey = grabbed.chars().any(char::is_whitespace)
-            || grabbed
-                .chars()
-                .any(|ch| matches!(ch, '/' | '\\' | ':' | '=' | ',' | '.'))
-            || grabbed.chars().count() >= 16;
-        looks_pastey.then_some(RetroGrab {
-            start_byte,
-            grabbed,
-        })
-    }
-
-    fn insert_str_at(&mut self, at: usize, text: &str) {
-        let at = self.clamp_pos_for_insertion(at);
-        self.text.insert_str(at, text);
-        self.update_elements_after_replace(at, at, text.len());
-        self.cursor = at + text.len();
-        self.preferred_column = None;
-    }
-
-    fn find_element_containing(&self, pos: usize) -> Option<usize> {
-        self.elements
-            .iter()
-            .position(|element| pos > element.range.start && pos < element.range.end)
-    }
-
-    fn range_intersects_element(&self, range: Range<usize>) -> bool {
-        self.elements
-            .iter()
-            .any(|element| element.range.start < range.end && element.range.end > range.start)
-    }
-
-    fn clamp_pos_to_nearest_boundary(&self, mut pos: usize) -> usize {
-        pos = min(pos, self.text.len());
-        if let Some(index) = self.find_element_containing(pos) {
-            let element = &self.elements[index];
-            let dist_start = pos.saturating_sub(element.range.start);
-            let dist_end = element.range.end.saturating_sub(pos);
-            if dist_start <= dist_end {
-                element.range.start
-            } else {
-                element.range.end
-            }
-        } else {
-            pos
-        }
-    }
-
-    fn clamp_pos_for_insertion(&self, pos: usize) -> usize {
-        self.clamp_pos_to_nearest_boundary(pos)
-    }
-
-    fn expand_range_to_element_boundaries(&self, mut range: Range<usize>) -> Range<usize> {
-        loop {
-            let mut changed = false;
-            for element in &self.elements {
-                if element.range.start < range.end && element.range.end > range.start {
-                    let next_start = min(range.start, element.range.start);
-                    let next_end = max(range.end, element.range.end);
-                    if next_start != range.start || next_end != range.end {
-                        range.start = next_start;
-                        range.end = next_end;
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                return range;
-            }
-        }
-    }
-
-    fn shift_elements(&mut self, at: usize, removed: usize, inserted: usize) {
-        let end = at.saturating_add(removed);
-        let delta = inserted as isize - removed as isize;
-        self.elements
-            .retain(|element| !(element.range.start >= at && element.range.end <= end));
-
-        for element in &mut self.elements {
-            if element.range.end <= at {
-                continue;
-            }
-            if element.range.start >= end {
-                element.range.start = ((element.range.start as isize) + delta) as usize;
-                element.range.end = ((element.range.end as isize) + delta) as usize;
-                continue;
-            }
-
-            let new_start = min(at, element.range.start);
-            let tail = element.range.end.saturating_sub(end);
-            element.range.start = new_start;
-            element.range.end = at.saturating_add(inserted).saturating_add(tail);
-        }
-    }
-
-    fn update_elements_after_replace(&mut self, start: usize, end: usize, inserted_len: usize) {
-        self.shift_elements(start, end.saturating_sub(start), inserted_len);
-    }
-
-    fn prev_atomic_boundary(&self, pos: usize) -> usize {
-        if pos == 0 {
-            return 0;
-        }
-        if let Some(index) = self
-            .elements
-            .iter()
-            .position(|element| pos > element.range.start && pos <= element.range.end)
-        {
-            return self.elements[index].range.start;
-        }
-        let boundary = previous_grapheme_boundary(self.text.as_str(), pos);
-        if let Some(index) = self.find_element_containing(boundary) {
-            self.elements[index].range.start
-        } else {
-            boundary
-        }
-    }
-
-    fn next_atomic_boundary(&self, pos: usize) -> usize {
-        if pos >= self.text.len() {
-            return self.text.len();
-        }
-        if let Some(index) = self
-            .elements
-            .iter()
-            .position(|element| pos >= element.range.start && pos < element.range.end)
-        {
-            return self.elements[index].range.end;
-        }
-        let boundary = next_grapheme_boundary(self.text.as_str(), pos);
-        if let Some(index) = self.find_element_containing(boundary) {
-            self.elements[index].range.end
-        } else {
-            boundary
-        }
-    }
-
-    fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
-        if let Some(index) = self.find_element_containing(pos) {
-            let element = &self.elements[index];
-            if prefer_start {
-                element.range.start
-            } else {
-                element.range.end
-            }
-        } else {
-            pos
-        }
     }
 }
 
@@ -16125,6 +17479,36 @@ fn composer_input_is_active(
     focus == Focus::Composer && (has_text_or_items || has_auxiliary_input_ui)
 }
 
+fn preferred_visible_session_selection(
+    session: &SessionResource,
+    visible_sessions: &[SessionResource],
+) -> Option<i64> {
+    [
+        Some(session.id),
+        session.parent_id,
+        (session.root_id != session.id).then_some(session.root_id),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|candidate| visible_sessions.iter().any(|item| item.id == *candidate))
+}
+
+fn permission_request_fingerprint(request: &PermissionRequest) -> String {
+    json!({
+        "action": &request.action,
+        "related_actions": &request.related_actions,
+        "requested_actions": &request.requested_actions,
+        "reason": &request.reason,
+        "explanation": &request.explanation,
+        "source": &request.source,
+        "scope": &request.scope,
+        "operator": &request.operator,
+        "risk": request.risk,
+        "trace": &request.trace,
+    })
+    .to_string()
+}
+
 fn permission_overlay_choice(selected: usize) -> PermissionOverlayChoice {
     match selected {
         0 => PermissionOverlayChoice {
@@ -16165,22 +17549,22 @@ fn permission_overlay_choice(selected: usize) -> PermissionOverlayChoice {
 fn permission_overlay_choice_label(i18n: &I18n, choice: PermissionOverlayChoice) -> String {
     match (choice.kind, choice.scope) {
         (PermissionReplyKind::AllowAlways, Some(PermissionScope::Session)) => {
-            "Allow always (session)".to_string()
+            ui_text::t(i18n, "overlay-permission-choice-allow-always-session")
         }
         (PermissionReplyKind::AllowAlways, Some(PermissionScope::Workspace)) => {
-            "Allow always (workspace)".to_string()
+            ui_text::t(i18n, "overlay-permission-choice-allow-always-workspace")
         }
         (PermissionReplyKind::AllowAlways, Some(PermissionScope::Global)) => {
-            "Allow always (global)".to_string()
+            ui_text::t(i18n, "overlay-permission-choice-allow-always-global")
         }
         (PermissionReplyKind::DenyAlways, Some(PermissionScope::Session)) => {
-            "Deny always (session)".to_string()
+            ui_text::t(i18n, "overlay-permission-choice-deny-always-session")
         }
         (PermissionReplyKind::DenyAlways, Some(PermissionScope::Workspace)) => {
-            "Deny always (workspace)".to_string()
+            ui_text::t(i18n, "overlay-permission-choice-deny-always-workspace")
         }
         (PermissionReplyKind::DenyAlways, Some(PermissionScope::Global)) => {
-            "Deny always (global)".to_string()
+            ui_text::t(i18n, "overlay-permission-choice-deny-always-global")
         }
         _ => ui_text::permission_reply_label(i18n, choice.kind),
     }
@@ -16216,10 +17600,15 @@ fn permission_action_label(i18n: &I18n, action: &PermissionAction) -> String {
                 "path" => target_path.clone(),
             ),
         ),
-        PermissionAction::NetworkAccess { host, port, .. } => match port {
-            Some(port) => format!("network {host}:{port}"),
-            None => format!("network {host}"),
-        },
+        PermissionAction::NetworkAccess { host, port, .. } => i18n.text_args(
+            "overlay-permission-action-network",
+            &crate::fl_args!(
+                "target" => match port {
+                    Some(port) => format!("{host}:{port}"),
+                    None => host.clone(),
+                }
+            ),
+        ),
     }
 }
 
@@ -16250,6 +17639,7 @@ fn format_timestamp_ms(timestamp_ms: i64) -> String {
 }
 
 fn build_plugin_inspector_item(
+    i18n: &I18n,
     status: agena::plugin::status::PluginStatus,
     inspect: Option<agena::plugin::PluginInspect>,
     logs: Vec<agena::plugin::PluginLogEntry>,
@@ -16276,20 +17666,24 @@ fn build_plugin_inspector_item(
         },
     );
     let authority = inspect.as_ref().and_then(|item| item.authority.as_ref());
-    let detail = format_plugin_inspector_detail(&status, manifest, authority);
-    let logs_text = format_plugin_inspector_logs(logs.as_slice());
-    let copy_text = format!("{summary}\n\n{detail}\n\nRecent logs\n-----------\n{logs_text}");
+    let (detail_body, detail_plain) =
+        build_plugin_inspector_detail(i18n, &status, manifest, authority);
+    let logs_text = format_plugin_inspector_logs(i18n, logs.as_slice());
+    let copy_text = format!(
+        "{summary}\n\n{detail_plain}\n\n{}\n-----------\n{logs_text}",
+        ui_text::t(i18n, "overlay-plugins-logs")
+    );
     let search_text = format!(
         "{} {} {}",
         summary.to_ascii_lowercase(),
-        detail.to_ascii_lowercase(),
+        detail_plain.to_ascii_lowercase(),
         logs_text.to_ascii_lowercase()
     );
 
     PluginInspectorItem {
         plugin_id: status.plugin_id.clone(),
         summary,
-        detail,
+        detail_body,
         logs: logs_text,
         search_text,
         copy_text,
@@ -16297,74 +17691,108 @@ fn build_plugin_inspector_item(
     }
 }
 
-fn format_plugin_inspector_detail(
+fn build_plugin_inspector_detail(
+    i18n: &I18n,
     status: &agena::plugin::status::PluginStatus,
     manifest: Option<&agena::plugin::PluginManifest>,
     authority: Option<&agena::plugin::host::PluginAuthoritySummary>,
-) -> String {
+) -> (Text<'static>, String) {
     let mut lines = vec![
-        format!("plugin_id: {}", status.plugin_id),
-        format!("kind: {}", status.kind),
-        format!("state: {}", status.state.as_str()),
-        format!(
-            "pid: {}",
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-plugin-id"),
+            status.plugin_id.clone(),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-kind"),
+            status.kind.to_string(),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-state"),
+            status.state.as_str().to_string(),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-pid"),
             status
                 .pid
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string())
+                .unwrap_or_else(|| "-".to_string()),
         ),
-        format!("restart_count: {}", status.restart_count),
-        format!(
-            "last_exit_code: {}",
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-restart-count"),
+            status.restart_count.to_string(),
+        ),
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-last-exit-code"),
             status
                 .last_exit_code
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| "-".to_string())
+                .unwrap_or_else(|| "-".to_string()),
         ),
-        format!(
-            "last_restart: {}",
+        app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-last-restart"),
             status
                 .last_restart_at_ms
                 .map(format_timestamp_ms)
-                .unwrap_or_else(|| "-".to_string())
+                .unwrap_or_else(|| "-".to_string()),
         ),
     ];
     if let Some(error) = status.last_error.as_deref() {
-        lines.push(format!("last_error: {error}"));
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-last-error"),
+            error.to_string(),
+        ));
     }
 
-    lines.push(String::new());
+    lines.push(app_detail_plain_line(String::new()));
     match manifest {
         Some(manifest) => {
-            lines.push(format!("manifest: {}@{}", manifest.name, manifest.version));
+            lines.push(app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-plugins-detail-manifest"),
+                format!("{}@{}", manifest.name, manifest.version),
+            ));
             if let Some(description) = manifest.description.as_deref() {
-                lines.push(format!("description: {description}"));
+                lines.push(app_detail_labeled_line(
+                    ui_text::t(i18n, "overlay-plugins-detail-description"),
+                    description.to_string(),
+                ));
             }
             if !manifest.authors.is_empty() {
-                lines.push(format!("authors: {}", manifest.authors.join(", ")));
+                lines.push(app_detail_labeled_line(
+                    ui_text::t(i18n, "overlay-plugins-detail-authors"),
+                    manifest.authors.join(", "),
+                ));
             }
             if !manifest.transports.is_empty() {
-                lines.push(format!(
-                    "transports: {}",
+                lines.push(app_detail_labeled_line(
+                    ui_text::t(i18n, "overlay-plugins-detail-transports"),
                     manifest
                         .transports
                         .iter()
                         .map(|transport| format!("{transport:?}"))
                         .collect::<Vec<_>>()
-                        .join(", ")
+                        .join(", "),
                 ));
             }
-            lines.push(format!("hooks: {:?}", manifest.hooks));
-            lines.push(format!("entries: {}", manifest.entries.len()));
+            lines.push(app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-plugins-detail-hooks"),
+                format!("{:?}", manifest.hooks),
+            ));
+            lines.push(app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-plugins-detail-entries"),
+                manifest.entries.len().to_string(),
+            ));
             for entry in manifest.entries.iter().take(5) {
                 lines.extend(
-                    format_plugin_entry_summary_lines(entry)
+                    format_plugin_entry_summary_lines(i18n, entry)
                         .into_iter()
-                        .map(|line| format!("  {line}")),
+                        .map(|line| app_detail_plain_line(format!("  {line}"))),
                 );
             }
             if manifest.entries.len() > 5 {
-                lines.push(format!("  - ... +{} more", manifest.entries.len() - 5));
+                lines.push(app_detail_plain_line(i18n.text_args(
+                    "overlay-plugins-detail-more-entries",
+                    &crate::fl_args!("count" => (manifest.entries.len() - 5) as i64),
+                )));
             }
             let capabilities = manifest
                 .entries
@@ -16373,88 +17801,136 @@ fn format_plugin_inspector_detail(
                 .map(|capability| format!("{capability:?}"))
                 .collect::<BTreeSet<_>>();
             if !capabilities.is_empty() {
-                lines.push(format!(
-                    "capabilities: {}",
-                    capabilities.into_iter().collect::<Vec<_>>().join(", ")
+                lines.push(app_detail_labeled_line(
+                    ui_text::t(i18n, "overlay-plugins-detail-capabilities"),
+                    capabilities.into_iter().collect::<Vec<_>>().join(", "),
                 ));
             }
         }
-        None => lines.push("manifest: unavailable".to_string()),
+        None => lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-manifest"),
+            ui_text::t(i18n, "overlay-plugins-detail-manifest-unavailable"),
+        )),
     }
 
     if let Some(authority) = authority {
-        lines.push(String::new());
-        lines.push(format!("trust_level: {}", authority.trust_level));
+        lines.push(app_detail_plain_line(String::new()));
+        lines.push(app_detail_labeled_line(
+            ui_text::t(i18n, "overlay-plugins-detail-trust-level"),
+            authority.trust_level.to_string(),
+        ));
         if !authority.provenance.is_empty() {
-            lines.push(format!("provenance: {}", authority.provenance.join(" | ")));
+            lines.push(app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-plugins-detail-provenance"),
+                authority.provenance.join(" | "),
+            ));
         }
         if !authority.plugin_capabilities.is_empty() {
-            lines.push(format!(
-                "effective_capabilities: {}",
-                authority.plugin_capabilities.join(", ")
+            lines.push(app_detail_labeled_line(
+                ui_text::t(i18n, "overlay-plugins-detail-effective-capabilities"),
+                authority.plugin_capabilities.join(", "),
             ));
         }
         if !authority.entry_capabilities.is_empty() {
-            lines.push("entry_capabilities:".to_string());
+            lines.push(app_detail_plain_line(format!(
+                "{}:",
+                ui_text::t(i18n, "overlay-plugins-detail-entry-capabilities")
+            )));
             for (entry, capabilities) in &authority.entry_capabilities {
-                lines.push(format!("  - {}: {}", entry, capabilities.join(", ")));
+                lines.push(app_detail_plain_line(format!(
+                    "  - {}: {}",
+                    entry,
+                    capabilities.join(", ")
+                )));
             }
         }
     }
 
-    lines.join("\n")
+    let detail_document =
+        build_detail_document(lines.as_slice(), &DetailTextSpec::with_label_width(18));
+    (detail_document.text, detail_document.plain)
 }
 
-fn format_plugin_entry_summary_lines(entry: &agena::plugin::PluginToolDecl) -> Vec<String> {
+fn format_plugin_entry_summary_lines(
+    i18n: &I18n,
+    entry: &agena::plugin::PluginToolDecl,
+) -> Vec<String> {
     let mut lines = vec![format!("{}", entry.name)];
     if let Some(description) = entry.description_text().trim().split('\n').next()
         && !description.trim().is_empty()
     {
-        lines.push(format!("description: {}", description.trim()));
+        lines.push(format!(
+            "{}: {}",
+            ui_text::t(i18n, "overlay-plugins-detail-description"),
+            description.trim()
+        ));
     }
     if let Some(summary) = entry.summary_text() {
-        lines.push(format!("summary: {summary}"));
+        lines.push(format!(
+            "{}: {summary}",
+            ui_text::t(i18n, "overlay-plugins-detail-summary")
+        ));
     }
     if let Some(help) = entry.help_text() {
-        lines.push(format!("help: {help}"));
+        lines.push(format!(
+            "{}: {help}",
+            ui_text::t(i18n, "overlay-plugins-detail-help")
+        ));
     }
     let mut facts = Vec::new();
     if let Some(mode) = entry.description_mode {
         let mode_label = match mode {
-            agena::plugin::ToolDescriptionMode::Detailed => "detailed",
-            agena::plugin::ToolDescriptionMode::Help => "help",
+            agena::plugin::ToolDescriptionMode::Detailed => {
+                ui_text::t(i18n, "settings-plugin-mode-detailed")
+            }
+            agena::plugin::ToolDescriptionMode::Help => {
+                ui_text::t(i18n, "settings-plugin-mode-help")
+            }
         };
-        facts.push(format!("mode={mode_label}"));
+        facts.push(i18n.text_args(
+            "overlay-plugins-detail-fact-mode",
+            &crate::fl_args!("mode" => mode_label),
+        ));
     }
     if entry.strict {
-        facts.push("strict".to_string());
+        facts.push(ui_text::t(i18n, "overlay-plugins-detail-fact-strict"));
     }
     if matches!(
         entry.streaming,
         agena::plugin::sdk::ToolStreamingMode::Streaming
     ) {
-        facts.push("streaming".to_string());
+        facts.push(ui_text::t(i18n, "overlay-plugins-detail-fact-streaming"));
     }
     if entry.concurrency_safe {
-        facts.push("concurrency-safe".to_string());
+        facts.push(ui_text::t(
+            i18n,
+            "overlay-plugins-detail-fact-concurrency-safe",
+        ));
     }
     if !entry.tags.is_empty() {
-        facts.push(format!(
-            "tags={}",
-            entry
-                .tags
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
+        facts.push(i18n.text_args(
+            "overlay-plugins-detail-fact-tags",
+            &crate::fl_args!(
+                "tags" => entry
+                    .tags
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         ));
     }
     if !facts.is_empty() {
-        lines.push(format!("facts: {}", facts.join(" · ")));
+        lines.push(format!(
+            "{}: {}",
+            ui_text::t(i18n, "overlay-plugins-detail-facts"),
+            join_inline_segments(facts)
+        ));
     }
     if !entry.host_capabilities.is_empty() {
         lines.push(format!(
-            "host_caps: {}",
+            "{}: {}",
+            ui_text::t(i18n, "overlay-plugins-detail-host-capabilities"),
             entry
                 .host_capabilities
                 .iter()
@@ -16466,9 +17942,9 @@ fn format_plugin_entry_summary_lines(entry: &agena::plugin::PluginToolDecl) -> V
     lines
 }
 
-fn format_plugin_inspector_logs(entries: &[agena::plugin::PluginLogEntry]) -> String {
+fn format_plugin_inspector_logs(i18n: &I18n, entries: &[agena::plugin::PluginLogEntry]) -> String {
     if entries.is_empty() {
-        return "No retained logs".to_string();
+        return ui_text::t(i18n, "overlay-plugins-logs-empty");
     }
     entries
         .iter()
@@ -16491,9 +17967,9 @@ fn format_plugin_inspector_logs(entries: &[agena::plugin::PluginLogEntry]) -> St
         .join("\n")
 }
 
-fn build_timeline_item(record: &DomainEvent) -> TimelineItem {
-    let event_type = timeline_event_type_name(record);
-    let summary_suffix = timeline_event_summary(record);
+fn build_timeline_item(i18n: &I18n, record: &DomainEvent) -> TimelineItem {
+    let event_type = timeline_event_type_label(i18n, record);
+    let summary_suffix = timeline_event_summary(i18n, record);
     let summary = if summary_suffix.is_empty() {
         format!("#{}  {}", record.meta.seq_global, event_type)
     } else {
@@ -16504,32 +17980,52 @@ fn build_timeline_item(record: &DomainEvent) -> TimelineItem {
     };
 
     let mut detail_lines = vec![
-        format!("seq: {}", record.meta.seq_global),
-        format!("created: {}", format_timestamp(record.meta.created_at)),
-        format!("type: {event_type}"),
-        format!("event_id: {}", record.meta.id),
+        timeline_detail_labeled_line(
+            i18n,
+            "timeline-label-seq",
+            record.meta.seq_global.to_string(),
+        ),
+        timeline_detail_labeled_line(
+            i18n,
+            "timeline-label-created",
+            format_timestamp(record.meta.created_at),
+        ),
+        timeline_detail_labeled_line(i18n, "timeline-label-type", event_type.clone()),
+        timeline_detail_labeled_line(i18n, "timeline-label-event-id", record.meta.id.to_string()),
     ];
     if let Some(causation_id) = record.meta.causation_id {
-        detail_lines.push(format!("causation_id: {causation_id}"));
+        detail_lines.push(timeline_detail_labeled_line(
+            i18n,
+            "timeline-label-causation-id",
+            causation_id.to_string(),
+        ));
     }
     if let Some(correlation_id) = record.meta.correlation_id {
-        detail_lines.push(format!("correlation_id: {correlation_id}"));
+        detail_lines.push(timeline_detail_labeled_line(
+            i18n,
+            "timeline-label-correlation-id",
+            correlation_id.to_string(),
+        ));
     }
-    detail_lines.push(String::new());
-    detail_lines.extend(timeline_event_detail_lines(record));
+    detail_lines.push(app_detail_plain_line(String::new()));
+    detail_lines.extend(timeline_event_detail_lines(i18n, record));
 
-    let detail = detail_lines.join("\n");
-    let copy_text = format!("{summary}\n\n{detail}");
+    let detail_document = build_detail_document(
+        detail_lines.as_slice(),
+        &DetailTextSpec::with_label_width(16),
+    );
+    let copy_text = format!("{summary}\n\n{}", detail_document.plain);
     let search_text = format!(
-        "{} {}",
+        "{} {} {}",
         summary.to_ascii_lowercase(),
-        detail.to_ascii_lowercase()
+        detail_document.plain.to_ascii_lowercase(),
+        record.kind.tag_str().to_ascii_lowercase(),
     );
     let linked_message_id = timeline_event_message_id(record);
 
     TimelineItem {
         summary,
-        detail,
+        detail_body: detail_document.text,
         search_text,
         copy_text,
         linked_message_id,
@@ -16564,308 +18060,635 @@ fn timeline_event_message_id(record: &DomainEvent) -> Option<i64> {
     }
 }
 
-fn timeline_event_type_name(record: &DomainEvent) -> &'static str {
-    record.kind.tag_str()
-}
-
-fn session_workflow_state_label(execution: &SessionExecutionResource) -> &'static str {
-    match pending_interactive_kind_for_execution(execution) {
-        Some(PendingInteractiveKind::Permission) => return "awaiting_permission",
-        Some(PendingInteractiveKind::UserInput) => return "awaiting_user_input",
-        None => {}
-    }
-    if execution.blocked {
-        return "blocked";
-    }
-    match execution.run_state {
-        SessionRunState::AwaitingModel => "awaiting_model",
-        SessionRunState::Idle => "idle",
-    }
-}
-
-fn timeline_event_summary(record: &DomainEvent) -> String {
+fn timeline_event_type_key(record: &DomainEvent) -> &'static str {
     match &record.kind {
-        AgenaSessionEvent::ExecutionStarted(event) => format!("session #{}", event.session_id),
+        AgenaSessionEvent::ExecutionStarted(_) => "timeline-type-execution-started",
+        AgenaSessionEvent::ExecutionFailed(_) => "timeline-type-execution-failed",
+        AgenaSessionEvent::StreamError(_) => "timeline-type-stream-error",
+        AgenaSessionEvent::MessagePartUpdated(_) => "timeline-type-message-part-updated",
+        AgenaSessionEvent::MessagePartDelta(_) => "timeline-type-message-part-delta",
+        AgenaSessionEvent::CommandBegin(_) => "timeline-type-command-begin",
+        AgenaSessionEvent::CommandOutputDelta(_) => "timeline-type-command-output-delta",
+        AgenaSessionEvent::CommandEnd(_) => "timeline-type-command-end",
+        AgenaSessionEvent::PermissionRequested(_) => "timeline-type-permission-requested",
+        AgenaSessionEvent::PermissionReplied(_) => "timeline-type-permission-replied",
+        AgenaSessionEvent::PermissionRuleCreated(_) => "timeline-type-permission-rule-created",
+        AgenaSessionEvent::PermissionRuleUpdated(_) => "timeline-type-permission-rule-updated",
+        AgenaSessionEvent::PermissionRuleRevoked(_) => "timeline-type-permission-rule-revoked",
+        AgenaSessionEvent::SessionGoalUpdated(_) => "timeline-type-session-goal-updated",
+        AgenaSessionEvent::RunStarted(_) => "timeline-type-run-started",
+        AgenaSessionEvent::RunCompleted(_) => "timeline-type-run-completed",
+        AgenaSessionEvent::RunAborted(_) => "timeline-type-run-aborted",
+        AgenaSessionEvent::UserMessageAppended(_) => "timeline-type-user-message-appended",
+        AgenaSessionEvent::AssistantMessageCompleted(_) => {
+            "timeline-type-assistant-message-completed"
+        }
+        AgenaSessionEvent::ToolCallIssued(_) => "timeline-type-tool-call-issued",
+        AgenaSessionEvent::ToolCallCompleted(_) => "timeline-type-tool-call-completed",
+        AgenaSessionEvent::SystemNoticeAppended(_) => "timeline-type-system-notice-appended",
+        AgenaSessionEvent::PluginEvent(_) => "timeline-type-plugin-event",
+    }
+}
+
+fn timeline_event_type_label(i18n: &I18n, record: &DomainEvent) -> String {
+    ui_text::t(i18n, timeline_event_type_key(record))
+}
+
+fn timeline_event_summary(i18n: &I18n, record: &DomainEvent) -> String {
+    match &record.kind {
+        AgenaSessionEvent::ExecutionStarted(event) => i18n.text_args(
+            "timeline-summary-execution-started",
+            &crate::fl_args!("id" => event.session_id),
+        ),
         AgenaSessionEvent::ExecutionFailed(event) => {
             format!(
                 "{}: {}",
                 event.error.code,
-                detail_excerpt(event.error.message.as_str(), 72)
+                timeline_excerpt(i18n, event.error.message.as_str(), 72)
             )
         }
-        AgenaSessionEvent::MessagePartUpdated(event) => format!(
-            "message #{} part #{} updated ({:?})",
-            event.message_id, event.part.id, event.part.kind
+        AgenaSessionEvent::MessagePartUpdated(event) => i18n.text_args(
+            "timeline-summary-message-part-updated",
+            &crate::fl_args!(
+                "message_id" => event.message_id,
+                "part_id" => event.part.id,
+                "kind" => event.part.kind.to_string(),
+            ),
         ),
-        AgenaSessionEvent::MessagePartDelta(event) => format!(
-            "message #{} part #{} {:?} (+{} chars)",
-            event.message_id,
-            event.part_id,
-            event.field,
-            event.delta.chars().count(),
+        AgenaSessionEvent::MessagePartDelta(event) => i18n.text_args(
+            "timeline-summary-message-part-delta",
+            &crate::fl_args!(
+                "message_id" => event.message_id,
+                "part_id" => event.part_id,
+                "field" => timeline_part_delta_field_token(&event.field),
+                "count" => event.delta.chars().count() as i64,
+            ),
         ),
-        AgenaSessionEvent::CommandBegin(event) => detail_excerpt(event.command.as_str(), 72),
+        AgenaSessionEvent::CommandBegin(event) => {
+            timeline_excerpt(i18n, event.command.as_str(), 72)
+        }
         AgenaSessionEvent::CommandOutputDelta(event) => {
             let preview = if event.preview_text.trim().is_empty() {
-                format!("{} bytes", event.chunk.len())
+                i18n.text_args(
+                    "timeline-summary-command-output-bytes",
+                    &crate::fl_args!("count" => event.chunk.len() as i64),
+                )
             } else {
-                detail_excerpt(event.preview_text.as_str(), 56)
+                timeline_excerpt(i18n, event.preview_text.as_str(), 56)
             };
-            format!("{:?} {}", event.stream, preview)
-        }
-        AgenaSessionEvent::CommandEnd(event) => {
-            format!(
-                "{:?} exit={} ({} ms)",
-                event.status, event.exit_code, event.duration_ms
+            i18n.text_args(
+                "timeline-summary-command-output-delta",
+                &crate::fl_args!(
+                    "stream" => timeline_command_output_stream_token(event.stream.clone()),
+                    "preview" => preview,
+                ),
             )
         }
+        AgenaSessionEvent::CommandEnd(event) => i18n.text_args(
+            "timeline-summary-command-end",
+            &crate::fl_args!(
+                "status" => ui_text::execution_status_label(i18n, event.status),
+                "exit_code" => event.exit_code,
+                "duration_ms" => event.duration_ms as i64,
+            ),
+        ),
         AgenaSessionEvent::StreamError(event) => {
             format!(
                 "{}: {}",
                 event.error.code,
-                detail_excerpt(event.error.message.as_str(), 72)
+                timeline_excerpt(i18n, event.error.message.as_str(), 72)
             )
         }
-        AgenaSessionEvent::PermissionRequested(event) => {
-            format!(
-                "permission requested [{}]: {}",
-                permission_risk_label(event.risk),
-                detail_excerpt(event.reason.as_str(), 72)
-            )
-        }
-        AgenaSessionEvent::PermissionReplied(event) => {
-            format!("permission replied: {:?}", event.kind)
-        }
-        AgenaSessionEvent::PermissionRuleCreated(event) => {
-            format!("permission rule #{} created", event.rule_id)
-        }
-        AgenaSessionEvent::PermissionRuleUpdated(event) => {
-            format!("permission rule #{} updated", event.rule_id)
-        }
-        AgenaSessionEvent::PermissionRuleRevoked(event) => {
-            format!("permission rule #{} revoked", event.rule_id)
-        }
+        AgenaSessionEvent::PermissionRequested(event) => i18n.text_args(
+            "timeline-summary-permission-requested",
+            &crate::fl_args!(
+                "risk" => permission_risk_label(i18n, event.risk),
+                "reason" => timeline_excerpt(i18n, event.reason.as_str(), 72),
+            ),
+        ),
+        AgenaSessionEvent::PermissionReplied(event) => i18n.text_args(
+            "timeline-summary-permission-replied",
+            &crate::fl_args!("kind" => ui_text::permission_reply_label(i18n, event.kind)),
+        ),
+        AgenaSessionEvent::PermissionRuleCreated(event) => i18n.text_args(
+            "timeline-summary-permission-rule-created",
+            &crate::fl_args!("id" => event.rule_id),
+        ),
+        AgenaSessionEvent::PermissionRuleUpdated(event) => i18n.text_args(
+            "timeline-summary-permission-rule-updated",
+            &crate::fl_args!("id" => event.rule_id),
+        ),
+        AgenaSessionEvent::PermissionRuleRevoked(event) => i18n.text_args(
+            "timeline-summary-permission-rule-revoked",
+            &crate::fl_args!("id" => event.rule_id),
+        ),
         AgenaSessionEvent::SessionGoalUpdated(event) => {
             let objective = event
                 .objective
                 .as_deref()
-                .map(|value| detail_excerpt(value, 56))
-                .unwrap_or_else(|| "<none>".to_string());
-            let status = event.status.as_deref().unwrap_or("unknown");
-            format!("goal updated: {status} · {objective}")
+                .map(|value| timeline_excerpt(i18n, value, 56))
+                .unwrap_or_else(|| ui_text::t(i18n, "value-none"));
+            let status = timeline_value_or_unknown(i18n, event.status.as_deref());
+            i18n.text_args(
+                "timeline-summary-session-goal-updated",
+                &crate::fl_args!(
+                    "status" => status,
+                    "objective" => objective,
+                ),
+            )
         }
-        AgenaSessionEvent::RunStarted(p) => format!("run {}", p.run_id),
-        AgenaSessionEvent::RunCompleted(p) => {
-            format!("run {} ({:?})", p.run_id, p.finish_reason)
-        }
-        AgenaSessionEvent::RunAborted(p) => {
-            format!("run {} aborted ({:?})", p.run_id, p.reason)
-        }
-        AgenaSessionEvent::UserMessageAppended(p) => {
-            format!("user #{}", p.message_id)
-        }
-        AgenaSessionEvent::AssistantMessageCompleted(p) => {
-            format!("assistant #{} ({:?})", p.message_id, p.finish_reason)
-        }
-        AgenaSessionEvent::ToolCallIssued(p) => {
-            format!("tool {} call={}", p.name, p.call_id)
-        }
-        AgenaSessionEvent::ToolCallCompleted(p) => format!("tool call {} done", p.call_id),
-        AgenaSessionEvent::SystemNoticeAppended(p) => {
-            format!("system #{}: {:?}", p.message_id, p.kind)
-        }
-        AgenaSessionEvent::PluginEvent(p) => {
-            format!("plugin {}/{}", p.plugin_id, p.kind_label)
-        }
+        AgenaSessionEvent::RunStarted(p) => i18n.text_args(
+            "timeline-summary-run-started",
+            &crate::fl_args!("id" => p.run_id),
+        ),
+        AgenaSessionEvent::RunCompleted(p) => i18n.text_args(
+            "timeline-summary-run-completed",
+            &crate::fl_args!(
+                "id" => p.run_id,
+                "finish" => p.finish_reason.to_string(),
+            ),
+        ),
+        AgenaSessionEvent::RunAborted(p) => i18n.text_args(
+            "timeline-summary-run-aborted",
+            &crate::fl_args!(
+                "id" => p.run_id,
+                "reason" => p.reason.to_string(),
+            ),
+        ),
+        AgenaSessionEvent::UserMessageAppended(p) => i18n.text_args(
+            "timeline-summary-user-message-appended",
+            &crate::fl_args!("id" => p.message_id),
+        ),
+        AgenaSessionEvent::AssistantMessageCompleted(p) => i18n.text_args(
+            "timeline-summary-assistant-message-completed",
+            &crate::fl_args!(
+                "id" => p.message_id,
+                "finish" => p.finish_reason.to_string(),
+            ),
+        ),
+        AgenaSessionEvent::ToolCallIssued(p) => i18n.text_args(
+            "timeline-summary-tool-call-issued",
+            &crate::fl_args!(
+                "name" => p.name.as_str(),
+                "call_id" => p.call_id,
+            ),
+        ),
+        AgenaSessionEvent::ToolCallCompleted(p) => i18n.text_args(
+            "timeline-summary-tool-call-completed",
+            &crate::fl_args!("call_id" => p.call_id),
+        ),
+        AgenaSessionEvent::SystemNoticeAppended(p) => i18n.text_args(
+            "timeline-summary-system-notice-appended",
+            &crate::fl_args!(
+                "message_id" => p.message_id,
+                "kind" => p.kind.to_string(),
+            ),
+        ),
+        AgenaSessionEvent::PluginEvent(p) => i18n.text_args(
+            "timeline-summary-plugin-event",
+            &crate::fl_args!(
+                "plugin_id" => p.plugin_id.clone(),
+                "kind_label" => p.kind_label.clone(),
+            ),
+        ),
     }
 }
 
-fn timeline_event_detail_lines(record: &DomainEvent) -> Vec<String> {
+fn timeline_event_detail_lines(i18n: &I18n, record: &DomainEvent) -> Vec<DetailTextLine<'static>> {
     match &record.kind {
-        AgenaSessionEvent::ExecutionStarted(event) => {
-            vec![format!("session_id: {}", event.session_id)]
-        }
+        AgenaSessionEvent::ExecutionStarted(event) => vec![timeline_detail_labeled_line(
+            i18n,
+            "timeline-label-session-id",
+            event.session_id.to_string(),
+        )],
         AgenaSessionEvent::ExecutionFailed(event) => vec![
-            format!("session_id: {}", event.session_id),
-            format!("error_code: {}", event.error.code),
-            format!("error_message: {}", event.error.message),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-session-id",
+                event.session_id.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-error-code",
+                event.error.code.clone(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-error-message",
+                event.error.message.clone(),
+            ),
         ],
         AgenaSessionEvent::MessagePartUpdated(event) => vec![
-            format!("message_id: {}", event.message_id),
-            format!("part_id: {}", event.part.id),
-            format!("part_kind: {:?}", event.part.kind),
-            format!("status: {:?}", event.part.status),
-            format!(
-                "summary: {}",
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-message-id",
+                event.message_id.to_string(),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-part-id", event.part.id.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-part-kind",
+                event.part.kind.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-status",
+                ui_text::execution_status_label(i18n, event.part.status),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-summary",
                 event
                     .part
                     .summary
                     .clone()
-                    .unwrap_or_else(|| "<none>".to_string())
+                    .unwrap_or_else(|| ui_text::t(i18n, "value-none")),
             ),
         ],
         AgenaSessionEvent::MessagePartDelta(event) => vec![
-            format!("message_id: {}", event.message_id),
-            format!("part_id: {}", event.part_id),
-            format!("field: {:?}", event.field),
-            format!("seq: {}", event.seq),
-            format!("delta: {}", detail_excerpt(event.delta.as_str(), 200)),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-message-id",
+                event.message_id.to_string(),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-part-id", event.part_id.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-field",
+                timeline_part_delta_field_token(&event.field),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-seq", event.seq.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-delta",
+                timeline_excerpt(i18n, event.delta.as_str(), 200),
+            ),
         ],
         AgenaSessionEvent::CommandBegin(event) => vec![
-            format!("session_id: {}", event.context.session_id),
-            format!("call_id: {}", event.context.call_id),
-            format!("command: {}", event.command),
-            format!("cwd: {}", event.cwd),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-session-id",
+                event.context.session_id.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-call-id",
+                event.context.call_id.to_string(),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-command", event.command.clone()),
+            timeline_detail_labeled_line(i18n, "timeline-label-cwd", event.cwd.clone()),
         ],
         AgenaSessionEvent::CommandOutputDelta(event) => vec![
-            format!("session_id: {}", event.context.session_id),
-            format!("call_id: {}", event.context.call_id),
-            format!("stream: {:?}", event.stream),
-            format!("seq: {}", event.seq),
-            format!("bytes: {}", event.chunk.len()),
-            format!(
-                "preview: {}",
-                detail_excerpt(event.preview_text.as_str(), 200)
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-session-id",
+                event.context.session_id.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-call-id",
+                event.context.call_id.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-stream",
+                timeline_command_output_stream_token(event.stream.clone()),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-seq", event.seq.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-bytes",
+                event.chunk.len().to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-preview",
+                timeline_excerpt(i18n, event.preview_text.as_str(), 200),
             ),
         ],
         AgenaSessionEvent::CommandEnd(event) => vec![
-            format!("session_id: {}", event.context.session_id),
-            format!("call_id: {}", event.context.call_id),
-            format!("status: {:?}", event.status),
-            format!("exit_code: {}", event.exit_code),
-            format!("duration_ms: {}", event.duration_ms),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-session-id",
+                event.context.session_id.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-call-id",
+                event.context.call_id.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-status",
+                ui_text::execution_status_label(i18n, event.status),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-exit-code",
+                event.exit_code.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-duration-ms",
+                event.duration_ms.to_string(),
+            ),
         ],
         AgenaSessionEvent::StreamError(event) => vec![
-            format!("session_id: {}", event.session_id),
-            format!("error_code: {}", event.error.code),
-            format!("error_message: {}", event.error.message),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-session-id",
+                event.session_id.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-error-code",
+                event.error.code.clone(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-error-message",
+                event.error.message.clone(),
+            ),
         ],
         AgenaSessionEvent::PermissionRequested(event) => {
             let mut lines = vec![
-                format!("session_id: {}", event.session_id),
-                format!("request_id: {}", event.request_id),
-                format!("reason: {}", event.reason),
-                format!("risk: {}", permission_risk_label(event.risk)),
-                format!(
-                    "explanation: {}",
-                    detail_excerpt(event.explanation.as_str(), 200)
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-session-id",
+                    event.session_id.to_string(),
+                ),
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-request-id",
+                    event.request_id.clone(),
+                ),
+                timeline_detail_labeled_line(i18n, "timeline-label-reason", event.reason.clone()),
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-risk",
+                    permission_risk_label(i18n, event.risk),
+                ),
+                timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-explanation",
+                    timeline_excerpt(i18n, event.explanation.as_str(), 200),
                 ),
             ];
             if let Some(source) = event.source.as_deref() {
-                lines.push(format!("source: {source}"));
+                lines.push(timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-source",
+                    source.to_string(),
+                ));
             }
             if let Some(scope) = event.scope.as_deref() {
-                lines.push(format!("scope: {scope}"));
+                lines.push(timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-scope",
+                    scope.to_string(),
+                ));
             }
             if let Some(operator) = event.operator.as_deref() {
-                lines.push(format!("operator: {operator}"));
+                lines.push(timeline_detail_labeled_line(
+                    i18n,
+                    "timeline-label-operator",
+                    operator.to_string(),
+                ));
             }
-            append_permission_trace_strings(&mut lines, &event.trace);
+            append_permission_trace_detail_lines(i18n, &mut lines, &event.trace);
             lines
         }
         AgenaSessionEvent::PermissionReplied(event) => vec![
-            format!("session_id: {}", event.session_id),
-            format!("request_id: {}", event.request_id),
-            format!("kind: {:?}", event.kind),
-            format!(
-                "reason: {}",
-                event.reason.clone().unwrap_or_else(|| "<none>".to_string())
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-session-id",
+                event.session_id.to_string(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-request-id",
+                event.request_id.clone(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-reply-kind",
+                ui_text::permission_reply_label(i18n, event.kind),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-reason",
+                timeline_value_or_none(i18n, event.reason.clone()),
             ),
         ],
         AgenaSessionEvent::PermissionRuleCreated(event)
         | AgenaSessionEvent::PermissionRuleUpdated(event)
         | AgenaSessionEvent::PermissionRuleRevoked(event) => vec![
-            format!("rule_id: {}", event.rule_id),
-            format!("action_key: {}", event.action_key),
-            format!("mode: {}", event.mode),
-            format!("scope: {}", event.scope),
-            format!("source: {}", event.source),
+            timeline_detail_labeled_line(i18n, "timeline-label-rule-id", event.rule_id.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-action-key",
+                event.action_key.clone(),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-mode",
+                permission_mode_token_display(i18n, event.mode.as_str()),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-scope",
+                permission_rule_scope_display(i18n, event.scope.as_str()),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-source", event.source.clone()),
         ],
         AgenaSessionEvent::SessionGoalUpdated(event) => vec![
-            format!("session_id: {}", event.session_id),
-            format!(
-                "goal_id: {}",
-                event
-                    .goal_id
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "<none>".to_string())
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-session-id",
+                event.session_id.to_string(),
             ),
-            format!(
-                "objective: {}",
-                event
-                    .objective
-                    .clone()
-                    .unwrap_or_else(|| "<none>".to_string())
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-goal-id",
+                timeline_value_or_none(i18n, event.goal_id),
             ),
-            format!(
-                "status: {}",
-                event.status.clone().unwrap_or_else(|| "<none>".to_string())
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-objective",
+                timeline_value_or_none(i18n, event.objective.clone()),
             ),
-            format!(
-                "completed_at_ms: {}",
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-status",
+                timeline_value_or_none(i18n, event.status.clone()),
+            ),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-completed-at",
                 event
                     .completed_at_ms
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "<none>".to_string())
+                    .map(format_timestamp_ms)
+                    .unwrap_or_else(|| ui_text::t(i18n, "value-none")),
             ),
         ],
         AgenaSessionEvent::RunStarted(p) => vec![
-            format!("run_id: {}", p.run_id),
-            format!("model: {} / {}", p.provider_id, p.model_id),
+            timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-model",
+                format!("{}/{}", p.provider_id, p.model_id),
+            ),
         ],
         AgenaSessionEvent::RunCompleted(p) => vec![
-            format!("run_id: {}", p.run_id),
-            format!("finish: {:?}", p.finish_reason),
+            timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-finish",
+                p.finish_reason.to_string(),
+            ),
         ],
         AgenaSessionEvent::RunAborted(p) => vec![
-            format!("run_id: {}", p.run_id),
-            format!("reason: {:?}", p.reason),
-            format!(
-                "message: {}",
-                p.message.clone().unwrap_or_else(|| "<none>".to_string())
+            timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
+            timeline_detail_labeled_line(i18n, "timeline-label-reason", p.reason.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-message",
+                timeline_value_or_none(i18n, p.message.clone()),
             ),
         ],
         AgenaSessionEvent::UserMessageAppended(p) => vec![
-            format!("message_id: {}", p.message_id),
-            format!("run_id: {}", p.run_id),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-message-id",
+                p.message_id.to_string(),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
         ],
         AgenaSessionEvent::AssistantMessageCompleted(p) => vec![
-            format!("message_id: {}", p.message_id),
-            format!("run_id: {}", p.run_id),
-            format!("finish: {:?}", p.finish_reason),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-message-id",
+                p.message_id.to_string(),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-finish",
+                p.finish_reason.to_string(),
+            ),
         ],
         AgenaSessionEvent::ToolCallIssued(p) => vec![
-            format!("call_id: {}", p.call_id),
-            format!("name: {}", p.name),
-            format!("run_id: {}", p.run_id),
+            timeline_detail_labeled_line(i18n, "timeline-label-call-id", p.call_id.to_string()),
+            timeline_detail_labeled_line(i18n, "timeline-label-name", p.name.to_string()),
+            timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
         ],
         AgenaSessionEvent::ToolCallCompleted(p) => vec![
-            format!("call_id: {}", p.call_id),
-            format!("run_id: {}", p.run_id),
+            timeline_detail_labeled_line(i18n, "timeline-label-call-id", p.call_id.to_string()),
+            timeline_detail_labeled_line(i18n, "timeline-label-run-id", p.run_id.to_string()),
         ],
         AgenaSessionEvent::SystemNoticeAppended(p) => vec![
-            format!("message_id: {}", p.message_id),
-            format!("kind: {:?}", p.kind),
-            format!("text: {}", detail_excerpt(p.text.as_str(), 200)),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-message-id",
+                p.message_id.to_string(),
+            ),
+            timeline_detail_labeled_line(i18n, "timeline-label-kind", p.kind.to_string()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-text",
+                timeline_excerpt(i18n, p.text.as_str(), 200),
+            ),
         ],
         AgenaSessionEvent::PluginEvent(p) => vec![
-            format!("plugin_id: {}", p.plugin_id),
-            format!("kind_label: {}", p.kind_label),
-            format!("payload: {}", detail_excerpt(&p.payload.to_string(), 200)),
+            timeline_detail_labeled_line(i18n, "timeline-label-plugin-id", p.plugin_id.clone()),
+            timeline_detail_labeled_line(i18n, "timeline-label-kind-label", p.kind_label.clone()),
+            timeline_detail_labeled_line(
+                i18n,
+                "timeline-label-payload",
+                timeline_excerpt(i18n, &p.payload.to_string(), 200),
+            ),
         ],
     }
 }
 
-fn permission_risk_label(risk: PermissionRiskLevel) -> &'static str {
-    match risk {
-        PermissionRiskLevel::Low => "low",
-        PermissionRiskLevel::Medium => "medium",
-        PermissionRiskLevel::High => "high",
-        PermissionRiskLevel::Critical => "critical",
+fn timeline_detail_labeled_line(
+    i18n: &I18n,
+    label_key: &str,
+    value: impl Into<String>,
+) -> DetailTextLine<'static> {
+    app_detail_labeled_line(ui_text::t(i18n, label_key), value.into())
+}
+
+fn timeline_excerpt(i18n: &I18n, text: &str, max_chars: usize) -> String {
+    if text.trim().is_empty() {
+        ui_text::t(i18n, "value-none")
+    } else {
+        detail_excerpt(text, max_chars)
     }
 }
 
-fn permission_trace_step_label(step: &DecisionTraceStep) -> String {
+fn timeline_value_or_none<T: ToString>(i18n: &I18n, value: Option<T>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| ui_text::t(i18n, "value-none"))
+}
+
+fn timeline_value_or_unknown(i18n: &I18n, value: Option<&str>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| ui_text::t(i18n, "value-unknown"))
+}
+
+fn timeline_part_delta_field_token(field: &agena::event::PartDeltaField) -> String {
+    match field {
+        agena::event::PartDeltaField::Text => "text".to_string(),
+        agena::event::PartDeltaField::ReasoningSummary => "reasoning_summary".to_string(),
+        agena::event::PartDeltaField::ReasoningRawContent => "reasoning_raw_content".to_string(),
+        agena::event::PartDeltaField::CommandStdout => "command_stdout".to_string(),
+        agena::event::PartDeltaField::CommandStderr => "command_stderr".to_string(),
+        agena::event::PartDeltaField::ToolOutputText => "tool_output_text".to_string(),
+        agena::event::PartDeltaField::Custom { name } => format!("custom/{name}"),
+    }
+}
+
+fn timeline_command_output_stream_token(stream: agena::event::CommandOutputStream) -> &'static str {
+    match stream {
+        agena::event::CommandOutputStream::Stdout => "stdout",
+        agena::event::CommandOutputStream::Stderr => "stderr",
+    }
+}
+
+fn append_permission_trace_detail_lines(
+    i18n: &I18n,
+    lines: &mut Vec<DetailTextLine<'static>>,
+    trace: &[DecisionTraceStep],
+) {
+    if trace.is_empty() {
+        return;
+    }
+    lines.push(app_detail_plain_line(format!(
+        "{}:",
+        ui_text::t(i18n, "timeline-label-trace")
+    )));
+    lines.extend(trace.iter().map(|step| {
+        app_detail_plain_line(format!("  {}", permission_trace_step_label(i18n, step)))
+    }));
+}
+
+fn permission_risk_label(i18n: &I18n, risk: PermissionRiskLevel) -> String {
+    ui_text::t(
+        i18n,
+        match risk {
+            PermissionRiskLevel::Low => "value-risk-low",
+            PermissionRiskLevel::Medium => "value-risk-medium",
+            PermissionRiskLevel::High => "value-risk-high",
+            PermissionRiskLevel::Critical => "value-risk-critical",
+        },
+    )
+}
+
+fn permission_trace_step_label(i18n: &I18n, step: &DecisionTraceStep) -> String {
     let source_kind = match step.source_kind {
         PolicySourceKind::StaticPolicy => "static_policy",
         PolicySourceKind::PersistedRule => "persisted_rule",
@@ -16874,18 +18697,31 @@ fn permission_trace_step_label(step: &DecisionTraceStep) -> String {
     };
     let mut facts = vec![source_kind.to_string()];
     if let Some(source) = step.source.as_deref() {
-        facts.push(format!("source={source}"));
+        facts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-source").as_str(),
+            source,
+        ));
     }
     if let Some(scope) = step.scope {
-        facts.push(format!("scope={scope}"));
+        facts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-scope").as_str(),
+            permission_scope_label(i18n, scope).as_str(),
+        ));
     }
     if let Some(operator) = step.operator.as_deref() {
-        facts.push(format!("operator={operator}"));
+        facts.push(format_key_value_segment(
+            ui_text::t(i18n, "inline-fact-operator").as_str(),
+            operator,
+        ));
     }
-    format!("- {} — {}", facts.join(" · "), step.summary)
+    format!("- {} — {}", join_inline_segments(facts), step.summary)
 }
 
-fn append_permission_trace_lines(lines: &mut Vec<Line<'static>>, trace: &[DecisionTraceStep]) {
+fn append_permission_trace_lines(
+    i18n: &I18n,
+    lines: &mut Vec<Line<'static>>,
+    trace: &[DecisionTraceStep],
+) {
     if trace.is_empty() {
         return;
     }
@@ -16893,16 +18729,16 @@ fn append_permission_trace_lines(lines: &mut Vec<Line<'static>>, trace: &[Decisi
     lines.extend(
         trace
             .iter()
-            .map(|step| Line::from(permission_trace_step_label(step))),
+            .map(|step| Line::from(permission_trace_step_label(i18n, step))),
     );
 }
 
-fn append_permission_trace_strings(lines: &mut Vec<String>, trace: &[DecisionTraceStep]) {
-    if trace.is_empty() {
-        return;
+fn permission_scope_label(i18n: &I18n, scope: PermissionScope) -> String {
+    match scope {
+        PermissionScope::Session => ui_text::t(i18n, "value-session"),
+        PermissionScope::Workspace => ui_text::t(i18n, "value-workspace"),
+        PermissionScope::Global => ui_text::t(i18n, "value-global"),
     }
-    lines.push("trace:".to_string());
-    lines.extend(trace.iter().map(permission_trace_step_label));
 }
 
 fn detail_excerpt(text: &str, max_chars: usize) -> String {
@@ -17310,12 +19146,13 @@ fn session_sort_recent(left: &SessionResource, right: &SessionResource) -> std::
         .then_with(|| right.id.cmp(&left.id))
 }
 
-fn derive_session_title(text: &str) -> String {
+fn derive_session_title(i18n: &I18n, text: &str) -> String {
+    let fallback = ui_text::t(i18n, "composer-session-new");
     let first_line = text
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .unwrap_or("New session");
+        .unwrap_or(fallback.as_str());
     truncate_display_width(first_line, 60)
 }
 
@@ -17500,109 +19337,12 @@ fn run_status_line_command(
     (!line.is_empty()).then(|| line.to_string())
 }
 
-fn split_editor_lines_with_offsets(text: &str) -> Vec<Range<usize>> {
-    let mut start = 0;
-    let mut lines = Vec::new();
-    for (index, ch) in text.char_indices() {
-        if ch == '\n' {
-            lines.push(start..index);
-            start = index + 1;
-        }
-    }
-    lines.push(start..text.len());
-    lines
-}
-
-fn previous_grapheme_boundary(text: &str, index: usize) -> usize {
-    text[..index]
-        .grapheme_indices(true)
-        .next_back()
-        .map(|(index, _)| index)
-        .unwrap_or(0)
-}
-
 fn next_grapheme_boundary(text: &str, index: usize) -> usize {
     if index >= text.len() {
         return text.len();
     }
     let grapheme = text[index..].graphemes(true).next().unwrap_or_default();
     index + grapheme.len()
-}
-
-fn byte_index_at_display_column(line: &str, offset: usize, target_column: usize) -> usize {
-    let mut width = 0_usize;
-    for (index, grapheme) in line.grapheme_indices(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
-        if width.saturating_add(grapheme_width) > target_column {
-            return offset + index;
-        }
-        width = width.saturating_add(grapheme_width);
-    }
-    offset + line.len()
-}
-
-fn slice_display_window_styled(
-    text: &str,
-    range: Range<usize>,
-    start_column: usize,
-    width: usize,
-    elements: &[EditorElement],
-) -> Line<'static> {
-    if width == 0 {
-        return Line::default();
-    }
-
-    let end_column = start_column.saturating_add(width);
-    let line_text = &text[range.clone()];
-    let mut current_column = 0_usize;
-    let mut current_style = Style::default();
-    let mut current_segment = String::new();
-    let mut spans = Vec::new();
-
-    for (offset, grapheme) in line_text.grapheme_indices(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
-        let next_column = current_column.saturating_add(grapheme_width);
-        if next_column <= start_column {
-            current_column = next_column;
-            continue;
-        }
-        if current_column >= end_column {
-            break;
-        }
-
-        let absolute_start = range.start + offset;
-        let absolute_end = absolute_start + grapheme.len();
-        let style = if elements
-            .iter()
-            .any(|element| element.range.start < absolute_end && element.range.end > absolute_start)
-        {
-            Style::default()
-                .fg(Color::LightCyan)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-
-        if !current_segment.is_empty() && style != current_style {
-            spans.push(Span::styled(
-                std::mem::take(&mut current_segment),
-                current_style,
-            ));
-        }
-        current_style = style;
-        current_segment.push_str(grapheme);
-        current_column = next_column;
-    }
-
-    if !current_segment.is_empty() {
-        spans.push(Span::styled(current_segment, current_style));
-    }
-
-    if spans.is_empty() {
-        Line::from("")
-    } else {
-        Line::from(spans)
-    }
 }
 
 fn attachment_chip_label(
@@ -17672,145 +19412,6 @@ fn find_placeholder_occurrence(
     None
 }
 
-fn is_altgr(modifiers: KeyModifiers) -> bool {
-    cfg!(windows)
-        && modifiers.contains(KeyModifiers::CONTROL)
-        && modifiers.contains(KeyModifiers::ALT)
-}
-
-fn is_word_separator(ch: char) -> bool {
-    WORD_SEPARATORS.contains(ch)
-}
-
-fn is_word_grapheme(grapheme: &str) -> bool {
-    grapheme
-        .chars()
-        .any(|ch| !ch.is_whitespace() && !is_word_separator(ch))
-}
-
-fn retro_start_index(before: &str, retro_chars: usize) -> usize {
-    let mut index = before.len();
-    for _ in 0..retro_chars {
-        let previous = previous_grapheme_boundary(before, index);
-        if previous == index {
-            break;
-        }
-        index = previous;
-    }
-    index
-}
-
-impl PasteBurst {
-    fn on_plain_char(&mut self, ch: char, now: Instant) -> PasteCharDecision {
-        let interval = Duration::from_millis(PASTE_BURST_CHAR_INTERVAL_MS);
-        match self.last_plain_char_time {
-            Some(previous) if now.duration_since(previous) <= interval => {
-                self.consecutive_plain_char_burst =
-                    self.consecutive_plain_char_burst.saturating_add(1);
-            }
-            _ => self.consecutive_plain_char_burst = 1,
-        }
-        self.last_plain_char_time = Some(now);
-
-        if self.active {
-            self.extend_window(now);
-            return PasteCharDecision::BufferAppend;
-        }
-
-        if let Some((held, held_at)) = self.pending_first_char
-            && now.duration_since(held_at) <= interval
-        {
-            self.active = true;
-            let _ = self.pending_first_char.take();
-            self.buffer.push(held);
-            self.extend_window(now);
-            return PasteCharDecision::BeginBufferFromPending;
-        }
-
-        if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
-            return PasteCharDecision::BeginBuffer {
-                retro_chars: self.consecutive_plain_char_burst.saturating_sub(1),
-            };
-        }
-
-        self.pending_first_char = Some((ch, now));
-        PasteCharDecision::RetainFirstChar
-    }
-
-    fn flush_if_due(&mut self, now: Instant) -> PasteFlushResult {
-        let timed_out = self.last_plain_char_time.is_some_and(|previous| {
-            now.duration_since(previous) > Duration::from_millis(PASTE_BURST_CHAR_INTERVAL_MS)
-        });
-
-        if !timed_out {
-            return PasteFlushResult::None;
-        }
-
-        self.flush_now()
-    }
-
-    fn flush_now(&mut self) -> PasteFlushResult {
-        self.last_plain_char_time = None;
-        self.consecutive_plain_char_burst = 0;
-
-        if self.active || !self.buffer.is_empty() {
-            self.active = false;
-            self.burst_window_until = None;
-            let text = std::mem::take(&mut self.buffer);
-            return PasteFlushResult::Paste(text);
-        }
-
-        if let Some((ch, _)) = self.pending_first_char.take() {
-            self.burst_window_until = None;
-            return PasteFlushResult::Typed(ch);
-        }
-
-        PasteFlushResult::None
-    }
-
-    fn append_char_to_buffer(&mut self, ch: char, now: Instant) {
-        self.buffer.push(ch);
-        self.extend_window(now);
-    }
-
-    fn begin_with_retro_grabbed(&mut self, grabbed: String, now: Instant) {
-        if !grabbed.is_empty() {
-            self.buffer.push_str(grabbed.as_str());
-        }
-        self.active = true;
-        self.extend_window(now);
-    }
-
-    fn newline_should_insert_instead_of_submit(&self, now: Instant) -> bool {
-        self.active
-            || self.burst_window_until.is_some_and(|until| now <= until)
-            || self.pending_first_char.is_some()
-    }
-
-    fn append_newline_if_active(&mut self, now: Instant) -> bool {
-        if self.active {
-            self.buffer.push('\n');
-            self.extend_window(now);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn extend_window(&mut self, now: Instant) {
-        self.burst_window_until = Some(now + Duration::from_millis(PASTE_ENTER_SUPPRESS_WINDOW_MS));
-    }
-
-    fn clear_window_after_non_char(&mut self) {
-        self.last_plain_char_time = None;
-        self.consecutive_plain_char_burst = 0;
-        self.burst_window_until = None;
-        self.active = false;
-        self.pending_first_char = None;
-        self.buffer.clear();
-    }
-}
-
 impl RunOptionsState {
     fn clear_model_stack(&mut self) {
         self.model = None;
@@ -17820,46 +19421,51 @@ impl RunOptionsState {
         self.parallel_tool_calls = None;
     }
 
-    fn runtime_setting_summary(&self, field: RuntimeSettingSpec) -> String {
+    fn runtime_setting_summary(&self, i18n: &I18n, field: RuntimeSettingSpec) -> String {
         match field.id {
             RuntimeSettingId::ThinkingMode => self
                 .thinking_mode
                 .as_deref()
-                .map(|value| format!("override \"{value}\""))
-                .unwrap_or_else(|| "default".to_string()),
+                .map(|value| runtime_setting_override_summary(i18n, value))
+                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             RuntimeSettingId::SpeedMode => self
                 .speed_mode
                 .as_deref()
-                .map(|value| format!("override \"{value}\""))
-                .unwrap_or_else(|| "default".to_string()),
+                .map(|value| runtime_setting_override_summary(i18n, value))
+                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             RuntimeSettingId::Verbosity => self
                 .verbosity
                 .as_deref()
-                .map(|value| format!("override \"{value}\""))
-                .unwrap_or_else(|| "default".to_string()),
+                .map(|value| runtime_setting_override_summary(i18n, value))
+                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             RuntimeSettingId::ParallelToolCalls => self
                 .parallel_tool_calls
-                .map(|value| format!("override {}", if value { "on" } else { "off" }))
-                .unwrap_or_else(|| "default".to_string()),
+                .map(|value| {
+                    runtime_setting_override_summary(
+                        i18n,
+                        ui_text::t(i18n, if value { "value-on" } else { "value-off" }).as_str(),
+                    )
+                })
+                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             RuntimeSettingId::Temperature => self
                 .temperature
-                .map(|value| format!("override {value:.2}"))
-                .unwrap_or_else(|| "default".to_string()),
+                .map(|value| runtime_setting_override_summary(i18n, format!("{value:.2}").as_str()))
+                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             RuntimeSettingId::MaxOutput => self
                 .max_output_tokens
-                .map(|value| format!("override {}", value))
-                .unwrap_or_else(|| "default".to_string()),
+                .map(|value| runtime_setting_override_summary(i18n, value.to_string().as_str()))
+                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
             RuntimeSettingId::System => self
                 .system
                 .as_ref()
                 .filter(|value| !value.trim().is_empty())
                 .map(|value| {
-                    format!(
-                        "override {}",
-                        format_setting_value_inline(&JsonValue::String(value.clone()))
+                    runtime_setting_override_summary(
+                        i18n,
+                        format_setting_value_inline(&JsonValue::String(value.clone())).as_str(),
                     )
                 })
-                .unwrap_or_else(|| "default".to_string()),
+                .unwrap_or_else(|| ui_text::t(i18n, "value-default")),
         }
     }
 
@@ -17892,10 +19498,12 @@ impl RunOptionsState {
 
     fn apply_runtime_setting_input(
         &mut self,
+        i18n: &I18n,
         field: RuntimeSettingSpec,
         input: &str,
     ) -> std::result::Result<String, String> {
         let trimmed = input.trim();
+        let field_label = runtime_setting_display_label(i18n, field);
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("clear") {
             match field.id {
                 RuntimeSettingId::ThinkingMode => self.thinking_mode = None,
@@ -17906,7 +19514,10 @@ impl RunOptionsState {
                 RuntimeSettingId::MaxOutput => self.max_output_tokens = None,
                 RuntimeSettingId::System => self.system = None,
             }
-            return Ok(format!("cleared {}", field.label.to_ascii_lowercase()));
+            return Ok(i18n.text_args(
+                "runtime-setting-apply-cleared",
+                &crate::fl_args!("field" => field_label),
+            ));
         }
 
         match field.id {
@@ -17918,36 +19529,51 @@ impl RunOptionsState {
                     "true" | "on" | "yes" | "1" | "enabled" => true,
                     "false" | "off" | "no" | "0" | "disabled" => false,
                     _ => {
-                        return Err(format!(
-                            "{} expects true/false, on/off, yes/no, or 1/0",
-                            field.label
+                        return Err(i18n.text_args(
+                            "runtime-setting-error-bool",
+                            &crate::fl_args!("field" => field_label.clone()),
                         ));
                     }
                 };
                 self.parallel_tool_calls = Some(value);
             }
             RuntimeSettingId::Temperature => {
-                let value = trimmed
-                    .parse::<f32>()
-                    .map_err(|_| format!("{} expects a numeric value", field.label))?;
+                let value = trimmed.parse::<f32>().map_err(|_| {
+                    i18n.text_args(
+                        "runtime-setting-error-number",
+                        &crate::fl_args!("field" => field_label.clone()),
+                    )
+                })?;
                 if !value.is_finite() {
-                    return Err(format!("{} expects a finite number", field.label));
+                    return Err(i18n.text_args(
+                        "runtime-setting-error-finite",
+                        &crate::fl_args!("field" => field_label.clone()),
+                    ));
                 }
                 self.temperature = Some(value);
             }
             RuntimeSettingId::MaxOutput => {
-                let value = trimmed
-                    .parse::<u32>()
-                    .map_err(|_| format!("{} expects a positive integer", field.label))?;
+                let value = trimmed.parse::<u32>().map_err(|_| {
+                    i18n.text_args(
+                        "runtime-setting-error-positive-int",
+                        &crate::fl_args!("field" => field_label.clone()),
+                    )
+                })?;
                 if value == 0 {
-                    return Err(format!("{} expects a positive integer", field.label));
+                    return Err(i18n.text_args(
+                        "runtime-setting-error-positive-int",
+                        &crate::fl_args!("field" => field_label.clone()),
+                    ));
                 }
                 self.max_output_tokens = Some(value);
             }
             RuntimeSettingId::System => self.system = Some(trimmed.to_string()),
         }
 
-        Ok(format!("updated {}", field.label.to_ascii_lowercase()))
+        Ok(i18n.text_args(
+            "runtime-setting-apply-updated",
+            &crate::fl_args!("field" => field_label),
+        ))
     }
 
     fn to_request(&self) -> RunOptions {
@@ -17964,38 +19590,62 @@ impl RunOptionsState {
         }
     }
 
-    fn summary(&self) -> Option<String> {
+    fn summary(&self, i18n: &I18n) -> Option<String> {
         let mut parts = Vec::new();
         if let Some(model) = self.model.as_ref() {
             parts.push(format!("{}/{}", model.provider_id, model.model_id));
         }
         if let Some(thinking_mode) = self.thinking_mode.as_ref() {
-            parts.push(format!("thinking {}", thinking_mode));
+            parts.push(i18n.text_args(
+                "run-options-summary-thinking",
+                &crate::fl_args!("value" => thinking_mode),
+            ));
         }
         if let Some(speed_mode) = self.speed_mode.as_ref() {
-            parts.push(format!("speed {}", speed_mode));
+            parts.push(i18n.text_args(
+                "run-options-summary-speed",
+                &crate::fl_args!("value" => speed_mode),
+            ));
         }
         if let Some(verbosity) = self.verbosity.as_ref() {
-            parts.push(format!("verbosity {}", verbosity));
+            parts.push(i18n.text_args(
+                "run-options-summary-verbosity",
+                &crate::fl_args!("value" => verbosity),
+            ));
         }
         if let Some(parallel_tool_calls) = self.parallel_tool_calls {
-            parts.push(format!(
-                "parallel-tools {}",
-                if parallel_tool_calls { "on" } else { "off" }
+            parts.push(i18n.text_args(
+                "run-options-summary-parallel-tools",
+                &crate::fl_args!(
+                    "value" => ui_text::t(
+                        i18n,
+                        if parallel_tool_calls {
+                            "value-on"
+                        } else {
+                            "value-off"
+                        },
+                    )
+                ),
             ));
         }
         if let Some(temperature) = self.temperature {
-            parts.push(format!("temp {:.2}", temperature));
+            parts.push(i18n.text_args(
+                "run-options-summary-temperature",
+                &crate::fl_args!("value" => format!("{temperature:.2}")),
+            ));
         }
         if let Some(max_output_tokens) = self.max_output_tokens {
-            parts.push(format!("max {}", max_output_tokens));
+            parts.push(i18n.text_args(
+                "run-options-summary-max-output",
+                &crate::fl_args!("value" => max_output_tokens as i64),
+            ));
         }
         if self
             .system
             .as_ref()
             .is_some_and(|system| !system.trim().is_empty())
         {
-            parts.push("system".to_string());
+            parts.push(ui_text::t(i18n, "run-options-summary-system"));
         }
         (!parts.is_empty()).then(|| parts.join(" | "))
     }
@@ -18153,7 +19803,7 @@ fn permission_rule_draft_from_request(request: &PermissionRequest) -> Permission
     draft
 }
 
-fn permission_rule_label(rule: &PermissionRuleResource) -> String {
+fn permission_rule_label(i18n: &I18n, rule: &PermissionRuleResource) -> String {
     match rule.subject_kind.as_str() {
         "tool" => match (rule.tool_name.as_deref(), rule.qualifier.as_deref()) {
             (Some(tool_name), Some(qualifier)) if !qualifier.trim().is_empty() => {
@@ -18162,12 +19812,19 @@ fn permission_rule_label(rule: &PermissionRuleResource) -> String {
             (Some(tool_name), _) => tool_name.to_string(),
             _ => rule.action_key.clone(),
         },
-        "path_access" => format!(
-            "{} · {}",
-            rule.path_access_kind.as_deref().unwrap_or("path"),
-            rule.target_path
-                .as_deref()
-                .unwrap_or(rule.action_key.as_str())
+        "path_access" => i18n.text_args(
+            "permission-rule-label-path",
+            &crate::fl_args!(
+                "access" => permission_rule_path_access_kind_display(
+                    i18n,
+                    rule.path_access_kind.as_deref().unwrap_or("path"),
+                ),
+                "path" => rule
+                    .target_path
+                    .as_deref()
+                    .unwrap_or(rule.action_key.as_str())
+                    .to_string(),
+            ),
         ),
         "network_access" => {
             let host = rule
@@ -18175,54 +19832,87 @@ fn permission_rule_label(rule: &PermissionRuleResource) -> String {
                 .as_deref()
                 .or(rule.network_target.as_deref())
                 .unwrap_or(rule.action_key.as_str());
-            match rule.network_port {
-                Some(port) => format!("network · {host}:{port}"),
-                None => format!("network · {host}"),
-            }
+            let target = match rule.network_port {
+                Some(port) => format!("{host}:{port}"),
+                None => host.to_string(),
+            };
+            i18n.text_args(
+                "permission-rule-label-network",
+                &crate::fl_args!("target" => target),
+            )
         }
         _ => rule.action_key.clone(),
     }
 }
 
-fn permission_rule_scope_label(rule: &PermissionRuleResource) -> String {
+fn permission_rule_scope_label(i18n: &I18n, rule: &PermissionRuleResource) -> String {
     match rule.scope.as_str() {
         "session" => rule
             .session_id
-            .map(|id| format!("session #{id}"))
-            .unwrap_or_else(|| "session".to_string()),
+            .map(|id| {
+                i18n.text_args(
+                    "permission-rule-scope-session",
+                    &crate::fl_args!("id" => id),
+                )
+            })
+            .unwrap_or_else(|| ui_text::t(i18n, "permission-rule-scope-session-generic")),
         "workspace" => rule
             .workspace_id
-            .map(|id| format!("workspace #{id}"))
-            .unwrap_or_else(|| "workspace".to_string()),
+            .map(|id| {
+                i18n.text_args(
+                    "permission-rule-scope-workspace",
+                    &crate::fl_args!("id" => id),
+                )
+            })
+            .unwrap_or_else(|| ui_text::t(i18n, "permission-rule-scope-workspace-generic")),
+        "global" => ui_text::t(i18n, "value-global"),
         other => other.to_string(),
     }
 }
 
-fn permission_rule_detail(rule: &PermissionRuleResource) -> String {
+fn permission_rule_detail(i18n: &I18n, rule: &PermissionRuleResource) -> String {
     let mut facts = vec![
-        format!("mode={}", permission_mode_name(rule.mode)),
-        format!("scope={}", permission_rule_scope_label(rule)),
-        format!("source={}", rule.source),
+        i18n.text_args(
+            "permission-rule-detail-mode",
+            &crate::fl_args!("mode" => permission_mode_display(i18n, rule.mode)),
+        ),
+        i18n.text_args(
+            "permission-rule-detail-scope",
+            &crate::fl_args!("scope" => permission_rule_scope_label(i18n, rule)),
+        ),
+        i18n.text_args(
+            "permission-rule-detail-source",
+            &crate::fl_args!("source" => rule.source.clone()),
+        ),
     ];
     if let Some(operator) = rule
         .operator
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        facts.push(format!("operator={operator}"));
+        facts.push(i18n.text_args(
+            "permission-rule-detail-operator",
+            &crate::fl_args!("operator" => operator.to_string()),
+        ));
     }
     if let Some(reason) = rule
         .reason
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        facts.push(format!("reason={reason}"));
+        facts.push(i18n.text_args(
+            "permission-rule-detail-reason",
+            &crate::fl_args!("reason" => reason.to_string()),
+        ));
     }
-    facts.push(format!("updated={}", rule.updated_at));
-    facts.join(" · ")
+    facts.push(i18n.text_args(
+        "permission-rule-detail-updated",
+        &crate::fl_args!("updated" => rule.updated_at.to_string()),
+    ));
+    join_inline_segments(facts)
 }
 
-fn permission_rule_draft_label(draft: &PermissionRuleDraft) -> String {
+fn permission_rule_draft_label(i18n: &I18n, draft: &PermissionRuleDraft) -> String {
     match draft.subject_kind {
         PermissionRuleSubjectKind::Tool => {
             let tool_name = draft.tool_name.trim();
@@ -18233,20 +19923,543 @@ fn permission_rule_draft_label(draft: &PermissionRuleDraft) -> String {
                 format!("{tool_name} · {qualifier}")
             }
         }
-        PermissionRuleSubjectKind::PathAccess => {
-            format!(
-                "{} · {}",
-                draft.path_access_kind.trim(),
-                draft.target_path.trim()
-            )
-        }
+        PermissionRuleSubjectKind::PathAccess => format!(
+            "{} · {}",
+            permission_rule_path_access_kind_display(i18n, draft.path_access_kind.trim()),
+            draft.target_path.trim()
+        ),
         PermissionRuleSubjectKind::NetworkAccess => {
             let target = draft.network_target.trim();
             if target.is_empty() {
-                "network".to_string()
+                ui_text::t(i18n, "value-network")
             } else {
-                format!("network · {target}")
+                i18n.text_args(
+                    "permission-rule-label-network",
+                    &crate::fl_args!("target" => target.to_string()),
+                )
             }
+        }
+    }
+}
+
+fn permission_rule_subject_kind_name(kind: PermissionRuleSubjectKind) -> &'static str {
+    match kind {
+        PermissionRuleSubjectKind::Tool => "tool",
+        PermissionRuleSubjectKind::PathAccess => "path_access",
+        PermissionRuleSubjectKind::NetworkAccess => "network_access",
+    }
+}
+
+fn permission_rule_mode_label(mode: PermissionMode) -> &'static str {
+    permission_mode_name(mode)
+}
+
+fn permission_mode_display(i18n: &I18n, mode: PermissionMode) -> String {
+    ui_text::t(
+        i18n,
+        match mode {
+            PermissionMode::Allow => "value-allow",
+            PermissionMode::Ask => "value-ask",
+            PermissionMode::Deny => "value-deny",
+        },
+    )
+}
+
+fn permission_mode_token_display(i18n: &I18n, mode: &str) -> String {
+    match mode.trim() {
+        "allow" => ui_text::t(i18n, "value-allow"),
+        "ask" => ui_text::t(i18n, "value-ask"),
+        "deny" => ui_text::t(i18n, "value-deny"),
+        other => other.to_string(),
+    }
+}
+
+fn permission_rule_subject_kind_display(i18n: &I18n, kind: PermissionRuleSubjectKind) -> String {
+    ui_text::t(
+        i18n,
+        match kind {
+            PermissionRuleSubjectKind::Tool => "value-permission-rule-subject-tool",
+            PermissionRuleSubjectKind::PathAccess => "value-permission-rule-subject-path-access",
+            PermissionRuleSubjectKind::NetworkAccess => {
+                "value-permission-rule-subject-network-access"
+            }
+        },
+    )
+}
+
+fn permission_rule_path_access_kind_display(i18n: &I18n, kind: &str) -> String {
+    match kind.trim() {
+        "read" => ui_text::t(i18n, "value-read"),
+        "write" => ui_text::t(i18n, "value-write"),
+        "read_write" => ui_text::t(i18n, "value-read-write"),
+        "path" => ui_text::t(i18n, "value-path"),
+        other => other.to_string(),
+    }
+}
+
+fn permission_rule_scope_display(i18n: &I18n, scope: &str) -> String {
+    match scope.trim() {
+        "session" => ui_text::t(i18n, "value-session"),
+        "workspace" => ui_text::t(i18n, "value-workspace"),
+        "global" => ui_text::t(i18n, "value-global"),
+        other => other.to_string(),
+    }
+}
+
+fn permission_rule_value_or(i18n: &I18n, value: &str, fallback_key: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        ui_text::t(i18n, fallback_key)
+    } else {
+        value.to_string()
+    }
+}
+
+fn permission_rule_studio_item(
+    i18n: &I18n,
+    label_key: &str,
+    value: String,
+    detail_key: &str,
+    action: PermissionRuleStudioAction,
+) -> PermissionRuleStudioItem {
+    PermissionRuleStudioItem {
+        label: ui_text::t(i18n, label_key),
+        value,
+        detail: ui_text::t(i18n, detail_key),
+        action,
+    }
+}
+
+fn permission_rule_choice_overlay_spec(
+    i18n: &I18n,
+    draft: &PermissionRuleDraft,
+    field: PermissionRuleStudioChoiceField,
+) -> (String, String, Editor, Vec<ChoiceItem>, bool) {
+    match field {
+        PermissionRuleStudioChoiceField::SubjectKind => (
+            ui_text::t(i18n, "overlay-permission-rule-choice-subject-title"),
+            ui_text::t(i18n, "overlay-permission-rule-choice-subject-prompt"),
+            Editor::from_text(permission_rule_subject_kind_name(draft.subject_kind).to_string()),
+            vec![
+                choice_item(
+                    "tool",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-subject-tool-detail"),
+                ),
+                choice_item(
+                    "path_access",
+                    ui_text::t(
+                        i18n,
+                        "overlay-permission-rule-choice-subject-path-access-detail",
+                    ),
+                ),
+                choice_item(
+                    "network_access",
+                    ui_text::t(
+                        i18n,
+                        "overlay-permission-rule-choice-subject-network-access-detail",
+                    ),
+                ),
+            ],
+            false,
+        ),
+        PermissionRuleStudioChoiceField::PathAccessKind => (
+            ui_text::t(i18n, "overlay-permission-rule-choice-access-title"),
+            ui_text::t(i18n, "overlay-permission-rule-choice-access-prompt"),
+            Editor::from_text(draft.path_access_kind.clone()),
+            vec![
+                choice_item(
+                    "read",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-access-read-detail"),
+                ),
+                choice_item(
+                    "write",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-access-write-detail"),
+                ),
+                choice_item(
+                    "read_write",
+                    ui_text::t(
+                        i18n,
+                        "overlay-permission-rule-choice-access-read-write-detail",
+                    ),
+                ),
+            ],
+            false,
+        ),
+        PermissionRuleStudioChoiceField::Scope => (
+            ui_text::t(i18n, "overlay-permission-rule-choice-scope-title"),
+            ui_text::t(i18n, "overlay-permission-rule-choice-scope-prompt"),
+            Editor::from_text(draft.scope.clone()),
+            vec![
+                choice_item(
+                    "session",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-scope-session-detail"),
+                ),
+                choice_item(
+                    "workspace",
+                    ui_text::t(
+                        i18n,
+                        "overlay-permission-rule-choice-scope-workspace-detail",
+                    ),
+                ),
+                choice_item(
+                    "global",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-scope-global-detail"),
+                ),
+            ],
+            false,
+        ),
+        PermissionRuleStudioChoiceField::Mode => (
+            ui_text::t(i18n, "overlay-permission-rule-choice-mode-title"),
+            ui_text::t(i18n, "overlay-permission-rule-choice-mode-prompt"),
+            Editor::from_text(permission_rule_mode_label(draft.mode).to_string()),
+            vec![
+                choice_item(
+                    "allow",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-mode-allow-detail"),
+                ),
+                choice_item(
+                    "ask",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-mode-ask-detail"),
+                ),
+                choice_item(
+                    "deny",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-mode-deny-detail"),
+                ),
+            ],
+            false,
+        ),
+    }
+}
+
+fn permission_rule_editor_spec(
+    i18n: &I18n,
+    draft: &PermissionRuleDraft,
+    field: PermissionRuleStudioEditField,
+) -> (String, String, String, String) {
+    let footer = ui_text::t(i18n, "overlay-permission-rule-editor-footer");
+    match field {
+        PermissionRuleStudioEditField::ToolName => (
+            ui_text::t(i18n, "overlay-permission-rule-editor-tool-name-title"),
+            ui_text::t(i18n, "overlay-permission-rule-editor-tool-name-prompt"),
+            footer,
+            draft.tool_name.clone(),
+        ),
+        PermissionRuleStudioEditField::Qualifier => (
+            ui_text::t(i18n, "overlay-permission-rule-editor-qualifier-title"),
+            ui_text::t(i18n, "overlay-permission-rule-editor-qualifier-prompt"),
+            footer,
+            draft.qualifier.clone(),
+        ),
+        PermissionRuleStudioEditField::WorkspaceRoot => (
+            ui_text::t(i18n, "overlay-permission-rule-editor-workspace-root-title"),
+            ui_text::t(i18n, "overlay-permission-rule-editor-workspace-root-prompt"),
+            footer,
+            draft.workspace_root.clone(),
+        ),
+        PermissionRuleStudioEditField::TargetPath => (
+            ui_text::t(i18n, "overlay-permission-rule-editor-target-path-title"),
+            ui_text::t(i18n, "overlay-permission-rule-editor-target-path-prompt"),
+            footer,
+            draft.target_path.clone(),
+        ),
+        PermissionRuleStudioEditField::NetworkTarget => (
+            ui_text::t(i18n, "overlay-permission-rule-editor-network-target-title"),
+            ui_text::t(i18n, "overlay-permission-rule-editor-network-target-prompt"),
+            footer,
+            draft.network_target.clone(),
+        ),
+        PermissionRuleStudioEditField::SessionId => (
+            ui_text::t(i18n, "overlay-permission-rule-editor-session-id-title"),
+            ui_text::t(i18n, "overlay-permission-rule-editor-session-id-prompt"),
+            footer,
+            draft.session_id.clone(),
+        ),
+    }
+}
+
+fn permission_rule_path_browser_spec(
+    i18n: &I18n,
+    draft: &PermissionRuleDraft,
+    field: PermissionRuleStudioPathField,
+) -> (String, String, PathBrowserMode, String) {
+    match field {
+        PermissionRuleStudioPathField::WorkspaceRoot => (
+            ui_text::t(i18n, "overlay-permission-rule-browser-workspace-root-title"),
+            ui_text::t(
+                i18n,
+                "overlay-permission-rule-browser-workspace-root-prompt",
+            ),
+            PathBrowserMode::DirectoryOnly,
+            draft.workspace_root.clone(),
+        ),
+        PermissionRuleStudioPathField::TargetPath => (
+            ui_text::t(i18n, "overlay-permission-rule-browser-target-path-title"),
+            ui_text::t(i18n, "overlay-permission-rule-browser-target-path-prompt"),
+            PathBrowserMode::AnyPath,
+            draft.target_path.clone(),
+        ),
+    }
+}
+
+fn permission_rule_preview_lines(i18n: &I18n, draft: &PermissionRuleDraft) -> Vec<String> {
+    let mut lines = vec![
+        i18n.text_args(
+            "overlay-permission-rule-preview-label",
+            &crate::fl_args!("label" => permission_rule_draft_label(i18n, draft)),
+        ),
+        i18n.text_args(
+            "overlay-permission-rule-preview-mode",
+            &crate::fl_args!("mode" => permission_mode_display(i18n, draft.mode)),
+        ),
+        i18n.text_args(
+            "overlay-permission-rule-preview-scope",
+            &crate::fl_args!("scope" => permission_rule_scope_display(i18n, draft.scope.as_str())),
+        ),
+    ];
+    match draft.subject_kind {
+        PermissionRuleSubjectKind::Tool => {
+            lines.push(i18n.text_args(
+                "overlay-permission-rule-preview-subject-tool",
+                &crate::fl_args!("tool" => draft.tool_name.trim().to_string()),
+            ));
+            if !draft.qualifier.trim().is_empty() {
+                lines.push(i18n.text_args(
+                    "overlay-permission-rule-preview-qualifier",
+                    &crate::fl_args!("qualifier" => draft.qualifier.trim().to_string()),
+                ));
+            }
+        }
+        PermissionRuleSubjectKind::PathAccess => {
+            lines.push(i18n.text_args(
+                "overlay-permission-rule-preview-subject-path",
+                &crate::fl_args!(
+                    "access" => permission_rule_path_access_kind_display(
+                        i18n,
+                        draft.path_access_kind.trim(),
+                    ),
+                ),
+            ));
+            lines.push(i18n.text_args(
+                "overlay-permission-rule-preview-target",
+                &crate::fl_args!("target" => draft.target_path.trim().to_string()),
+            ));
+            if !draft.workspace_root.trim().is_empty() {
+                lines.push(i18n.text_args(
+                    "overlay-permission-rule-preview-workspace-root",
+                    &crate::fl_args!("path" => draft.workspace_root.trim().to_string()),
+                ));
+            }
+        }
+        PermissionRuleSubjectKind::NetworkAccess => {
+            lines.push(ui_text::t(
+                i18n,
+                "overlay-permission-rule-preview-subject-network",
+            ));
+            lines.push(i18n.text_args(
+                "overlay-permission-rule-preview-target",
+                &crate::fl_args!("target" => draft.network_target.trim().to_string()),
+            ));
+        }
+    }
+    if draft.scope == "session" && !draft.session_id.trim().is_empty() {
+        lines.push(i18n.text_args(
+            "overlay-permission-rule-preview-session-id",
+            &crate::fl_args!("session" => draft.session_id.trim().to_string()),
+        ));
+    }
+    lines
+}
+
+fn permission_rule_studio_items(
+    i18n: &I18n,
+    draft: &PermissionRuleDraft,
+    rule_id: Option<i64>,
+) -> Vec<PermissionRuleStudioItem> {
+    let mut items = vec![
+        permission_rule_studio_item(
+            i18n,
+            "overlay-permission-rule-item-subject-kind",
+            permission_rule_subject_kind_display(i18n, draft.subject_kind),
+            "overlay-permission-rule-item-subject-kind-detail",
+            PermissionRuleStudioAction::SubjectKind,
+        ),
+        permission_rule_studio_item(
+            i18n,
+            "overlay-permission-rule-item-mode",
+            permission_mode_display(i18n, draft.mode),
+            "overlay-permission-rule-item-mode-detail",
+            PermissionRuleStudioAction::Mode,
+        ),
+        permission_rule_studio_item(
+            i18n,
+            "overlay-permission-rule-item-scope",
+            permission_rule_scope_display(i18n, draft.scope.as_str()),
+            "overlay-permission-rule-item-scope-detail",
+            PermissionRuleStudioAction::Scope,
+        ),
+    ];
+
+    if draft.scope == "session" {
+        items.push(permission_rule_studio_item(
+            i18n,
+            "overlay-permission-rule-item-session-id",
+            permission_rule_value_or(i18n, draft.session_id.as_str(), "value-unset"),
+            "overlay-permission-rule-item-session-id-detail",
+            PermissionRuleStudioAction::SessionId,
+        ));
+    }
+
+    match draft.subject_kind {
+        PermissionRuleSubjectKind::Tool => {
+            items.push(permission_rule_studio_item(
+                i18n,
+                "overlay-permission-rule-item-tool-name",
+                permission_rule_value_or(i18n, draft.tool_name.as_str(), "value-unset"),
+                "overlay-permission-rule-item-tool-name-detail",
+                PermissionRuleStudioAction::ToolName,
+            ));
+            items.push(permission_rule_studio_item(
+                i18n,
+                "overlay-permission-rule-item-qualifier",
+                permission_rule_value_or(i18n, draft.qualifier.as_str(), "value-none"),
+                "overlay-permission-rule-item-qualifier-detail",
+                PermissionRuleStudioAction::Qualifier,
+            ));
+        }
+        PermissionRuleSubjectKind::PathAccess => {
+            items.push(permission_rule_studio_item(
+                i18n,
+                "overlay-permission-rule-item-access-kind",
+                permission_rule_path_access_kind_display(i18n, draft.path_access_kind.as_str()),
+                "overlay-permission-rule-item-access-kind-detail",
+                PermissionRuleStudioAction::PathAccessKind,
+            ));
+            items.push(permission_rule_studio_item(
+                i18n,
+                "overlay-permission-rule-item-target-path",
+                permission_rule_value_or(i18n, draft.target_path.as_str(), "value-unset"),
+                "overlay-permission-rule-item-target-path-detail",
+                PermissionRuleStudioAction::TargetPath,
+            ));
+            items.push(permission_rule_studio_item(
+                i18n,
+                "overlay-permission-rule-item-browse-target-path",
+                ui_text::t(i18n, "overlay-permission-rule-item-browser-value"),
+                "overlay-permission-rule-item-browse-target-path-detail",
+                PermissionRuleStudioAction::BrowseTargetPath,
+            ));
+            items.push(permission_rule_studio_item(
+                i18n,
+                "overlay-permission-rule-item-workspace-root",
+                permission_rule_value_or(
+                    i18n,
+                    draft.workspace_root.as_str(),
+                    "value-runtime-default",
+                ),
+                "overlay-permission-rule-item-workspace-root-detail",
+                PermissionRuleStudioAction::WorkspaceRoot,
+            ));
+            items.push(permission_rule_studio_item(
+                i18n,
+                "overlay-permission-rule-item-browse-workspace-root",
+                ui_text::t(i18n, "overlay-permission-rule-item-browser-value"),
+                "overlay-permission-rule-item-browse-workspace-root-detail",
+                PermissionRuleStudioAction::BrowseWorkspaceRoot,
+            ));
+        }
+        PermissionRuleSubjectKind::NetworkAccess => {
+            items.push(permission_rule_studio_item(
+                i18n,
+                "overlay-permission-rule-item-network-target",
+                permission_rule_value_or(i18n, draft.network_target.as_str(), "value-unset"),
+                "overlay-permission-rule-item-network-target-detail",
+                PermissionRuleStudioAction::NetworkTarget,
+            ));
+        }
+    }
+
+    items.push(permission_rule_studio_item(
+        i18n,
+        "overlay-permission-rule-item-save",
+        permission_rule_draft_label(i18n, draft),
+        "overlay-permission-rule-item-save-detail",
+        PermissionRuleStudioAction::Save,
+    ));
+
+    if rule_id.is_some() {
+        items.push(permission_rule_studio_item(
+            i18n,
+            "overlay-permission-rule-item-revoke",
+            ui_text::t(i18n, "value-inactive"),
+            "overlay-permission-rule-item-revoke-detail",
+            PermissionRuleStudioAction::Revoke,
+        ));
+    }
+
+    items
+}
+
+fn refresh_permission_rule_studio_dialog(i18n: &I18n, dialog: &mut PermissionRuleStudioOverlay) {
+    let preferred_item = dialog
+        .workbench
+        .list
+        .selected_item()
+        .map(|item| item.label.as_str());
+    let items = permission_rule_studio_items(i18n, &dialog.draft, dialog.rule_id);
+    let selected = preferred_item
+        .and_then(|label| items.iter().position(|item| item.label == label))
+        .unwrap_or(0);
+    dialog.workbench.list = SelectableListState::new(items, selected);
+}
+
+fn permission_rule_studio_detail_text(
+    i18n: &I18n,
+    draft: &PermissionRuleDraft,
+    item: &PermissionRuleStudioItem,
+) -> String {
+    match item.action {
+        PermissionRuleStudioAction::SubjectKind => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-subject-kind")
+        }
+        PermissionRuleStudioAction::ToolName => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-tool-name")
+        }
+        PermissionRuleStudioAction::Qualifier => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-qualifier")
+        }
+        PermissionRuleStudioAction::PathAccessKind => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-path-access-kind")
+        }
+        PermissionRuleStudioAction::WorkspaceRoot => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-workspace-root")
+        }
+        PermissionRuleStudioAction::BrowseWorkspaceRoot => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-browse-workspace-root")
+        }
+        PermissionRuleStudioAction::TargetPath => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-target-path")
+        }
+        PermissionRuleStudioAction::BrowseTargetPath => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-browse-target-path")
+        }
+        PermissionRuleStudioAction::NetworkTarget => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-network-target")
+        }
+        PermissionRuleStudioAction::Scope => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-scope")
+        }
+        PermissionRuleStudioAction::SessionId => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-session-id")
+        }
+        PermissionRuleStudioAction::Mode => ui_text::t(i18n, "overlay-permission-rule-detail-mode"),
+        PermissionRuleStudioAction::Save => {
+            let mut lines = vec![ui_text::t(i18n, "overlay-permission-rule-preview-heading")];
+            lines.push(String::new());
+            lines.extend(permission_rule_preview_lines(i18n, draft));
+            lines.join("\n")
+        }
+        PermissionRuleStudioAction::Revoke => {
+            ui_text::t(i18n, "overlay-permission-rule-detail-revoke")
         }
     }
 }
@@ -18305,40 +20518,13 @@ fn render_permission_rule_draft(draft: &PermissionRuleDraft) -> String {
     }
 }
 
-fn render_permission_rule_preview(input: &str) -> String {
-    match parse_permission_rule_input(input) {
-        Ok(draft) => {
-            let mut lines = vec![format!("label: {}", permission_rule_draft_label(&draft))];
-            lines.push(format!("mode: {}", permission_mode_name(draft.mode)));
-            lines.push(format!("scope: {}", draft.scope));
-            match draft.subject_kind {
-                PermissionRuleSubjectKind::Tool => {
-                    lines.push(format!("subject: tool ({})", draft.tool_name.trim()));
-                    if !draft.qualifier.trim().is_empty() {
-                        lines.push(format!("qualifier: {}", draft.qualifier.trim()));
-                    }
-                }
-                PermissionRuleSubjectKind::PathAccess => {
-                    lines.push(format!(
-                        "subject: path_access ({})",
-                        draft.path_access_kind.trim()
-                    ));
-                    lines.push(format!("target: {}", draft.target_path.trim()));
-                    if !draft.workspace_root.trim().is_empty() {
-                        lines.push(format!("workspace_root: {}", draft.workspace_root.trim()));
-                    }
-                }
-                PermissionRuleSubjectKind::NetworkAccess => {
-                    lines.push("subject: network_access".to_string());
-                    lines.push(format!("target: {}", draft.network_target.trim()));
-                }
-            }
-            if draft.scope == "session" && !draft.session_id.trim().is_empty() {
-                lines.push(format!("session_id: {}", draft.session_id.trim()));
-            }
-            lines.join("\n")
-        }
-        Err(error) => format!("invalid rule: {error}"),
+fn render_permission_rule_preview(i18n: &I18n, input: &str) -> String {
+    match parse_permission_rule_input(i18n, input) {
+        Ok(draft) => permission_rule_preview_lines(i18n, &draft).join("\n"),
+        Err(error) => i18n.text_args(
+            "overlay-permission-rule-preview-invalid",
+            &crate::fl_args!("error" => error),
+        ),
     }
 }
 
@@ -18413,13 +20599,17 @@ fn permission_rule_params_from_draft(draft: &PermissionRuleDraft) -> UpsertPermi
     }
 }
 
-fn parse_permission_rule_input(input: &str) -> std::result::Result<PermissionRuleDraft, String> {
-    let tokens = shlex::split(input).ok_or_else(|| "invalid shell-style arguments".to_string())?;
+fn parse_permission_rule_input(
+    i18n: &I18n,
+    input: &str,
+) -> std::result::Result<PermissionRuleDraft, String> {
+    let tokens = shlex::split(input)
+        .ok_or_else(|| ui_text::t(i18n, "permission-rule-error-invalid-shell-args"))?;
     if tokens.len() < 4 {
-        return Err(
-            "expected a structured rule starting with tool/path and ending with allow|ask|deny"
-                .to_string(),
-        );
+        return Err(ui_text::t(
+            i18n,
+            "permission-rule-error-expected-structured",
+        ));
     }
     let subject = tokens[0].to_ascii_lowercase();
     let mut draft = PermissionRuleDraft::default();
@@ -18427,89 +20617,128 @@ fn parse_permission_rule_input(input: &str) -> std::result::Result<PermissionRul
         "tool" => {
             draft.subject_kind = PermissionRuleSubjectKind::Tool;
             draft.tool_name = tokens[1].clone();
-            draft.mode = parse_permission_mode_token(tokens[2].as_str())?;
+            draft.mode = parse_permission_mode_token(i18n, tokens[2].as_str())?;
             for token in &tokens[3..] {
-                let (key, value) = split_permission_rule_option(token)?;
+                let (key, value) = split_permission_rule_option(i18n, token)?;
                 match key {
                     "qualifier" => draft.qualifier = value.to_string(),
-                    "scope" => draft.scope = parse_permission_scope_token(value)?.to_string(),
+                    "scope" => draft.scope = parse_permission_scope_token(i18n, value)?.to_string(),
                     "session" => draft.session_id = value.to_string(),
-                    _ => return Err(format!("unknown permission rule option: {key}")),
+                    _ => {
+                        return Err(i18n.text_args(
+                            "permission-rule-error-unknown-option",
+                            &crate::fl_args!("key" => key.to_string()),
+                        ));
+                    }
                 }
             }
             if draft.tool_name.trim().is_empty() {
-                return Err("tool_name is required".to_string());
+                return Err(ui_text::t(i18n, "permission-rule-error-tool-name-required"));
             }
         }
         "path" => {
             draft.subject_kind = PermissionRuleSubjectKind::PathAccess;
             draft.path_access_kind = tokens[1].clone();
             draft.target_path = tokens[2].clone();
-            draft.mode = parse_permission_mode_token(tokens[3].as_str())?;
+            draft.mode = parse_permission_mode_token(i18n, tokens[3].as_str())?;
             for token in &tokens[4..] {
-                let (key, value) = split_permission_rule_option(token)?;
+                let (key, value) = split_permission_rule_option(i18n, token)?;
                 match key {
-                    "scope" => draft.scope = parse_permission_scope_token(value)?.to_string(),
+                    "scope" => draft.scope = parse_permission_scope_token(i18n, value)?.to_string(),
                     "session" => draft.session_id = value.to_string(),
                     "workspace_root" => draft.workspace_root = value.to_string(),
-                    _ => return Err(format!("unknown permission rule option: {key}")),
+                    _ => {
+                        return Err(i18n.text_args(
+                            "permission-rule-error-unknown-option",
+                            &crate::fl_args!("key" => key.to_string()),
+                        ));
+                    }
                 }
             }
             if draft.path_access_kind.trim().is_empty() {
-                return Err("path_access_kind is required".to_string());
+                return Err(ui_text::t(
+                    i18n,
+                    "permission-rule-error-path-access-kind-required",
+                ));
             }
             if draft.target_path.trim().is_empty() {
-                return Err("target_path is required".to_string());
+                return Err(ui_text::t(
+                    i18n,
+                    "permission-rule-error-target-path-required",
+                ));
             }
         }
         "network" => {
             draft.subject_kind = PermissionRuleSubjectKind::NetworkAccess;
             draft.network_target = tokens[1].clone();
-            draft.mode = parse_permission_mode_token(tokens[2].as_str())?;
+            draft.mode = parse_permission_mode_token(i18n, tokens[2].as_str())?;
             for token in &tokens[3..] {
-                let (key, value) = split_permission_rule_option(token)?;
+                let (key, value) = split_permission_rule_option(i18n, token)?;
                 match key {
-                    "scope" => draft.scope = parse_permission_scope_token(value)?.to_string(),
+                    "scope" => draft.scope = parse_permission_scope_token(i18n, value)?.to_string(),
                     "session" => draft.session_id = value.to_string(),
-                    _ => return Err(format!("unknown permission rule option: {key}")),
+                    _ => {
+                        return Err(i18n.text_args(
+                            "permission-rule-error-unknown-option",
+                            &crate::fl_args!("key" => key.to_string()),
+                        ));
+                    }
                 }
             }
             if draft.network_target.trim().is_empty() {
-                return Err("network target is required".to_string());
+                return Err(ui_text::t(
+                    i18n,
+                    "permission-rule-error-network-target-required",
+                ));
             }
         }
         _ => {
-            return Err("rule subject must start with `tool`, `path`, or `network`".to_string());
+            return Err(ui_text::t(i18n, "permission-rule-error-invalid-subject"));
         }
     }
     if draft.scope == "session" && draft.session_id.trim().is_empty() {
-        return Err("session scope requires session=<id>".to_string());
+        return Err(ui_text::t(
+            i18n,
+            "permission-rule-error-session-token-required",
+        ));
     }
     Ok(draft)
 }
 
-fn parse_permission_mode_token(token: &str) -> std::result::Result<PermissionMode, String> {
+fn parse_permission_mode_token(
+    i18n: &I18n,
+    token: &str,
+) -> std::result::Result<PermissionMode, String> {
     match token.to_ascii_lowercase().as_str() {
         "allow" => Ok(PermissionMode::Allow),
         "ask" => Ok(PermissionMode::Ask),
         "deny" => Ok(PermissionMode::Deny),
-        _ => Err("permission mode must be allow, ask, or deny".to_string()),
+        _ => Err(ui_text::t(i18n, "permission-rule-error-invalid-mode")),
     }
 }
 
-fn parse_permission_scope_token(token: &str) -> std::result::Result<&'static str, String> {
+fn parse_permission_scope_token(
+    i18n: &I18n,
+    token: &str,
+) -> std::result::Result<&'static str, String> {
     match token.to_ascii_lowercase().as_str() {
         "session" => Ok("session"),
         "workspace" => Ok("workspace"),
         "global" => Ok("global"),
-        _ => Err("scope must be session, workspace, or global".to_string()),
+        _ => Err(ui_text::t(i18n, "permission-rule-error-invalid-scope")),
     }
 }
 
-fn split_permission_rule_option(token: &str) -> std::result::Result<(&str, &str), String> {
-    token
-        .split_once('=')
-        .ok_or_else(|| format!("expected key=value option, got `{token}`"))
+fn split_permission_rule_option<'a>(
+    i18n: &I18n,
+    token: &'a str,
+) -> std::result::Result<(&'a str, &'a str), String> {
+    token.split_once('=').ok_or_else(|| {
+        i18n.text_args(
+            "permission-rule-error-invalid-option-format",
+            &crate::fl_args!("token" => token.to_string()),
+        )
+    })
 }
 
 fn shell_quote_or_dash(value: &str) -> String {
@@ -18662,9 +20891,12 @@ fn slash_command_suggestion_context_for_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena::message::{ExecutionStatus, MessagePart, PartContent};
+    use agena::message::{
+        ExecutionStatus, MessagePart, OperationBlock, OperationPart, PartContent, UserInputOption,
+    };
     use agena::plugin::status::{PluginRunState, PluginStatus};
     use chrono::Utc;
+    use serde_json::json;
 
     fn permission_request(request_id: &str) -> PermissionRequest {
         PermissionRequest {
@@ -18693,6 +20925,27 @@ mod tests {
             session_id: Some(1),
             questions: Vec::new(),
             created_at: Utc::now(),
+        }
+    }
+
+    fn user_input_question(
+        id: &str,
+        option_labels: &[&str],
+        allow_custom: bool,
+    ) -> UserInputQuestion {
+        UserInputQuestion {
+            id: id.to_string(),
+            header: String::new(),
+            question: format!("question-{id}"),
+            options: option_labels
+                .iter()
+                .map(|label| UserInputOption {
+                    label: (*label).to_string(),
+                    description: String::new(),
+                })
+                .collect(),
+            multiple: false,
+            allow_custom,
         }
     }
 
@@ -18729,6 +20982,279 @@ mod tests {
             part_count: 1,
             parts: Some(vec![part]),
         }
+    }
+
+    fn transcript_tool_message(id: i64, command: &str, stdout: &str) -> MessageResource {
+        let created_at = Utc::now();
+        let invocation = ToolInvocation::new(
+            "bash",
+            serde_json::from_value(json!({ "command": command }))
+                .expect("valid structured tool input"),
+        );
+        let tool = OperationPart::completed(
+            id.saturating_mul(10),
+            invocation,
+            stdout.to_string(),
+            vec![OperationBlock::Command {
+                command: command.to_string(),
+                cwd: None,
+                exit_code: Some(0),
+                stdout: Some(stdout.to_string()),
+                stderr: None,
+            }],
+            Vec::new(),
+            agena::message::ToolOutput::default(),
+            agena::message::TimeRange::default(),
+        );
+        let part = MessagePart::with_content(
+            id.saturating_mul(100),
+            id,
+            created_at,
+            ExecutionStatus::Completed,
+            PartContent::Operation(tool),
+        );
+        MessageResource {
+            id,
+            session_id: 1,
+            role: MessageRole::Assistant,
+            state: MessageStatus::Completed,
+            created_at,
+            updated_at: created_at,
+            metadata: Default::default(),
+            usage: None,
+            part_count: 1,
+            parts: Some(vec![part]),
+        }
+    }
+
+    fn session_resource(
+        id: i64,
+        parent_id: Option<i64>,
+        root_id: i64,
+        is_subagent: bool,
+    ) -> SessionResource {
+        let now = Utc::now();
+        SessionResource {
+            id,
+            parent_id,
+            depth: match parent_id {
+                Some(_) => 1,
+                None => 0,
+            },
+            root_id,
+            workspace_id: 1,
+            title: format!("session-{id}"),
+            version: 1,
+            is_subagent,
+            created_at: now,
+            updated_at: now,
+            message_count: 0,
+            child_session_count: 0,
+            last_message_at: None,
+            goal: None,
+        }
+    }
+
+    fn session_execution_resource(
+        run_state: SessionRunState,
+        blocked: bool,
+    ) -> SessionExecutionResource {
+        SessionExecutionResource {
+            session: session_resource(1, None, 1, false),
+            blocked,
+            run_state,
+            latest_event_seq: None,
+            automation: None,
+            execution: SessionExecutionContextResource {
+                agent_profile: None,
+                agent_mode: None,
+                agent_hidden: false,
+                agent_color: None,
+                active_skill_name: None,
+                system_prompt_override: None,
+                allowed_tools: Vec::new(),
+                agent_permission: Default::default(),
+                model_provider_id: None,
+                model_adapter_id: None,
+                model_id: None,
+                model_thinking_mode: None,
+                model_speed_mode: None,
+                model_verbosity: None,
+                model_parallel_tool_calls: None,
+                agent_run: Default::default(),
+                effective_workspace_root: None,
+                task_id: None,
+            },
+            pending_interactive_requests: Vec::new(),
+            pending_permission_requests: Vec::new(),
+            pending_user_input_requests: Vec::new(),
+            goal: None,
+            usage: SessionUsageResource {
+                measured_prompt_tokens: None,
+                current_tokens: 0,
+                projected_tokens: None,
+                limit_tokens: None,
+                limit_basis: None,
+                reserved_tokens: None,
+                model_context_window_tokens: None,
+                model_max_input_tokens: None,
+                model_max_output_tokens: None,
+            },
+        }
+    }
+
+    fn search_list_config(
+        search_enabled: bool,
+        custom_value_enabled: bool,
+    ) -> SearchListOverlayConfig {
+        SearchListOverlayConfig {
+            target_width: 96,
+            search_enabled,
+            custom_value_enabled,
+            fill_selected_into_input: true,
+            min_list_body_height: 3,
+            max_list_body_height: 12,
+        }
+    }
+
+    #[test]
+    fn search_list_overlay_can_disable_custom_rows_per_instance() {
+        let all_items = vec![choice_item("allow", "always allow matching actions")];
+        let mut without_custom = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("typed".to_string()),
+            search_list_config(false, false),
+            Some(SearchListClearAction {
+                label: "Clear value".to_string(),
+                detail: "reset field".to_string(),
+            }),
+            ChoiceOverlayMeta {
+                i18n: I18n::english(),
+                all_items: all_items.clone(),
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut without_custom);
+
+        let mut with_custom = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("typed".to_string()),
+            search_list_config(false, true),
+            Some(SearchListClearAction {
+                label: "Clear value".to_string(),
+                detail: "reset field".to_string(),
+            }),
+            ChoiceOverlayMeta {
+                i18n: I18n::english(),
+                all_items,
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut with_custom);
+
+        assert_eq!(without_custom.row_count(), 2);
+        assert_eq!(with_custom.row_count(), 3);
+        assert!(matches!(
+            with_custom.selected_row(),
+            Some(SearchListRow::Clear(_))
+        ));
+        assert!(matches!(
+            with_custom.rows().get(1),
+            Some(SearchListRow::Custom(_))
+        ));
+    }
+
+    #[test]
+    fn search_list_custom_rows_follow_overlay_locale() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let mut overlay = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("typed".to_string()),
+            search_list_config(false, true),
+            None,
+            ChoiceOverlayMeta {
+                i18n: i18n.clone(),
+                all_items: vec![choice_item("allow", "always allow matching actions")],
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut overlay);
+
+        let rows = overlay.rows();
+        match rows.get(0) {
+            Some(SearchListRow::Custom(value)) => {
+                assert_eq!(value.search_list_label(&overlay.meta), "使用输入值");
+                assert_eq!(
+                    value.search_list_detail(&overlay.meta),
+                    Some(i18n.text_args(
+                        "search-list-custom-value-detail",
+                        &crate::fl_args!("value" => "\"typed\""),
+                    ))
+                );
+            }
+            other => panic!("expected localized custom row, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn search_list_overlay_respects_search_enabled_config() {
+        let all_items = vec![
+            choice_item("allow", "always allow matching actions"),
+            choice_item("deny", "always deny matching actions"),
+        ];
+        let mut local_search = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("deny".to_string()),
+            search_list_config(true, false),
+            None,
+            ChoiceOverlayMeta {
+                i18n: I18n::english(),
+                all_items: all_items.clone(),
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut local_search);
+
+        let mut remote_query = ChoiceOverlay::new(
+            "Title".to_string(),
+            "Prompt".to_string(),
+            "Footer".to_string(),
+            "Empty".to_string(),
+            Editor::from_text("deny".to_string()),
+            search_list_config(false, false),
+            None,
+            ChoiceOverlayMeta {
+                i18n: I18n::english(),
+                all_items,
+                action: ChoiceOverlayAction::PermissionRuleStudio(
+                    PermissionRuleStudioChoiceField::Mode,
+                ),
+            },
+        );
+        App::refresh_choice_overlay(&mut remote_query);
+
+        assert_eq!(local_search.items.len(), 1);
+        assert_eq!(remote_query.items.len(), 2);
     }
 
     #[test]
@@ -18779,11 +21305,80 @@ mod tests {
     }
 
     #[test]
+    fn user_input_selection_helpers_clamp_questions_and_options() {
+        let request = UserInputRequest {
+            request_id: "input-1".to_string(),
+            session_id: Some(1),
+            questions: vec![
+                user_input_question("q1", &["One", "Two"], false),
+                user_input_question("q2", &["Only"], true),
+            ],
+            created_at: Utc::now(),
+        };
+        let mut overlay = App::build_user_input_overlay(1, request);
+
+        App::move_user_input_option_to_end(&mut overlay);
+        assert_eq!(overlay.state.selected_question(), 0);
+        assert_eq!(overlay.state.selected_option(), 1);
+
+        overlay.answers.insert(
+            "q2".to_string(),
+            UserInputAnswerDraft {
+                option_indexes: BTreeSet::new(),
+                custom_values: vec!["typed".to_string()],
+            },
+        );
+        App::focus_user_input_question(&mut overlay, usize::MAX);
+        assert_eq!(overlay.state.selected_question(), 1);
+        assert_eq!(overlay.state.selected_option(), 1);
+
+        App::move_user_input_option(&mut overlay, 10);
+        assert_eq!(overlay.state.selected_option(), 1);
+
+        overlay.state.set_screen(QuestionFlowScreen::Review);
+        App::move_user_input_question(&mut overlay, -10);
+        assert_eq!(overlay.state.selected_question(), 0);
+        assert_eq!(overlay.state.screen(), QuestionFlowScreen::Review);
+    }
+
+    #[test]
     fn composer_input_is_active_only_when_the_composer_is_engaged() {
         assert!(composer_input_is_active(Focus::Composer, true, false));
         assert!(composer_input_is_active(Focus::Composer, false, true));
         assert!(!composer_input_is_active(Focus::Composer, false, false));
         assert!(!composer_input_is_active(Focus::Transcript, true, true));
+    }
+
+    #[test]
+    fn preferred_visible_session_selection_falls_back_to_parent_for_hidden_subagent() {
+        let subagent = session_resource(42, Some(7), 3, true);
+        let visible = vec![
+            session_resource(3, None, 3, false),
+            session_resource(7, Some(3), 3, false),
+        ];
+
+        assert_eq!(
+            preferred_visible_session_selection(&subagent, visible.as_slice()),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn permission_request_fingerprint_ignores_runtime_request_identity() {
+        let mut first = permission_request("perm-1");
+        let mut second = permission_request("perm-2");
+        second.created_at = second.created_at + chrono::Duration::milliseconds(250);
+
+        assert_eq!(
+            permission_request_fingerprint(&first),
+            permission_request_fingerprint(&second)
+        );
+
+        first.reason = "different".to_string();
+        assert_ne!(
+            permission_request_fingerprint(&first),
+            permission_request_fingerprint(&second)
+        );
     }
 
     #[test]
@@ -18806,6 +21401,132 @@ mod tests {
         assert!(
             !rendered.lines.iter().any(|line| line.text.is_empty()),
             "expected transcript rendering to avoid inserting blank separator lines"
+        );
+    }
+
+    #[test]
+    fn transcript_line_motion_selects_next_block_before_entering_it() {
+        let first = transcript_message(1, MessageRole::User, "first");
+        let second = transcript_message(2, MessageRole::Assistant, "alpha\nbeta");
+        let width = 80;
+        let height = 10;
+        let mut transcript = TranscriptState {
+            session_id: Some(1),
+            messages: vec![first, second],
+            ..TranscriptState::default()
+        };
+        let nodes = transcript.rendered(width).nodes.clone();
+        let first_node = nodes[0].clone();
+        let second_node = nodes[1].clone();
+
+        transcript.set_cursor_line(width, height, first_node.end_line.saturating_sub(1));
+        transcript.scroll_by_lines_with_blocks(width, height, TranscriptMoveDirection::Down, 1);
+
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(second_node.key.clone())
+        );
+        assert_eq!(transcript.cursor_line, second_node.start_line);
+        assert_eq!(
+            transcript.highlighted_block_range(width),
+            Some(second_node.start_line..second_node.end_line)
+        );
+
+        transcript.scroll_by_lines_with_blocks(width, height, TranscriptMoveDirection::Down, 1);
+        assert_eq!(transcript.highlighted_block_key(), None);
+        assert_eq!(transcript.cursor_line, second_node.start_line);
+
+        transcript.scroll_by_lines_with_blocks(width, height, TranscriptMoveDirection::Down, 1);
+        assert_eq!(transcript.highlighted_block_key(), None);
+        assert_eq!(
+            transcript.cursor_line,
+            second_node.start_line.saturating_add(1)
+        );
+    }
+
+    #[test]
+    fn transcript_block_motion_jumps_by_node() {
+        let width = 80;
+        let height = 10;
+        let mut transcript = TranscriptState {
+            session_id: Some(1),
+            messages: vec![
+                transcript_message(1, MessageRole::User, "first"),
+                transcript_message(2, MessageRole::Assistant, "second"),
+                transcript_message(3, MessageRole::User, "third"),
+            ],
+            ..TranscriptState::default()
+        };
+        let nodes = transcript.rendered(width).nodes.clone();
+
+        transcript.move_by_blocks(width, height, TranscriptMoveDirection::Down, 2);
+
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(nodes[2].key.clone())
+        );
+        assert_eq!(transcript.cursor_line, nodes[2].start_line);
+        assert_eq!(
+            transcript.highlighted_block_range(width),
+            Some(nodes[2].start_line..nodes[2].end_line)
+        );
+
+        transcript.move_by_blocks(width, height, TranscriptMoveDirection::Up, 1);
+        assert_eq!(
+            transcript.highlighted_block_key(),
+            Some(nodes[1].key.clone())
+        );
+        assert_eq!(transcript.cursor_line, nodes[1].end_line.saturating_sub(1));
+    }
+
+    #[test]
+    fn collapsed_tool_output_is_a_single_block_and_expansion_round_trips() {
+        let width = 120;
+        let height = 10;
+        let mut transcript = TranscriptState {
+            session_id: Some(1),
+            messages: vec![transcript_tool_message(
+                1,
+                "ls -la src",
+                "file-a\nfile-b\nfile-c",
+            )],
+            ..TranscriptState::default()
+        };
+
+        let collapsed = transcript.rendered(width).nodes[0].clone();
+        assert_eq!(collapsed.kind, TranscriptNodeKind::Tool);
+        assert!(collapsed.toggleable);
+        assert!(!collapsed.expanded);
+        let collapsed_line_count = collapsed.end_line.saturating_sub(collapsed.start_line);
+        assert!(collapsed_line_count >= 1);
+
+        transcript.set_block_cursor(width, height, 0, TranscriptMoveDirection::Down);
+        assert_eq!(
+            transcript.highlighted_block_range(width),
+            Some(collapsed.start_line..collapsed.end_line)
+        );
+
+        transcript
+            .node_expansions
+            .insert(collapsed.key.clone(), true);
+        transcript.invalidate_render();
+
+        let expanded = transcript.rendered(width).nodes[0].clone();
+        assert!(expanded.expanded);
+        assert!(expanded.end_line.saturating_sub(expanded.start_line) > collapsed_line_count);
+
+        transcript
+            .node_expansions
+            .insert(collapsed.key.clone(), false);
+        transcript.invalidate_render();
+
+        let collapsed_again = transcript.rendered(width).nodes[0].clone();
+        assert!(!collapsed_again.expanded);
+        assert_eq!(
+            collapsed_again
+                .end_line
+                .saturating_sub(collapsed_again.start_line),
+            collapsed_line_count
         );
     }
 
@@ -18869,7 +21590,353 @@ mod tests {
     }
 
     #[test]
+    fn permission_rule_studio_items_localize_non_english_display_values() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let draft = PermissionRuleDraft {
+            subject_kind: PermissionRuleSubjectKind::PathAccess,
+            path_access_kind: "read_write".to_string(),
+            scope: "global".to_string(),
+            ..PermissionRuleDraft::default()
+        };
+        let items = permission_rule_studio_items(&i18n, &draft, None);
+
+        assert_eq!(items[0].value, "路径访问");
+        assert_eq!(items[1].value, "询问");
+        assert_eq!(items[2].value, "全局");
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label == "访问类型" && item.value == "读写"),
+            "expected localized access-kind display in permission rule studio"
+        );
+    }
+
+    #[test]
+    fn permission_rule_label_localizes_path_prefixes() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let now = Utc::now();
+        let rule = PermissionRuleResource {
+            id: 7,
+            action_key: "path_access".to_string(),
+            subject_kind: "path_access".to_string(),
+            tool_name: None,
+            qualifier: None,
+            path_access_kind: Some("read".to_string()),
+            workspace_root: None,
+            target_path: Some("/tmp/demo.txt".to_string()),
+            network_target: None,
+            network_host: None,
+            network_port: None,
+            scope: "workspace".to_string(),
+            workspace_id: None,
+            session_id: None,
+            source: "manual".to_string(),
+            operator: None,
+            reason: None,
+            mode: PermissionMode::Ask,
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+            revoked_by: None,
+            revoked_reason: None,
+        };
+
+        assert_eq!(
+            sanitize_terminal_text(&permission_rule_label(&i18n, &rule)),
+            "读取 · /tmp/demo.txt"
+        );
+    }
+
+    #[test]
+    fn permission_rule_parser_errors_follow_locale() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let error = parse_permission_rule_input(&i18n, "tool demo maybe")
+            .expect_err("expected localized parse error");
+
+        assert_eq!(
+            error,
+            "需要一个结构化规则：以 tool/path 开头，并以 allow|ask|deny 结尾"
+        );
+    }
+
+    #[test]
+    fn runtime_setting_messages_follow_locale() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let mut run_options = RunOptionsState::default();
+
+        assert_eq!(
+            run_options.runtime_setting_summary(&i18n, RUNTIME_SETTINGS[0]),
+            "默认"
+        );
+
+        let updated = run_options
+            .apply_runtime_setting_input(&i18n, RUNTIME_SETTINGS[0], "high")
+            .expect("expected localized success message");
+        assert_eq!(
+            updated,
+            i18n.text_args(
+                "runtime-setting-apply-updated",
+                &crate::fl_args!(
+                    "field" => runtime_setting_display_label(&i18n, RUNTIME_SETTINGS[0])
+                ),
+            )
+        );
+
+        let error = run_options
+            .apply_runtime_setting_input(&i18n, RUNTIME_SETTINGS[3], "maybe")
+            .expect_err("expected localized validation error");
+        assert_eq!(
+            error,
+            i18n.text_args(
+                "runtime-setting-error-bool",
+                &crate::fl_args!(
+                    "field" => runtime_setting_display_label(&i18n, RUNTIME_SETTINGS[3])
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn provider_studio_messages_follow_locale() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let auth_kind = ProviderDraftAuthKind::Credential(Some(CredentialIssuer::AtomGit));
+        let rule = auth_kind
+            .adapter_rule("openai")
+            .expect("expected localized adapter rule");
+
+        assert_eq!(
+            provider_studio_field_label(&i18n, ProviderStudioField::DefaultAdapter),
+            "默认 Adapter"
+        );
+        assert_eq!(
+            provider_studio_field_prompt(&i18n, ProviderStudioField::AuthMode),
+            "更新 auth mode（none | api | gitlab_api | credential | bedrock_sigv4）"
+        );
+        assert_eq!(
+            provider_studio_adapter_rule_detail(&i18n, rule),
+            "通过 openai adapter 路由的 AtomGit 凭证。"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_studio_live_listing_unavailable_message(
+                &i18n, &auth_kind
+            )),
+            "当前 auth credential:atomgit 不支持 live model listing"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_studio_listing_auth_required_message(
+                &i18n,
+                &ProviderDraftAuthKind::BedrockSigv4
+            )),
+            "列出 adapter models 需要 api/gitlab_api 认证，或需要一个已保存的 provider；当前 auth 是 bedrock_sigv4"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_studio_model_count_label(&i18n, 3)),
+            "3 个模型"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_studio_catalog_match_label(&i18n, Some("gpt-4o"))),
+            "catalog gpt-4o"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_draft_auth_action_message(
+                &i18n,
+                &crate::backend::ProviderDraftAuthMessage::CopilotDeviceStarted {
+                    user_code: "ABCD-EFGH".to_string(),
+                }
+            )),
+            "已开始 Copilot 设备登录。打开已复制的验证 URL，输入代码 ABCD-EFGH，然后按 p。"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_studio_save_result_message(
+                &i18n,
+                &crate::backend::ProviderStudioSaveResult::AdapterMatchesSaved {
+                    provider_id: "demo".to_string(),
+                    adapter_id: "openai".to_string(),
+                    listed_model_count: 4,
+                    matched_model_count: 3,
+                }
+            )),
+            "已保存 demo/openai，共 4 个列出模型，其中 3 个匹配 catalog。"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_draft_auth_error_message(
+                &i18n,
+                &crate::backend::ProviderDraftAuthError::RequiredField(
+                    crate::backend::ProviderDraftAuthField::CallbackUrl,
+                ),
+            )),
+            "Callback URL 为必填项"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_draft_auth_error_message(
+                &i18n,
+                &crate::backend::ProviderDraftAuthError::StartBrowserAuthFirst,
+            )),
+            "请先按 o 启动浏览器认证"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_studio_save_error_message(
+                &i18n,
+                &crate::backend::ProviderStudioSaveError::Validation(
+                    crate::backend::ProviderStudioSaveValidationError::FieldRequired(
+                        crate::backend::ProviderStudioSaveField::DefaultAdapter,
+                    ),
+                ),
+            )),
+            "默认 Adapter 为必填项"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&provider_studio_save_error_message(
+                &i18n,
+                &crate::backend::ProviderStudioSaveError::ProviderModelConfigMustBeObject,
+            )),
+            "provider model config 必须是一个 JSON object"
+        );
+    }
+
+    #[test]
+    fn timeline_items_follow_locale_and_preserve_raw_kind_search() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let record = DomainEvent {
+            meta: agena::event::EventMeta {
+                id: uuid::Uuid::nil(),
+                seq_global: 7,
+                seq_session: Some(7),
+                session_id: Some(1),
+                workspace_id: None,
+                created_at: Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: agena::event::envelope::ENVELOPE_SCHEMA_VERSION,
+            },
+            kind: AgenaSessionEvent::ExecutionStarted(agena::event::ExecutionStartedEvent {
+                session_id: 1,
+                ts_ms: 1_717_000_000_000,
+            }),
+        };
+
+        let item = build_timeline_item(&i18n, &record);
+
+        assert!(item.summary.contains("执行开始"));
+        assert!(item.copy_text.contains("会话 ID"));
+        assert!(item.copy_text.contains("事件类型"));
+        assert!(item.search_text.contains("execution_started"));
+    }
+
+    #[test]
+    fn session_workflow_state_labels_follow_locale() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+
+        assert_eq!(
+            ui_text::session_workflow_state_label(
+                &i18n,
+                &session_execution_resource(SessionRunState::AwaitingModel, false),
+            ),
+            "等待模型"
+        );
+        assert_eq!(
+            ui_text::session_workflow_state_label(
+                &i18n,
+                &session_execution_resource(SessionRunState::Idle, true),
+            ),
+            "已阻塞"
+        );
+        assert_eq!(
+            ui_text::session_workflow_state_label(
+                &i18n,
+                &session_execution_resource(SessionRunState::Idle, false),
+            ),
+            "空闲"
+        );
+    }
+
+    #[test]
+    fn agent_editor_messages_follow_locale() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+
+        assert_eq!(editor_save_footer(&i18n, false), "Enter 保存 | Esc 取消");
+        assert_eq!(editor_save_footer(&i18n, true), "Ctrl+S 保存 | Esc 取消");
+
+        let mode_error =
+            agent_studio_field_setting_value(&i18n, "demo", AgentStudioField::Mode, "invalid")
+                .expect_err("expected localized agent mode error");
+        assert_eq!(
+            mode_error,
+            i18n.text_args(
+                "agent-studio-field-parse-mode",
+                &crate::fl_args!(
+                    "field" => agent_studio_field_label(&i18n, AgentStudioField::Mode),
+                    "value" => "invalid",
+                ),
+            )
+        );
+
+        let bool_error = agent_permission_field_setting_value(
+            &i18n,
+            "demo",
+            AgentPermissionField::InheritPath,
+            "maybe",
+        )
+        .expect_err("expected localized agent permission bool error");
+        assert_eq!(
+            bool_error,
+            i18n.text_args(
+                "agent-permission-field-parse-bool",
+                &crate::fl_args!(
+                    "field" => agent_permission_field_label(
+                        &i18n,
+                        AgentPermissionField::InheritPath,
+                    ),
+                ),
+            )
+        );
+    }
+
+    #[test]
+    fn settings_field_messages_follow_locale() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+
+        assert_eq!(
+            settings_field_display_description(&i18n, SETTINGS_FIELDS[0]),
+            "默认 provider id"
+        );
+
+        let error = parse_settings_field_input(&i18n, SETTINGS_FIELDS[5], "maybe")
+            .expect_err("expected localized settings parse error");
+        assert_eq!(
+            error,
+            i18n.text_args(
+                "settings-field-parse-bool",
+                &crate::fl_args!("field" => SETTINGS_FIELDS[5].path),
+            )
+        );
+    }
+
+    #[test]
+    fn transcript_node_flash_messages_follow_locale() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        let kind = transcript_node_kind_label(&i18n, TranscriptNodeKind::Tool);
+
+        assert_eq!(kind, "tool 输出");
+        assert_eq!(
+            sanitize_terminal_text(&i18n.text_args(
+                "flash-transcript-node-copied",
+                &crate::fl_args!("kind" => kind.clone()),
+            )),
+            "已复制当前tool 输出"
+        );
+        assert_eq!(
+            sanitize_terminal_text(&i18n.text_args(
+                "flash-transcript-node-collapsed",
+                &crate::fl_args!("kind" => kind),
+            )),
+            "已收起tool 输出"
+        );
+    }
+
+    #[test]
     fn settings_plugin_entries_include_runtime_builtin_plugins() {
+        let i18n = I18n::english();
         let sources = ConfigJsonSources {
             config_path: PathBuf::from("/tmp/agena-config.json"),
             config_found: true,
@@ -18877,6 +21944,7 @@ mod tests {
             effective: json!({ "plugins": { "list": {} } }),
         };
         let items = settings_studio_plugin_entry_items(
+            &i18n,
             &sources,
             &[PluginStatus {
                 plugin_id: "agena.fs".to_string(),

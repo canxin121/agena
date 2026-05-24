@@ -34,7 +34,7 @@ pub struct RuntimeSnapshot {
     loaded_at: DateTime<Utc>,
     resolution: Arc<ConfigResolution>,
     services: RuntimeServices,
-    maintenance: RuntimeMaintenance,
+    tasks: RuntimeTasks,
 }
 
 #[derive(Clone)]
@@ -120,13 +120,13 @@ struct RuntimeTaskPolicy {
 }
 
 #[derive(Debug, Clone)]
-struct RuntimeMaintenance {
+struct RuntimeTasks {
     watch_paths: Vec<PathBuf>,
     reload: RuntimeTaskPolicy,
-    session_maintenance: RuntimeTaskPolicy,
+    session_gc: RuntimeTaskPolicy,
 }
 
-impl RuntimeMaintenance {
+impl RuntimeTasks {
     fn from_resolution(resolution: &ConfigResolution) -> Self {
         Self {
             watch_paths: collect_watch_paths(resolution),
@@ -134,11 +134,9 @@ impl RuntimeMaintenance {
                 enabled: resolution.config.runtime.reload.enabled,
                 interval: Duration::from_secs(resolution.config.runtime.reload.poll_interval_secs),
             },
-            session_maintenance: RuntimeTaskPolicy {
-                enabled: resolution.config.session.maintenance.enabled,
-                interval: Duration::from_secs(
-                    resolution.config.session.maintenance.interval_secs,
-                ),
+            session_gc: RuntimeTaskPolicy {
+                enabled: resolution.config.runtime.session.gc.enabled,
+                interval: Duration::from_secs(resolution.config.runtime.session.gc.interval_secs),
             },
         }
     }
@@ -312,14 +310,14 @@ impl RuntimeSnapshot {
             event_bridge,
             plugin_shutdown,
         );
-        let maintenance = RuntimeMaintenance::from_resolution(&resolution);
+        let tasks = RuntimeTasks::from_resolution(&resolution);
 
         Ok(Self {
             generation,
             loaded_at: Utc::now(),
             resolution: Arc::new(resolution),
             services,
-            maintenance,
+            tasks,
         })
     }
 
@@ -458,23 +456,23 @@ impl RuntimeSnapshot {
     }
 
     pub fn watch_paths(&self) -> &[PathBuf] {
-        self.maintenance.watch_paths.as_slice()
+        self.tasks.watch_paths.as_slice()
     }
 
     pub fn reload_enabled(&self) -> bool {
-        self.maintenance.reload.enabled
+        self.tasks.reload.enabled
     }
 
     pub fn reload_poll_interval(&self) -> Duration {
-        self.maintenance.reload.interval
+        self.tasks.reload.interval
     }
 
-    pub fn session_maintenance_enabled(&self) -> bool {
-        self.maintenance.session_maintenance.enabled
+    pub fn session_gc_enabled(&self) -> bool {
+        self.tasks.session_gc.enabled
     }
 
-    pub fn session_maintenance_interval(&self) -> Duration {
-        self.maintenance.session_maintenance.interval
+    pub fn session_gc_interval(&self) -> Duration {
+        self.tasks.session_gc.interval
     }
 }
 

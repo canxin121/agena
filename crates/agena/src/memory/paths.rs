@@ -65,6 +65,10 @@ impl MemoryDir {
         self.path.join("MEMORY.md")
     }
 
+    pub fn index_dir(&self) -> PathBuf {
+        self.path.join(".index")
+    }
+
     pub fn ensure_exists(&self) -> io::Result<()> {
         std::fs::create_dir_all(&self.path)
     }

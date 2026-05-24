@@ -147,7 +147,7 @@ const AWS_REGION_CHOICES: &[&str] = &[
     "af-south-1",
 ];
 
-const SETTINGS_FIELDS: [SettingsFieldSpec; 16] = [
+const SETTINGS_FIELDS: [SettingsFieldSpec; 18] = [
     SettingsFieldSpec {
         path: "providers.default",
         description_key: "settings-field-default-provider-description",
@@ -204,18 +204,28 @@ const SETTINGS_FIELDS: [SettingsFieldSpec; 16] = [
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "session.cache.max_sessions",
+        path: "runtime.session.cache.max_sessions",
         description_key: "settings-field-runtime-session-cache-max-sessions-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "session.cache.ttl_secs",
+        path: "runtime.session.cache.ttl_secs",
         description_key: "settings-field-runtime-session-cache-ttl-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
-        path: "session.cache.max_bytes",
+        path: "runtime.session.cache.max_bytes",
         description_key: "settings-field-runtime-session-cache-max-bytes-description",
+        kind: SettingsFieldKind::Integer,
+    },
+    SettingsFieldSpec {
+        path: "runtime.session.gc.enabled",
+        description_key: "settings-field-runtime-session-gc-enabled-description",
+        kind: SettingsFieldKind::Bool,
+    },
+    SettingsFieldSpec {
+        path: "runtime.session.gc.interval_secs",
+        description_key: "settings-field-runtime-session-gc-interval-description",
         kind: SettingsFieldKind::Integer,
     },
     SettingsFieldSpec {
@@ -3316,16 +3326,12 @@ impl App {
                 set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Navigation);
                 false
             }
-            KeyCode::PageUp
-                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
-            {
+            KeyCode::PageUp if dialog.pane_focus == PermissionStudioPaneFocus::Navigation => {
                 permission_studio_nav_move_page(&mut dialog.nav, -1, 10);
                 self.apply_permission_studio_nav_selection(dialog);
                 false
             }
-            KeyCode::PageDown
-                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
-            {
+            KeyCode::PageDown if dialog.pane_focus == PermissionStudioPaneFocus::Navigation => {
                 permission_studio_nav_move_page(&mut dialog.nav, 1, 10);
                 self.apply_permission_studio_nav_selection(dialog);
                 false
@@ -9061,13 +9067,7 @@ impl App {
         preferred_item_label: Option<&str>,
         preferred_focus: PermissionStudioFocus,
     ) -> UiResult<PermissionStudioOverlay> {
-        let (
-            title_context,
-            source_label,
-            scope_label,
-            editable,
-            permission,
-        ) = match &source {
+        let (title_context, source_label, scope_label, editable, permission) = match &source {
             PermissionStudioSource::GlobalConfig => {
                 let sources = self
                     .backend
@@ -9233,7 +9233,10 @@ impl App {
 
     fn open_permission_studio_add_current(&mut self, dialog: &mut PermissionStudioOverlay) {
         if !dialog.editable {
-            self.flash_warning(permission_studio_read_only_message(&self.i18n, &dialog.source));
+            self.flash_warning(permission_studio_read_only_message(
+                &self.i18n,
+                &dialog.source,
+            ));
             return;
         }
         let action = match &dialog.page {
@@ -9243,38 +9246,31 @@ impl App {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
                 return;
             }
-            PermissionStudioPage::PathRules => {
-                PermissionStudioEditorAction::AddPathRule {
-                    duplicate_from: None,
-                }
-            }
-            PermissionStudioPage::NetworkRules => {
-                PermissionStudioEditorAction::AddNetworkRule {
-                    duplicate_from: None,
-                }
-            }
-            PermissionStudioPage::EntryTags => {
-                PermissionStudioEditorAction::AddToolTag {
-                    duplicate_from: None,
-                }
-            }
-            PermissionStudioPage::EntryNames => {
-                PermissionStudioEditorAction::AddToolName {
-                    duplicate_from: None,
-                }
-            }
-            PermissionStudioPage::EntryCommandRules => {
-                PermissionStudioEditorAction::AddToolRule {
-                    duplicate_from: None,
-                }
-            }
+            PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule {
+                duplicate_from: None,
+            },
+            PermissionStudioPage::NetworkRules => PermissionStudioEditorAction::AddNetworkRule {
+                duplicate_from: None,
+            },
+            PermissionStudioPage::EntryTags => PermissionStudioEditorAction::AddToolTag {
+                duplicate_from: None,
+            },
+            PermissionStudioPage::EntryNames => PermissionStudioEditorAction::AddToolName {
+                duplicate_from: None,
+            },
+            PermissionStudioPage::EntryCommandRules => PermissionStudioEditorAction::AddToolRule {
+                duplicate_from: None,
+            },
         };
         self.open_permission_studio_creator(dialog, action);
     }
 
     fn open_permission_studio_duplicate_current(&mut self, dialog: &mut PermissionStudioOverlay) {
         if !dialog.editable {
-            self.flash_warning(permission_studio_read_only_message(&self.i18n, &dialog.source));
+            self.flash_warning(permission_studio_read_only_message(
+                &self.i18n,
+                &dialog.source,
+            ));
             return;
         }
         let action = match &dialog.page {
@@ -9288,7 +9284,8 @@ impl App {
                 return;
             }
             PermissionStudioPage::PathRules => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
+                else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -9300,7 +9297,8 @@ impl App {
                 }
             }
             PermissionStudioPage::NetworkRules => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
+                else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -9312,7 +9310,8 @@ impl App {
                 }
             }
             PermissionStudioPage::EntryTags => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
+                else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -9324,7 +9323,8 @@ impl App {
                 }
             }
             PermissionStudioPage::EntryNames => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
+                else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -9336,7 +9336,8 @@ impl App {
                 }
             }
             PermissionStudioPage::EntryCommandRules => {
-                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog) else {
+                let Some(duplicate_from) = self.permission_studio_selected_item_label(dialog)
+                else {
                     self.flash_warning(ui_text::t(
                         &self.i18n,
                         "flash-permission-studio-no-selection",
@@ -9353,7 +9354,10 @@ impl App {
 
     fn open_permission_studio_delete_current(&mut self, dialog: &mut PermissionStudioOverlay) {
         if !dialog.editable {
-            self.flash_warning(permission_studio_read_only_message(&self.i18n, &dialog.source));
+            self.flash_warning(permission_studio_read_only_message(
+                &self.i18n,
+                &dialog.source,
+            ));
             return;
         }
         let (title, body, action) = match &dialog.page {
@@ -9464,7 +9468,9 @@ impl App {
                 )
             }
         };
-        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(title, body, action)));
+        self.overlay = Some(Overlay::Confirm(
+            self.build_confirm_overlay(title, body, action),
+        ));
     }
 
     fn delete_permission_studio_config<F>(&mut self, mutator: F)
@@ -10239,9 +10245,7 @@ impl App {
 
     fn settings_field_choice_overlay_style(field: SettingsFieldSpec) -> ChoiceOverlayStyle {
         match field.path {
-            "providers.default" | "agents.default" => {
-                ChoiceOverlayStyle::Searchable
-            }
+            "providers.default" | "agents.default" => ChoiceOverlayStyle::Searchable,
             "ui.locale" => ChoiceOverlayStyle::SelectOnly,
             _ if matches!(field.kind, SettingsFieldKind::Bool) => ChoiceOverlayStyle::SelectOnly,
             _ => ChoiceOverlayStyle::Searchable,
@@ -10302,9 +10306,7 @@ impl App {
         }
     }
 
-    fn runtime_setting_choice_overlay_style(
-        field: RuntimeSettingSpec,
-    ) -> ChoiceOverlayStyle {
+    fn runtime_setting_choice_overlay_style(field: RuntimeSettingSpec) -> ChoiceOverlayStyle {
         match field.id {
             RuntimeSettingId::ParallelToolCalls => ChoiceOverlayStyle::SelectOnly,
             RuntimeSettingId::ThinkingMode
@@ -12151,7 +12153,10 @@ impl App {
                 adapter_id,
                 provider.defaults.model.clone(),
             ),
-            None => ModelRef::new(provider.provider_id.clone(), provider.defaults.model.clone()),
+            None => ModelRef::new(
+                provider.provider_id.clone(),
+                provider.defaults.model.clone(),
+            ),
         });
         self.run_options.thinking_mode = None;
         self.run_options.speed_mode = None;
@@ -15606,7 +15611,10 @@ fn agent_studio_editor_config(
     profile: &AgentProfile,
     field: AgentStudioField,
 ) -> (String, String, String, bool, Editor) {
-    let multiline = matches!(field, AgentStudioField::Description | AgentStudioField::Prompt);
+    let multiline = matches!(
+        field,
+        AgentStudioField::Description | AgentStudioField::Prompt
+    );
     let title = settings_edit_title(i18n, agent_studio_field_label(i18n, field).as_str());
     let prompt = agent_studio_field_prompt(i18n, field);
     let footer = editor_save_footer(i18n, multiline);
@@ -15791,7 +15799,9 @@ fn permission_studio_nav_is_selectable(item: &PermissionStudioNavItem) -> bool {
     item.selectable
 }
 
-fn permission_studio_nav_normalize_selection(nav: &mut SelectableListState<PermissionStudioNavItem>) {
+fn permission_studio_nav_normalize_selection(
+    nav: &mut SelectableListState<PermissionStudioNavItem>,
+) {
     if nav.items.is_empty() {
         nav.selected = 0;
         return;
@@ -15805,7 +15815,11 @@ fn permission_studio_nav_normalize_selection(nav: &mut SelectableListState<Permi
     {
         return;
     }
-    if let Some(index) = nav.items.iter().position(permission_studio_nav_is_selectable) {
+    if let Some(index) = nav
+        .items
+        .iter()
+        .position(permission_studio_nav_is_selectable)
+    {
         nav.selected = index;
     } else {
         nav.selected = 0;
@@ -15852,7 +15866,11 @@ fn permission_studio_nav_move_page(
 }
 
 fn permission_studio_nav_move_home(nav: &mut SelectableListState<PermissionStudioNavItem>) {
-    if let Some(index) = nav.items.iter().position(permission_studio_nav_is_selectable) {
+    if let Some(index) = nav
+        .items
+        .iter()
+        .position(permission_studio_nav_is_selectable)
+    {
         nav.selected = index;
     }
 }
@@ -15886,8 +15904,8 @@ fn refresh_permission_studio_dialog(
     preferred_focus: Option<PermissionStudioFocus>,
 ) {
     let nav_items = permission_studio_nav_items(i18n);
-    let nav_selected = permission_studio_nav_index_for_page(&dialog.page)
-        .min(nav_items.len().saturating_sub(1));
+    let nav_selected =
+        permission_studio_nav_index_for_page(&dialog.page).min(nav_items.len().saturating_sub(1));
     dialog.nav = SelectableListState::new(nav_items, nav_selected);
     permission_studio_nav_normalize_selection(&mut dialog.nav);
     if let Some(nav_item) = dialog.nav.selected_item() {
@@ -15898,10 +15916,7 @@ fn refresh_permission_studio_dialog(
         .state
         .selected_item()
         .map(|item| item.label.as_str().to_string());
-    let sections = permission_studio_sections(
-        i18n,
-        dialog,
-    );
+    let sections = permission_studio_sections(i18n, dialog);
     let selected_section = preferred_section
         .or(current_section)
         .and_then(|id| sections.iter().position(|section| section.id == id))
@@ -15981,9 +15996,7 @@ fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioPage) -> Str
             ui_text::t(i18n, "permission-studio-page-network-rules")
         }
         PermissionStudioPage::EntryTags => ui_text::t(i18n, "permission-studio-page-entry-tags"),
-        PermissionStudioPage::EntryNames => {
-            ui_text::t(i18n, "permission-studio-page-entry-names")
-        }
+        PermissionStudioPage::EntryNames => ui_text::t(i18n, "permission-studio-page-entry-names"),
         PermissionStudioPage::EntryCommandRules => {
             ui_text::t(i18n, "permission-studio-page-entry-command-rules")
         }
@@ -16314,10 +16327,7 @@ fn permission_studio_sections(
                 items: vec![
                     PermissionStudioItem {
                         label: ui_text::t(i18n, "permission-studio-section-defaults"),
-                        value: network_defaults_summary(
-                            i18n,
-                            dialog.permission.network.as_ref(),
-                        ),
+                        value: network_defaults_summary(i18n, dialog.permission.network.as_ref()),
                         action: PermissionStudioAction::Noop,
                     },
                     PermissionStudioItem {

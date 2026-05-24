@@ -258,9 +258,9 @@ fn map_mcp_auth(
 pub(super) fn session_manager_config(resolution: &ConfigResolution) -> SessionManagerConfig {
     let defaults = SessionManagerConfig::default();
     SessionManagerConfig {
-        cache_max_sessions: resolution.config.session.cache.max_sessions,
-        cache_ttl: Duration::from_secs(resolution.config.session.cache.ttl_secs),
-        cache_max_bytes: resolution.config.session.cache.max_bytes,
+        cache_max_sessions: resolution.config.runtime.session.cache.max_sessions,
+        cache_ttl: Duration::from_secs(resolution.config.runtime.session.cache.ttl_secs),
+        cache_max_bytes: resolution.config.runtime.session.cache.max_bytes,
         doom_loop: defaults.doom_loop,
         default_selection: resolution.config.default_selection.clone(),
         default_agent: resolution.config.default_agent.clone(),

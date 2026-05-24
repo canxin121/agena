@@ -8,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::config::MemoryConfig;
-use crate::memory::paths::workspace_key;
-use crate::memory::{MemoryEntry, MemoryError, MemoryStore, MemoryType, NewMemory};
+use crate::memory::{
+    MemoryEntry, MemoryError, MemoryIndex, MemorySearchDocument, MemoryStore, MemoryType, NewMemory,
+};
 use crate::plugin::sdk::host_api::HostClient;
 use crate::plugin::sdk::{
     HookSubscription, InitContext, InitOutcome, NetworkRequest, PathRequest, Plugin,
@@ -20,7 +21,6 @@ use crate::plugin::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, PluginError,
 };
-use crate::search::meili::MeiliConnection;
 
 pub const MEMORY_PLUGIN_ID: &str = "agena.memory";
 
@@ -109,17 +109,6 @@ struct MemoryDeleteInput {
     name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MemorySearchDocument {
-    id: String,
-    name: String,
-    description: String,
-    memory_type: Option<String>,
-    body: String,
-    path: String,
-    searchable_text: String,
-}
-
 #[derive(Debug, Serialize)]
 struct MemoryRecordOutput {
     name: String,
@@ -149,35 +138,49 @@ impl MemoryPlugin {
         Ok(MemoryStore::for_workspace(self.workspace_root()?))
     }
 
-    fn search_backend(&self) -> SdkResult<MeiliConnection> {
-        let search = &self.config.search;
-        MeiliConnection::new(search.url.as_str(), search.api_key.as_deref()).map_err(|err| {
-            PluginError::new(format!("memory search backend unavailable; set memory.search.url: {err}"))
-        })
+    fn search_index(&self) -> SdkResult<MemoryIndex> {
+        Ok(MemoryIndex::for_workspace(self.workspace_root()?))
     }
 
-    fn search_index_name(&self) -> SdkResult<String> {
-        Ok(format!(
-            "{}_{}",
-            self.config.search.index_prefix,
-            workspace_key(self.workspace_root()?)
-        ))
-    }
-
-    async fn sync_index(&self, store: &MemoryStore) -> SdkResult<()> {
-        let backend = self.search_backend()?;
-        let index_name = self.search_index_name()?;
-        let documents = store
+    fn sync_documents(&self, store: &MemoryStore) -> SdkResult<Vec<MemorySearchDocument>> {
+        Ok(store
             .list()
             .map_err(memory_error_to_plugin)?
             .into_iter()
             .map(memory_document_from_entry)
-            .collect::<Vec<_>>();
-        let _guard = self.sync_lock.lock().await;
-        backend
-            .replace_documents(index_name.as_str(), Some("id"), &documents)
-            .await
+            .collect())
+    }
+
+    fn sync_index(&self, documents: &[MemorySearchDocument]) -> SdkResult<()> {
+        self.search_index()?
+            .replace_documents(documents)
             .map_err(|err| PluginError::new(format!("failed to rebuild memory index: {err}")))
+    }
+
+    fn run_search(
+        &self,
+        query: &str,
+        limit: usize,
+        documents: &[MemorySearchDocument],
+    ) -> SdkResult<Vec<MemorySearchDocument>> {
+        if documents.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.search_index()?
+            .search(query, limit)
+            .map_err(|err| PluginError::new(format!("memory search failed: {err}")))
+    }
+
+    async fn sync_and_search_documents(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> SdkResult<Vec<MemorySearchDocument>> {
+        let store = self.store()?;
+        let documents = self.sync_documents(&store)?;
+        let _guard = self.sync_lock.lock().await;
+        self.sync_index(&documents)?;
+        self.run_search(query, limit, &documents)
     }
 
     async fn search_documents(
@@ -185,15 +188,7 @@ impl MemoryPlugin {
         query: &str,
         limit: usize,
     ) -> SdkResult<Vec<MemorySearchDocument>> {
-        let store = self.store()?;
-        self.sync_index(&store).await?;
-        let backend = self.search_backend()?;
-        let index_name = self.search_index_name()?;
-        let results = backend
-            .search::<MemorySearchDocument>(index_name.as_str(), query, limit)
-            .await
-            .map_err(|err| PluginError::new(format!("memory search failed: {err}")))?;
-        Ok(results.hits.into_iter().map(|hit| hit.result).collect())
+        self.sync_and_search_documents(query, limit).await
     }
 
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -300,7 +295,6 @@ impl MemoryPlugin {
                 index_line: Some(memory_index_line(name.as_str(), description, content)),
             })
             .map_err(memory_error_to_plugin)?;
-        let _ = self.sync_index(&store).await;
         let payload = serde_json::to_value(memory_record_output(&entry))
             .map_err(|err| PluginError::new(err.to_string()))?;
         Ok(
@@ -316,7 +310,6 @@ impl MemoryPlugin {
         store
             .forget(name.as_str())
             .map_err(memory_error_to_plugin)?;
-        let _ = self.sync_index(&store).await;
         Ok(
             ToolInvokeOutput::text(format!("Deleted memory '{}'.", name))
                 .with_title("memory delete"),
@@ -387,10 +380,12 @@ impl Plugin for MemoryPlugin {
         let store = self.store()?;
         let parsed = parse_memory_input(input.clone())?;
         let request = match parsed {
+            MemoryToolInput::Get { .. } | MemoryToolInput::List { .. } => {
+                PathRequest::read(store.dir().display().to_string())
+            }
             MemoryToolInput::Search { .. }
-            | MemoryToolInput::Get { .. }
-            | MemoryToolInput::List { .. } => PathRequest::read(store.dir().display().to_string()),
-            MemoryToolInput::Write { .. } | MemoryToolInput::Delete { .. } => {
+            | MemoryToolInput::Write { .. }
+            | MemoryToolInput::Delete { .. } => {
                 PathRequest::write(store.dir().display().to_string())
             }
         };
@@ -399,27 +394,10 @@ impl Plugin for MemoryPlugin {
 
     async fn permission_networks(
         &self,
-        tool: &str,
-        input: &serde_json::Value,
+        _tool: &str,
+        _input: &serde_json::Value,
     ) -> SdkResult<Vec<NetworkRequest>> {
-        if tool != "memory" {
-            return Ok(Vec::new());
-        }
-        let parsed = parse_memory_input(input.clone())?;
-        let needs_search_backend = matches!(
-            parsed,
-            MemoryToolInput::Search { .. }
-                | MemoryToolInput::Write { .. }
-                | MemoryToolInput::Delete { .. }
-        );
-        if !needs_search_backend {
-            return Ok(Vec::new());
-        }
-        let url = self.config.search.url.trim();
-        if url.is_empty() {
-            return Ok(Vec::new());
-        }
-        Ok(vec![NetworkRequest::connect(url.to_string())])
+        Ok(Vec::new())
     }
 
     async fn chat_system_transform(
@@ -456,7 +434,11 @@ impl Plugin for MemoryPlugin {
         let Some(query) = self.memory_retrieval_query(&input) else {
             return Ok(None);
         };
-        let limit = self.config.retrieval.limit.clamp(1, MAX_MEMORY_SEARCH_LIMIT as u32) as usize;
+        let limit = self
+            .config
+            .retrieval
+            .limit
+            .clamp(1, MAX_MEMORY_SEARCH_LIMIT as u32) as usize;
         let memories = match self.search_documents(query.as_str(), limit).await {
             Ok(memories) => memories,
             Err(err) => {
@@ -503,22 +485,8 @@ fn memory_document_from_entry(entry: MemoryEntry) -> MemorySearchDocument {
         .r#type
         .map(|kind| kind.label().to_string());
     let path = entry.path.display().to_string();
-    let searchable_text = format!(
-        "{} {} {} {}",
-        name,
-        description,
-        memory_type.as_deref().unwrap_or(""),
-        entry.body
-    );
-    MemorySearchDocument {
-        id,
-        name,
-        description,
-        memory_type,
-        body: entry.body,
-        path,
-        searchable_text,
-    }
+    let body = entry.body;
+    MemorySearchDocument::new(id, name, description, memory_type, body, path)
 }
 
 fn memory_record_output(entry: &MemoryEntry) -> MemoryRecordOutput {
@@ -662,12 +630,9 @@ mod tests {
     #[test]
     fn memory_config_rejects_unknown_fields() {
         let err = serde_json::from_value::<MemoryConfig>(serde_json::json!({
-            "search": {
-                "url": "http://localhost:7700",
-                "backend": "legacy"
-            }
+            "search": {}
         }))
         .expect_err("memory config should reject unknown fields");
-        assert!(err.to_string().contains("unknown field `backend`"));
+        assert!(err.to_string().contains("unknown field `search`"));
     }
 }

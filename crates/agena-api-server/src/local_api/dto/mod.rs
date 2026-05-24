@@ -136,7 +136,7 @@ pub struct RuntimeStatusResponse {
     pub session_runtime_available: bool,
     pub watch_paths: Vec<String>,
     pub reload: RuntimeTaskResource,
-    pub session_maintenance: RuntimeTaskResource,
+    pub session_gc: RuntimeTaskResource,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_cache: Option<RuntimeSessionCacheResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

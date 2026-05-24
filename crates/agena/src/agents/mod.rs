@@ -88,10 +88,7 @@ pub struct AgentFrontmatter {
         skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
     pub permission: crate::agent::PermissionConfig,
-    #[serde(
-        default,
-        skip_serializing_if = "AgentSelectionConfig::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "AgentSelectionConfig::is_empty")]
     pub defaults: AgentSelectionConfig,
 }
 
@@ -114,10 +111,7 @@ pub struct AgentDescriptor {
         skip_serializing_if = "crate::agent::PermissionConfig::is_empty"
     )]
     pub permission: crate::agent::PermissionConfig,
-    #[serde(
-        default,
-        skip_serializing_if = "AgentSelectionConfig::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "AgentSelectionConfig::is_empty")]
     pub defaults: AgentSelectionConfig,
     pub scope: AgentScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]

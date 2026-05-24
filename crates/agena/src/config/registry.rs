@@ -1080,14 +1080,17 @@ fn resolve_adapter_default_models(
         .filter(|(_, adapter)| adapter.enabled)
         .map(|(adapter_id, _)| adapter_id)
     {
-        let default_model = resolved
-            .defaults
-            .model
-            .clone()
-            .ok_or_else(|| ConfigError::InvalidProviderConfig {
-                provider_id: provider_id.to_owned(),
-                message: format!("provider defaults.model is missing for adapter `{adapter_id}`"),
-            })?;
+        let default_model =
+            resolved
+                .defaults
+                .model
+                .clone()
+                .ok_or_else(|| ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message: format!(
+                        "provider defaults.model is missing for adapter `{adapter_id}`"
+                    ),
+                })?;
         defaults.insert(adapter_id.clone(), default_model);
     }
 

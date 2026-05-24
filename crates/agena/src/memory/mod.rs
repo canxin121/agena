@@ -1,9 +1,11 @@
+mod index;
 mod paths;
 mod plugin;
 pub mod project_instructions;
 pub(crate) mod prompt;
 pub mod store;
 
+pub(crate) use index::{MemoryIndex, MemorySearchDocument};
 pub use paths::MemoryDir;
 pub use plugin::{MEMORY_PLUGIN_ID, MemoryPlugin};
 pub use project_instructions::{

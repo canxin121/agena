@@ -189,9 +189,9 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
     let session_cache = snapshot.session_manager().map(|manager| {
         let stats = manager.cache_stats();
         RuntimeSessionCacheResource {
-            max_sessions: resolution.config.session.cache.max_sessions,
-            ttl_secs: resolution.config.session.cache.ttl_secs,
-            max_bytes: resolution.config.session.cache.max_bytes,
+            max_sessions: resolution.config.runtime.session.cache.max_sessions,
+            ttl_secs: resolution.config.runtime.session.cache.ttl_secs,
+            max_bytes: resolution.config.runtime.session.cache.max_bytes,
             entry_count: stats.entry_count,
             total_bytes: stats.total_bytes,
             hits: stats.hits,
@@ -397,9 +397,9 @@ async fn runtime_status_response(state: &AppState) -> RuntimeStatusResponse {
             enabled: snapshot.reload_enabled(),
             interval_secs: snapshot.reload_poll_interval().as_secs(),
         },
-        session_maintenance: RuntimeTaskResource {
-            enabled: snapshot.session_maintenance_enabled(),
-            interval_secs: snapshot.session_maintenance_interval().as_secs(),
+        session_gc: RuntimeTaskResource {
+            enabled: snapshot.session_gc_enabled(),
+            interval_secs: snapshot.session_gc_interval().as_secs(),
         },
         session_cache,
         model_catalog: Some(model_catalog),

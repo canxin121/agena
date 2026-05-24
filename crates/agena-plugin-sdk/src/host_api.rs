@@ -1329,10 +1329,7 @@ pub struct HostAgentDescriptor {
     pub description: String,
     #[serde(default, skip_serializing_if = "AgentPermissionConfig::is_empty")]
     pub permission: AgentPermissionConfig,
-    #[serde(
-        default,
-        skip_serializing_if = "HostAgentSelectionConfig::is_empty"
-    )]
+    #[serde(default, skip_serializing_if = "HostAgentSelectionConfig::is_empty")]
     pub defaults: HostAgentSelectionConfig,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

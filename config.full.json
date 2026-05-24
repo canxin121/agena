@@ -25,17 +25,23 @@
     },
     "model_catalog": {
       "cache_max_age_secs": 604800
+    },
+    "session": {
+      "cache": {
+        "max_sessions": 128,
+        "ttl_secs": 900,
+        "max_bytes": 67108864
+      },
+      "gc": {
+        "enabled": true,
+        "interval_secs": 30
+      }
     }
   },
   "session": {
-    "maintenance": {
-      "enabled": true,
-      "interval_secs": 30
-    },
-    "cache": {
-      "max_sessions": 128,
-      "ttl_secs": 900,
-      "max_bytes": 67108864
+    "compaction": {
+      "auto": true,
+      "reserved_tokens": 12000
     }
   },
   "agents": {
@@ -118,11 +124,6 @@
     "project_instructions": {
       "enabled": true,
       "include_global": true
-    },
-    "search": {
-      "url": "http://127.0.0.1:7700",
-      "api_key": "optional-meili-key",
-      "index_prefix": "agena_memory"
     },
     "retrieval": {
       "enabled": true,

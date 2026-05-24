@@ -21,7 +21,8 @@ agena config validate
 - `[providers.<id>.defaults]`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
 - `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `[runtime]`: provider HTTP、retry、reload、catalog 等运行时基础设施参数。
-- `[session]`: compaction、session cache、session maintenance。
+- `[runtime.session]`: session cache、session gc。
+- `[session]`: compaction。
 - `[agents.default]`: 全局默认 agent 名称。
 - `[agents.<name>]`: 自定义 agent。
 - `[permission]`: 路径、网络、tool 权限。
@@ -30,7 +31,7 @@ agena config validate
 `config.full.json` 展示了更完整的功能面：
 
 - provider HTTP timeout、retry、stream replay。
-- runtime reload、session maintenance、session cache。
+- runtime reload、runtime.session.gc、runtime.session.cache。
 - permission path/network/tool rules。
 - `memory` durable memory / retrieval 配置。
 - plugin transport、restart、storage、marketplace 安装后的配置形态。
@@ -98,6 +99,11 @@ runtime.providers.retry.max_delay_ms
 runtime.providers.stream_replay.max_retries_after_output
 runtime.providers.stream_replay.max_tracked_events
 runtime.model_catalog.cache_max_age_secs
+runtime.session.cache.max_sessions
+runtime.session.cache.ttl_secs
+runtime.session.cache.max_bytes
+runtime.session.gc.enabled
+runtime.session.gc.interval_secs
 ```
 
 Provider 覆盖：
@@ -139,7 +145,7 @@ agena \
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
 - `plugins` 只合并 `timeouts`、`list`、`trusted_keys`、`default_quota` 和 `tool_presentation`；没有总开关。
 - `memory`、`mcp`、`lsp`、`web` 都是顶层配置源；对应 built-in plugin 只消费解析后的结果。
-- 这些顶层块的合并语义跟随各自配置结构，例如 server map 按名称合并，`web` / `memory.search` / `memory.retrieval` 采用整体替换。
+- 这些顶层块的合并语义跟随各自配置结构，例如 server map 按名称合并，`web` 采用整体替换，`memory.project_instructions` / `memory.retrieval` 也采用整体替换。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
 
@@ -300,8 +306,8 @@ cache_max_age_secs = 604800
 - `runtime.providers.stream_replay`：流式 replay-safe 重试。
 - `runtime.reload`：配置文件变更轮询。
 - `runtime.model_catalog`：公共模型目录缓存过期。
-
-`session.cache` 和 `session.maintenance` 不在 `runtime` 下，它们属于 `session`。
+- `runtime.session.cache`：session cache 的容量和 TTL。
+- `runtime.session.gc`：session cache 的定期清理任务。
 
 `runtime` 里的这些值只影响运行时基础设施，不决定默认 provider、默认 adapter/model 或默认 agent。那部分分别由 `providers.default`、`providers.<id>.defaults` 和 `agents.default` 管。
 
@@ -309,7 +315,8 @@ cache_max_age_secs = 604800
 
 - provider HTTP timeout 和 connect timeout 必须大于 0。
 - reload poll interval 必须大于 0。
-- session cache TTL、max sessions、max bytes 必须大于 0。
+- runtime session cache TTL、max sessions、max bytes 必须大于 0。
+- runtime session GC interval 必须大于 0。
 - model catalog cache max age 必须大于 0。
 - `runtime.providers.retry.max_delay_ms` 会至少等于 `base_delay_ms`。
 
@@ -841,31 +848,23 @@ fs = "ask"
 enabled = true
 include_global = true
 
-[memory.search]
-url = "http://127.0.0.1:7700"
-api_key = "optional-meili-key"
-index_prefix = "agena_memory"
-
 [memory.retrieval]
 enabled = true
 limit = 3
 min_query_chars = 8
 ```
 
-`memory` 现在是“文件持久化 + Meilisearch 检索 + 会话前自动回忆”的组合，不再只是把 `MEMORY.md` 整体注入 prompt。
+`memory` 现在是“文件持久化 + 进程内 Tantivy 检索 + 会话前自动回忆”的组合，不再只是把 `MEMORY.md` 整体注入 prompt。
 
 字段说明：
 
 - `project_instructions.enabled`: 是否启用工作区项目记忆/指令。
 - `project_instructions.include_global`: 是否同时读取全局 project instructions。
-- `search.url`: Meilisearch 地址；为空时 `memory search` 和自动回忆不会生效。
-- `search.api_key`: 可选 Meilisearch API key。
-- `search.index_prefix`: memory 检索索引前缀，默认 `agena_memory`。
 - `retrieval.enabled`: 会话消息进入模型前，是否基于最后一条用户消息自动检索相关 memory。
 - `retrieval.limit`: 自动回忆最多注入多少条命中。
 - `retrieval.min_query_chars`: 用户消息短于这个长度时跳过自动回忆。
 
-`memory` 顶层配置会驱动 `agena.memory` 插件；模型可见 tool 名是 `memory`，支持 `search`、`get`、`list`、`write`、`delete` 五个 action。`write` / `delete` 会同步更新文件和 Meilisearch 索引。
+`memory` 顶层配置会驱动 `agena.memory` 插件；模型可见 tool 名是 `memory`，支持 `search`、`get`、`list`、`write`、`delete` 五个 action。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
 
 ## Workflow Tool Search
 

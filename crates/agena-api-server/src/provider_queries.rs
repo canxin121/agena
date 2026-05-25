@@ -70,10 +70,26 @@ pub fn list_providers_response(state: &AppState) -> Vec<ProviderSummaryResource>
 fn provider_native_tools_summary_resource(
     provider: &agena::config::ResolvedProviderConfig,
 ) -> ProviderNativeToolsSummaryResource {
+    let (enabled, bindings) = provider
+        .defaults
+        .adapter
+        .as_ref()
+        .zip(provider.defaults.model.as_ref())
+        .and_then(|(adapter_id, model_id)| {
+            provider
+                .models
+                .get(format!("{adapter_id}/{model_id}").as_str())
+        })
+        .map(|model| (model.native_tools.enabled, model.native_tool_bindings()))
+        .unwrap_or((false, Vec::new()));
     ProviderNativeToolsSummaryResource {
-        enabled: provider.native_tools.enabled,
-        bindings: provider
-            .native_tool_bindings()
+        enabled,
+        model_count: provider
+            .models
+            .values()
+            .filter(|model| model.native_tools.enabled)
+            .count(),
+        bindings: bindings
             .into_iter()
             .map(|binding| ProviderNativeToolBindingResource {
                 tool: binding.tool.config_key().to_owned(),

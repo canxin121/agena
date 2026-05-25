@@ -727,6 +727,7 @@ pub struct ProviderNativeToolBindingResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderNativeToolsSummaryResource {
     pub enabled: bool,
+    pub model_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<ProviderNativeToolBindingResource>,
 }

@@ -10448,7 +10448,7 @@ impl App {
                     ProviderNativeToolsPreset::Disabled.token(),
                     ui_text::t(&self.i18n, "provider-native-tools-disabled-detail"),
                 )];
-                if let Some(preset) = dialog.draft.suggested_native_tools_preset() {
+                if let Some(preset) = dialog.draft.available_native_tools_preset() {
                     let detail_key = match preset {
                         ProviderNativeToolsPreset::OpenAiHostedDefaults => {
                             "provider-native-tools-openai-detail"

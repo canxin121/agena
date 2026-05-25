@@ -19,7 +19,7 @@ agena config validate
 - `[tracing]`: 日志过滤。
 - `[providers.default]`: 全局默认 provider 名称。
 - `[providers.<id>.defaults]`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
-- `[providers.<id>.native_tools]`: provider-native 远程内置 tool 的路由、默认 hosted 参数、harness 绑定和 connector 引用。
+- `[providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools]`: model-scoped provider-native 远程内置 tool 路由、默认 hosted 参数、harness 绑定和 connector 引用。
 - `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `[runtime]`: provider HTTP、retry、reload、catalog 等运行时基础设施参数。
 - `[runtime.session]`: session cache、session gc。
@@ -124,11 +124,11 @@ providers.<id>.auth.protocol_paths.<adapter>
 providers.<id>.auth.api_key
 providers.<id>.auth.api_key_env
 providers.<id>.enabled
-providers.<id>.native_tools.enabled
-providers.<id>.native_tools.routes.web_search
-providers.<id>.native_tools.hosted.web_search.allowed_domains
-providers.<id>.native_tools.harness.computer.kind
-providers.<id>.native_tools.connectors.<name>.server
+providers.<id>.adapters.<adapter>.models.<model>.native_tools.enabled
+providers.<id>.adapters.<adapter>.models.<model>.native_tools.routes.web_search
+providers.<id>.adapters.<adapter>.models.<model>.native_tools.hosted.web_search.allowed_domains
+providers.<id>.adapters.<adapter>.models.<model>.native_tools.harness.computer.kind
+providers.<id>.adapters.<adapter>.models.<model>.native_tools.connectors.<name>.server
 harnesses.browser.<name>.driver
 ```
 
@@ -336,9 +336,8 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 - `[providers.default]`：全局默认 provider 名称。
 - `[providers.<id>.defaults]`：provider-local 默认 adapter/model/thinking/speed/verbosity/parallel。
 - `[providers.<id>.auth]`：认证与身份来源。
-- `[providers.<id>.native_tools]`：provider-native remote tool 路由、hosted 默认值、harness 绑定、connector 引用。
 - `[providers.<id>.adapters.<adapter-id>]`：协议实现。
-- `[providers.<id>.adapters.<adapter-id>.models."<model-id>"]`：真实上游模型节点。
+- `[providers.<id>.adapters.<adapter-id>.models."<model-id>"]`：真实上游模型节点，以及该 model 的 native tools 配置。
 
 更完整的架构说明见 [Provider / Auth / Adapter 架构](provider-auth-adapters.md)。
 
@@ -424,22 +423,23 @@ OpenAI ChatGPT -> Codex、Google ADC -> Gemini CLI；没有专属身份的 auth
 
 ### Provider-native tools
 
-`providers.<id>.native_tools` 是 provider 原生远程内置 tool 的 canonical 配置入口。它和 `[web]`、plugin tool 是两条平行链路：
+`providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools` 是 provider 原生远程内置 tool 的 canonical 配置入口。它和 `[web]`、plugin tool 是两条平行链路：
 
 - plugin tool 继续表示 host-executed function tools。
 - `[web]` 继续表示 Agena 本地 `agena.web` 的 fetch / Brave fallback search。
-- `providers.<id>.native_tools` 表示 provider 自己托管或 provider 规划、host 执行的 native tools。
+- `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools` 表示某个具体 model 自己托管或 provider 规划、host 执行的 native tools。
 
 默认行为不是“一律开启”：
 
 - runtime 解析阶段不会再根据 auth 或 base URL 隐式推导 native tool 默认值。
 - 自定义 OpenAI-compatible / gateway / proxy provider 默认不会自动开启任何 native tool。
-- TUI / Studio Web 在创建 provider 时可以为官方 auth 预填一组显式的 hosted tool routes；保存后它们会直接写进 `providers.<id>.native_tools.*`。
-- `enabled = false` 也是显式配置的一部分，用来明确关闭这一层能力。
+- TUI / Studio Web 在创建 provider 时只会为官方 auth 默认勾选一组显式 hosted tool presets；非官方 auth 默认不勾选，但仍可手动开启。
+- 保存后这些选择会直接写进 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
+- `enabled = false` 也是显式配置的一部分，用来明确关闭某个 model 的这一层能力。
 
 结构分四层：
 
-- `enabled`：是否为这个 provider 打开 native tool 系统。
+- `enabled`：是否为这个 model 打开 native tool 系统。
 - `routes`：每个逻辑工具走 `plugin`、`provider_hosted`、`provider_harness`、`provider_connector` 还是 `disabled`。
 - `hosted`：provider-hosted tool 的默认资源和参数。
 - `harness`：provider-harness tool 绑定到哪个顶层 harness。
@@ -466,43 +466,44 @@ route 约束：
 - `computer` / `bash` / `text_editor`：`disabled` / `provider_harness`
 - `remote_mcp`：`disabled` / `provider_connector`
 
-当前自动推导的官方默认值：
+创建界面的默认勾选规则：
 
-- OpenAI first-party：`web_search`、`file_search`、`code_execution`、`image_generation`
-- Anthropic first-party：`web_search`
-- Gemini first-party：`web_search`、`url_context`、`code_execution`
+- OpenAI first-party auth：默认勾选 `web_search`、`file_search`、`code_execution`、`image_generation`
+- Anthropic first-party auth：默认勾选 `web_search`
+- Gemini first-party auth：默认勾选 `web_search`、`url_context`、`code_execution`
+- 其他 auth provenance：默认不勾选，但只要 adapter 支持，仍可手动开启对应 preset
 
-这里的 “first-party” 指官方 auth provenance，而不是单纯的 adapter kind。例如同样走 `openai` adapter 的 Copilot、AtomGit、SAP AI Core、任意自建 gateway，都不会自动继承 OpenAI hosted tools。
+这里的 “first-party auth” 指官方 auth provenance，而不是单纯的 adapter kind。例如同样走 `openai` adapter 的 Copilot、AtomGit、SAP AI Core、任意自建 gateway，都不会默认勾选 OpenAI hosted tools。
 
 示例：
 
 ```toml
-[providers.openai.native_tools]
+[providers.openai.adapters.openai.models."gpt-5".native_tools]
 enabled = true
 
-[providers.openai.native_tools.routes]
+[providers.openai.adapters.openai.models."gpt-5".native_tools.routes]
 web_search = "provider_hosted"
 file_search = "provider_hosted"
 code_execution = "provider_hosted"
 image_generation = "provider_hosted"
 remote_mcp = "provider_connector"
 
-[providers.openai.native_tools.hosted.web_search]
+[providers.openai.adapters.openai.models."gpt-5".native_tools.hosted.web_search]
 allowed_domains = ["platform.openai.com", "developers.openai.com"]
 freshness = "cached"
 max_results = 8
 
-[providers.openai.native_tools.hosted.file_search]
+[providers.openai.adapters.openai.models."gpt-5".native_tools.hosted.file_search]
 vector_store_ids = ["vs_docs_main"]
 max_results = 8
 include_results = true
 
-[providers.openai.native_tools.hosted.code_execution.container]
+[providers.openai.adapters.openai.models."gpt-5".native_tools.hosted.code_execution.container]
 type = "auto"
 memory_limit = "4g"
 file_ids = ["file_seed_csv"]
 
-[providers.openai.native_tools.connectors.docs]
+[providers.openai.adapters.openai.models."gpt-5".native_tools.connectors.docs]
 server = "docs"
 require_approval = true
 tool_filter = ["search", "read_page"]
@@ -535,24 +536,24 @@ max_file_bytes = 262144
 provider 侧只保存引用：
 
 ```toml
-[providers.anthropic.native_tools]
+[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools]
 enabled = true
 
-[providers.anthropic.native_tools.routes]
+[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools.routes]
 web_search = "provider_hosted"
 bash = "provider_harness"
 text_editor = "provider_harness"
 computer = "provider_harness"
 
-[providers.anthropic.native_tools.harness.bash]
+[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools.harness.bash]
 kind = "shell"
 name = "default"
 
-[providers.anthropic.native_tools.harness.text_editor]
+[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools.harness.text_editor]
 kind = "editor"
 name = "default"
 
-[providers.anthropic.native_tools.harness.computer]
+[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools.harness.computer]
 kind = "browser"
 name = "default"
 ```
@@ -1318,7 +1319,7 @@ api_key = "..."
 - `fetch` 直接由本地 runtime 发 HTTP 请求。
 - `search` 目前仍是 Brave fallback backend。
 
-如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `[web]`，而是写在 `providers.<id>.native_tools.*`。
+如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `[web]`，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
 
 API key 可写在配置里，也可由环境变量提供：
 

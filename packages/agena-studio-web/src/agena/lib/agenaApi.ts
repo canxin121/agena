@@ -439,6 +439,7 @@ export type ProviderSummary = {
   adapters?: ProviderAdapterSummary[]
   native_tools?: {
     enabled: boolean
+    model_count: number
     bindings?: Array<{
       tool: string
       route: string

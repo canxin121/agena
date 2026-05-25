@@ -373,16 +373,7 @@ Path 使用点分语法。带点的 table key 用引号包起来，例如 `mcp.s
 
 `PATCH /api/v1/settings` 请求：
 
-```json
-{
-  "path": "web.search",
-  "changes": {
-    "api_key": "..."
-  },
-  "validate": true,
-  "reload": true
-}
-```
+`web.search` 是本地 crawl-index 搜索，不再有 API key 设置。要让搜索返回结果，需要先用 `crawl` 工具采集页面并建立本地索引。
 
 写入响应包含：
 

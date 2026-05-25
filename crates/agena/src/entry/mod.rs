@@ -348,8 +348,6 @@ pub struct ToolExecutor {
     monitor_registry: Option<Arc<dyn MonitorService>>,
     truncator: ToolOutputTruncator,
     plugins: Arc<PluginHost>,
-    web_search_backend: crate::config::WebSearchBackend,
-    web_search_url_override: Option<String>,
     plan_registry: Option<plan::PlanRegistry>,
     worktree_registry: Option<worktree::WorktreeRegistry>,
     scheduler: Option<Arc<agena_scheduler::Scheduler>>,
@@ -368,8 +366,6 @@ impl ToolExecutor {
             monitor_registry: monitor::default_registry(),
             truncator: ToolOutputTruncator::default(),
             plugins: PluginHost::new_empty(),
-            web_search_backend: crate::config::WebSearchConfig::default().resolve(),
-            web_search_url_override: None,
             plan_registry: None,
             worktree_registry: None,
             scheduler: None,
@@ -414,24 +410,6 @@ impl ToolExecutor {
     ) -> Self {
         self.tool_presentation = presentation;
         self
-    }
-
-    pub fn with_web_search_backend(mut self, backend: crate::config::WebSearchBackend) -> Self {
-        self.web_search_backend = backend;
-        self
-    }
-
-    pub fn with_web_search_url_override(mut self, url: impl Into<String>) -> Self {
-        self.web_search_url_override = Some(url.into());
-        self
-    }
-
-    pub fn web_search_backend(&self) -> crate::config::WebSearchBackend {
-        self.web_search_backend.clone()
-    }
-
-    pub fn web_search_url_override(&self) -> Option<&str> {
-        self.web_search_url_override.as_deref()
     }
 
     pub fn with_plan_registry(mut self, reg: plan::PlanRegistry) -> Self {

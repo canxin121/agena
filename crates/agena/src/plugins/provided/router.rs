@@ -332,9 +332,7 @@ pub(crate) fn permission_networks_for(
             let payload: WebFetchToolInput = serde_json::from_value(input.clone())?;
             Ok(vec![NetworkRequest::connect(payload.url)])
         }
-        "web_search" => Ok(vec![NetworkRequest::connect(
-            "https://api.search.brave.com/res/v1/web/search",
-        )]),
+        "web_search" => Ok(Vec::new()),
         _ => Ok(Vec::new()),
     }
 }

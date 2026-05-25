@@ -40,7 +40,7 @@ pub use types::{
     RuntimeModelCatalogConfig, RuntimeProvidersConfig, RuntimeReloadConfig, RuntimeSessionConfig,
     SessionCacheConfig, SessionCompactionConfig, SessionConfig, ShellHarnessConfig,
     SimpleHttpProviderOptions, StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig,
-    WebSearchBackend, WebSearchConfig, WebToolsConfig,
+    WebSearchConfig, WebToolsConfig,
 };
 
 pub use adapter_models::{

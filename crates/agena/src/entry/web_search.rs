@@ -1,6 +1,4 @@
-//! `web_search` plugin tool backed by Brave Search.
-
-use serde::Deserialize;
+//! `web_search` plugin tool backed by the local crawl index.
 
 use crate::message::WebSearchToolInput;
 
@@ -10,8 +8,7 @@ use super::{
 };
 
 const DEFAULT_MAX_RESULTS: u32 = 8;
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
-const BRAVE_SEARCH_URL: &str = "https://api.search.brave.com/res/v1/web/search";
+const BACKEND_NAME: &str = "crawl";
 
 pub(super) fn execute(
     executor: &ToolExecutor,
@@ -24,28 +21,13 @@ pub(super) fn execute(
         ));
     }
 
-    let backend = executor.web_search_backend();
     let max = input
         .max_results
         .unwrap_or(DEFAULT_MAX_RESULTS)
         .clamp(1, 20);
     let allow = input.allowed_domains.clone();
     let block = input.blocked_domains.clone();
-
-    let query = q.to_string();
-    let backend_name = backend.name().to_string();
-    let api_key = backend.api_key.clone();
-    let request_url = executor
-        .web_search_url_override()
-        .unwrap_or(BRAVE_SEARCH_URL)
-        .to_string();
-    let target = crate::permission::NetworkTarget::parse(request_url.as_str())
-        .map_err(|e| ToolError::Plugin(format!("web_search: invalid network target: {e}")))?;
-    executor.ensure_network_permission(&target)?;
-
-    let raw_hits: Vec<WebSearchHit> = super::mcp::block_on(async move {
-        brave_search(&query, max, &api_key, request_url.as_str()).await
-    })?;
+    let raw_hits = local_crawl_search(executor, q, max as usize)?;
 
     let hits: Vec<WebSearchHit> = raw_hits
         .into_iter()
@@ -54,9 +36,12 @@ pub(super) fn execute(
         .collect();
 
     let summary = if hits.is_empty() {
-        format!("[brave] no results for {q:?}")
+        format!(
+            "[{}] no local crawl results for {q:?}. Run `crawl` first to build the local index.",
+            BACKEND_NAME
+        )
     } else {
-        let mut buf = format!("[brave] {} result(s):\n", hits.len());
+        let mut buf = format!("[{}] {} result(s):\n", BACKEND_NAME, hits.len());
         for (i, h) in hits.iter().enumerate() {
             use std::fmt::Write as _;
             let _ = writeln!(&mut buf, "  {}. {} — {}", i + 1, h.title, h.url);
@@ -67,10 +52,37 @@ pub(super) fn execute(
     let view = ToolExecutionView::simple(format!("WebSearch {q:?}"), summary);
     let output = ToolPayloadOutput::WebSearch {
         query: q.to_string(),
-        backend: backend_name,
+        backend: BACKEND_NAME.to_string(),
         results: hits,
     };
     Ok(ToolPayloadExecution::new(output, view))
+}
+
+fn local_crawl_search(
+    executor: &ToolExecutor,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<WebSearchHit>, ToolError> {
+    let store = agena_crawl::CrawlStore::for_workspace(executor.workspace_root());
+    if !store.dir().exists() {
+        return Ok(Vec::new());
+    }
+    if !store.dir().join(".index").exists() {
+        store
+            .rebuild_index()
+            .map_err(|err| ToolError::Plugin(format!("web_search[crawl]: {err}")))?;
+    }
+    let hits = store
+        .search(query, limit)
+        .map_err(|err| ToolError::Plugin(format!("web_search[crawl]: {err}")))?;
+    Ok(hits
+        .into_iter()
+        .map(|hit| WebSearchHit {
+            title: hit.title,
+            url: hit.url,
+            snippet: Some(hit.preview),
+        })
+        .collect())
 }
 
 fn domain_allowed(url: &str, allow: &[String], block: &[String]) -> bool {
@@ -93,63 +105,69 @@ fn host_matches(host: &str, pattern: &str) -> bool {
     h == p || h.ends_with(&format!(".{p}"))
 }
 
-async fn brave_search(
-    query: &str,
-    max: u32,
-    api_key: &str,
-    request_url: &str,
-) -> Result<Vec<WebSearchHit>, ToolError> {
-    if api_key.is_empty() {
-        return Err(ToolError::Plugin(
-            "web_search[brave]: BRAVE_API_KEY missing".to_string(),
-        ));
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    use super::execute;
+    use crate::agent::Agent;
+    use crate::entry::{ToolExecutor, ToolPayloadOutput};
+    use crate::message::WebSearchToolInput;
+    use crate::permission::PermissionPolicy;
+
+    #[test]
+    fn web_search_uses_local_crawl_index_without_external_search_service() {
+        let workspace = tempdir().expect("workspace");
+        let store = agena_crawl::CrawlStore::for_workspace(workspace.path());
+        let document = agena_crawl::StoredDocument {
+            id: "doc-1".to_string(),
+            url: "https://example.com/docs".to_string(),
+            canonical_url: "https://example.com/docs".to_string(),
+            title: "Runtime Web Docs".to_string(),
+            markdown: "Runtime web crawl search is fully local.".to_string(),
+            chunks: vec!["Runtime web crawl search is fully local.".to_string()],
+            chunk_hashes: vec!["chunk-hash".to_string()],
+            links: Vec::new(),
+            content_type: "text/html".to_string(),
+            status: 200,
+            truncated: false,
+            rendered: false,
+            hash: "hash".to_string(),
+            raw_html_hash: "raw-hash".to_string(),
+            markdown_hash: "markdown-hash".to_string(),
+            simhash: 1,
+            etag: None,
+            last_modified: None,
+            depth: 0,
+            fetched_at: Utc::now(),
+        };
+        store.save_document(&document).expect("document saved");
+        store.rebuild_index().expect("index rebuilt");
+
+        let executor = ToolExecutor::new(
+            workspace.path(),
+            Agent::new("test", PermissionPolicy::allow_all()),
+        );
+        let output = execute(
+            &executor,
+            &WebSearchToolInput {
+                query: "fully local".to_string(),
+                allowed_domains: Vec::new(),
+                blocked_domains: Vec::new(),
+                max_results: Some(5),
+            },
+        )
+        .expect("search succeeds");
+
+        let ToolPayloadOutput::WebSearch {
+            backend, results, ..
+        } = output.output
+        else {
+            panic!("expected web search output");
+        };
+        assert_eq!(backend, "crawl");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "Runtime Web Docs");
     }
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
-        .build()
-        .map_err(|e| ToolError::Plugin(e.to_string()))?;
-    let url = format!(
-        "{request_url}?q={}&count={}",
-        urlencoding::encode(query),
-        max
-    );
-    let resp = client
-        .get(&url)
-        .header("X-Subscription-Token", api_key)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| ToolError::Plugin(format!("brave request failed: {e}")))?;
-    if !resp.status().is_success() {
-        return Err(ToolError::Plugin(format!("brave {}", resp.status())));
-    }
-    #[derive(Deserialize)]
-    struct Response {
-        web: Option<Web>,
-    }
-    #[derive(Deserialize)]
-    struct Web {
-        results: Vec<Item>,
-    }
-    #[derive(Deserialize)]
-    struct Item {
-        title: Option<String>,
-        url: String,
-        description: Option<String>,
-    }
-    let parsed: Response = resp
-        .json()
-        .await
-        .map_err(|e| ToolError::Plugin(e.to_string()))?;
-    Ok(parsed
-        .web
-        .map(|web| web.results)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| WebSearchHit {
-            title: item.title.unwrap_or_default(),
-            url: item.url,
-            snippet: item.description,
-        })
-        .collect())
 }

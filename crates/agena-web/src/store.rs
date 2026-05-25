@@ -144,14 +144,20 @@ impl CrawlStore {
         {
             return self.get_document(id.as_str()).map(Some);
         }
-        Ok(None)
+        Ok(self
+            .list_documents()?
+            .into_iter()
+            .find(|document| document.markdown_hash == markdown_hash))
     }
 
     pub fn find_by_raw_hash(&self, raw_hash: &str) -> Result<Option<StoredDocument>, CrawlError> {
         if let Some(id) = self.metadata()?.find_document_id_by_raw_hash(raw_hash)? {
             return self.get_document(id.as_str()).map(Some);
         }
-        Ok(None)
+        Ok(self
+            .list_documents()?
+            .into_iter()
+            .find(|document| document.raw_html_hash == raw_hash))
     }
 
     pub fn rebuild_index(&self) -> Result<(), CrawlError> {
@@ -255,6 +261,49 @@ mod tests {
         let hits = store.search("Tantivy index", 5).expect("search succeeds");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, document.id);
+    }
+
+    #[test]
+    fn empty_metadata_database_does_not_break_url_lookup() {
+        let temp = tempdir().expect("tempdir");
+        let store = CrawlStore::for_workspace(temp.path());
+
+        assert!(
+            store
+                .find_by_url("https://example.com/docs")
+                .expect("empty metadata lookup should not fail")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn hash_lookup_falls_back_to_document_files_when_metadata_is_empty() {
+        let temp = tempdir().expect("tempdir");
+        let store = CrawlStore::for_workspace(temp.path());
+        let document = test_document("doc", "https://example.com/doc", 1);
+        store.ensure_exists().expect("store exists");
+        std::fs::write(
+            store.document_path(document.id.as_str()),
+            serde_json::to_vec(&document).expect("document serializes"),
+        )
+        .expect("document file written");
+
+        assert_eq!(
+            store
+                .find_by_markdown_hash(document.markdown_hash.as_str())
+                .expect("markdown lookup")
+                .expect("markdown document")
+                .id,
+            document.id
+        );
+        assert_eq!(
+            store
+                .find_by_raw_hash(document.raw_html_hash.as_str())
+                .expect("raw lookup")
+                .expect("raw document")
+                .id,
+            document.id
+        );
     }
 
     #[test]

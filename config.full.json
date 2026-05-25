@@ -149,7 +149,6 @@
     "store_max_bytes": 104857600,
     "default_chunk_chars": 1800,
     "near_duplicate_hamming_distance": 3,
-    "search_engine": "bing",
     "search_default_limit": 5,
     "search_max_limit": 20,
     "list_default_limit": 20,

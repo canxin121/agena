@@ -114,7 +114,7 @@ pub async fn search_web(
     }
     let limit = options.limit.clamp(1, 50);
     tracing::debug!(
-        target: "agena::crawl",
+        target: "agena::web",
         query,
         engine = options.engine.as_str(),
         limit,

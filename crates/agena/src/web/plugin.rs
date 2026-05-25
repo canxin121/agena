@@ -42,7 +42,7 @@ pub struct WebPlugin {
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "web",
-    description = "Preferred local web discovery and ingestion tool. Use action `search` for direct web search, `fetch` for one page, `crawl` to build a local index, `query` to search that index, `get` to inspect one stored page, or `list` to inspect the local crawl catalog.",
+    description = "Preferred local web discovery and ingestion tool. Use action `search` for direct web search, `fetch` for one page, `crawl` to build a local index, `query` to search that index, `get` to inspect one stored page, or `list` to inspect the local crawl catalog. For `search`, choose engine `duckduckgo`, `bing`, `baidu`, or `auto` per query.",
     summary = "Local web search, crawling, fetch, and embedded crawl index.",
     help = "This tool performs direct web search with embedded ferris-style search code, fetches pages with Spider, stores extracted markdown under the current workspace's Agena data directory, and queries the local Tantivy index. It does not use Firecrawl, Brave API, or any remote search API key service.",
     tags(
@@ -126,11 +126,21 @@ struct CrawlWebSearchInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max_results: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    engine: Option<String>,
+    engine: Option<WebSearchEngineSelection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     allowed_domains: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     blocked_domains: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum WebSearchEngineSelection {
+    Auto,
+    Bing,
+    #[serde(rename = "duckduckgo", alias = "duck_duck_go", alias = "ddg")]
+    DuckDuckGo,
+    Baidu,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -167,6 +177,7 @@ struct CrawlListInput {
 struct CrawlWebSearchOutput {
     query: String,
     engine: String,
+    attempted_engines: Vec<String>,
     results: Vec<WebSearchResult>,
 }
 
@@ -333,37 +344,42 @@ impl WebPlugin {
             self.config.search_default_limit as usize,
             self.config.search_max_limit as usize,
         );
-        let engine = input
-            .engine
-            .as_deref()
-            .unwrap_or(self.config.search_engine.as_str())
-            .parse::<WebSearchEngine>()
-            .map_err(crawl_error_to_plugin)?;
-        let engine_url = url::Url::parse(engine.permission_url())
-            .map_err(|err| PluginError::new(err.to_string()))?;
-        if let Some(host) = engine_url.host_str() {
-            self.host_limiter.until_key_ready(&host.to_string()).await;
+        let engines = search_engines(input.engine);
+        let explicit_engine = !matches!(input.engine, None | Some(WebSearchEngineSelection::Auto));
+        let mut attempted_engines = Vec::new();
+        let mut last_error = None;
+        let mut selected_engine = WebSearchEngineSelection::Auto.label().to_string();
+        let mut results = Vec::new();
+
+        for engine in engines {
+            attempted_engines.push(engine.as_str().to_string());
+            match self.search_with_engine(query, limit, engine, input).await {
+                Ok(engine_results) => {
+                    if explicit_engine || !engine_results.is_empty() {
+                        selected_engine = engine.as_str().to_string();
+                        results = engine_results;
+                        break;
+                    }
+                }
+                Err(err) if explicit_engine => return Err(err),
+                Err(err) => {
+                    last_error = Some(format!("{}: {}", engine.as_str(), err));
+                }
+            }
         }
-        self.ensure_network_permission(&engine_url).await?;
-        let mut options = WebSearchOptions {
-            engine,
-            limit,
-            timeout: Duration::from_secs(self.config.fetch_timeout_secs),
-            user_agent: crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string(),
-        };
-        options.limit = limit;
-        let results = search_web(query, &options)
-            .await
-            .map_err(crawl_error_to_plugin)?
-            .into_iter()
-            .filter(|result| {
-                domain_allowed(&result.url, &input.allowed_domains, &input.blocked_domains)
-            })
-            .take(limit)
-            .collect::<Vec<_>>();
+
+        if results.is_empty()
+            && !explicit_engine
+            && attempted_engines.len() == search_engines(input.engine).len()
+            && let Some(error) = last_error
+        {
+            tracing::debug!(target: "agena::web", %error, "auto web search exhausted engines");
+        }
+
         let output = CrawlWebSearchOutput {
             query: query.to_string(),
-            engine: engine.as_str().to_string(),
+            engine: selected_engine,
+            attempted_engines,
             results,
         };
         let text = format_web_search(&output);
@@ -372,6 +388,36 @@ impl WebPlugin {
         Ok(ToolInvokeOutput::text(text)
             .with_title("web search")
             .with_payload(payload))
+    }
+
+    async fn search_with_engine(
+        &self,
+        query: &str,
+        limit: usize,
+        engine: WebSearchEngine,
+        input: &CrawlWebSearchInput,
+    ) -> SdkResult<Vec<WebSearchResult>> {
+        let engine_url = url::Url::parse(engine.permission_url())
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        if let Some(host) = engine_url.host_str() {
+            self.host_limiter.until_key_ready(&host.to_string()).await;
+        }
+        self.ensure_network_permission(&engine_url).await?;
+        let options = WebSearchOptions {
+            engine,
+            limit,
+            timeout: Duration::from_secs(self.config.fetch_timeout_secs),
+            user_agent: crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string(),
+        };
+        Ok(search_web(query, &options)
+            .await
+            .map_err(crawl_error_to_plugin)?
+            .into_iter()
+            .filter(|result| {
+                domain_allowed(&result.url, &input.allowed_domains, &input.blocked_domains)
+            })
+            .take(limit)
+            .collect())
     }
 
     async fn invoke_query(&self, input: &CrawlQueryInput) -> SdkResult<ToolInvokeOutput> {
@@ -547,15 +593,10 @@ impl Plugin for WebPlugin {
         }
         let parsed = parse_web_input(input.clone())?;
         let requests = match parsed {
-            WebToolInput::Search { args } => {
-                let engine = args
-                    .engine
-                    .as_deref()
-                    .unwrap_or(self.config.search_engine.as_str())
-                    .parse::<WebSearchEngine>()
-                    .map_err(crawl_error_to_plugin)?;
-                vec![NetworkRequest::connect(engine.permission_url().to_string())]
-            }
+            WebToolInput::Search { args } => search_engines(args.engine)
+                .into_iter()
+                .map(|engine| NetworkRequest::connect(engine.permission_url().to_string()))
+                .collect(),
             WebToolInput::Fetch { args } => vec![NetworkRequest::connect(
                 prepare_fetch_url(args.url.as_str())
                     .map_err(crawl_error_to_plugin)?
@@ -579,6 +620,11 @@ fn web_decl() -> PluginToolDecl {
 }
 
 fn parse_web_input(input: serde_json::Value) -> SdkResult<WebToolInput> {
+    if matches!(&input, serde_json::Value::Array(items) if items.is_empty()) {
+        return Ok(WebToolInput::List {
+            args: CrawlListInput { limit: None },
+        });
+    }
     WebToolInput::parse_input(input)
 }
 
@@ -617,6 +663,30 @@ fn build_host_limiter(delay_ms: u64) -> DefaultKeyedRateLimiter<String> {
         .expect("crawl request delay must be non-zero")
         .allow_burst(NonZeroU32::new(1).expect("non-zero"));
     DefaultKeyedRateLimiter::keyed(quota)
+}
+
+fn search_engines(selection: Option<WebSearchEngineSelection>) -> Vec<WebSearchEngine> {
+    match selection {
+        Some(WebSearchEngineSelection::Bing) => vec![WebSearchEngine::Bing],
+        Some(WebSearchEngineSelection::DuckDuckGo) => vec![WebSearchEngine::DuckDuckGo],
+        Some(WebSearchEngineSelection::Baidu) => vec![WebSearchEngine::Baidu],
+        Some(WebSearchEngineSelection::Auto) | None => vec![
+            WebSearchEngine::DuckDuckGo,
+            WebSearchEngine::Bing,
+            WebSearchEngine::Baidu,
+        ],
+    }
+}
+
+impl WebSearchEngineSelection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Bing => "bing",
+            Self::DuckDuckGo => "duckduckgo",
+            Self::Baidu => "baidu",
+        }
+    }
 }
 
 fn fetch_cache_key(url: &url::Url, render_js: bool) -> String {
@@ -663,6 +733,13 @@ fn format_document(document: &StoredDocument) -> String {
 
 fn format_web_search(output: &CrawlWebSearchOutput) -> String {
     if output.results.is_empty() {
+        if output.engine == "auto" {
+            return format!(
+                "No web search result(s) for '{}' via auto. Tried: {}.",
+                output.query,
+                output.attempted_engines.join(", ")
+            );
+        }
         return format!(
             "No web search result(s) for '{}' via {}.",
             output.query, output.engine
@@ -732,7 +809,7 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_cache_key, web_decl};
+    use super::{WebToolInput, fetch_cache_key, parse_web_input, search_engines, web_decl};
     use crate::plugin::sdk::HostCapability;
 
     #[test]
@@ -754,6 +831,25 @@ mod tests {
         assert_eq!(
             fetch_cache_key(&url, false),
             "spider:plain:https://example.com/docs"
+        );
+    }
+
+    #[test]
+    fn empty_array_input_defaults_to_list_action() {
+        let parsed = parse_web_input(serde_json::json!([])).expect("empty array should parse");
+        assert!(matches!(parsed, WebToolInput::List { .. }));
+    }
+
+    #[test]
+    fn omitted_search_engine_uses_auto_fallback_order() {
+        let engines = search_engines(None);
+        assert_eq!(
+            engines,
+            vec![
+                agena_web::WebSearchEngine::DuckDuckGo,
+                agena_web::WebSearchEngine::Bing,
+                agena_web::WebSearchEngine::Baidu,
+            ]
         );
     }
 

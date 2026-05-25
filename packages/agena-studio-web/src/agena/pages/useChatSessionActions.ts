@@ -25,8 +25,9 @@ import {
   updateSession,
   type MessagePart,
   type MessageResource,
-  type SessionGoalResource,
   type SessionExecutionResource,
+  type SessionGoalResource,
+  type SessionResource,
 } from '../lib/agenaApi'
 
 export type ChatSessionActionsInput = {
@@ -63,6 +64,7 @@ export type ChatSessionActionsInput = {
   sending: Ref<boolean>
   sessionImportJsonl: Ref<string>
   sessionState: Ref<SessionExecutionResource | null>
+  sessions: Ref<SessionResource[]>
   syncEventStream: () => void
   prompt: (message: string, defaultValue?: string) => string | null
   userInputDrafts: Record<string, Record<string, string>>
@@ -159,6 +161,37 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         goal,
       },
     }
+  }
+
+  function deriveSessionTitle(text: string): string {
+    const title = text.replace(/\s+/g, ' ').trim()
+    if (!title) return 'New session'
+    return title.length > 72 ? `${title.slice(0, 69)}...` : title
+  }
+
+  function upsertSession(session: SessionResource) {
+    input.sessions.value = [session, ...input.sessions.value.filter((item) => item.id !== session.id)]
+  }
+
+  async function ensureSessionForPrompt(text: string): Promise<number | null> {
+    const existingSessionId = input.selectedSessionId.value
+    if (existingSessionId) return existingSessionId
+
+    const workspaceId = input.selectedWorkspaceId.value
+    if (!workspaceId) {
+      input.errorMessage.value = 'Select or create a workspace before sending a prompt.'
+      return null
+    }
+
+    const session = await deps.createSession({
+      workspaceId,
+      title: input.newSessionTitle.value.trim() || deriveSessionTitle(text),
+    })
+    input.newSessionTitle.value = ''
+    upsertSession(session)
+    input.selectedSessionId.value = session.id
+    await input.selectSession(session.id)
+    return session.id
   }
 
   async function inspectMessage(messageId: number, partId?: number) {
@@ -386,12 +419,11 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   async function submitPromptText(text: string) {
-    const sessionId = input.selectedSessionId.value
-    if (!sessionId) return
-
     input.sending.value = true
     input.errorMessage.value = ''
     try {
+      const sessionId = await ensureSessionForPrompt(text)
+      if (!sessionId) return
       const state = await deps.submitTurn({
         sessionId,
         text,
@@ -418,6 +450,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
             : undefined,
       })
       input.sessionState.value = state
+      upsertSession(state.session)
       input.composer.value = ''
       input.syncEventStream()
       await input.refreshConversation(false)

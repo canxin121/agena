@@ -160,7 +160,6 @@ export function useChatSessionLifecycle(
 
     const routeSessionId = readChatRouteSessionId(input.route.query.session)
     if (routeSessionId !== null) {
-      input.selectedSessionId.value = routeSessionId
       const matched = await trySelectRouteSession(workspaceData, routeSessionId)
       if (matched) return
     }
@@ -210,20 +209,7 @@ export function useChatSessionLifecycle(
       return
     }
 
-    const firstSession = input.sessions.value[0]
-    if (firstSession) {
-      input.selectedSessionId.value = firstSession.id
-      await refreshConversation(true)
-      return
-    }
-
-    input.selectedSessionId.value = null
-    input.messages.value = []
-    input.timelineEvents.value = []
-    input.sessionState.value = null
-    stopEventStream()
-    clearScheduledConversationRefresh()
-    stopPolling()
+    clearConversationSelection()
   }
 
   async function selectWorkspace(workspaceId: number) {
@@ -255,11 +241,27 @@ export function useChatSessionLifecycle(
     syncEventStream,
   } = conversationRuntime
 
+  function clearConversationSelection() {
+    input.selectedSessionId.value = null
+    input.messages.value = []
+    input.timelineEvents.value = []
+    input.sessionState.value = null
+    input.sessionTree.value = []
+    input.rewindCheckpoints.value = []
+    stopEventStream()
+    clearScheduledConversationRefresh()
+    stopPolling()
+  }
+
   watch(
     () => input.route.query.session,
     (value) => {
       const routeSessionId = readChatRouteSessionId(value)
-      if (routeSessionId === null || routeSessionId === input.selectedSessionId.value) return
+      if (routeSessionId === null) {
+        if (input.selectedSessionId.value !== null) clearConversationSelection()
+        return
+      }
+      if (routeSessionId === input.selectedSessionId.value) return
       input.selectedSessionId.value = routeSessionId
       void loadSidebar().catch((err) => {
         input.errorMessage.value = err instanceof Error ? err.message : String(err)

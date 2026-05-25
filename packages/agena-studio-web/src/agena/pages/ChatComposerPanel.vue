@@ -7,7 +7,6 @@ const props = defineProps<{
   composer: string
   slashSuggestions: CommandItem[]
   sending: boolean
-  selectedSessionId: number | null
   openPalette: () => void
   sendPrompt: () => void | Promise<void>
 }>()
@@ -24,7 +23,7 @@ const selectedSuggestion = computed(
 )
 const canSubmit = computed(() => {
   const text = props.composer.trim()
-  return Boolean(text && (props.selectedSessionId || text.startsWith('/')))
+  return Boolean(text)
 })
 
 watch(

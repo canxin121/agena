@@ -161,6 +161,6 @@ const activeGoal = computed(
         </div>
       </template>
     </div>
-    <p v-else class="muted">Pick or create a session to start chatting.</p>
+    <p v-else class="muted">Send a prompt to create a new session, or pick an existing session.</p>
   </section>
 </template>

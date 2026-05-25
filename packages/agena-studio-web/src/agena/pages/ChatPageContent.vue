@@ -173,7 +173,6 @@ const props = defineProps<{
         :composer="props.state.composer.value"
         :slash-suggestions="props.state.slashSuggestions.value"
         :sending="props.state.sending.value"
-        :selected-session-id="props.state.sidebar.selectedSessionId.value"
         :open-palette="props.state.openGlobalCommandPalette"
         :send-prompt="props.state.sendPrompt"
         @update:composer="props.state.composer.value = $event"

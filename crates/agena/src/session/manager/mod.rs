@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 use tracing::Instrument;
 
 use crate::AppError;
+use crate::config::ProviderNativeToolsConfig;
 use crate::db::crud::session_goal::GoalUpdate;
 use crate::event::{
     ErrorInfo, EventKind, ExecutionFailedEvent, ExecutionStartedEvent, PermissionRepliedEvent,
@@ -232,6 +233,7 @@ impl SessionRunOptions {
         system: Option<String>,
         messages: Vec<Message>,
         tools: Vec<crate::plugin::registry::PluginEntry>,
+        native_tools: ProviderNativeToolsConfig,
         prompt_cache_key: Option<String>,
         previous_response_id: Option<String>,
         prompt_window_generation: Option<u64>,
@@ -241,6 +243,7 @@ impl SessionRunOptions {
             system,
             messages,
             tools,
+            native_tools,
             temperature: self.temperature,
             max_output_tokens: self.max_output_tokens,
             prompt_cache_key,

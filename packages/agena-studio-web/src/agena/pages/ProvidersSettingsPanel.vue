@@ -225,7 +225,7 @@ const providerCreateNativeToolsOptions = computed(() => {
     options.push({
       value: available,
       label: 'openai hosted defaults',
-      detail: 'Write explicit hosted routes for web_search, file_search, code_execution, and image_generation on the default model.',
+      detail: 'Write explicit hosted routes for web_search, file_search, and code_execution on the default model.',
     })
   } else if (available === 'anthropic_hosted_defaults') {
     options.push({
@@ -267,7 +267,34 @@ function onProviderCreateNativeToolsProfileChange() {
 
 function buildProviderCreateNativeToolsPatch(profile: ProviderCreateNativeToolsProfile) {
   if (profile === 'disabled') {
-  return { enabled: false }
+    return { enabled: false }
+  }
+  if (profile === 'openai_hosted_defaults') {
+    return {
+      enabled: true,
+      routes: {
+        web_search: 'provider_hosted',
+        file_search: 'provider_hosted',
+        code_execution: 'provider_hosted',
+      },
+    }
+  }
+  if (profile === 'anthropic_hosted_defaults') {
+    return {
+      enabled: true,
+      routes: {
+        web_search: 'provider_hosted',
+      },
+    }
+  }
+  return {
+    enabled: true,
+    routes: {
+      web_search: 'provider_hosted',
+      url_context: 'provider_hosted',
+      code_execution: 'provider_hosted',
+    },
+  }
 }
 
 function applyNativeToolsToAdaptersPatch(
@@ -288,34 +315,6 @@ function applyNativeToolsToAdaptersPatch(
         ...existingModel,
         native_tools: nativeTools,
       },
-    },
-  }
-}
-  if (profile === 'openai_hosted_defaults') {
-    return {
-      enabled: true,
-      routes: {
-        web_search: 'provider_hosted',
-        file_search: 'provider_hosted',
-        code_execution: 'provider_hosted',
-        image_generation: 'provider_hosted',
-      },
-    }
-  }
-  if (profile === 'anthropic_hosted_defaults') {
-    return {
-      enabled: true,
-      routes: {
-        web_search: 'provider_hosted',
-      },
-    }
-  }
-  return {
-    enabled: true,
-    routes: {
-      web_search: 'provider_hosted',
-      url_context: 'provider_hosted',
-      code_execution: 'provider_hosted',
     },
   }
 }

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::{
+    config::{ProviderNativeToolKind, ProviderNativeToolRoute},
     error::AppError,
     message::{AttachmentItem, Message, MessageUsage},
     model::{ModelId, ModelMetadata, ProviderId},
@@ -231,18 +232,18 @@ impl GeminiAdapter {
         &self,
         request: &CompletionRequest,
         stream: Option<bool>,
-    ) -> GeminiGenerateRequest {
+    ) -> Result<GeminiGenerateRequest, AppError> {
         let (system_chunks, contents) = Self::request_system_and_contents(request);
-        GeminiGenerateRequest {
+        Ok(GeminiGenerateRequest {
             system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
                 parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
             }),
             contents,
             generation_config: Self::generation_config(request.model.as_str(), request, None),
             stream,
-            tools: build_gemini_tools(request.tools.as_slice()),
+            tools: build_gemini_tools(request)?,
             tool_config: None,
-        }
+        })
     }
 
     fn request_contains_tool_results(request: &CompletionRequest) -> bool {
@@ -522,7 +523,7 @@ impl GeminiAdapter {
                 system_instruction: (!system_chunks.is_empty()).then(|| GeminiInstruction {
                     parts: vec![GeminiPart::text(system_chunks.join("\n\n"))],
                 }),
-                tools: build_gemini_tools(request.tools.as_slice()),
+                tools: build_gemini_tools(request)?,
             },
             client_content: GeminiLiveClientContent {
                 turns: contents,
@@ -816,6 +817,14 @@ impl ModelRuntime for GeminiAdapter {
         Some(crate::provider::CapabilityFamily::Gemini)
     }
 
+    fn validate_native_tools_request(
+        &self,
+        _adapter_id: Option<&crate::model::AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        build_gemini_tools(request).map(|_| ())
+    }
+
     fn prompt_cache_shape(&self, _model: &ModelId) -> Option<crate::provider::PromptCacheShape> {
         Some(
             crate::provider::PromptCacheShape::new(PROVIDER_ID)
@@ -903,7 +912,7 @@ impl ModelRuntime for GeminiAdapter {
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse, AppError> {
         let model = request.model.clone();
         let stream_fallback_request = request.clone();
-        let body = self.generate_request(&request, None);
+        let body = self.generate_request(&request, None)?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
         let request_headers =
@@ -994,7 +1003,7 @@ impl ModelRuntime for GeminiAdapter {
                 .await;
         }
 
-        let body = self.generate_request(&request, Some(true));
+        let body = self.generate_request(&request, Some(true))?;
         let body_json =
             utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
         let request_headers =
@@ -1269,7 +1278,7 @@ struct GeminiGenerateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<GeminiTool>>,
+    tools: Option<Vec<serde_json::Value>>,
     #[serde(rename = "toolConfig", skip_serializing_if = "Option::is_none")]
     tool_config: Option<GeminiToolConfig>,
 }
@@ -1369,12 +1378,6 @@ struct GeminiFunctionResponse {
 }
 
 #[derive(Debug, Serialize)]
-struct GeminiTool {
-    #[serde(rename = "functionDeclarations")]
-    function_declarations: Vec<GeminiFunctionDeclaration>,
-}
-
-#[derive(Debug, Serialize)]
 struct GeminiFunctionDeclaration {
     name: String,
     description: String,
@@ -1451,7 +1454,7 @@ struct GeminiLiveSetup {
     #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
     system_instruction: Option<GeminiInstruction>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<GeminiTool>>,
+    tools: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1677,21 +1680,138 @@ fn sanitize_function_parameters(value: &serde_json::Value) -> Option<serde_json:
     }
 }
 
-fn build_gemini_tools(tools: &[crate::plugin::registry::PluginEntry]) -> Option<Vec<GeminiTool>> {
-    if tools.is_empty() {
-        return None;
+fn merge_gemini_tool_provider_options(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    extra: Option<&serde_json::Value>,
+    tool_label: &str,
+) -> Result<(), AppError> {
+    let Some(extra) = extra else {
+        return Ok(());
+    };
+    let extra = extra.as_object().ok_or_else(|| {
+        AppError::Config(format!(
+            "gemini native tool `{tool_label}` provider_options must be a JSON object"
+        ))
+    })?;
+    for (key, value) in extra {
+        map.insert(key.clone(), value.clone());
     }
-    let function_declarations = tools
-        .iter()
-        .map(|tool| GeminiFunctionDeclaration {
-            name: tool.exposed_name.clone(),
-            description: tool.description_text().to_string(),
-            parameters: sanitize_function_parameters(&tool.sanitized_input_schema()),
-        })
-        .collect();
-    Some(vec![GeminiTool {
-        function_declarations,
-    }])
+    Ok(())
+}
+
+fn build_gemini_tools(
+    request: &CompletionRequest,
+) -> Result<Option<Vec<serde_json::Value>>, AppError> {
+    let native_bindings = request.native_tools.bindings();
+    if native_bindings.is_empty() && request.tools.is_empty() {
+        return Ok(None);
+    }
+    if !native_bindings.is_empty() && !request.tools.is_empty() {
+        return Err(AppError::Config(
+            "gemini native hosted tools cannot be combined with function tools in the current API; remove plugin tools or disable native hosted tools for this model".to_owned(),
+        ));
+    }
+
+    let mut tools = Vec::new();
+    if !request.tools.is_empty() {
+        let function_declarations = request
+            .tools
+            .iter()
+            .map(|tool| GeminiFunctionDeclaration {
+                name: tool.exposed_name.clone(),
+                description: tool.description_text().to_string(),
+                parameters: sanitize_function_parameters(&tool.sanitized_input_schema()),
+            })
+            .collect::<Vec<_>>();
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "functionDeclarations".to_owned(),
+            serde_json::to_value(function_declarations)
+                .expect("gemini function declarations should serialize"),
+        );
+        tools.push(serde_json::Value::Object(map));
+    }
+
+    for binding in native_bindings {
+        if binding.route != ProviderNativeToolRoute::ProviderHosted {
+            return Err(AppError::Config(format!(
+                "gemini native tool `{}` only supports `provider_hosted` routes in the current runtime",
+                binding.tool.config_key()
+            )));
+        }
+        match binding.tool {
+            ProviderNativeToolKind::WebSearch => {
+                let config = &request.native_tools.hosted.web_search;
+                if !config.allowed_domains.is_empty()
+                    || !config.blocked_domains.is_empty()
+                    || config.freshness.is_some()
+                    || !config.user_location.is_empty()
+                    || config.max_results.is_some()
+                    || config.search_context_size.is_some()
+                {
+                    return Err(AppError::Config(
+                        "gemini native tool `web_search` currently only supports `provider_options`; other hosted web_search fields are not implemented for Gemini".to_owned(),
+                    ));
+                }
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    "googleSearch".to_owned(),
+                    serde_json::Value::Object(Default::default()),
+                );
+                merge_gemini_tool_provider_options(
+                    &mut map,
+                    config.provider_options.as_ref(),
+                    "web_search",
+                )?;
+                tools.push(serde_json::Value::Object(map));
+            }
+            ProviderNativeToolKind::UrlContext => {
+                let config = &request.native_tools.hosted.url_context;
+                let mut inner = serde_json::Map::new();
+                if let Some(max_urls) = config.max_urls {
+                    inner.insert(
+                        "maxUrls".to_owned(),
+                        serde_json::Value::Number(max_urls.into()),
+                    );
+                }
+                let mut map = serde_json::Map::new();
+                map.insert("urlContext".to_owned(), serde_json::Value::Object(inner));
+                merge_gemini_tool_provider_options(
+                    &mut map,
+                    config.provider_options.as_ref(),
+                    "url_context",
+                )?;
+                tools.push(serde_json::Value::Object(map));
+            }
+            ProviderNativeToolKind::CodeExecution => {
+                let config = &request.native_tools.hosted.code_execution;
+                if !config.container.is_empty() {
+                    return Err(AppError::Config(
+                        "gemini native tool `code_execution` does not support `hosted.code_execution.container`; use `provider_options` for Gemini-specific overrides instead".to_owned(),
+                    ));
+                }
+                let mut map = serde_json::Map::new();
+                map.insert(
+                    "codeExecution".to_owned(),
+                    serde_json::Value::Object(Default::default()),
+                );
+                merge_gemini_tool_provider_options(
+                    &mut map,
+                    config.provider_options.as_ref(),
+                    "code_execution",
+                )?;
+                tools.push(serde_json::Value::Object(map));
+            }
+            other => {
+                return Err(AppError::Config(format!(
+                    "gemini native tool `{}` is not supported by the current runtime",
+                    other.config_key()
+                )));
+            }
+        }
+    }
+
+    Ok(Some(tools))
 }
 
 fn map_gemini_usage(u: GeminiUsageMetadata) -> crate::provider::CompletionUsage {

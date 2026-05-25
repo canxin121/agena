@@ -178,10 +178,15 @@ impl SessionManager {
             .tool_executor
             .for_session_context(&session.runtime.execution);
         let tools = scoped_executor.available_tools();
+        let native_tools = state
+            .processor
+            .provider_registry()
+            .native_tools_config(&options.model)?;
         let request = options.completion_request(
             options.system.clone(),
             active_messages,
             tools,
+            native_tools,
             Some(prompt_window::prompt_cache_key_for_session(session)),
             None,
             Some(session.runtime.prompt_window.generation),

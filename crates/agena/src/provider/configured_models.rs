@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 use serde::{Deserialize, Serialize};
 
+use crate::config::ProviderNativeToolsConfig;
 use crate::error::AppError;
 use crate::model::{
     AdapterId, CapabilitySupport, Model, ModelCapabilities, ModelId, ModelInputModality,
@@ -734,6 +735,16 @@ impl ModelRuntime for ConfiguredModelsProvider {
     impl_model_runtime_target_methods! {
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
+        fn native_tools_config / native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
+    }
+
+    fn validate_native_tools_request(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        self.target
+            .validate_native_tools_request(adapter_id, request)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {

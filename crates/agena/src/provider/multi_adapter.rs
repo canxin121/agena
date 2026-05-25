@@ -22,10 +22,12 @@ use super::{
     ModelCapabilities, ModelRuntime, PromptCacheShape, StreamResumePolicy,
     configured_models::apply_configured_modes,
 };
+use crate::config::ProviderNativeToolsConfig;
 
 #[derive(Debug, Clone)]
 pub struct ProviderModelRoute {
     pub enabled: bool,
+    pub native_tools: ProviderNativeToolsConfig,
     pub definition: ConfiguredModelDefinition,
 }
 
@@ -83,7 +85,15 @@ impl MultiAdapterProvider {
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-    ) -> Result<(AdapterId, ModelId, ConfiguredModelDefinition), AppError> {
+    ) -> Result<
+        (
+            AdapterId,
+            ModelId,
+            ProviderNativeToolsConfig,
+            ConfiguredModelDefinition,
+        ),
+        AppError,
+    > {
         let adapter_id = self.selected_adapter(adapter_id);
         let target_model = model.clone();
         let key = (adapter_id.to_string(), target_model.to_string());
@@ -94,13 +104,19 @@ impl MultiAdapterProvider {
                     self.id, model
                 )));
             }
-            return Ok((adapter_id, target_model, route.definition.clone()));
+            return Ok((
+                adapter_id,
+                target_model,
+                route.native_tools.clone(),
+                route.definition.clone(),
+            ));
         }
 
         self.adapter(adapter_id.as_str())?;
         Ok((
             adapter_id,
             target_model,
+            ProviderNativeToolsConfig::default(),
             ConfiguredModelDefinition::default(),
         ))
     }
@@ -113,27 +129,36 @@ impl MultiAdapterProvider {
         (
             AdapterId,
             ModelId,
+            ProviderNativeToolsConfig,
             ConfiguredModelDefinition,
             Arc<dyn ModelRuntime>,
         ),
         AppError,
     > {
-        let (adapter_id, target_model, definition) = self.resolve_route(adapter_id, model)?;
+        let (adapter_id, target_model, native_tools, definition) =
+            self.resolve_route(adapter_id, model)?;
         let adapter = self.adapter(adapter_id.as_str())?;
-        Ok((adapter_id, target_model, definition, adapter))
+        Ok((adapter_id, target_model, native_tools, definition, adapter))
     }
 
     fn map_route_and_adapter<T>(
         &self,
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
-        map: impl FnOnce(&AdapterId, &ModelId, &ConfiguredModelDefinition, &dyn ModelRuntime) -> T,
+        map: impl FnOnce(
+            &AdapterId,
+            &ModelId,
+            &ProviderNativeToolsConfig,
+            &ConfiguredModelDefinition,
+            &dyn ModelRuntime,
+        ) -> T,
     ) -> Option<T> {
-        let (adapter_id, target_model, definition, adapter) =
+        let (adapter_id, target_model, native_tools, definition, adapter) =
             self.resolve_route_and_adapter(adapter_id, model).ok()?;
         Some(map(
             &adapter_id,
             &target_model,
+            &native_tools,
             &definition,
             adapter.as_ref(),
         ))
@@ -194,6 +219,7 @@ impl ModelRuntime for MultiAdapterProvider {
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
+        fn native_tools_config / native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
     }
 
     fn model_capabilities_for_adapter(
@@ -204,7 +230,7 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, definition, adapter| {
+            |_adapter_id, target_model, _native_tools, definition, adapter| {
                 definition
                     .capabilities
                     .apply_to(adapter.model_capabilities(target_model))
@@ -221,7 +247,7 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, definition, adapter| {
+            |_adapter_id, target_model, _native_tools, definition, adapter| {
                 definition
                     .metadata()
                     .with_fallbacks_from(&adapter.model_metadata(target_model))
@@ -238,7 +264,7 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, definition, adapter| {
+            |_adapter_id, target_model, _native_tools, definition, adapter| {
                 apply_configured_modes(
                     adapter.model_thinking_modes(target_model),
                     definition.thinking_modes.iter(),
@@ -257,13 +283,26 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, definition, adapter| {
+            |_adapter_id, target_model, _native_tools, definition, adapter| {
                 apply_configured_modes(
                     adapter.model_speed_modes(target_model),
                     definition.speed_modes.iter(),
                     |configured, existing| configured.apply_to_mode(existing),
                 )
             },
+        )
+        .unwrap_or_default()
+    }
+
+    fn native_tools_config_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> ProviderNativeToolsConfig {
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_adapter_id, _target_model, native_tools, _definition, _adapter| native_tools.clone(),
         )
         .unwrap_or_default()
     }
@@ -284,7 +323,7 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, _definition, adapter| {
+            |_adapter_id, target_model, _native_tools, _definition, adapter| {
                 adapter.supports_prompt_continuation(target_model)
             },
         )
@@ -299,11 +338,26 @@ impl ModelRuntime for MultiAdapterProvider {
         self.map_route_and_adapter(
             adapter_id,
             model,
-            |_adapter_id, target_model, _definition, adapter| {
+            |_adapter_id, target_model, _native_tools, _definition, adapter| {
                 adapter.prompt_cache_shape(target_model)
             },
         )
         .flatten()
+    }
+
+    fn validate_native_tools_request(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        if request.native_tools.bindings().is_empty() {
+            return Ok(());
+        }
+        let (_adapter_id, target_model, _native_tools, _definition, adapter) =
+            self.resolve_route_and_adapter(adapter_id, &request.model)?;
+        let mut delegated = request.clone();
+        delegated.model = target_model;
+        adapter.validate_native_tools_request(None, &delegated)
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, AppError> {
@@ -382,7 +436,7 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> Result<CompletionResponse, AppError> {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (_adapter_id, target_model, _definition, adapter) =
+        let (_adapter_id, target_model, _native_tools, _definition, adapter) =
             self.resolve_route_and_adapter(adapter_id, &visible_model)?;
         request.model = target_model;
         let mut response = adapter.complete(request).await?;
@@ -405,7 +459,7 @@ impl ModelRuntime for MultiAdapterProvider {
     ) -> Result<Option<String>, AppError> {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (_adapter_id, target_model, _definition, adapter) =
+        let (_adapter_id, target_model, _native_tools, _definition, adapter) =
             self.resolve_route_and_adapter(adapter_id, &visible_model)?;
         request.model = target_model;
         adapter.compact_conversation(request).await
@@ -431,7 +485,7 @@ impl ModelRuntime for MultiAdapterProvider {
     > {
         let visible_model = request.model.clone();
         self.backfill_assistant_reasoning_field(adapter_id, &mut request);
-        let (_adapter_id, target_model, _definition, adapter) =
+        let (_adapter_id, target_model, _native_tools, _definition, adapter) =
             self.resolve_route_and_adapter(adapter_id, &visible_model)?;
         request.model = target_model;
         let provider_id = self.id.clone();

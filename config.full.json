@@ -201,9 +201,7 @@
                 "routes": {
                   "web_search": "provider_hosted",
                   "file_search": "provider_hosted",
-                  "code_execution": "provider_hosted",
-                  "image_generation": "provider_hosted",
-                  "remote_mcp": "provider_connector"
+                  "code_execution": "provider_hosted"
                 },
                 "hosted": {
                   "web_search": {
@@ -211,8 +209,7 @@
                       "platform.openai.com",
                       "developers.openai.com"
                     ],
-                    "freshness": "cached",
-                    "max_results": 8
+                    "freshness": "cached"
                   },
                   "file_search": {
                     "vector_store_ids": [
@@ -229,21 +226,6 @@
                         "file_seed_csv"
                       ]
                     }
-                  },
-                  "image_generation": {
-                    "background": "transparent",
-                    "size": "1536x1024",
-                    "quality": "high"
-                  }
-                },
-                "connectors": {
-                  "docs": {
-                    "server": "docs",
-                    "require_approval": true,
-                    "tool_filter": [
-                      "search",
-                      "read_page"
-                    ]
                   }
                 }
               }

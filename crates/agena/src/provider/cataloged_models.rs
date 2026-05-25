@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use futures_core::Stream;
 
 use crate::{
+    config::ProviderNativeToolsConfig,
     error::AppError,
     model::{AdapterId, Model, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode},
     model_catalog::{
@@ -146,6 +147,16 @@ impl ModelRuntime for CatalogedModelsProvider {
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
+        fn native_tools_config / native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
+    }
+
+    fn validate_native_tools_request(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        request: &CompletionRequest,
+    ) -> Result<(), AppError> {
+        self.target
+            .validate_native_tools_request(adapter_id, request)
     }
 
     fn model_capabilities_for_adapter(

@@ -468,7 +468,7 @@ route 约束：
 
 创建界面的默认勾选规则：
 
-- OpenAI first-party auth：默认勾选 `web_search`、`file_search`、`code_execution`、`image_generation`
+- OpenAI first-party auth：默认勾选 `web_search`、`file_search`、`code_execution`
 - Anthropic first-party auth：默认勾选 `web_search`
 - Gemini first-party auth：默认勾选 `web_search`、`url_context`、`code_execution`
 - 其他 auth provenance：默认不勾选，但只要 adapter 支持，仍可手动开启对应 preset
@@ -485,13 +485,10 @@ enabled = true
 web_search = "provider_hosted"
 file_search = "provider_hosted"
 code_execution = "provider_hosted"
-image_generation = "provider_hosted"
-remote_mcp = "provider_connector"
 
 [providers.openai.adapters.openai.models."gpt-5".native_tools.hosted.web_search]
 allowed_domains = ["platform.openai.com", "developers.openai.com"]
 freshness = "cached"
-max_results = 8
 
 [providers.openai.adapters.openai.models."gpt-5".native_tools.hosted.file_search]
 vector_store_ids = ["vs_docs_main"]
@@ -502,14 +499,17 @@ include_results = true
 type = "auto"
 memory_limit = "4g"
 file_ids = ["file_seed_csv"]
-
-[providers.openai.adapters.openai.models."gpt-5".native_tools.connectors.docs]
-server = "docs"
-require_approval = true
-tool_filter = ["search", "read_page"]
 ```
 
 `hosted.*.provider_options` 是 escape hatch，用于写 provider-specific 原始 JSON；优先只用 canonical 字段。
+
+当前 adapter/runtime 已经接通的 provider-hosted 组合是：
+
+- OpenAI：`web_search`、`file_search`、`code_execution`
+- Anthropic：`web_search`
+- Gemini：`web_search`、`url_context`、`code_execution`
+
+`image_generation`、`remote_mcp`、以及 provider-harness 路径已经有 canonical 配置模型，但当前对话 runtime 还没有把它们投影成一等消息输出或执行循环；如果为这些 route 写了显式配置，运行时会直接报不支持，而不是静默忽略。
 
 ### Harnesses
 

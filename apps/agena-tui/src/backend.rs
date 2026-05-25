@@ -104,7 +104,6 @@ fn provider_native_tools_config_for_preset(
                 web_search: Some(ProviderNativeToolRoute::ProviderHosted),
                 file_search: Some(ProviderNativeToolRoute::ProviderHosted),
                 code_execution: Some(ProviderNativeToolRoute::ProviderHosted),
-                image_generation: Some(ProviderNativeToolRoute::ProviderHosted),
                 ..Default::default()
             },
             ..Default::default()
@@ -1214,9 +1213,9 @@ impl ProviderConfigDraft {
     pub fn sync_native_tools_suggestion(&mut self) {
         if !self.supports_native_tools_preset(self.native_tools_preset) {
             self.native_tools_preset = ProviderNativeToolsPreset::Disabled;
-            self.native_tools_touched = false;
+            self.native_tools_touched = self.source_provider_id.is_some();
         }
-        if self.native_tools_touched {
+        if self.native_tools_touched || self.source_provider_id.is_some() {
             return;
         }
         self.native_tools_preset = self
@@ -5367,6 +5366,11 @@ mod tests {
             config.routes.file_search,
             Some(ProviderNativeToolRoute::ProviderHosted)
         );
+        assert_eq!(
+            config.routes.code_execution,
+            Some(ProviderNativeToolRoute::ProviderHosted)
+        );
+        assert_eq!(config.routes.image_generation, None);
     }
 
     #[test]
@@ -5387,6 +5391,23 @@ mod tests {
             ProviderNativeToolsPreset::Disabled
         );
         assert!(!draft.effective_native_tools_config().enabled);
+    }
+
+    #[test]
+    fn existing_provider_draft_does_not_auto_suggest_native_tools() {
+        let mut draft = ProviderConfigDraft::new_empty();
+        draft.source_provider_id = Some("saved-provider".to_owned());
+        draft.auth_kind = ProviderDraftAuthKind::Api;
+        draft.auth.base_url = "https://api.openai.com".to_owned();
+        draft.default_adapter = "openai".to_owned();
+        draft.default_model = "gpt-5".to_owned();
+        draft.sync_native_tools_suggestion();
+
+        assert_eq!(
+            draft.native_tools_preset,
+            ProviderNativeToolsPreset::Disabled
+        );
+        assert!(!draft.native_tools_touched);
     }
 
     #[tokio::test]

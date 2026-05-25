@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    config::ProviderNativeToolsConfig,
     message::{Message, MessageUsage},
     model::{ModelId, ModelSpeedModeRequestOverride, ProviderId},
     plugin::registry::PluginEntry as RegistryPluginEntry,
@@ -93,6 +94,8 @@ pub struct CompletionRequest {
     pub messages: Vec<Message>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<RegistryPluginEntry>,
+    #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
+    pub native_tools: ProviderNativeToolsConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

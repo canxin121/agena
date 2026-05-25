@@ -19,6 +19,7 @@ export type ProviderNativeToolBindingResource = {
 
 export type ProviderNativeToolsSummaryResource = {
   enabled: boolean
+  model_count: number
   bindings?: ProviderNativeToolBindingResource[]
 }
 

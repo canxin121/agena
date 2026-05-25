@@ -204,32 +204,40 @@ function suggestProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsPro
   return null
 }
 
+function availableProviderCreateNativeToolsProfile(): ProviderCreateNativeToolsProfile | null {
+  const adapterId = String(providerCreateDraft.adapter_id || '').trim()
+  if (adapterId === 'openai') return 'openai_hosted_defaults'
+  if (adapterId === 'anthropic') return 'anthropic_hosted_defaults'
+  if (adapterId === 'gemini') return 'gemini_hosted_defaults'
+  return null
+}
+
 const providerCreateNativeToolsOptions = computed(() => {
   const options: Array<{ value: ProviderCreateNativeToolsProfile; label: string; detail: string }> = [
     {
       value: 'disabled',
       label: 'disabled',
-      detail: 'Write providers.<id>.native_tools.enabled = false.',
+      detail: 'Write providers.<id>.adapters.<adapter>.models.<model>.native_tools.enabled = false for the default model.',
     },
   ]
-  const suggested = suggestProviderCreateNativeToolsProfile()
-  if (suggested === 'openai_hosted_defaults') {
+  const available = availableProviderCreateNativeToolsProfile()
+  if (available === 'openai_hosted_defaults') {
     options.push({
-      value: suggested,
+      value: available,
       label: 'openai hosted defaults',
-      detail: 'Write explicit hosted routes for web_search, file_search, code_execution, and image_generation.',
+      detail: 'Write explicit hosted routes for web_search, file_search, code_execution, and image_generation on the default model.',
     })
-  } else if (suggested === 'anthropic_hosted_defaults') {
+  } else if (available === 'anthropic_hosted_defaults') {
     options.push({
-      value: suggested,
+      value: available,
       label: 'anthropic hosted defaults',
-      detail: 'Write an explicit hosted route for web_search.',
+      detail: 'Write an explicit hosted route for web_search on the default model.',
     })
-  } else if (suggested === 'gemini_hosted_defaults') {
+  } else if (available === 'gemini_hosted_defaults') {
     options.push({
-      value: suggested,
+      value: available,
       label: 'gemini hosted defaults',
-      detail: 'Write explicit hosted routes for web_search, url_context, and code_execution.',
+      detail: 'Write explicit hosted routes for web_search, url_context, and code_execution on the default model.',
     })
   }
   return options
@@ -238,7 +246,7 @@ const providerCreateNativeToolsOptions = computed(() => {
 const providerCreateNativeToolsDetail = computed(
   () =>
     providerCreateNativeToolsOptions.value.find((option) => option.value === providerCreateDraft.native_tools_profile)
-      ?.detail || 'Remote native tools are written explicitly into providers.<id>.native_tools.',
+      ?.detail || 'Remote native tools are written explicitly into providers.<id>.adapters.<adapter>.models.<model>.native_tools.',
 )
 
 watchEffect(() => {
@@ -259,8 +267,30 @@ function onProviderCreateNativeToolsProfileChange() {
 
 function buildProviderCreateNativeToolsPatch(profile: ProviderCreateNativeToolsProfile) {
   if (profile === 'disabled') {
-    return { enabled: false }
+  return { enabled: false }
+}
+
+function applyNativeToolsToAdaptersPatch(
+  adaptersPatch: Record<string, { enabled: boolean; models?: Record<string, Record<string, unknown>> }>,
+  adapterId: string,
+  modelId: string,
+  nativeTools: Record<string, unknown>,
+) {
+  const existingAdapter = adaptersPatch[adapterId] || { enabled: true, models: {} }
+  const existingModels = existingAdapter.models || {}
+  const existingModel = existingModels[modelId] || {}
+  adaptersPatch[adapterId] = {
+    ...existingAdapter,
+    enabled: true,
+    models: {
+      ...existingModels,
+      [modelId]: {
+        ...existingModel,
+        native_tools: nativeTools,
+      },
+    },
   }
+}
   if (profile === 'openai_hosted_defaults') {
     return {
       enabled: true,
@@ -606,6 +636,7 @@ async function createProvider() {
     defaultModelId: modelId,
     defaultCatalogModelId: providerCreateDraft.catalog_model_id.trim(),
   })
+  applyNativeToolsToAdaptersPatch(adaptersPatch, adapterId, modelId, nativeTools)
 
   submittingConfig.value = true
   try {
@@ -619,7 +650,6 @@ async function createProvider() {
             model: modelId,
           },
           auth,
-          native_tools: nativeTools,
           adapters: adaptersPatch,
         },
       },
@@ -904,19 +934,21 @@ onMounted(() => {
             </span>
           </div>
         </div>
-        <p
-          v-if="provider.native_tools?.enabled && provider.native_tools.bindings?.length"
-          class="muted"
-          style="margin-top: 10px"
-        >
+        <p v-if="provider.native_tools" class="muted" style="margin-top: 10px">
           Remote tools:
           {{
-            provider.native_tools.bindings
-              .map((binding) => `${providerNativeToolLabel(binding.tool)} (${binding.route})`)
-              .join(', ')
+            provider.native_tools.enabled ? 'default model enabled' : 'default model disabled'
           }}
+          · {{ provider.native_tools.model_count }} model(s) configured
+          <template v-if="provider.native_tools.bindings?.length">
+            ·
+            {{
+              provider.native_tools.bindings
+                .map((binding) => `${providerNativeToolLabel(binding.tool)} (${binding.route})`)
+                .join(', ')
+            }}
+          </template>
         </p>
-        <p v-else-if="provider.native_tools" class="muted" style="margin-top: 10px">Remote tools: disabled</p>
 
         <div class="field full" style="margin-top: 12px">
           <label class="label">Adapters To List</label>

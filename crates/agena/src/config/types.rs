@@ -134,13 +134,20 @@ impl ResolvedConfig {
         }
     }
 
-    pub fn provider_native_tool_bindings(
+    pub fn provider_model_native_tool_bindings(
         &self,
         provider_id: &str,
-    ) -> Option<Vec<ProviderNativeToolBinding>> {
-        self.providers
-            .get(provider_id)
-            .map(ResolvedProviderConfig::native_tool_bindings)
+    ) -> Option<BTreeMap<String, Vec<ProviderNativeToolBinding>>> {
+        self.providers.get(provider_id).map(|provider| {
+            provider
+                .models
+                .iter()
+                .filter_map(|(route, model)| {
+                    let bindings = model.native_tool_bindings();
+                    (!bindings.is_empty()).then(|| (route.clone(), bindings))
+                })
+                .collect()
+        })
     }
 }
 
@@ -365,17 +372,9 @@ pub struct ResolvedProviderConfig {
     pub enabled: bool,
     pub defaults: ProviderDefaultsConfig,
     pub auth: ProviderAuthConfig,
-    #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
-    pub native_tools: ProviderNativeToolsConfig,
     pub adapters: BTreeMap<String, ResolvedProviderAdapterConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ResolvedProviderModelConfig>,
-}
-
-impl ResolvedProviderConfig {
-    pub fn native_tool_bindings(&self) -> Vec<ProviderNativeToolBinding> {
-        self.native_tools.bindings()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1134,6 +1133,8 @@ pub enum ProviderAdapterDefinition {
 pub struct ResolvedProviderModelConfig {
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
+    pub native_tools: ProviderNativeToolsConfig,
     #[serde(flatten)]
     pub definition: ConfiguredModelDefinition,
 }
@@ -1142,8 +1143,15 @@ impl Default for ResolvedProviderModelConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            native_tools: ProviderNativeToolsConfig::default(),
             definition: ConfiguredModelDefinition::default(),
         }
+    }
+}
+
+impl ResolvedProviderModelConfig {
+    pub fn native_tool_bindings(&self) -> Vec<ProviderNativeToolBinding> {
+        self.native_tools.bindings()
     }
 }
 

@@ -350,8 +350,6 @@ pub struct ProviderOverlay {
     pub defaults: Option<ProviderDefaultsOverlay>,
     #[merge(strategy = option_struct_merge)]
     pub auth: Option<ProviderAuthOverlay>,
-    #[merge(strategy = option_struct_merge)]
-    pub native_tools: Option<ProviderNativeToolsOverlay>,
     #[merge(strategy = map_extend)]
     pub adapters: BTreeMap<String, ProviderAdapterOverlay>,
 }
@@ -397,6 +395,7 @@ pub fn provider_model_overlay_from_definition(
 ) -> ProviderModelOverlay {
     ProviderModelOverlay {
         enabled: true,
+        native_tools: Default::default(),
         definition,
     }
 }

@@ -19,11 +19,6 @@ provider
 │   ├── adapter
 │   └── model
 ├── auth
-├── native_tools
-│   ├── routes
-│   ├── hosted
-│   ├── harness
-│   └── connectors
 └── adapters
     └── <adapter>
         ├── enabled
@@ -31,6 +26,11 @@ provider
         └── models
             └── <real-upstream-model-id>
                 ├── enabled
+                ├── native_tools
+                │   ├── routes
+                │   ├── hosted
+                │   ├── harness
+                │   └── connectors
                 └── metadata / capabilities / thinking_modes / speed_modes
 ```
 
@@ -51,17 +51,17 @@ mode = "api"
 base_url = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 
-[providers.openai.native_tools]
-enabled = true
-
-[providers.openai.native_tools.routes]
-web_search = "provider_hosted"
-
 [providers.openai.adapters.openai]
 enabled = true
 
 [providers.openai.adapters.openai.models."gpt-5"]
 enabled = true
+
+[providers.openai.adapters.openai.models."gpt-5".native_tools]
+enabled = true
+
+[providers.openai.adapters.openai.models."gpt-5".native_tools.routes]
+web_search = "provider_hosted"
 ```
 
 关键约束：
@@ -71,7 +71,7 @@ enabled = true
 - adapter 不再有自己的默认模型字段
 - model key 就是真实上游 model id，不再有 `target_model`
 - provider / adapter / model 三层都支持 `enabled`
-- provider-native remote tools 的路由和 hosted 默认值写在 `providers.<id>.native_tools`
+- provider-native remote tools 的路由和 hosted 默认值写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools`
 - 运行时模型选择由 `provider_id`、`adapter_id`、`model_id` 三个字段共同决定，不使用三段字符串编码
 
 ## 四层职责
@@ -110,9 +110,9 @@ provider-native hosted tools 默认直接复用这一层 auth；不会再单独�
 
 同样因为 provider-native tool 会复用 auth provenance，Agena 的创建界面会把 auth 来源当成“建议配置”的依据：
 
-- first-party official auth 可以在 TUI / Studio Web 里预填一组保守的 hosted native tools
-- 自定义 gateway / compatible auth 默认不预填任何 native tool
-- 保存后这些建议会变成显式的 `providers.<id>.native_tools.*` 配置，而不是 runtime fallback
+- first-party official auth 可以在 TUI / Studio Web 里默认勾选一组保守的 hosted native tools
+- 自定义 gateway / compatible auth 默认不勾选任何 native tool，但仍可手动开启 adapter 对应的 preset
+- 保存后这些建议会变成显式的 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*` 配置，而不是 runtime fallback
 - 用户也可以在创建阶段直接改成 `enabled = false`
 
 ### adapter
@@ -144,6 +144,7 @@ provider-native hosted tools 默认直接复用这一层 auth；不会再单独�
 它负责：
 
 - 开关控制：`enabled`
+- model-scoped provider-native tools
 - metadata patch
 - capability patch
 - thinking mode patch

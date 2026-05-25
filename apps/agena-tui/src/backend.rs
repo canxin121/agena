@@ -17,11 +17,10 @@ use agena::{
         ConfigSettingsGetInput, ConfigSettingsPatchInput, ConfigSettingsPathInput,
         ConfigSettingsSetInput, ProcessEnvironment, ProviderAdapterOverlay, ProviderAuthConfig,
         ProviderAuthMode, ProviderAuthOverlay, ProviderModelOverlay, ProviderNativeToolRoute,
-        ProviderNativeToolsConfig, ProviderNativeToolsOverlay, ProviderOverlay,
-        delete_file_setting, draft_atomgit_provider_adapter_models_target,
-        draft_gitlab_provider_adapter_models_target, draft_provider_adapter_models_target,
-        list_provider_adapter_models_with_config, patch_file_settings,
-        provider_model_overlay_from_catalog_definition, read_file_setting,
+        ProviderNativeToolsConfig, ProviderOverlay, delete_file_setting,
+        draft_atomgit_provider_adapter_models_target, draft_gitlab_provider_adapter_models_target,
+        draft_provider_adapter_models_target, list_provider_adapter_models_with_config,
+        patch_file_settings, provider_model_overlay_from_catalog_definition, read_file_setting,
         saved_provider_adapter_models_target, set_file_setting,
     },
     event::{DomainEvent, EventKind},
@@ -61,10 +60,26 @@ fn parse_worktree_payload(payload: Option<serde_json::Value>) -> Result<Worktree
 fn provider_native_tools_summary_resource(
     provider: &agena::config::ResolvedProviderConfig,
 ) -> ProviderNativeToolsSummaryResource {
+    let (enabled, default_bindings) = provider
+        .defaults
+        .adapter
+        .as_ref()
+        .zip(provider.defaults.model.as_ref())
+        .and_then(|(adapter_id, model_id)| {
+            provider
+                .models
+                .get(format!("{adapter_id}/{model_id}").as_str())
+        })
+        .map(|model| (model.native_tools.enabled, model.native_tool_bindings()))
+        .unwrap_or((false, Vec::new()));
     ProviderNativeToolsSummaryResource {
-        enabled: provider.native_tools.enabled,
-        bindings: provider
-            .native_tool_bindings()
+        enabled,
+        model_count: provider
+            .models
+            .values()
+            .filter(|model| model.native_tools.enabled)
+            .count(),
+        bindings: default_bindings
             .into_iter()
             .map(|binding| ProviderNativeToolBindingResource {
                 tool: binding.tool.config_key().to_owned(),
@@ -997,6 +1012,19 @@ impl ProviderConfigDraft {
             ),
         };
 
+        let default_native_tools = provider
+            .defaults
+            .adapter
+            .as_ref()
+            .zip(provider.defaults.model.as_ref())
+            .and_then(|(adapter_id, model_id)| {
+                provider
+                    .models
+                    .get(format!("{adapter_id}/{model_id}").as_str())
+                    .map(|model| model.native_tools.clone())
+            })
+            .unwrap_or_default();
+
         let mut draft = Self {
             source_provider_id: Some(provider_id.to_owned()),
             provider_id: provider_id.to_owned(),
@@ -1017,8 +1045,8 @@ impl ProviderConfigDraft {
             credential_drafts,
             default_adapter: provider.defaults.adapter.clone().unwrap_or_default(),
             default_model: provider.defaults.model.clone().unwrap_or_default(),
-            native_tools_preset: provider_native_tools_preset_from_config(&provider.native_tools),
-            native_tools_custom: provider.native_tools.clone(),
+            native_tools_preset: provider_native_tools_preset_from_config(&default_native_tools),
+            native_tools_custom: default_native_tools,
             native_tools_touched: true,
         };
         draft.normalize_shape();
@@ -1040,7 +1068,6 @@ impl ProviderConfigDraft {
                 ..Default::default()
             }),
             auth: Some(self.to_auth_overlay_for_save()?),
-            native_tools: Some(self.to_native_tools_overlay_for_save()?),
             adapters,
         })
     }
@@ -1125,12 +1152,19 @@ impl ProviderConfigDraft {
         }
     }
 
-    fn to_native_tools_overlay_for_save(
+    fn apply_native_tools_to_model_overlay(
         &self,
-    ) -> std::result::Result<ProviderNativeToolsOverlay, ProviderStudioSaveError> {
-        serde_json::to_value(self.effective_native_tools_config())
-            .map_err(ProviderStudioSaveError::other)
-            .and_then(|value| serde_json::from_value(value).map_err(ProviderStudioSaveError::other))
+        adapter_id: &str,
+        model_id: &str,
+        mut overlay: ProviderModelOverlay,
+    ) -> ProviderModelOverlay {
+        if self
+            .default_model_route()
+            .is_some_and(|route| route == provider_model_route_id(adapter_id, model_id))
+        {
+            overlay.native_tools = self.effective_native_tools_config();
+        }
+        overlay
     }
 
     pub fn suggested_native_tools_preset(&self) -> Option<ProviderNativeToolsPreset> {
@@ -1161,7 +1195,27 @@ impl ProviderConfigDraft {
         }
     }
 
+    pub fn available_native_tools_preset(&self) -> Option<ProviderNativeToolsPreset> {
+        match self.default_adapter.trim() {
+            "openai" => Some(ProviderNativeToolsPreset::OpenAiHostedDefaults),
+            "anthropic" => Some(ProviderNativeToolsPreset::AnthropicHostedDefaults),
+            "gemini" => Some(ProviderNativeToolsPreset::GeminiHostedDefaults),
+            _ => None,
+        }
+    }
+
+    pub fn supports_native_tools_preset(&self, preset: ProviderNativeToolsPreset) -> bool {
+        match preset {
+            ProviderNativeToolsPreset::Disabled | ProviderNativeToolsPreset::Custom => true,
+            other => self.available_native_tools_preset() == Some(other),
+        }
+    }
+
     pub fn sync_native_tools_suggestion(&mut self) {
+        if !self.supports_native_tools_preset(self.native_tools_preset) {
+            self.native_tools_preset = ProviderNativeToolsPreset::Disabled;
+            self.native_tools_touched = false;
+        }
         if self.native_tools_touched {
             return;
         }
@@ -1177,6 +1231,12 @@ impl ProviderConfigDraft {
 
     pub fn effective_native_tools_config(&self) -> ProviderNativeToolsConfig {
         provider_native_tools_config_for_preset(self.native_tools_preset, &self.native_tools_custom)
+    }
+
+    fn default_model_route(&self) -> Option<String> {
+        let adapter_id = optional_non_empty(self.default_adapter.as_str())?;
+        let model_id = optional_non_empty(self.default_model.as_str())?;
+        Some(provider_model_route_id(adapter_id, model_id))
     }
 
     fn oauth_auth_data(&self) -> Result<Option<AuthData>> {
@@ -2580,7 +2640,9 @@ impl Backend {
                 .map(|model| {
                     (
                         model.id.to_string(),
-                        provider_model_json_for_model_id(
+                        provider_model_json_for_model_id_with_draft(
+                            &draft,
+                            adapter_id,
                             &catalog_entries,
                             model.id.as_str(),
                             Some(model),
@@ -2614,6 +2676,12 @@ impl Backend {
             default_model.as_str(),
             default_provider_model.as_ref(),
         );
+        let default_model_value =
+            provider_model_overlay_to_json(draft.apply_native_tools_to_model_overlay(
+                default_adapter.as_str(),
+                default_model.as_str(),
+                serde_json::from_value(default_model_value).unwrap_or_default(),
+            ));
         adapters
             .entry(default_adapter.clone())
             .or_insert_with(|| json!({ "enabled": true }));
@@ -2637,11 +2705,6 @@ impl Backend {
         provider_object.insert(
             "auth".to_owned(),
             JsonValue::Object(build_provider_auth_patch_value_for_save(&draft)?),
-        );
-        provider_object.insert(
-            "native_tools".to_owned(),
-            serde_json::to_value(draft.to_native_tools_overlay_for_save()?)
-                .map_err(ProviderStudioSaveError::other)?,
         );
         provider_object.insert("adapters".to_owned(), JsonValue::Object(adapters));
         self.set_provider_settings(provider_id, provider_value)
@@ -2689,7 +2752,9 @@ impl Backend {
             .map(|model| {
                 (
                     model.id.to_string(),
-                    provider_model_json_for_model_id(
+                    provider_model_json_for_model_id_with_draft(
+                        &draft,
+                        adapter_id,
                         &catalog_entries,
                         model.id.as_str(),
                         Some(model),
@@ -2754,8 +2819,13 @@ impl Backend {
             .map_err(ProviderStudioSaveError::Validation)?;
         let catalog_entries =
             self.lookup_model_catalog_entries(&[catalog_lookup_id_for_model_id(model_id)]);
-        let model_value =
-            provider_model_json_for_model_id(&catalog_entries, model_id, provider_model.as_ref());
+        let model_value = provider_model_json_for_model_id_with_draft(
+            &draft,
+            adapter_id,
+            &catalog_entries,
+            model_id,
+            provider_model.as_ref(),
+        );
         let default_adapter = if set_default {
             adapter_id
         } else {
@@ -2905,8 +2975,17 @@ impl Backend {
                 .map(|response| response.value)
             })
             .transpose()?;
-        let adapter_patch =
-            merge_provider_model_adapter_patch_for_save(existing_adapter, model_id, model_value)?;
+        let model_overlay = serde_json::from_value::<ProviderModelOverlay>(model_value)
+            .map_err(ProviderStudioSaveError::other)?;
+        let adapter_patch = merge_provider_model_adapter_patch_for_save(
+            existing_adapter,
+            model_id,
+            provider_model_overlay_to_json(draft.apply_native_tools_to_model_overlay(
+                adapter_id,
+                model_id,
+                model_overlay,
+            )),
+        )?;
         let mut provider_patch = JsonMap::new();
         provider_patch.insert("enabled".to_owned(), JsonValue::Bool(true));
         provider_patch.insert(
@@ -2918,11 +2997,6 @@ impl Backend {
             json!({
                 adapter_id: adapter_patch,
             }),
-        );
-        provider_patch.insert(
-            "native_tools".to_owned(),
-            serde_json::to_value(draft.to_native_tools_overlay_for_save()?)
-                .map_err(ProviderStudioSaveError::other)?,
         );
         if include_defaults {
             provider_patch.insert(
@@ -4689,6 +4763,20 @@ fn provider_model_json_for_model_id(
     ))
 }
 
+fn provider_model_json_for_model_id_with_draft(
+    draft: &ProviderConfigDraft,
+    adapter_id: &str,
+    catalog_entries: &[ModelCatalogEntryResource],
+    model_id: &str,
+    provider_model: Option<&ProviderModel>,
+) -> JsonValue {
+    provider_model_overlay_to_json(draft.apply_native_tools_to_model_overlay(
+        adapter_id,
+        model_id,
+        provider_model_overlay_for_model_id(catalog_entries, model_id, provider_model),
+    ))
+}
+
 fn provider_model_overlay_for_model_id(
     catalog_entries: &[ModelCatalogEntryResource],
     model_id: &str,
@@ -4805,6 +4893,10 @@ fn sanitize_selection_patch<T: Clone + PartialEq>(
 
 fn provider_model_to_provider_model_overlay(model: &ProviderModel) -> ProviderModelOverlay {
     provider_model_overlay_from_catalog_definition(&catalog_definition_from_model(model))
+}
+
+fn provider_model_route_id(adapter_id: &str, model_id: &str) -> String {
+    format!("{adapter_id}/{model_id}")
 }
 
 fn dedupe_vec<T: PartialEq>(values: &mut Vec<T>) {
@@ -5290,7 +5382,10 @@ mod tests {
         draft.auth.base_url = "https://api.openai.com".to_owned();
         draft.sync_native_tools_suggestion();
 
-        assert_eq!(draft.native_tools_preset, ProviderNativeToolsPreset::Disabled);
+        assert_eq!(
+            draft.native_tools_preset,
+            ProviderNativeToolsPreset::Disabled
+        );
         assert!(!draft.effective_native_tools_config().enabled);
     }
 

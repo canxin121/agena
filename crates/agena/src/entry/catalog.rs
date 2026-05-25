@@ -5,7 +5,7 @@ use crate::plugin::sdk::ToolTag;
 use crate::plugin::sdk::Plugin;
 use crate::plugins::provided::{
     cron as provided_cron, fs as provided_fs, lsp as provided_lsp, settings as provided_settings,
-    shell as provided_shell, web as provided_web, workflow as provided_workflow,
+    shell as provided_shell, workflow as provided_workflow,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +104,11 @@ fn tool_decls() -> Vec<crate::plugin::sdk::PluginToolDecl> {
     decls.extend(provided_fs::new_plugin().manifest().entries);
     decls.extend(provided_settings::SettingsPlugin::new().manifest().entries);
     decls.extend(provided_shell::new_plugin().manifest().entries);
-    decls.extend(provided_web::new_plugin().manifest().entries);
+    decls.extend(
+        crate::crawl::new_crawl_plugin(crate::config::CrawlConfig::default())
+            .manifest()
+            .entries,
+    );
     decls.extend(provided_workflow::new_plugin().manifest().entries);
     decls
 }

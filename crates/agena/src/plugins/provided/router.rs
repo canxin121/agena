@@ -15,7 +15,7 @@ use crate::entry::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestr
 use crate::message::{
     ApplyPatchToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorToolInput,
-    NetworkEffect, NotebookEditToolInput, ReadToolInput, ShellCommandInput, WebFetchToolInput,
+    NetworkEffect, NotebookEditToolInput, ReadToolInput, ShellCommandInput,
 };
 use crate::plugin::PluginError;
 use crate::plugin::sdk::{
@@ -106,7 +106,6 @@ fn routed_entry_name(tool_name: &str) -> Option<&'static str> {
     match tool_name {
         "read" | "glob" | "grep" | "apply_patch" | "notebook_edit" => Some("fs"),
         "bash" | "powershell" | "monitor" => Some("shell"),
-        "web_fetch" | "web_search" => Some("web"),
         "cron_list" | "cron_create" | "cron_delete" | "schedule_wakeup" => Some("schedule"),
         "lsp_servers" | "lsp_definition" | "lsp_references" | "lsp_hover" | "lsp_diagnostics" => {
             Some("lsp")
@@ -328,11 +327,6 @@ pub(crate) fn permission_networks_for(
                 | MonitorToolInput::Stop { .. } => Ok(Vec::new()),
             }
         }
-        "web_fetch" => {
-            let payload: WebFetchToolInput = serde_json::from_value(input.clone())?;
-            Ok(vec![NetworkRequest::connect(payload.url)])
-        }
-        "web_search" => Ok(Vec::new()),
         _ => Ok(Vec::new()),
     }
 }

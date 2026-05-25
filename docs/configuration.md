@@ -1321,6 +1321,7 @@ fetch_cache_ttl_secs = 900
 fetch_cache_capacity = 128
 default_chunk_chars = 1800
 near_duplicate_hamming_distance = 3
+search_engine = "bing" # bing | duckduckgo | baidu
 search_default_limit = 5
 search_max_limit = 20
 list_default_limit = 20
@@ -1337,7 +1338,8 @@ browser_wait_for_delay_ms = 0
 
 - `fetch`: 单页抓取，带进程内 TTL cache，但不会写入本地索引。
 - `crawl`: 多页抓取、用 Spider 抓取页面、用 CRW extract 抽取 Markdown、落盘、维护 metadata、去重，并重建本地 Tantivy 索引。
-- `search`: 查询当前 workspace 的本地 crawl 语料；使用 Tantivy BM25 / ngram 全文检索，不加载 embedding 或 rerank 模型。
+- `search`: 直接调用内置 ferris-style 搜索实现做网页搜索，当前支持 `bing`、`duckduckgo`、`baidu`，不需要 API key，也不启动外部服务。
+- `query`: 查询当前 workspace 的本地 crawl 语料；使用 Tantivy BM25 / ngram 全文检索，不加载 embedding 或 rerank 模型。
 - `get` / `list`: 检查已保存文档。
 
 字段说明：
@@ -1357,6 +1359,7 @@ fetch_cache_ttl_secs
 fetch_cache_capacity
 default_chunk_chars
 near_duplicate_hamming_distance
+search_engine
 search_default_limit
 search_max_limit
 list_default_limit
@@ -1371,17 +1374,17 @@ browser_wait_for_delay_ms
 
 说明：
 
-- `crawl` 始终使用 Spider 抓取；轻量单页 HTTP fetch 由独立的 `web.fetch` 提供。
+- `crawl` 和 `fetch` 都使用 Spider 抓取；旧的 `web_fetch` / `web_search` typed payload 会兼容映射到 `crawl`，默认工具目录不再暴露单独的 `agena.web` plugin。
 - `respect_robots_txt` 打开后 Spider 会按 robots.txt 约束抓取。
 - `document_cache_ttl_secs` 控制已保存文档在后续 crawl 中被直接复用的时长。
 - `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。
 - `near_duplicate_hamming_distance` 用于基于 SimHash 的近重复过滤。
-- `search` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
+- `search_engine` 控制 `crawl search` 的默认搜索引擎；`crawl query` 不依赖模型，只使用本地 Tantivy BM25 / ngram 索引。
 - `browser_enabled` 会让 `crawl` 默认通过 Agena 托管的本地 Chrome/Chromium 进程抓取 JS 页面；单次 tool call 也可以用 `render_js` 覆盖。
 - `browser_executable_path` 可选，用于指定本地 Chrome/Chromium 可执行文件路径；不支持配置远端 DevTools/WebSocket 链接。
 - `browser_wait_for_network_idle`、`browser_wait_timeout_secs`、`browser_wait_for_selector` 和 `browser_wait_for_delay_ms` 控制渲染等待策略。
 
-如果你只是想临时拉一页内容，`web.fetch` 仍然保留；如果你需要站内多页抓取、后续反复查询、或者想避免再接 Firecrawl 这类远程服务，优先用 `crawl`。
+如果你只是想临时拉一页内容，用 `crawl` 的 `fetch` action；如果你需要站内多页抓取、后续反复查询、或者想避免再接 Firecrawl 这类远程服务，用 `crawl` 的 `crawl` / `query` action。
 
 ## Web
 
@@ -1390,14 +1393,7 @@ browser_wait_for_delay_ms
 fetch_enabled = true
 ```
 
-`fetch_enabled` 控制 `web` 的 `fetch` command。
-
-这里的 `[web]` 只影响 Agena 本地内建 `agena.web` plugin。它现在是轻量能力：
-
-- `fetch` 直接由本地 runtime 发 HTTP 请求。
-- `search` 查询 `crawl` 维护的本地 Tantivy 索引，不调用外部搜索 API。
-
-对于多页抓取、本地语料落盘和后续检索，优先用 `[crawl]` 对应的 `agena.crawl` plugin。`web.search` 是兼容入口，适合让旧的 `web_search` tool call 查询已有 crawl 索引；如果本地索引还没有内容，需要先运行 `crawl`。
+`[web]` 只保留为历史配置壳；默认工具目录不再暴露单独的 `agena.web` plugin。网络搜索、单页抓取、多页抓取和本地 crawl 索引查询都归到 `[crawl]` / `agena.crawl`。
 
 如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `[web]`，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
 

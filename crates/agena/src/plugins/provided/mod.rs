@@ -7,5 +7,4 @@ pub mod router;
 pub mod settings;
 pub mod shell;
 pub mod skills;
-pub mod web;
 pub mod workflow;

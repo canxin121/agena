@@ -2346,6 +2346,12 @@ fn validate_crawl_config(crawl: &crate::config::types::CrawlConfig) -> Result<()
                 .to_string(),
         ));
     }
+    if agena_crawl::normalize_web_search_engine(crawl.search_engine.as_str()).is_none() {
+        return Err(ConfigError::Validation(format!(
+            "crawl.search_engine must be one of bing, duckduckgo, baidu, got `{}`",
+            crawl.search_engine
+        )));
+    }
     if crawl.list_default_limit > crawl.list_max_limit {
         return Err(ConfigError::Validation(
             "crawl.list_default_limit must be less than or equal to crawl.list_max_limit"
@@ -2717,6 +2723,21 @@ mod tests {
         assert!(err.to_string().contains(
             "crawl.default_max_pages must be less than or equal to crawl.max_pages_limit"
         ));
+    }
+
+    #[test]
+    fn crawl_config_rejects_unknown_search_engine() {
+        let err = resolve_config(json!({
+            "crawl": {
+                "search_engine": "brave"
+            }
+        }))
+        .expect_err("invalid crawl search engine should fail");
+
+        assert!(
+            err.to_string()
+                .contains("crawl.search_engine must be one of bing, duckduckgo, baidu")
+        );
     }
 
     #[test]

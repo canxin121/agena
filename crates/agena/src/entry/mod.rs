@@ -23,8 +23,6 @@ pub(crate) mod task;
 pub(crate) mod todo_write;
 pub(crate) mod tool_search;
 pub(crate) mod truncation;
-pub(crate) mod web_fetch;
-pub(crate) mod web_search;
 pub(crate) mod worktree;
 
 use std::path::{Path, PathBuf};
@@ -58,7 +56,7 @@ use crate::plugin::{
 use crate::plugins::provided::{
     code as provided_code, cron as provided_cron, fs as provided_fs, lsp as provided_lsp, mcp,
     router as in_process_router, settings as provided_settings, shell as provided_shell, skills,
-    web as provided_web, workflow as provided_workflow,
+    workflow as provided_workflow,
 };
 
 pub use apply_patch::{AppliedFileChange, ApplyPatchExecution};
@@ -134,14 +132,6 @@ pub fn new_shell_plugin() -> impl crate::plugin::sdk::Plugin {
     provided_shell::new_plugin()
 }
 
-pub fn web_plugin_id() -> &'static str {
-    provided_web::WEB_PLUGIN_ID
-}
-
-pub fn new_web_plugin() -> impl crate::plugin::sdk::Plugin {
-    provided_web::new_plugin()
-}
-
 pub fn workflow_plugin_id() -> &'static str {
     provided_workflow::WORKFLOW_PLUGIN_ID
 }
@@ -159,7 +149,6 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
     let fs_id = fs_plugin_id().to_string();
     let settings_id = settings_plugin_id().to_string();
     let shell_id = shell_plugin_id().to_string();
-    let web_id = web_plugin_id().to_string();
     let workflow_id = workflow_plugin_id().to_string();
     let crawl_id = crate::crawl::crawl_plugin_id().to_string();
     let mut list = std::collections::BTreeMap::new();
@@ -171,7 +160,6 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
         &fs_id,
         &settings_id,
         &shell_id,
-        &web_id,
         &workflow_id,
         &crawl_id,
     ] {
@@ -207,7 +195,6 @@ pub fn default_tool_host(workspace_root: impl Into<PathBuf>) -> Result<Arc<Plugi
             .register_static(fs_id, new_fs_plugin())
             .register_static(settings_id, new_settings_plugin())
             .register_static(shell_id, new_shell_plugin())
-            .register_static(web_id, new_web_plugin())
             .register_static(workflow_id, new_workflow_plugin())
             .register_static(
                 crawl_id,
@@ -2420,7 +2407,6 @@ mod tests {
         let fs_id = super::fs_plugin_id().to_string();
         let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
-        let web_id = super::web_plugin_id().to_string();
         let workflow_id = super::workflow_plugin_id().to_string();
         let crawl_id = crate::crawl::crawl_plugin_id().to_string();
         let mut list = BTreeMap::new();
@@ -2432,7 +2418,6 @@ mod tests {
             &fs_id,
             &settings_id,
             &shell_id,
-            &web_id,
             &workflow_id,
             &crawl_id,
         ] {
@@ -2477,7 +2462,6 @@ mod tests {
                 .register_static(fs_id, super::new_fs_plugin())
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
-                .register_static(web_id, super::new_web_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
                 .register_static(
                     crawl_id,
@@ -2500,7 +2484,6 @@ mod tests {
         let fs_id = super::fs_plugin_id().to_string();
         let settings_id = super::settings_plugin_id().to_string();
         let shell_id = super::shell_plugin_id().to_string();
-        let web_id = super::web_plugin_id().to_string();
         let workflow_id = super::workflow_plugin_id().to_string();
         let crawl_id = crate::crawl::crawl_plugin_id().to_string();
         let mut list = BTreeMap::new();
@@ -2512,7 +2495,6 @@ mod tests {
             &fs_id,
             &settings_id,
             &shell_id,
-            &web_id,
             &workflow_id,
             &crawl_id,
         ] {
@@ -2549,7 +2531,6 @@ mod tests {
                 .register_static(fs_id, super::new_fs_plugin())
                 .register_static(settings_id, super::new_settings_plugin())
                 .register_static(shell_id, super::new_shell_plugin())
-                .register_static(web_id, super::new_web_plugin())
                 .register_static(workflow_id, super::new_workflow_plugin())
                 .register_static(
                     crawl_id,

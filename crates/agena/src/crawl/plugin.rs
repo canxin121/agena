@@ -1,12 +1,15 @@
-use std::collections::{HashSet, VecDeque};
+use std::future::Future;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use agena_crawl::{
-    BrowserRenderOptions, CrawlDocumentSummary, CrawlStore, FetchedPage, LocalBrowserOptions,
-    SpiderFetchOptions, StoredDocument, fetch_page_with_spider, prepare_fetch_url, preview_text,
+    BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
+    FetchedPage, LocalBrowserOptions, SpiderFetchOptions, StoredDocument, WebSearchEngine,
+    WebSearchOptions, WebSearchResult, crawl_site, ensure_index_exists, fetch_page_with_spider,
+    prepare_fetch_url, preview_text, results_to_text, search_web,
 };
 use agena_macros::StaticToolSurface;
 use async_trait::async_trait;
@@ -39,9 +42,9 @@ pub struct CrawlPlugin {
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "crawl",
-    description = "Preferred local web ingestion tool. Use action `fetch` for one page, `crawl` to build a local index, `search` to query that index, `get` to inspect one stored page, or `list` to inspect the local crawl catalog.",
-    summary = "Preferred local crawler and embedded web index.",
-    help = "This tool is fully local by default: it fetches pages directly, stores extracted markdown under the current workspace's Agena data directory, and searches the local Tantivy index without any Firecrawl-style remote service. Prefer it over `web.fetch` when you need multi-page retrieval, repeated lookups, or a persistent local web corpus.",
+    description = "Preferred local web discovery and ingestion tool. Use action `search` for direct web search, `fetch` for one page, `crawl` to build a local index, `query` to search that index, `get` to inspect one stored page, or `list` to inspect the local crawl catalog.",
+    summary = "Local web search, crawling, fetch, and embedded crawl index.",
+    help = "This tool performs direct web search with embedded ferris-style search code, fetches pages with Spider, stores extracted markdown under the current workspace's Agena data directory, and queries the local Tantivy index. It does not use Firecrawl, Brave API, or any remote search API key service.",
     tags(
         ToolTag::ReadOnly,
         ToolTag::Mutating,
@@ -54,6 +57,11 @@ pub struct CrawlPlugin {
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum CrawlToolInput {
+    #[tool(exec = "search")]
+    Search {
+        #[serde(flatten)]
+        args: CrawlWebSearchInput,
+    },
     #[tool(exec = "fetch")]
     Fetch {
         #[serde(flatten)]
@@ -64,10 +72,10 @@ enum CrawlToolInput {
         #[serde(flatten)]
         args: CrawlRunInput,
     },
-    #[tool(exec = "search")]
-    Search {
+    #[tool(exec = "query")]
+    Query {
         #[serde(flatten)]
-        args: CrawlSearchInput,
+        args: CrawlQueryInput,
     },
     #[tool(exec = "get")]
     Get {
@@ -85,6 +93,8 @@ enum CrawlToolInput {
 #[serde(deny_unknown_fields)]
 struct CrawlFetchInput {
     url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     use_cache: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,10 +119,32 @@ struct CrawlRunInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct CrawlSearchInput {
+struct CrawlWebSearchInput {
     query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_results: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engine: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    allowed_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blocked_domains: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CrawlQueryInput {
+    query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_results: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    allowed_domains: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    blocked_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -132,19 +164,16 @@ struct CrawlListInput {
 }
 
 #[derive(Debug, Serialize)]
-struct CrawlRunOutput {
-    start_url: String,
+struct CrawlWebSearchOutput {
+    query: String,
     engine: String,
-    rendered: bool,
-    stored_count: usize,
-    cached_count: usize,
-    duplicate_count: usize,
-    near_duplicate_count: usize,
-    failure_count: usize,
-    total_documents: usize,
-    documents: Vec<CrawlDocumentSummary>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    failures: Vec<String>,
+    results: Vec<WebSearchResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct CrawlQueryOutput {
+    query: String,
+    results: Vec<agena_crawl::CrawlSearchHit>,
 }
 
 impl CrawlPlugin {
@@ -255,146 +284,40 @@ impl CrawlPlugin {
     async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
         let start_url =
             prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?;
-        let max_pages = clamp_limit(
-            input.max_pages,
-            self.config.default_max_pages as usize,
-            self.config.max_pages_limit as usize,
-        );
-        let max_depth = input
-            .max_depth
-            .unwrap_or(self.config.default_max_depth)
-            .clamp(0, self.config.max_depth_limit);
-        let same_host_only = input
-            .same_host_only
-            .unwrap_or(self.config.default_same_host_only);
-        let use_cache = input.use_cache.unwrap_or(true);
-        let render_js = input.render_js.unwrap_or(self.config.browser_enabled);
         let store = self.store()?;
-
-        let mut queue = VecDeque::from([(start_url.clone(), 0u32)]);
-        let mut seen_urls = HashSet::from([start_url.to_string()]);
-        let mut documents = Vec::new();
-        let mut failures = Vec::new();
-        let mut stored_count = 0usize;
-        let mut cached_count = 0usize;
-        let mut duplicate_count = 0usize;
-        let mut near_duplicate_count = 0usize;
-        let mut known_simhashes = store
-            .list_documents()
-            .map_err(crawl_error_to_plugin)?
-            .into_iter()
-            .map(|document| document.simhash)
-            .collect::<Vec<_>>();
-
         let _guard = self.sync_lock.lock().await;
-        while let Some((url, depth)) = queue.pop_front() {
-            if documents.len() >= max_pages {
-                break;
-            }
-
-            if use_cache
-                && let Some(existing) = store
-                    .find_by_url(url.as_str())
-                    .map_err(crawl_error_to_plugin)?
-                && document_matches_render_mode(&existing, render_js)
-                && is_document_fresh(&existing, self.config.document_cache_ttl_secs)
-            {
-                if depth < max_depth {
-                    enqueue_document_links(
-                        &start_url,
-                        &existing,
-                        depth,
-                        same_host_only,
-                        &mut queue,
-                        &mut seen_urls,
-                    );
-                }
-                cached_count += 1;
-                documents.push(existing.summary());
-                continue;
-            }
-
-            match self.fetch_page(&url, use_cache, render_js).await {
-                Ok(page) => {
-                    if page.status >= 400 {
-                        failures.push(format!("{url}: http {}", page.status));
-                        continue;
-                    }
-                    let document = StoredDocument::from_fetched_page(
-                        page.clone(),
-                        depth,
-                        self.config.default_chunk_chars as usize,
-                    );
-                    if store
-                        .find_by_raw_hash(document.raw_html_hash.as_str())
-                        .map_err(crawl_error_to_plugin)?
-                        .is_some()
-                    {
-                        duplicate_count += 1;
-                        continue;
-                    }
-                    if store
-                        .find_by_markdown_hash(document.markdown_hash.as_str())
-                        .map_err(crawl_error_to_plugin)?
-                        .is_some()
-                    {
-                        duplicate_count += 1;
-                        continue;
-                    }
-                    if is_near_duplicate(
-                        document.simhash,
-                        &known_simhashes,
-                        self.config.near_duplicate_hamming_distance,
-                    ) {
-                        near_duplicate_count += 1;
-                        continue;
-                    }
-
-                    store
-                        .save_document(&document)
-                        .map_err(crawl_error_to_plugin)?;
-                    known_simhashes.push(document.simhash);
-                    if depth < max_depth {
-                        enqueue_links(
-                            &start_url,
-                            &page,
-                            depth,
-                            same_host_only,
-                            &mut queue,
-                            &mut seen_urls,
-                        );
-                    }
-                    stored_count += 1;
-                    documents.push(document.summary());
-                }
-                Err(err) => failures.push(format!("{url}: {err}")),
-            }
-        }
-
-        store.rebuild_index().map_err(crawl_error_to_plugin)?;
-        let total_documents = store.list_documents().map_err(crawl_error_to_plugin)?.len();
-        let payload = CrawlRunOutput {
-            start_url: start_url.to_string(),
-            engine: "spider".to_string(),
-            rendered: render_js,
-            stored_count,
-            cached_count,
-            duplicate_count,
-            near_duplicate_count,
-            failure_count: failures.len(),
-            total_documents,
-            documents: documents.clone(),
-            failures: failures.clone(),
+        let options = CrawlRunOptions {
+            max_pages: clamp_limit(
+                input.max_pages,
+                self.config.default_max_pages as usize,
+                self.config.max_pages_limit as usize,
+            ),
+            max_depth: input
+                .max_depth
+                .unwrap_or(self.config.default_max_depth)
+                .clamp(0, self.config.max_depth_limit),
+            same_host_only: input
+                .same_host_only
+                .unwrap_or(self.config.default_same_host_only),
+            use_cache: input.use_cache.unwrap_or(true),
+            render_js: input.render_js.unwrap_or(self.config.browser_enabled),
+            document_cache_ttl: Duration::from_secs(self.config.document_cache_ttl_secs),
+            max_chunk_chars: self.config.default_chunk_chars as usize,
+            near_duplicate_hamming_distance: self.config.near_duplicate_hamming_distance,
         };
-        let text = format_crawl_run(&payload);
+        let fetcher = PluginPageFetcher { plugin: self };
+        let report = crawl_site(&start_url, &store, &options, &fetcher)
+            .await
+            .map_err(crawl_error_to_plugin)?;
+        let text = format_crawl_run(&report);
         let payload =
-            serde_json::to_value(payload).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_value(report).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(text)
             .with_title("crawl run")
             .with_payload(payload))
     }
 
-    async fn invoke_search(&self, input: &CrawlSearchInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_search(&self, input: &CrawlWebSearchInput) -> SdkResult<ToolInvokeOutput> {
         let query = input.query.trim();
         if query.is_empty() {
             return Err(PluginError::invalid_params(
@@ -402,13 +325,72 @@ impl CrawlPlugin {
             ));
         }
         let limit = clamp_limit(
-            input.limit,
+            input.limit.or(input.max_results),
+            self.config.search_default_limit as usize,
+            self.config.search_max_limit as usize,
+        );
+        let engine = input
+            .engine
+            .as_deref()
+            .unwrap_or(self.config.search_engine.as_str())
+            .parse::<WebSearchEngine>()
+            .map_err(crawl_error_to_plugin)?;
+        let engine_url = url::Url::parse(engine.permission_url())
+            .map_err(|err| PluginError::new(err.to_string()))?;
+        if let Some(host) = engine_url.host_str() {
+            self.host_limiter.until_key_ready(&host.to_string()).await;
+        }
+        self.ensure_network_permission(&engine_url).await?;
+        let mut options = WebSearchOptions {
+            engine,
+            limit,
+            timeout: Duration::from_secs(self.config.fetch_timeout_secs),
+            user_agent: crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string(),
+        };
+        options.limit = limit;
+        let results = search_web(query, &options)
+            .await
+            .map_err(crawl_error_to_plugin)?
+            .into_iter()
+            .filter(|result| {
+                domain_allowed(&result.url, &input.allowed_domains, &input.blocked_domains)
+            })
+            .take(limit)
+            .collect::<Vec<_>>();
+        let output = CrawlWebSearchOutput {
+            query: query.to_string(),
+            engine: engine.as_str().to_string(),
+            results,
+        };
+        let text = format_web_search(&output);
+        let payload =
+            serde_json::to_value(output).map_err(|err| PluginError::new(err.to_string()))?;
+        Ok(ToolInvokeOutput::text(text)
+            .with_title("crawl search")
+            .with_payload(payload))
+    }
+
+    async fn invoke_query(&self, input: &CrawlQueryInput) -> SdkResult<ToolInvokeOutput> {
+        let query = input.query.trim();
+        if query.is_empty() {
+            return Err(PluginError::invalid_params(
+                "crawl query requires a non-empty query",
+            ));
+        }
+        let limit = clamp_limit(
+            input.limit.or(input.max_results),
             self.config.search_default_limit as usize,
             self.config.search_max_limit as usize,
         );
         let store = self.store()?;
         ensure_index_exists(&store).map_err(crawl_error_to_plugin)?;
-        let hits = store.search(query, limit).map_err(crawl_error_to_plugin)?;
+        let hits = store
+            .search(query, limit)
+            .map_err(crawl_error_to_plugin)?
+            .into_iter()
+            .filter(|hit| domain_allowed(&hit.url, &input.allowed_domains, &input.blocked_domains))
+            .take(limit)
+            .collect::<Vec<_>>();
         let mut lines = vec![format!(
             "Found {} crawl hit(s) for '{}'.",
             hits.len(),
@@ -424,10 +406,14 @@ impl CrawlPlugin {
             ));
             lines.push(format!("  {}", hit.preview));
         }
+        let output = CrawlQueryOutput {
+            query: query.to_string(),
+            results: hits,
+        };
         let payload =
-            serde_json::to_value(&hits).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_value(output).map_err(|err| PluginError::new(err.to_string()))?;
         Ok(ToolInvokeOutput::text(lines.join("\n"))
-            .with_title("crawl search")
+            .with_title("crawl query")
             .with_payload(payload))
     }
 
@@ -517,9 +503,10 @@ impl Plugin for CrawlPlugin {
             )));
         }
         match parse_crawl_input(input.input)? {
+            CrawlToolInput::Search { args } => self.invoke_search(&args).await,
             CrawlToolInput::Fetch { args } => self.invoke_fetch(&args).await,
             CrawlToolInput::Crawl { args } => self.invoke_crawl(&args).await,
-            CrawlToolInput::Search { args } => self.invoke_search(&args).await,
+            CrawlToolInput::Query { args } => self.invoke_query(&args).await,
             CrawlToolInput::Get { args } => self.invoke_get(&args).await,
             CrawlToolInput::List { args } => self.invoke_list(&args).await,
         }
@@ -537,9 +524,10 @@ impl Plugin for CrawlPlugin {
         let store = self.store()?;
         let path = store.dir().display().to_string();
         let request = match parsed {
+            CrawlToolInput::Search { .. } => return Ok(Vec::new()),
             CrawlToolInput::Fetch { .. } => return Ok(Vec::new()),
             CrawlToolInput::Crawl { .. } => PathRequest::write(path),
-            CrawlToolInput::Search { .. } => PathRequest::write(path),
+            CrawlToolInput::Query { .. } => PathRequest::write(path),
             CrawlToolInput::Get { .. } | CrawlToolInput::List { .. } => PathRequest::read(path),
         };
         Ok(vec![request])
@@ -555,6 +543,15 @@ impl Plugin for CrawlPlugin {
         }
         let parsed = parse_crawl_input(input.clone())?;
         let requests = match parsed {
+            CrawlToolInput::Search { args } => {
+                let engine = args
+                    .engine
+                    .as_deref()
+                    .unwrap_or(self.config.search_engine.as_str())
+                    .parse::<WebSearchEngine>()
+                    .map_err(crawl_error_to_plugin)?;
+                vec![NetworkRequest::connect(engine.permission_url().to_string())]
+            }
             CrawlToolInput::Fetch { args } => vec![NetworkRequest::connect(
                 prepare_fetch_url(args.url.as_str())
                     .map_err(crawl_error_to_plugin)?
@@ -565,7 +562,7 @@ impl Plugin for CrawlPlugin {
                     .map_err(crawl_error_to_plugin)?
                     .to_string(),
             )],
-            CrawlToolInput::Search { .. }
+            CrawlToolInput::Query { .. }
             | CrawlToolInput::Get { .. }
             | CrawlToolInput::List { .. } => Vec::new(),
         };
@@ -585,6 +582,27 @@ fn crawl_error_to_plugin(err: agena_crawl::CrawlError) -> PluginError {
     PluginError::new(err.to_string())
 }
 
+struct PluginPageFetcher<'a> {
+    plugin: &'a CrawlPlugin,
+}
+
+impl CrawlPageFetcher for PluginPageFetcher<'_> {
+    fn fetch_page<'a>(
+        &'a self,
+        url: &'a url::Url,
+        use_cache: bool,
+        render_js: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<FetchedPage, agena_crawl::CrawlError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            self.plugin
+                .fetch_page(url, use_cache, render_js)
+                .await
+                .map_err(|err| agena_crawl::CrawlError::InvalidInput(err.to_string()))
+        })
+    }
+}
+
 fn clamp_limit(limit: Option<u32>, default_limit: usize, max_limit: usize) -> usize {
     limit
         .unwrap_or(default_limit as u32)
@@ -598,76 +616,12 @@ fn build_host_limiter(delay_ms: u64) -> DefaultKeyedRateLimiter<String> {
     DefaultKeyedRateLimiter::keyed(quota)
 }
 
-fn is_document_fresh(document: &StoredDocument, ttl_secs: u64) -> bool {
-    let ttl = chrono::Duration::seconds(ttl_secs.min(i64::MAX as u64) as i64);
-    chrono::Utc::now() - document.fetched_at <= ttl
-}
-
-fn document_matches_render_mode(document: &StoredDocument, render_js: bool) -> bool {
-    !render_js || document.rendered
-}
-
-fn is_near_duplicate(candidate: u64, existing: &[u64], max_distance: u32) -> bool {
-    existing
-        .iter()
-        .any(|value| simhash::hamming_distance(candidate, *value) <= max_distance)
-}
-
 fn fetch_cache_key(url: &url::Url, render_js: bool) -> String {
     format!(
         "spider:{}:{}",
         if render_js { "rendered" } else { "plain" },
         url
     )
-}
-
-fn enqueue_links(
-    start_url: &url::Url,
-    page: &FetchedPage,
-    current_depth: u32,
-    same_host_only: bool,
-    queue: &mut VecDeque<(url::Url, u32)>,
-    seen_urls: &mut HashSet<String>,
-) {
-    for link in &page.links {
-        let Ok(url) = url::Url::parse(link) else {
-            continue;
-        };
-        if same_host_only && url.host_str() != start_url.host_str() {
-            continue;
-        }
-        if seen_urls.insert(url.to_string()) {
-            queue.push_back((url, current_depth + 1));
-        }
-    }
-}
-
-fn enqueue_document_links(
-    start_url: &url::Url,
-    document: &StoredDocument,
-    current_depth: u32,
-    same_host_only: bool,
-    queue: &mut VecDeque<(url::Url, u32)>,
-    seen_urls: &mut HashSet<String>,
-) {
-    for link in &document.links {
-        let Ok(url) = url::Url::parse(link) else {
-            continue;
-        };
-        if same_host_only && url.host_str() != start_url.host_str() {
-            continue;
-        }
-        if seen_urls.insert(url.to_string()) {
-            queue.push_back((url, current_depth + 1));
-        }
-    }
-}
-
-fn ensure_index_exists(store: &CrawlStore) -> Result<(), agena_crawl::CrawlError> {
-    if !store.dir().join(".index").exists() {
-        store.rebuild_index()?;
-    }
-    Ok(())
 }
 
 fn format_fetched_page(page: &FetchedPage) -> String {
@@ -704,7 +658,23 @@ fn format_document(document: &StoredDocument) -> String {
     lines.join("\n")
 }
 
-fn format_crawl_run(output: &CrawlRunOutput) -> String {
+fn format_web_search(output: &CrawlWebSearchOutput) -> String {
+    if output.results.is_empty() {
+        return format!(
+            "No web search result(s) for '{}' via {}.",
+            output.query, output.engine
+        );
+    }
+    format!(
+        "Found {} web search result(s) for '{}' via {}.\n\n{}",
+        output.results.len(),
+        output.query,
+        output.engine,
+        results_to_text(&output.results)
+    )
+}
+
+fn format_crawl_run(output: &CrawlRunReport) -> String {
     let mut lines = vec![format!(
         "Crawled from {} via {} (rendered: {}). New pages stored: {}. Cached pages reused: {}. Exact duplicates skipped: {}. Near duplicates skipped: {}. Failures: {}. Total indexed documents: {}.",
         output.start_url,
@@ -736,9 +706,28 @@ fn format_crawl_run(output: &CrawlRunOutput) -> String {
     lines.join("\n")
 }
 
+fn domain_allowed(url: &str, allow: &[String], block: &[String]) -> bool {
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+        .unwrap_or_default();
+    if !allow.is_empty() && !allow.iter().any(|domain| host_matches(&host, domain)) {
+        return false;
+    }
+    if block.iter().any(|domain| host_matches(&host, domain)) {
+        return false;
+    }
+    true
+}
+
+fn host_matches(host: &str, pattern: &str) -> bool {
+    let pattern = pattern.trim().to_ascii_lowercase();
+    !pattern.is_empty() && (host == pattern || host.ends_with(&format!(".{pattern}")))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{crawl_decl, document_matches_render_mode, fetch_cache_key};
+    use super::{crawl_decl, fetch_cache_key};
     use crate::plugin::sdk::HostCapability;
 
     #[test]
@@ -788,11 +777,11 @@ mod tests {
             fetched_at: chrono::Utc::now(),
         };
 
-        assert!(document_matches_render_mode(&document, false));
-        assert!(!document_matches_render_mode(&document, true));
+        assert!(agena_crawl::document_matches_render_mode(&document, false));
+        assert!(!agena_crawl::document_matches_render_mode(&document, true));
 
         document.rendered = true;
-        assert!(document_matches_render_mode(&document, false));
-        assert!(document_matches_render_mode(&document, true));
+        assert!(agena_crawl::document_matches_render_mode(&document, false));
+        assert!(agena_crawl::document_matches_render_mode(&document, true));
     }
 }

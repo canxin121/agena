@@ -438,7 +438,7 @@ fn default_profiles() -> Vec<AgentProfile> {
                 crate::permission::PermissionMode::Ask,
                 &[
                     ("fs", crate::permission::PermissionMode::Allow),
-                    ("web", crate::permission::PermissionMode::Allow),
+                    ("crawl", crate::permission::PermissionMode::Allow),
                     ("tools", crate::permission::PermissionMode::Allow),
                     ("todo", crate::permission::PermissionMode::Allow),
                     ("user", crate::permission::PermissionMode::Allow),
@@ -457,7 +457,7 @@ fn default_profiles() -> Vec<AgentProfile> {
                 &[
                     ("fs", crate::permission::PermissionMode::Allow),
                     ("shell", crate::permission::PermissionMode::Ask),
-                    ("web", crate::permission::PermissionMode::Allow),
+                    ("crawl", crate::permission::PermissionMode::Allow),
                 ],
             ),
             "You are a focused read-only engineering explorer. Gather evidence quickly, inspect code paths, summarize findings concisely, and do not make edits.",
@@ -470,7 +470,7 @@ fn default_profiles() -> Vec<AgentProfile> {
                 crate::permission::PermissionMode::Ask,
                 &[
                     ("fs", crate::permission::PermissionMode::Allow),
-                    ("web", crate::permission::PermissionMode::Allow),
+                    ("crawl", crate::permission::PermissionMode::Allow),
                     ("shell", crate::permission::PermissionMode::Ask),
                 ],
             ),

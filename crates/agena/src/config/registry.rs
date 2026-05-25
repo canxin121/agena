@@ -339,7 +339,6 @@ impl super::ConfigResolution {
                 crate::tool::shell_plugin_id(),
                 crate::tool::new_shell_plugin(),
             )
-            .register_static(crate::tool::web_plugin_id(), crate::tool::new_web_plugin())
             .register_static(
                 crate::tool::workflow_plugin_id(),
                 crate::tool::new_workflow_plugin(),

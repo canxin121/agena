@@ -3327,10 +3327,11 @@ mod runtime_builtin_tool_tests {
         HostExitPlanModeRequest, HostExitWorktreeRequest, HostGetGoalRequest, HostGetGoalResponse,
         HostGetSessionRequest, HostGetSessionResponse, HostGoal, HostGoalStatus, HostLspDiagnostic,
         HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-        HostLspServer, HostRenameSessionRequest, HostRenameSessionResponse, HostSession,
-        HostTodoPriority, HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest,
-        HostUpdateGoalResponse, LogLevel, SpawnSubtaskRequest, SpawnSubtaskResponse,
-        ToolDescriptor, current_host_callback_context,
+        HostLspServer, HostNetworkPermissionCheckRequest, HostPermissionCheckResponse,
+        HostRenameSessionRequest, HostRenameSessionResponse, HostSession, HostTodoPriority,
+        HostTodoStatus, HostTodoWriteRequest, HostUpdateGoalRequest, HostUpdateGoalResponse,
+        LogLevel, SpawnSubtaskRequest, SpawnSubtaskResponse, ToolDescriptor,
+        current_host_callback_context,
     };
     use crate::plugin::sdk::{EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision};
     use axum::{Router, extract::State, response::Html, routing::get};
@@ -3446,6 +3447,13 @@ mod runtime_builtin_tool_tests {
             _req: PermissionAskInput,
         ) -> crate::plugin::sdk::Result<PermissionDecision> {
             Ok(PermissionDecision::Prompt)
+        }
+
+        async fn check_network_permission(
+            &self,
+            _req: HostNetworkPermissionCheckRequest,
+        ) -> crate::plugin::sdk::Result<HostPermissionCheckResponse> {
+            Ok(HostPermissionCheckResponse::allowed())
         }
 
         async fn read_config(
@@ -5056,7 +5064,7 @@ while True:
             {
                 scripted_tool_call_events(vec![(
                     "call_web_fetch_1",
-                    "web",
+                    "crawl",
                     serde_json::json!({
                         "action": "fetch",
                         "url": self.fetch_url
@@ -5066,7 +5074,7 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_web_fetch_2"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_web_fetch_2",
-                    "web",
+                    "crawl",
                     serde_json::json!({
                         "action": "fetch",
                         "url": self.fetch_url
@@ -5076,9 +5084,9 @@ while True:
             } else if completed_or_failed_operation_count(&request, &["call_web_search_1"]) == 0 {
                 scripted_tool_call_events(vec![(
                     "call_web_search_1",
-                    "web",
+                    "crawl",
                     serde_json::json!({
-                        "action": "search",
+                        "action": "query",
                         "query": "runtime web",
                         "allowed_domains": ["127.0.0.1"],
                         "max_results": 5
@@ -5169,42 +5177,33 @@ while True:
 
             let fetch_payload = session_operation_payload(&session, "call_web_fetch_1");
             assert_eq!(fetch_payload["status"].as_u64(), Some(200));
-            assert_eq!(fetch_payload["cached"].as_bool(), Some(false));
             let fetched_markdown = fetch_payload["markdown"]
                 .as_str()
-                .expect("web fetch should return markdown");
+                .expect("crawl fetch should return markdown");
             assert!(
                 fetched_markdown.contains("Runtime Web"),
-                "web fetch markdown should contain the local page title: {fetched_markdown}"
+                "crawl fetch markdown should contain the local page title: {fetched_markdown}"
             );
             assert!(
-                fetch_payload["url"]
+                fetch_payload["canonical_url"]
                     .as_str()
                     .is_some_and(|url| url.starts_with("http://127.0.0.1:")),
                 "loopback fetch should preserve HTTP for the local fixture"
             );
 
-            let cached_fetch_payload = session_operation_payload(&session, "call_web_fetch_2");
-            assert_eq!(cached_fetch_payload["cached"].as_bool(), Some(true));
-
             let search_payload = session_operation_payload(&session, "call_web_search_1");
-            assert_eq!(
-                search_payload["backend"].as_str(),
-                Some("crawl"),
-                "web search should report the active provider"
-            );
             let results = search_payload["results"]
                 .as_array()
-                .expect("web search should return results");
+                .expect("crawl query should return results");
             assert_eq!(
                 results.len(),
                 1,
-                "allowed_domains should filter the external result from the local fixture"
+                "allowed_domains should filter the crawl-index result"
             );
             assert_eq!(
                 results[0]["title"].as_str(),
                 Some("Runtime Web Docs"),
-                "web search should return the local crawl-index result"
+                "crawl query should return the local crawl-index result"
             );
             assert!(
                 results[0]["url"]

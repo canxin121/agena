@@ -20,8 +20,8 @@ use crate::config::CrawlConfig;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
 use crate::plugin::sdk::{
-    HookSubscription, InitContext, InitOutcome, NetworkRequest, PathRequest, Plugin,
-    PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
+    HookSubscription, HostCapability, InitContext, InitOutcome, NetworkRequest, PathRequest,
+    Plugin, PluginManifest, PluginToolDecl, Result as SdkResult, ToolInvokeInput, ToolInvokeOutput,
     ToolTag,
 };
 
@@ -49,6 +49,7 @@ pub struct CrawlPlugin {
         ToolTag::Internet,
         ToolTag::Discovery
     ),
+    host_capabilities(HostCapability::PermissionCheck),
     concurrency_safe = false
 )]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -737,7 +738,17 @@ fn format_crawl_run(output: &CrawlRunOutput) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{document_matches_render_mode, fetch_cache_key};
+    use super::{crawl_decl, document_matches_render_mode, fetch_cache_key};
+    use crate::plugin::sdk::HostCapability;
+
+    #[test]
+    fn crawl_decl_declares_permission_check_host_capability() {
+        let decl = crawl_decl();
+        assert!(
+            decl.host_capabilities
+                .contains(&HostCapability::PermissionCheck)
+        );
+    }
 
     #[test]
     fn fetch_cache_key_tracks_render_mode() {

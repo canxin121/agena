@@ -2321,12 +2321,18 @@ fn validate_crawl_config(crawl: &crate::config::types::CrawlConfig) -> Result<()
         ),
         ("crawl.fetch_cache_ttl_secs", crawl.fetch_cache_ttl_secs),
         ("crawl.fetch_cache_capacity", crawl.fetch_cache_capacity),
+        ("crawl.store_max_bytes", crawl.store_max_bytes),
     ] {
         if value == 0 {
             return Err(ConfigError::Validation(format!(
                 "{label} must be greater than 0"
             )));
         }
+    }
+    if crawl.store_max_documents == 0 {
+        return Err(ConfigError::Validation(
+            "crawl.store_max_documents must be greater than 0".to_string(),
+        ));
     }
     if crawl.default_max_pages > crawl.max_pages_limit {
         return Err(ConfigError::Validation(

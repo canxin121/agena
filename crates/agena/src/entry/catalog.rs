@@ -105,7 +105,7 @@ fn tool_decls() -> Vec<crate::plugin::sdk::PluginToolDecl> {
     decls.extend(provided_settings::SettingsPlugin::new().manifest().entries);
     decls.extend(provided_shell::new_plugin().manifest().entries);
     decls.extend(
-        crate::crawl::new_crawl_plugin(crate::config::CrawlConfig::default())
+        crate::web::new_web_plugin(crate::config::WebConfig::default())
             .manifest()
             .entries,
     );

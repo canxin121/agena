@@ -21,7 +21,7 @@ pub use overrides::ConfigOverride;
 pub use types::{
     AgentConfig, AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer,
     BedrockSigv4AuthConfig, BrowserHarnessConfig, ConfigOutputFormat, ConfigResolution,
-    ConfigResolutionMeta, ConfigSource, CrawlConfig, EditorHarnessConfig, GeminiProviderOptions,
+    ConfigResolutionMeta, ConfigSource, EditorHarnessConfig, GeminiProviderOptions,
     GitlabProviderOptions, HarnessViewportConfig, HarnessesConfig,
     HostedCodeExecutionContainerConfig, HttpProviderAdapterConfig, LspConfig, LspServerConfig,
     McpConfig, McpHttpAuthConfig, McpServerConfig, MemoryConfig, MemoryRetrievalConfig,
@@ -40,7 +40,7 @@ pub use types::{
     RuntimeModelCatalogConfig, RuntimeProvidersConfig, RuntimeReloadConfig, RuntimeSessionConfig,
     SessionCacheConfig, SessionCompactionConfig, SessionConfig, ShellHarnessConfig,
     SimpleHttpProviderOptions, StreamReplayConfig, StreamTransportMode, TracingConfig, UiConfig,
-    WebSearchConfig, WebToolsConfig,
+    WebConfig,
 };
 
 pub use adapter_models::{

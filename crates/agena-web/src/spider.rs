@@ -49,7 +49,7 @@ impl Default for SpiderFetchOptions {
             max_body_bytes: crate::DEFAULT_MAX_BODY_BYTES,
             timeout: Duration::from_secs(crate::DEFAULT_FETCH_TIMEOUT_SECS),
             delay_ms: 0,
-            user_agent: format!("agena-crawl/{}", env!("CARGO_PKG_VERSION")),
+            user_agent: format!("agena-web/{}", env!("CARGO_PKG_VERSION")),
             respect_robots_txt: true,
             browser: BrowserRenderOptions::default(),
         }

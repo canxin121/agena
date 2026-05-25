@@ -79,7 +79,7 @@ impl Default for WebSearchOptions {
             engine: WebSearchEngine::default(),
             limit: 8,
             timeout: DEFAULT_SEARCH_TIMEOUT,
-            user_agent: format!("agena-crawl/{}", env!("CARGO_PKG_VERSION")),
+            user_agent: format!("agena-web/{}", env!("CARGO_PKG_VERSION")),
         }
     }
 }
@@ -157,8 +157,7 @@ fn browser_headers(user_agent: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
-        HeaderValue::from_str(user_agent)
-            .unwrap_or_else(|_| HeaderValue::from_static("agena-crawl")),
+        HeaderValue::from_str(user_agent).unwrap_or_else(|_| HeaderValue::from_static("agena-web")),
     );
     headers.insert(
         ACCEPT,

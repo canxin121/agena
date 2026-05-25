@@ -33,7 +33,7 @@
 从当前实现看，Agena 的抽象边界已经基本正确：
 
 - `PluginHost` 是统一扩展平面，内置 static plugin 和外部 plugin 走同一路径。
-- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.shell`、`agena.web`、`agena.crawl`、`agena.workflow`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
+- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.shell`、`agena.web`、`agena.workflow`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
 - 对模型暴露的是高层 action tool，而不是零散 syscall 级工具。
 
 这意味着最合理的策略是：
@@ -51,7 +51,7 @@
 | 浏览器自动化 | 当前无专门内置 browser plugin | Playwright MCP | 不自研，直接接入 `agena.mcp` | P1 |
 | Skills 格式 | `agena.skills` 扫描 `SKILL.md` / slash command | GitHub Agent Skills、Vercel Skills、AGENTS.md | 保留实现，增强兼容层 | P1 |
 | 代码结构化搜索 | 当前以 `glob`/`grep`/LSP 为主 | `ast-grep`、`tree-sitter` | 适合增强内置 tool | P1 |
-| Web 搜索 | `agena.web` 查询 `crawl` 本地索引 | 独立 search MCP / 第三方 server | 保持本地内置，不默认依赖外部搜索服务 | P2 |
+| Web 搜索/抓取 | `agena.web` 内置 search/fetch/crawl/query | 独立 search MCP / 第三方 server | 保持本地内置，不默认依赖外部搜索服务 | P2 |
 | Memory/RAG | `agena.memory` 已是文件持久化 + Tantivy 本地检索 + prompt 注入 | Qdrant、LanceDB、mem0 思路 | 适合新增更强 RAG/长期记忆能力，不适合替换当前本地 memory | P2 |
 | MCP 安全 | 当前主要靠权限系统和网络审计 | `mcp-firewall`、`mcp-scan`、`agent-scan` | 适合加在接入层和 CI，不适合塞进 tool body | P2 |
 | Tool discovery | `tool_search` 当前是内置 Tantivy 本地检索 | Meilisearch | 保持内置实现，暂不引入外部服务 | P3 |
@@ -125,12 +125,12 @@
 
 ### 3. 用 Playwright MCP 增强浏览器能力，不自建 `agena.browser`
 
-你们当前有 `agena.web` 和 `agena.crawl`；前者是轻量 search/fetch，后者是本地 crawl/index，不是 browser automation。
+你们当前用 `agena.web` 统一承载 search/fetch/crawl/index；它不是 browser automation。
 
 对浏览器这类高变动、高兼容性成本的领域，自研 plugin 不划算。最合适的路线是：
 
 - 继续保留 `agena.web` 负责轻量 search/fetch。
-- 优先让 `agena.crawl` 承担多页抓取、本地语料落盘和后续检索。
+- 让 `agena.web` 的 crawl/query action 承担多页抓取、本地语料落盘和后续检索。
 - 通过 `agena.mcp` 接入 Playwright MCP 作为 browser/computer-use 能力。
 
 建议增强项：
@@ -275,24 +275,13 @@
 
 ### `agena.web`
 
-建议保持轻量，不要做成浏览器。
+建议保持本地内置，不要做成远程服务依赖，也不要做成通用浏览器自动化。
 
 可以增强的点：
 
 - 为 search 结果返回更结构化的来源 metadata
-- 增加“推荐 provider”逻辑，而不是长期依赖 `duckduckgo_html`
+- 继续增强多搜索引擎解析质量
 - 在 `fetch` 里提供更稳定的正文提取模式
-
-不建议做的点：
-
-- 不建议把复杂页面交互、登录、点击、截图能力塞进 `agena.web`
-
-### `agena.crawl`
-
-建议作为默认的本地网页采集入口保留并继续增强。
-
-适合放在这里的能力：
-
 - 多页 crawl
 - URL 规范化和去重
 - 本地持久化语料和 metadata cache

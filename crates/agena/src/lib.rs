@@ -2,7 +2,6 @@ pub mod agent;
 pub mod agents;
 pub mod cli;
 pub mod config;
-pub mod crawl;
 pub mod db;
 pub mod error;
 pub mod event;
@@ -22,6 +21,7 @@ pub(crate) mod search;
 pub mod session;
 pub mod storage;
 pub mod tracing;
+pub mod web;
 pub use entry as tool;
 pub mod plugins;
 

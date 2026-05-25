@@ -24,7 +24,7 @@ impl Default for FetchOptions {
         Self {
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
             timeout: Duration::from_secs(DEFAULT_FETCH_TIMEOUT_SECS),
-            user_agent: format!("agena-crawl/{}", env!("CARGO_PKG_VERSION")),
+            user_agent: format!("agena-web/{}", env!("CARGO_PKG_VERSION")),
             max_retries: 2,
         }
     }

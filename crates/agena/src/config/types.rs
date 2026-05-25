@@ -72,13 +72,11 @@ pub struct ResolvedConfig {
     #[serde(skip_serializing)]
     pub memory: MemoryConfig,
     #[serde(skip_serializing)]
-    pub crawl: CrawlConfig,
-    #[serde(skip_serializing)]
     pub mcp: McpConfig,
     #[serde(skip_serializing)]
     pub lsp: LspConfig,
     #[serde(skip_serializing)]
-    pub web: WebToolsConfig,
+    pub web: WebConfig,
     #[serde(default, skip_serializing_if = "HarnessesConfig::is_empty")]
     pub harnesses: HarnessesConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
@@ -371,7 +369,9 @@ impl Default for MemoryRetrievalConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct CrawlConfig {
+pub struct WebConfig {
+    #[serde(default = "default_web_fetch_enabled")]
+    pub fetch_enabled: bool,
     pub default_max_pages: u32,
     pub max_pages_limit: u32,
     pub default_max_depth: u32,
@@ -403,9 +403,10 @@ pub struct CrawlConfig {
     pub browser_wait_for_delay_ms: u64,
 }
 
-impl Default for CrawlConfig {
+impl Default for WebConfig {
     fn default() -> Self {
         Self {
+            fetch_enabled: true,
             default_max_pages: 10,
             max_pages_limit: 100,
             default_max_depth: 1,
@@ -435,6 +436,10 @@ impl Default for CrawlConfig {
             browser_wait_for_delay_ms: 0,
         }
     }
+}
+
+fn default_web_fetch_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1546,24 +1551,11 @@ pub enum McpHttpAuthConfig {
     Custom { headers: BTreeMap<String, String> },
 }
 
-// ─────────────────────────── Web tools ──────────────────────────────
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct WebToolsConfig {
-    pub fetch_enabled: bool,
-    pub search: WebSearchConfig,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct WebSearchConfig {}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{McpServerConfig, WebSearchConfig};
+    use super::{McpServerConfig, WebConfig};
 
     #[test]
     fn mcp_http_config_rejects_removed_mode_field() {
@@ -1577,15 +1569,17 @@ mod tests {
     }
 
     #[test]
-    fn web_search_config_rejects_removed_backend_and_api_key_fields() {
-        let err = serde_json::from_value::<WebSearchConfig>(json!({
-            "backend": "exa",
-            "api_key": "test"
+    fn web_config_rejects_removed_search_backend_and_api_key_fields() {
+        let err = serde_json::from_value::<WebConfig>(json!({
+            "search": {
+                "backend": "exa",
+                "api_key": "test"
+            }
         }))
         .expect_err("removed web search backend and api key should be rejected");
-        assert!(err.to_string().contains("unknown field"));
+        assert!(err.to_string().contains("unknown field `search`"));
 
-        let err = serde_json::from_value::<WebSearchConfig>(json!({
+        let err = serde_json::from_value::<WebConfig>(json!({
             "api_key": "test"
         }))
         .expect_err("removed web search api key should be rejected");

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 [dependencies]
+agena-crawl = { workspace = true }
 agena-mcp-client = { workspace = true }
 agena-mcp-server = { workspace = true }
 agena-lsp = { workspace = true }
@@ -24,6 +25,8 @@ aws-smithy-eventstream = { workspace = true }
 aws-smithy-http = { workspace = true, features = ["event-stream"] }
 aws-smithy-types = { workspace = true, features = ["http-body-1-x"] }
 aws-sigv4 = { workspace = true }
+governor = { workspace = true }
+backoff = { workspace = true }
 base64 = { workspace = true }
 hex = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
@@ -39,9 +42,9 @@ imagesize = { workspace = true }
 oauth2 = { workspace = true }
 mime_guess = { workspace = true }
 merge = { workspace = true }
+moka = { workspace = true }
 path-clean = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
-html2md = { workspace = true }
 lru = { workspace = true }
 parking_lot = { workspace = true }
 regex = { workspace = true }
@@ -62,6 +65,7 @@ serde_yaml = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
 sha2 = { workspace = true }
+simhash = { workspace = true }
 smol_str = { workspace = true }
 strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }

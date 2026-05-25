@@ -21,9 +21,9 @@ pub(crate) fn new_plugin() -> InProcessToolPlugin {
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
 #[tool_surface(
     entry = "web",
-    description = "Web command dispatcher. Set action to fetch or search. Fetch upgrades HTTP to HTTPS and caches for 15 minutes.",
-    summary = "Search the web or fetch web pages.",
-    help = "Use action `search` for web search and `fetch` to retrieve a URL. Fetch upgrades HTTP URLs to HTTPS where possible and caches successful fetches for 15 minutes.",
+    description = "Lightweight web command dispatcher. Use it for single-page fetches or Brave-backed web search. Prefer the `crawl` tool for multi-page crawling, local indexing, and repeated retrieval.",
+    summary = "Search the web or fetch one page.",
+    help = "Use action `search` for web search and `fetch` to retrieve a single URL. Fetch upgrades HTTP URLs to HTTPS where possible and caches successful fetches for 15 minutes. For multi-page crawling or local search over fetched pages, prefer the `crawl` tool.",
     tags(ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet),
     concurrency_safe = true
 )]

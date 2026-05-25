@@ -33,7 +33,7 @@
 从当前实现看，Agena 的抽象边界已经基本正确：
 
 - `PluginHost` 是统一扩展平面，内置 static plugin 和外部 plugin 走同一路径。
-- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.shell`、`agena.web`、`agena.workflow`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
+- 内置能力已经按领域收敛成稳定入口：`agena.fs`、`agena.shell`、`agena.web`、`agena.crawl`、`agena.workflow`、`agena.skills`、`agena.lsp`、`agena.memory`、`agena.mcp`、`agena.settings`。
 - 对模型暴露的是高层 action tool，而不是零散 syscall 级工具。
 
 这意味着最合理的策略是：
@@ -125,11 +125,12 @@
 
 ### 3. 用 Playwright MCP 增强浏览器能力，不自建 `agena.browser`
 
-你们当前有 `agena.web`，但它是 search/fetch，不是 browser automation。
+你们当前有 `agena.web` 和 `agena.crawl`；前者是轻量 search/fetch，后者是本地 crawl/index，不是 browser automation。
 
 对浏览器这类高变动、高兼容性成本的领域，自研 plugin 不划算。最合适的路线是：
 
 - 继续保留 `agena.web` 负责轻量 search/fetch。
+- 优先让 `agena.crawl` 承担多页抓取、本地语料落盘和后续检索。
 - 通过 `agena.mcp` 接入 Playwright MCP 作为 browser/computer-use 能力。
 
 建议增强项：
@@ -285,6 +286,22 @@
 不建议做的点：
 
 - 不建议把复杂页面交互、登录、点击、截图能力塞进 `agena.web`
+
+### `agena.crawl`
+
+建议作为默认的本地网页采集入口保留并继续增强。
+
+适合放在这里的能力：
+
+- 多页 crawl
+- URL 规范化和去重
+- 本地持久化语料和 metadata cache
+- 本地全文/混合检索
+
+不建议放在这里的能力：
+
+- 需要远程托管服务才能运行的抓取核心路径
+- 浏览器自动化和复杂交互
 
 ## 四类：只借鉴思路，不建议直接引入依赖
 

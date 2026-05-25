@@ -2,6 +2,7 @@ pub mod agent;
 pub mod agents;
 pub mod cli;
 pub mod config;
+pub mod crawl;
 pub mod db;
 pub mod error;
 pub mod event;

@@ -197,6 +197,7 @@ pub(crate) struct RawConfig {
     pub(crate) agents: RawAgentsConfig,
     pub(crate) plugins: Option<PluginConfig>,
     pub(crate) memory: Option<MemoryConfig>,
+    pub(crate) crawl: Option<crate::config::types::CrawlConfig>,
     pub(crate) mcp: Option<McpConfig>,
     pub(crate) lsp: Option<crate::config::types::LspConfig>,
     pub(crate) web: Option<WebToolsConfig>,
@@ -214,6 +215,7 @@ impl RawConfig {
         self.agents.merge_from(overlay.agents);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         merge_option_struct(&mut self.memory, overlay.memory);
+        merge_option_struct(&mut self.crawl, overlay.crawl);
         merge_option_struct(&mut self.mcp, overlay.mcp);
         merge_option_struct(&mut self.lsp, overlay.lsp);
         merge_option_struct(&mut self.web, overlay.web);
@@ -230,6 +232,7 @@ impl RawConfig {
             && self.agents.is_empty()
             && self.plugins.is_none()
             && self.memory.is_none()
+            && self.crawl.is_none()
             && self.mcp.is_none()
             && self.lsp.is_none()
             && self.web.is_none()
@@ -402,6 +405,7 @@ impl RawConfig {
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
         PluginRuntimeOptions::validate_builtin_plugins(&plugins)?;
         let memory: MemoryConfig = self.memory.unwrap_or_default();
+        let crawl: crate::config::types::CrawlConfig = self.crawl.unwrap_or_default();
         let mcp: McpConfig = self.mcp.unwrap_or_default();
         let lsp: crate::config::types::LspConfig = self.lsp.unwrap_or_default();
         let web: WebToolsConfig = self.web.unwrap_or_default();
@@ -410,6 +414,7 @@ impl RawConfig {
         let agents_default = self.agents.default.clone();
 
         validate_harnesses(&harnesses)?;
+        validate_crawl_config(&crawl)?;
 
         let providers = self
             .providers
@@ -442,6 +447,7 @@ impl RawConfig {
             plugins,
             plugin_storage: crate::config::types::PluginStorageConfig::default(),
             memory,
+            crawl,
             mcp,
             lsp,
             web,
@@ -539,7 +545,7 @@ impl PluginRuntimeOptions {
                 continue;
             }
             match plugin_id.as_str() {
-                "agena.memory" | "agena.mcp" | "agena.lsp" | "agena.web" => {
+                "agena.memory" | "agena.crawl" | "agena.mcp" | "agena.lsp" | "agena.web" => {
                     let field = plugin_id.trim_start_matches("agena.");
                     return Err(ConfigError::Validation(format!(
                         "`plugins.list.\"{plugin_id}\".options` is no longer a config source; move those fields under top-level `{field}`"
@@ -631,6 +637,12 @@ impl Merge for ProjectInstructionsConfig {
 }
 
 impl Merge for crate::config::types::MemoryRetrievalConfig {
+    fn merge_from(&mut self, overlay: Self) {
+        *self = overlay;
+    }
+}
+
+impl Merge for crate::config::types::CrawlConfig {
     fn merge_from(&mut self, overlay: Self) {
         *self = overlay;
     }
@@ -2274,6 +2286,94 @@ fn validate_harnesses(harnesses: &HarnessesConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn validate_crawl_config(crawl: &crate::config::types::CrawlConfig) -> Result<(), ConfigError> {
+    for (label, value) in [
+        ("crawl.default_max_pages", crawl.default_max_pages),
+        ("crawl.max_pages_limit", crawl.max_pages_limit),
+        ("crawl.max_depth_limit", crawl.max_depth_limit),
+        ("crawl.default_chunk_chars", crawl.default_chunk_chars),
+        (
+            "crawl.near_duplicate_hamming_distance",
+            crawl.near_duplicate_hamming_distance,
+        ),
+        ("crawl.search_default_limit", crawl.search_default_limit),
+        ("crawl.search_max_limit", crawl.search_max_limit),
+        ("crawl.list_default_limit", crawl.list_default_limit),
+        ("crawl.list_max_limit", crawl.list_max_limit),
+        ("crawl.vector_candidate_limit", crawl.vector_candidate_limit),
+        ("crawl.min_vector_query_chars", crawl.min_vector_query_chars),
+        ("crawl.hybrid_rrf_k", crawl.hybrid_rrf_k),
+        ("crawl.rerank_limit", crawl.rerank_limit),
+    ] {
+        if value == 0 {
+            return Err(ConfigError::Validation(format!(
+                "{label} must be greater than 0"
+            )));
+        }
+    }
+    for (label, value) in [
+        ("crawl.request_delay_ms", crawl.request_delay_ms),
+        ("crawl.fetch_timeout_secs", crawl.fetch_timeout_secs),
+        ("crawl.max_body_bytes", crawl.max_body_bytes),
+        (
+            "crawl.browser_wait_timeout_secs",
+            crawl.browser_wait_timeout_secs,
+        ),
+        (
+            "crawl.document_cache_ttl_secs",
+            crawl.document_cache_ttl_secs,
+        ),
+        ("crawl.fetch_cache_ttl_secs", crawl.fetch_cache_ttl_secs),
+        ("crawl.fetch_cache_capacity", crawl.fetch_cache_capacity),
+    ] {
+        if value == 0 {
+            return Err(ConfigError::Validation(format!(
+                "{label} must be greater than 0"
+            )));
+        }
+    }
+    if crawl.default_max_pages > crawl.max_pages_limit {
+        return Err(ConfigError::Validation(
+            "crawl.default_max_pages must be less than or equal to crawl.max_pages_limit"
+                .to_string(),
+        ));
+    }
+    if crawl.default_max_depth > crawl.max_depth_limit {
+        return Err(ConfigError::Validation(
+            "crawl.default_max_depth must be less than or equal to crawl.max_depth_limit"
+                .to_string(),
+        ));
+    }
+    if crawl.search_default_limit > crawl.search_max_limit {
+        return Err(ConfigError::Validation(
+            "crawl.search_default_limit must be less than or equal to crawl.search_max_limit"
+                .to_string(),
+        ));
+    }
+    if crawl.list_default_limit > crawl.list_max_limit {
+        return Err(ConfigError::Validation(
+            "crawl.list_default_limit must be less than or equal to crawl.list_max_limit"
+                .to_string(),
+        ));
+    }
+    if crawl.rerank_limit > crawl.vector_candidate_limit {
+        return Err(ConfigError::Validation(
+            "crawl.rerank_limit must be less than or equal to crawl.vector_candidate_limit"
+                .to_string(),
+        ));
+    }
+    if crawl
+        .browser_wait_for_selector
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(ConfigError::Validation(
+            "crawl.browser_wait_for_selector must not be empty when set".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_harness_name(scope: &str, name: &str) -> Result<(), ConfigError> {
     if name.trim().is_empty() {
         return Err(ConfigError::Validation(format!(
@@ -2578,6 +2678,61 @@ mod tests {
                 && binding.connector_names == vec!["docs".to_owned()]
         }));
         assert_eq!(bindings.len(), 3);
+    }
+
+    #[test]
+    fn crawl_builtin_plugin_options_are_rejected() {
+        let raw = serde_json::from_value::<RawConfig>(json!({
+            "plugins": {
+                "list": {
+                    "agena.crawl": {
+                        "kind": "static",
+                        "options": {
+                            "default_max_pages": 20
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("config should parse");
+
+        let err = raw
+            .resolve_with_env(&TestEnvironment)
+            .expect_err("crawl plugin options should be rejected");
+        assert!(
+            err.to_string()
+                .contains("move those fields under top-level `crawl`")
+        );
+    }
+
+    #[test]
+    fn crawl_config_rejects_default_pages_above_limit() {
+        let err = resolve_config(json!({
+            "crawl": {
+                "default_max_pages": 20,
+                "max_pages_limit": 10
+            }
+        }))
+        .expect_err("invalid crawl config should fail");
+
+        assert!(err.to_string().contains(
+            "crawl.default_max_pages must be less than or equal to crawl.max_pages_limit"
+        ));
+    }
+
+    #[test]
+    fn crawl_config_rejects_rerank_limit_above_vector_candidates() {
+        let err = resolve_config(json!({
+            "crawl": {
+                "vector_candidate_limit": 5,
+                "rerank_limit": 6
+            }
+        }))
+        .expect_err("invalid crawl config should fail");
+
+        assert!(err.to_string().contains(
+            "crawl.rerank_limit must be less than or equal to crawl.vector_candidate_limit"
+        ));
     }
 
     #[test]

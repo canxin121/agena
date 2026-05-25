@@ -792,19 +792,12 @@ async fn build_session_start_plugin_host(
     let mut list = BTreeMap::new();
     list.insert(
         "fixture".to_string(),
-        crate::plugin::PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-            disabled: false,
-        },
+        crate::plugin::PluginEntry::static_default(),
     );
     let config = crate::plugin::PluginsConfig {
-        timeouts: Default::default(),
+        host: Default::default(),
+        policy: Default::default(),
         list,
-        trusted_keys: Default::default(),
-        default_quota: Default::default(),
-        quotas: Default::default(),
-        tool_presentation: Default::default(),
     };
     crate::plugin::PluginHostBuilder::new(workspace_root, "test")
         .with_config(config)
@@ -824,19 +817,12 @@ async fn build_session_end_plugin_host(
     let mut list = BTreeMap::new();
     list.insert(
         "fixture".to_string(),
-        crate::plugin::PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-            disabled: false,
-        },
+        crate::plugin::PluginEntry::static_default(),
     );
     let config = crate::plugin::PluginsConfig {
-        timeouts: Default::default(),
+        host: Default::default(),
+        policy: Default::default(),
         list,
-        trusted_keys: Default::default(),
-        default_quota: Default::default(),
-        quotas: Default::default(),
-        tool_presentation: Default::default(),
     };
     let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
         .with_config(config)
@@ -859,19 +845,12 @@ async fn build_streaming_plugin_host(
     let mut list = BTreeMap::new();
     list.insert(
         "fixture".to_string(),
-        crate::plugin::PluginEntry::Static {
-            options: serde_json::Value::Null,
-            timeouts: Default::default(),
-            disabled: false,
-        },
+        crate::plugin::PluginEntry::static_default(),
     );
     let config = crate::plugin::PluginsConfig {
-        timeouts: Default::default(),
+        host: Default::default(),
+        policy: Default::default(),
         list,
-        trusted_keys: Default::default(),
-        default_quota: Default::default(),
-        quotas: Default::default(),
-        tool_presentation: Default::default(),
     };
     let host = crate::plugin::PluginHostBuilder::new(workspace_root, "test")
         .with_config(config)

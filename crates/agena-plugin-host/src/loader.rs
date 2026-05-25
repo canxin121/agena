@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::config::{PluginEntry, PluginSignature};
+use crate::config::{PluginEntry, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
 use crate::registry::{effective_host_capabilities_for_manifest, per_entry_host_capabilities};
@@ -28,8 +28,8 @@ pub async fn load_entry(
     env_lookup: &(dyn Fn(&str) -> Option<String> + Send + Sync),
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> Result<LoadedPlugin, HostError> {
-    let transport: Arc<dyn PluginTransport> = match entry {
-        PluginEntry::Static { .. } => {
+    let transport: Arc<dyn PluginTransport> = match &entry.package {
+        PluginPackage::Static { .. } => {
             let registration =
                 static_registry
                     .remove(plugin_id)
@@ -39,7 +39,7 @@ pub async fn load_entry(
                     })?;
             (registration.builder)()
         }
-        PluginEntry::Cdylib {
+        PluginPackage::Cdylib {
             path,
             sha256,
             signature,
@@ -85,7 +85,7 @@ pub async fn load_entry(
             })?;
             Arc::new(t)
         }
-        PluginEntry::Stdio {
+        PluginPackage::Stdio {
             command,
             args,
             env,
@@ -139,7 +139,7 @@ pub async fn load_entry(
             })?;
             Arc::new(t)
         }
-        PluginEntry::Http { url, auth, .. } => {
+        PluginPackage::Http { url, auth, .. } => {
             let t = HttpTransport::new(
                 url.clone(),
                 auth.clone(),
@@ -149,7 +149,7 @@ pub async fn load_entry(
             Arc::new(t)
         }
         #[cfg(feature = "wasm")]
-        PluginEntry::Wasm { path, sha256, .. } => {
+        PluginPackage::Wasm { path, sha256, .. } => {
             let resolved = if path.is_absolute() {
                 path.clone()
             } else {
@@ -171,7 +171,7 @@ pub async fn load_entry(
             Arc::new(t)
         }
         #[cfg(not(feature = "wasm"))]
-        PluginEntry::Wasm { .. } => {
+        PluginPackage::Wasm { .. } => {
             return Err(HostError::Load {
                 plugin: plugin_id.to_string(),
                 message: "wasm transport requires the `wasm` feature".into(),
@@ -224,7 +224,7 @@ pub async fn load_entry(
         plugin_id: plugin_id.to_string(),
         host_callback_url: host_handle.callback_url(plugin_id),
         host_callback_token: host_handle.callback_token(plugin_id).await,
-        options: entry.options().clone(),
+        config: entry.config().clone(),
         protocol_version: crate::sdk::rpc::PROTOCOL_VERSION,
     };
 
@@ -247,7 +247,7 @@ pub async fn load_entry(
             message: e.to_string(),
         })?;
 
-    validate_manifest_options(plugin_id, &outcome.manifest, entry.options())?;
+    validate_manifest_config(plugin_id, &outcome.manifest, entry.config())?;
 
     let trust_level = plugin_trust_level(entry, trusted_keys);
     let provenance = plugin_provenance(entry, trusted_keys);
@@ -267,9 +267,9 @@ fn plugin_trust_level(
     entry: &PluginEntry,
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> String {
-    match entry {
-        PluginEntry::Static { .. } => "static".to_string(),
-        PluginEntry::Cdylib {
+    match &entry.package {
+        PluginPackage::Static { .. } => "static".to_string(),
+        PluginPackage::Cdylib {
             signature, sha256, ..
         } => {
             if has_trusted_signature(signature.as_ref(), trusted_keys) {
@@ -280,15 +280,15 @@ fn plugin_trust_level(
                 "unverified".to_string()
             }
         }
-        PluginEntry::Stdio { sha256, .. } => {
+        PluginPackage::Stdio { sha256, .. } => {
             if sha256.is_some() {
                 "checksummed".to_string()
             } else {
                 "unverified".to_string()
             }
         }
-        PluginEntry::Http { .. } => "remote".to_string(),
-        PluginEntry::Wasm { sha256, .. } => {
+        PluginPackage::Http { .. } => "remote".to_string(),
+        PluginPackage::Wasm { sha256, .. } => {
             if sha256.is_some() {
                 "checksummed".to_string()
             } else {
@@ -303,9 +303,9 @@ fn plugin_provenance(
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> Vec<String> {
     let mut provenance = vec![format!("transport:{}", entry.kind_str())];
-    match entry {
-        PluginEntry::Static { .. } => provenance.push("static registration".to_string()),
-        PluginEntry::Cdylib {
+    match &entry.package {
+        PluginPackage::Static { .. } => provenance.push("static registration".to_string()),
+        PluginPackage::Cdylib {
             path,
             sha256,
             signature,
@@ -322,7 +322,7 @@ fn plugin_provenance(
                 }
             }
         }
-        PluginEntry::Stdio {
+        PluginPackage::Stdio {
             command,
             sha256,
             cwd,
@@ -336,10 +336,10 @@ fn plugin_provenance(
                 provenance.push("sha256 configured".to_string());
             }
         }
-        PluginEntry::Http { url, .. } => {
+        PluginPackage::Http { url, .. } => {
             provenance.push(format!("url:{}", url));
         }
-        PluginEntry::Wasm { path, sha256, .. } => {
+        PluginPackage::Wasm { path, sha256, .. } => {
             provenance.push(format!("path:{}", path.display()));
             if sha256.is_some() {
                 provenance.push("sha256 configured".to_string());
@@ -357,17 +357,17 @@ fn has_trusted_signature(
 }
 
 #[allow(clippy::result_large_err)]
-fn validate_manifest_options(
+fn validate_manifest_config(
     plugin_id: &str,
     manifest: &PluginManifest,
-    options: &serde_json::Value,
+    config: &serde_json::Value,
 ) -> Result<(), HostError> {
-    let Some(schema) = manifest.options_schema.as_ref() else {
+    let Some(schema) = manifest.config_schema.as_ref() else {
         return Ok(());
     };
-    validate_schema_value("$", schema, options).map_err(|message| {
+    validate_schema_value("$", schema, config).map_err(|message| {
         HostError::Config(format!(
-            "plugin `{plugin_id}` options do not match manifest schema: {message}"
+            "plugin `{plugin_id}` config does not match manifest schema: {message}"
         ))
     })
 }

@@ -1,12 +1,12 @@
 //! Install / uninstall flows. Wraps cache layout, http fetch, sha256/signature
-//! verification, and toml_edit-based config writes.
+//! verification, and JSON config writes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use sha2::{Digest, Sha256};
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
 
 use crate::cache::{InstalledRecord, MarketplaceCache, write_secure_file};
 use crate::error::MarketplaceError;
@@ -321,7 +321,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
         }
         write_plugin_entry(&mut document, &plugin.id, &version, &artifact_path)?;
         if !req.dry_run {
-            write_secure_file(&config_path, document.to_string().as_bytes())?;
+            write_config_doc(&config_path, &document)?;
         }
 
         // Update installed.json
@@ -393,7 +393,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             .ok_or_else(|| MarketplaceError::Config(format!("`{plugin_id}` is not installed")))?;
         let mut document = read_or_create_doc(&record.config_path)?;
         remove_plugin_entry(&mut document, plugin_id);
-        write_secure_file(&record.config_path, document.to_string().as_bytes())?;
+        write_config_doc(&record.config_path, &document)?;
         let plugin_dir = self.cache.plugin_dir(plugin_id, &record.version);
         if plugin_dir.exists() {
             std::fs::remove_dir_all(&plugin_dir)?;
@@ -780,65 +780,105 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(digest)
 }
 
-fn read_or_create_doc(path: &Path) -> Result<DocumentMut, MarketplaceError> {
+fn read_or_create_doc(path: &Path) -> Result<JsonValue, MarketplaceError> {
     if path.exists() {
         let text = std::fs::read_to_string(path)?;
-        let doc = text
-            .parse::<DocumentMut>()
-            .map_err(|e| MarketplaceError::Config(format!("parse {}: {e}", path.display())))?;
+        if text.trim().is_empty() {
+            return Ok(JsonValue::Object(JsonMap::new()));
+        }
+        let doc: JsonValue = serde_json::from_str(&text).map_err(|e| {
+            MarketplaceError::Config(format!("parse {} as JSON: {e}", path.display()))
+        })?;
+        if !doc.is_object() {
+            return Err(MarketplaceError::Config(format!(
+                "{} must contain a JSON object",
+                path.display()
+            )));
+        }
         Ok(doc)
     } else {
-        Ok(DocumentMut::new())
+        Ok(JsonValue::Object(JsonMap::new()))
     }
 }
 
-fn ensure_plugins_list_table(doc: &mut DocumentMut) -> &mut Table {
-    if !doc.contains_key("plugins") || !doc["plugins"].is_table() {
-        doc["plugins"] = Item::Table(Table::new());
-    }
-    let plugins = doc["plugins"].as_table_mut().expect("plugins table");
-    if !plugins.contains_key("list") || !plugins["list"].is_table() {
-        plugins["list"] = Item::Table(Table::new());
-    }
-    plugins["list"].as_table_mut().expect("plugins.list table")
+fn write_config_doc(path: &Path, doc: &JsonValue) -> Result<(), MarketplaceError> {
+    let mut bytes = serde_json::to_vec_pretty(doc).map_err(|e| {
+        MarketplaceError::Config(format!("serialize {} as JSON: {e}", path.display()))
+    })?;
+    bytes.push(b'\n');
+    write_secure_file(path, &bytes)
 }
 
-fn plugin_entry_exists(doc: &DocumentMut, plugin_id: &str) -> bool {
+fn ensure_object<'a>(
+    value: &'a mut JsonValue,
+    label: &str,
+) -> Result<&'a mut JsonMap<String, JsonValue>, MarketplaceError> {
+    if value.is_null() {
+        *value = JsonValue::Object(JsonMap::new());
+    }
+    value
+        .as_object_mut()
+        .ok_or_else(|| MarketplaceError::Config(format!("`{label}` must be a JSON object")))
+}
+
+fn ensure_plugins_list_object(
+    doc: &mut JsonValue,
+) -> Result<&mut JsonMap<String, JsonValue>, MarketplaceError> {
+    let root = ensure_object(doc, "config")?;
+    let plugins = root
+        .entry("plugins")
+        .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+    let plugins = ensure_object(plugins, "plugins")?;
+    let list = plugins
+        .entry("list")
+        .or_insert_with(|| JsonValue::Object(JsonMap::new()));
+    ensure_object(list, "plugins.list")
+}
+
+fn plugin_entry_exists(doc: &JsonValue, plugin_id: &str) -> bool {
     doc.get("plugins")
-        .and_then(|p| p.as_table())
-        .and_then(|t| t.get("list"))
-        .and_then(|l| l.as_table())
+        .and_then(JsonValue::as_object)
+        .and_then(|plugins| plugins.get("list"))
+        .and_then(JsonValue::as_object)
         .map(|l| l.contains_key(plugin_id))
         .unwrap_or(false)
 }
 
 fn write_plugin_entry(
-    doc: &mut DocumentMut,
+    doc: &mut JsonValue,
     plugin_id: &str,
     version: &PluginVersion,
     artifact_path: &Path,
 ) -> Result<(), MarketplaceError> {
-    let list = ensure_plugins_list_table(doc);
-    let mut table = Table::new();
-    table.set_implicit(false);
-    table["kind"] = Item::Value(Value::from(version.kind.as_str()));
+    let list = ensure_plugins_list_object(doc)?;
+    let mut package = JsonMap::new();
+    package.insert("kind".to_string(), JsonValue::from(version.kind.as_str()));
     match version.kind {
         PluginKind::Cdylib => {
-            table["path"] = Item::Value(Value::from(artifact_path.display().to_string()));
+            package.insert(
+                "path".to_string(),
+                JsonValue::from(artifact_path.display().to_string()),
+            );
             if let Some(sha) = version.sha256.as_ref() {
-                table["sha256"] = Item::Value(Value::from(sha.as_str()));
+                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
             }
             if let Some(sig) = version.signature.as_ref() {
-                let mut inline = InlineTable::new();
-                inline.insert("key_id", Value::from(sig.key_id.as_str()));
-                inline.insert("signature", Value::from(sig.signature.as_str()));
-                table["signature"] = Item::Value(Value::InlineTable(inline));
+                package.insert(
+                    "signature".to_string(),
+                    serde_json::json!({
+                        "key_id": sig.key_id.as_str(),
+                        "signature": sig.signature.as_str(),
+                    }),
+                );
             }
         }
         PluginKind::Wasm => {
-            table["path"] = Item::Value(Value::from(artifact_path.display().to_string()));
+            package.insert(
+                "path".to_string(),
+                JsonValue::from(artifact_path.display().to_string()),
+            );
             if let Some(sha) = version.sha256.as_ref() {
-                table["sha256"] = Item::Value(Value::from(sha.as_str()));
+                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
             }
         }
         PluginKind::Stdio => {
@@ -846,31 +886,101 @@ fn write_plugin_entry(
                 .command
                 .clone()
                 .unwrap_or_else(|| artifact_path.display().to_string());
-            table["command"] = Item::Value(Value::from(command));
+            package.insert("command".to_string(), JsonValue::from(command));
             if !version.args.is_empty() {
-                let mut arr = Array::new();
-                for arg in &version.args {
-                    arr.push(arg.as_str());
-                }
-                table["args"] = Item::Value(Value::Array(arr));
+                package.insert("args".to_string(), serde_json::json!(version.args));
+            }
+            if !version.env.is_empty() {
+                package.insert("env".to_string(), serde_json::json!(version.env));
             }
             if let Some(sha) = version.sha256.as_ref() {
-                table["sha256"] = Item::Value(Value::from(sha.as_str()));
+                package.insert("sha256".to_string(), JsonValue::from(sha.as_str()));
             }
         }
         PluginKind::Http => {
-            table["url"] = Item::Value(Value::from(version.url.as_str()));
+            package.insert("url".to_string(), JsonValue::from(version.url.as_str()));
         }
     }
-    list[plugin_id] = Item::Table(table);
+    let mut entry = JsonMap::new();
+    entry.insert("package".to_string(), JsonValue::Object(package));
+    if !version.config.is_null() {
+        entry.insert("config".to_string(), version.config.clone());
+    }
+    list.insert(plugin_id.to_string(), JsonValue::Object(entry));
     Ok(())
 }
 
-fn remove_plugin_entry(doc: &mut DocumentMut, plugin_id: &str) {
-    if let Some(plugins) = doc.get_mut("plugins").and_then(|p| p.as_table_mut())
-        && let Some(list) = plugins.get_mut("list").and_then(|l| l.as_table_mut())
+fn remove_plugin_entry(doc: &mut JsonValue, plugin_id: &str) {
+    if let Some(plugins) = doc.get_mut("plugins").and_then(JsonValue::as_object_mut)
+        && let Some(list) = plugins.get_mut("list").and_then(JsonValue::as_object_mut)
     {
         list.remove(plugin_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stdio_version() -> PluginVersion {
+        PluginVersion {
+            version: "1.2.3".to_string(),
+            kind: PluginKind::Stdio,
+            platform: "any".to_string(),
+            url: "https://example.com/echo.tar.gz".to_string(),
+            sha256: Some("abc123".to_string()),
+            signature: None,
+            command: Some("node".to_string()),
+            args: vec!["./echo.js".to_string()],
+            env: BTreeMap::from([("LOG_LEVEL".to_string(), "debug".to_string())]),
+            config: serde_json::json!({
+                "uppercase": true,
+                "nested": {
+                    "nullable": null
+                }
+            }),
+            min_agena_version: None,
+            archive: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn write_plugin_entry_uses_json_package_and_config() {
+        let mut doc = serde_json::json!({});
+        write_plugin_entry(
+            &mut doc,
+            "echo",
+            &stdio_version(),
+            Path::new("/tmp/echo-plugin"),
+        )
+        .expect("plugin entry should be written");
+
+        let entry = &doc["plugins"]["list"]["echo"];
+        assert_eq!(entry["package"]["kind"], "stdio");
+        assert_eq!(entry["package"]["command"], "node");
+        assert_eq!(entry["package"]["args"], serde_json::json!(["./echo.js"]));
+        assert_eq!(entry["package"]["env"]["LOG_LEVEL"], "debug");
+        assert_eq!(entry["package"]["sha256"], "abc123");
+        assert_eq!(entry["config"]["uppercase"], true);
+        assert!(entry["config"]["nested"]["nullable"].is_null());
+    }
+
+    #[test]
+    fn remove_plugin_entry_removes_only_target_entry() {
+        let mut doc = serde_json::json!({
+            "plugins": {
+                "list": {
+                    "echo": {},
+                    "other": {}
+                }
+            }
+        });
+
+        remove_plugin_entry(&mut doc, "echo");
+
+        assert!(!plugin_entry_exists(&doc, "echo"));
+        assert!(plugin_entry_exists(&doc, "other"));
     }
 }
 

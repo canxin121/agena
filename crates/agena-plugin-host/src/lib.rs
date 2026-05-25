@@ -15,8 +15,8 @@ pub mod transport;
 
 pub use agena_plugin_sdk as sdk;
 pub use config::{
-    HttpAuth, PluginEntry, PluginSignature, PluginsConfig, RestartPolicy, TimeoutsConfig,
-    ToolPresentationConfig,
+    HttpAuth, PluginEntry, PluginHostConfig, PluginPackage, PluginPolicyConfig, PluginSignature,
+    PluginsConfig, RestartPolicy, TimeoutsConfig, ToolPresentationConfig,
 };
 pub use error::{HostError, TransportError};
 pub use host::{

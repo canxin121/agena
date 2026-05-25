@@ -2,14 +2,15 @@
 //! tools.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 
 use agena_macros::StaticToolSurface;
-use agena_mcp_client::McpConnectionManager;
 use agena_mcp_client::protocol::{
     CallToolResult, ContentBlock, GetPromptResult, ListPromptsResult, ListResourcesResult,
     ReadResourceResult, ResourceContents, ToolDescriptor,
 };
+use agena_mcp_client::{FileTokenStore, McpConnectionManager, ServerSpec, TokenStore};
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,153 @@ use crate::plugin::sdk::{
 };
 
 pub(crate) const MCP_PLUGIN_ID: &str = "agena.mcp";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct McpConfig {
+    /// Map of `<server_name> -> <transport spec>`.
+    pub servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum McpServerConfig {
+    /// Spawn a child process and exchange newline-delimited JSON over
+    /// its stdin/stdout (the typical MCP server style).
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default)]
+        cwd: Option<PathBuf>,
+    },
+    /// Connect to a streamable HTTP MCP server.
+    Http {
+        url: String,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth: Option<McpHttpAuthConfig>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum McpHttpAuthConfig {
+    /// Static `Authorization: Bearer <token>`.
+    Bearer { token: String },
+    /// Read the bearer token from the named env var at connect time.
+    BearerFromEnv { env: String },
+    /// Resolve via the runtime's MCP token store.
+    BearerFromStore,
+    /// Free-form header map.
+    Custom { headers: BTreeMap<String, String> },
+}
+
+pub(crate) fn config_from_plugins(
+    plugins: &crate::plugin::PluginsConfig,
+) -> Result<McpConfig, String> {
+    let Some(entry) = plugins.list.get(MCP_PLUGIN_ID) else {
+        return Ok(McpConfig::default());
+    };
+    if entry.disabled() || entry.config().is_null() {
+        return Ok(McpConfig::default());
+    }
+    serde_json::from_value(entry.config().clone())
+        .map_err(|err| format!("plugins.list.\"{MCP_PLUGIN_ID}\".config: {err}"))
+}
+
+pub(crate) async fn build_manager(config: &McpConfig) -> Arc<McpConnectionManager> {
+    let mut manager = McpConnectionManager::new(
+        crate::provider::CODEX_MCP_CLIENT_NAME,
+        crate::provider::CODEX_PACKAGE_VERSION,
+    );
+
+    match FileTokenStore::open_default() {
+        Ok(store) => {
+            manager.set_token_store(Arc::new(store) as Arc<dyn TokenStore>);
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "agena::mcp",
+                "failed to open default token store: {err}"
+            );
+        }
+    }
+
+    let manager = Arc::new(manager);
+    for (name, entry) in &config.servers {
+        let manager = manager.clone();
+        let name = name.clone();
+        let spec = match entry {
+            McpServerConfig::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+            } => ServerSpec::Stdio {
+                command: command.clone(),
+                args: args.clone(),
+                env: env.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                cwd: cwd.clone(),
+            },
+            McpServerConfig::Http { url, headers, auth } => {
+                let Some(parsed) = parse_mcp_server_url(name.as_str(), url.as_str()) else {
+                    continue;
+                };
+                let auth = map_mcp_auth(auth.as_ref());
+                ServerSpec::Http {
+                    url: parsed,
+                    headers: headers
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                    auth,
+                }
+            }
+        };
+        if let Err(e) = manager.add_server(&name, spec).await {
+            tracing::warn!(
+                target: "agena::mcp",
+                "failed to connect MCP server '{name}': {e}"
+            );
+        } else {
+            tracing::info!(target: "agena::mcp", "connected MCP server '{name}'");
+        }
+    }
+    manager
+}
+
+fn parse_mcp_server_url(name: &str, url: &str) -> Option<url::Url> {
+    match url::Url::parse(url) {
+        Ok(parsed) => Some(parsed),
+        Err(err) => {
+            tracing::warn!(
+                target: "agena::mcp",
+                "skipping mcp server '{name}': invalid url '{url}': {err}"
+            );
+            None
+        }
+    }
+}
+
+fn map_mcp_auth(auth: Option<&McpHttpAuthConfig>) -> Option<agena_mcp_client::HttpAuth> {
+    auth.map(|cfg| match cfg {
+        McpHttpAuthConfig::Bearer { token } => agena_mcp_client::HttpAuth::Bearer(token.clone()),
+        McpHttpAuthConfig::BearerFromEnv { env } => {
+            agena_mcp_client::HttpAuth::BearerFromEnv(env.clone())
+        }
+        McpHttpAuthConfig::BearerFromStore => agena_mcp_client::HttpAuth::BearerFromStore,
+        McpHttpAuthConfig::Custom { headers } => agena_mcp_client::HttpAuth::Custom(
+            headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        ),
+    })
+}
 
 pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
@@ -282,6 +430,7 @@ fn manifest_from_snapshot(
     PluginManifest::builder("agena-mcp", env!("CARGO_PKG_VERSION"))
         .description("Agena MCP bridge exposed as hierarchical plugin commands.")
         .hooks(HookSubscription::TOOL_INVOKE)
+        .config_schema(crate::entry::definition::json_schema_for::<McpConfig>())
         .tools(entries)
         .build()
 }

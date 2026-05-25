@@ -91,7 +91,7 @@ use crate::{
                   Resume the most recent session:\n    \
                   agena resume\n\n  \
                   Show effective config:\n    \
-                  agena config show --format toml\n\n  \
+                  agena config show --format json\n\n  \
                   Run as an MCP server over stdio:\n    \
                   agena mcp-server --transport stdio"
 )]

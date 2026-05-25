@@ -26,11 +26,22 @@ cargo build --release
 
 在 `config.json` 中显式声明 cdylib plugin：
 
-```toml
-[plugins.list.echo]
-kind = "cdylib"
-path = "examples/echo_plugin/target/release/libagena_echo_plugin.so"
-options = { uppercase = false }
+```json
+{
+  "plugins": {
+    "list": {
+      "echo": {
+        "package": {
+          "kind": "cdylib",
+          "path": "examples/echo_plugin/target/release/libagena_echo_plugin.so"
+        },
+        "config": {
+          "uppercase": false
+        }
+      }
+    }
+  }
+}
 ```
 
 macOS 和 Windows 的动态库文件名分别是：
@@ -48,11 +59,22 @@ agena plugin inspect echo
 
 如果要在 debug 构建下测试，把 `path` 指向 `target/debug` 下的动态库：
 
-```toml
-[plugins.list.echo]
-kind = "cdylib"
-path = "examples/echo_plugin/target/debug/libagena_echo_plugin.so"
-options = { uppercase = true }
+```json
+{
+  "plugins": {
+    "list": {
+      "echo": {
+        "package": {
+          "kind": "cdylib",
+          "path": "examples/echo_plugin/target/debug/libagena_echo_plugin.so"
+        },
+        "config": {
+          "uppercase": true
+        }
+      }
+    }
+  }
+}
 ```
 
 ## 示例行为
@@ -74,4 +96,4 @@ options = { uppercase = true }
    - `AGENA_ECHO=1`
    - `AGENA_ECHO_CWD=<当前 cwd>`
 
-如果 `options.uppercase = true`，`tool.invoke` 会把输出转成大写。
+如果 `config.uppercase = true`，`tool.invoke` 会把输出转成大写。

@@ -16,18 +16,19 @@ agena config validate
 
 `config.example.json` 展示了最小启动面：
 
-- `[tracing]`: 日志过滤。
-- `[providers.default]`: 全局默认 provider 名称。
-- `[providers.<id>.defaults]`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
-- `[providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools]`: model-scoped provider-native 远程内置 tool 路由、默认 hosted 参数、harness 绑定和 connector 引用。
-- `[providers.<id>]`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
-- `[runtime]`: provider HTTP、retry、reload、catalog 等运行时基础设施参数。
-- `[runtime.session]`: session cache、session gc。
-- `[session]`: compaction。
-- `[agents.default]`: 全局默认 agent 名称。
-- `[agents.<name>]`: 自定义 agent。
-- `[permission]`: 路径、网络、tool 权限。
-- `[memory]` / `[web]` / `[mcp]` / `[lsp]` / `[harnesses]`: 内建能力的顶层配置。
+- `tracing`: 日志过滤。
+- `providers.default`: 全局默认 provider 名称。
+- `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
+- `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools`: model-scoped provider-native 远程内置 tool 路由、默认 hosted 参数、harness 绑定和 connector 引用。
+- `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
+- `runtime`: provider HTTP、retry、reload、catalog 等运行时基础设施参数。
+- `runtime.session`: session cache、session gc。
+- `session`: compaction。
+- `agents.default`: 全局默认 agent 名称。
+- `agents.<name>`: 自定义 agent。
+- `permission`: 路径、网络、tool 权限。
+- `plugins.list."agena.memory".config` / `plugins.list."agena.web".config` / `plugins.list."agena.mcp".config` / `plugins.list."agena.lsp".config`: 内建 static plugin 的配置。
+- `harnesses`: browser/shell/editor harness 配置。
 
 `config.full.json` 展示了更完整的功能面：
 
@@ -65,7 +66,6 @@ agena config validate
 解析并输出最终配置：
 
 ```bash
-agena config resolve --format toml
 agena config resolve --format json
 ```
 
@@ -152,8 +152,8 @@ agena \
 - map 通常按 key 合并。
 - provider config 按字段合并，`auth` 按字段合并，`adapters`、`extra_headers`、`ai_gateway_headers`、`feature_flags` 以及 provider/adapter 的 `models` map 会按 key 扩展或覆盖。
 - `plugins` 只合并 `timeouts`、`list`、`trusted_keys`、`default_quota` 和 `tool_presentation`；没有总开关。
-- `memory`、`web`、`mcp`、`lsp` 都是顶层配置源；对应 built-in plugin 只消费解析后的结果。
-- 这些顶层块的合并语义跟随各自配置结构，例如 server map 按名称合并，`web` 采用整体替换，`memory.project_instructions` / `memory.retrieval` 也采用整体替换。
+- plugin 专属配置统一位于 `plugins.list.<id>.config`，host 不再有 `memory`、`web`、`mcp`、`lsp` 顶层配置源。
+- `plugins.list` 按 plugin id 合并；每个 plugin 的 `config` 是 plugin 自己的 JSON object，由 plugin manifest 的 JSON Schema 描述和校验。
 
 这些规则由 `crates/agena/src/config/raw.rs` 中的 `Merge` 实现定义。
 
@@ -176,7 +176,7 @@ AGENA_PROVIDER_STREAM_REPLAY_MAX_EVENTS
 AGENA_MODEL_CATALOG_CACHE_MAX_AGE_SECS
 ```
 
-插件通过 `[plugins.list.<id>]` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
+插件通过 `plugins.list.<id>` 显式配置，插件存储和 marketplace cache 可以通过上面的环境变量改写。
 
 环境变量和 CLI 覆盖中的布尔值支持：
 
@@ -249,10 +249,13 @@ AGENA_MARKETPLACE_DIR
 
 ## Tracing
 
-```toml
-[tracing]
-filter = "info"
-database = "error"
+```json
+{
+  "tracing": {
+    "filter": "info",
+    "database": "error"
+  }
+}
 ```
 
 默认值：
@@ -285,26 +288,33 @@ provider 凭据的 canonical 位置是 `[providers.<id>.auth]`。常见来源有
 
 ## Runtime
 
-```toml
-[runtime.providers.http]
-timeout_secs = 120
-connect_timeout_secs = 15
-
-[runtime.providers.retry]
-max_retries = 5
-base_delay_ms = 250
-max_delay_ms = 2000
-
-[runtime.providers.stream_replay]
-max_retries_after_output = 5
-max_tracked_events = 2048
-
-[runtime.reload]
-enabled = true
-poll_interval_secs = 2
-
-[runtime.model_catalog]
-cache_max_age_secs = 604800
+```json
+{
+  "runtime": {
+    "providers": {
+      "http": {
+        "timeout_secs": 120,
+        "connect_timeout_secs": 15
+      },
+      "retry": {
+        "max_retries": 5,
+        "base_delay_ms": 250,
+        "max_delay_ms": 2000
+      },
+      "stream_replay": {
+        "max_retries_after_output": 5,
+        "max_tracked_events": 2048
+      }
+    },
+    "reload": {
+      "enabled": true,
+      "poll_interval_secs": 2
+    },
+    "model_catalog": {
+      "cache_max_age_secs": 604800
+    }
+  }
+}
 ```
 
 `runtime` 只放基础设施参数：
@@ -344,24 +354,33 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 
 最小示例：
 
-```toml
-[providers]
-default = "openai"
-
-[providers.openai.defaults]
-adapter = "openai"
-model = "gpt-5"
-
-[providers.openai.auth]
-mode = "api"
-base_url = "https://api.openai.com"
-api_key_env = "OPENAI_API_KEY"
-
-[providers.openai.adapters.openai]
-enabled = true
-
-[providers.openai.adapters.openai.models."gpt-5"]
-enabled = true
+```json
+{
+  "providers": {
+    "default": "openai",
+    "openai": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-5"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://api.openai.com",
+        "api_key_env": "OPENAI_API_KEY"
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-5": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 关键规则：
@@ -424,10 +443,10 @@ OpenAI ChatGPT -> Codex、Google ADC -> Gemini CLI；没有专属身份的 auth
 
 ### Provider-native tools
 
-`providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools` 是 provider 原生远程内置 tool 的 canonical 配置入口。它和 `[web]`、plugin tool 是两条平行链路：
+`providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools` 是 provider 原生远程内置 tool 的 canonical 配置入口。它和 `agena.web` plugin tool 是两条平行链路：
 
 - plugin tool 继续表示 host-executed function tools。
-- `[web]` 继续表示 Agena 本地 `agena.web` 的 fetch / local crawl-index search。
+- `plugins.list."agena.web".config` 继续表示 Agena 本地 `agena.web` 的 fetch / local crawl-index search。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_tools` 表示某个具体 model 自己托管或 provider 规划、host 执行的 native tools。
 
 默认行为不是“一律开启”：
@@ -478,28 +497,54 @@ route 约束：
 
 示例：
 
-```toml
-[providers.openai.adapters.openai.models."gpt-5".native_tools]
-enabled = true
-
-[providers.openai.adapters.openai.models."gpt-5".native_tools.routes]
-web_search = "provider_hosted"
-file_search = "provider_hosted"
-code_execution = "provider_hosted"
-
-[providers.openai.adapters.openai.models."gpt-5".native_tools.hosted.web_search]
-allowed_domains = ["platform.openai.com", "developers.openai.com"]
-freshness = "cached"
-
-[providers.openai.adapters.openai.models."gpt-5".native_tools.hosted.file_search]
-vector_store_ids = ["vs_docs_main"]
-max_results = 8
-include_results = true
-
-[providers.openai.adapters.openai.models."gpt-5".native_tools.hosted.code_execution.container]
-type = "auto"
-memory_limit = "4g"
-file_ids = ["file_seed_csv"]
+```json
+{
+  "providers": {
+    "openai": {
+      "adapters": {
+        "openai": {
+          "models": {
+            "gpt-5": {
+              "native_tools": {
+                "enabled": true,
+                "routes": {
+                  "web_search": "provider_hosted",
+                  "file_search": "provider_hosted",
+                  "code_execution": "provider_hosted"
+                },
+                "hosted": {
+                  "web_search": {
+                    "allowed_domains": [
+                      "platform.openai.com",
+                      "developers.openai.com"
+                    ],
+                    "freshness": "cached"
+                  },
+                  "file_search": {
+                    "vector_store_ids": [
+                      "vs_docs_main"
+                    ],
+                    "max_results": 8,
+                    "include_results": true
+                  },
+                  "code_execution": {
+                    "container": {
+                      "type": "auto",
+                      "memory_limit": "4g",
+                      "file_ids": [
+                        "file_seed_csv"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 `hosted.*.provider_options` 是 escape hatch，用于写 provider-specific 原始 JSON；优先只用 canonical 字段。
@@ -518,45 +563,82 @@ file_ids = ["file_seed_csv"]
 
 顶层结构：
 
-```toml
-[harnesses.browser.default]
-driver = "playwright"
-headless = true
-viewport = { width = 1280, height = 800 }
-allowed_domains = ["example.com", "github.com"]
-
-[harnesses.shell.default]
-workspace_only = true
-deny_commands = ["sudo", "rm -rf /"]
-
-[harnesses.editor.default]
-workspace_only = true
-max_file_bytes = 262144
+```json
+{
+  "harnesses": {
+    "browser": {
+      "default": {
+        "driver": "playwright",
+        "headless": true,
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "allowed_domains": [
+          "example.com",
+          "github.com"
+        ]
+      }
+    },
+    "shell": {
+      "default": {
+        "workspace_only": true,
+        "deny_commands": [
+          "sudo",
+          "rm -rf /"
+        ]
+      }
+    },
+    "editor": {
+      "default": {
+        "workspace_only": true,
+        "max_file_bytes": 262144
+      }
+    }
+  }
+}
 ```
 
 provider 侧只保存引用：
 
-```toml
-[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools]
-enabled = true
-
-[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools.routes]
-web_search = "provider_hosted"
-bash = "provider_harness"
-text_editor = "provider_harness"
-computer = "provider_harness"
-
-[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools.harness.bash]
-kind = "shell"
-name = "default"
-
-[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools.harness.text_editor]
-kind = "editor"
-name = "default"
-
-[providers.anthropic.adapters.anthropic.models."claude-sonnet-4-6".native_tools.harness.computer]
-kind = "browser"
-name = "default"
+```json
+{
+  "providers": {
+    "anthropic": {
+      "adapters": {
+        "anthropic": {
+          "models": {
+            "claude-sonnet-4-6": {
+              "native_tools": {
+                "enabled": true,
+                "routes": {
+                  "web_search": "provider_hosted",
+                  "bash": "provider_harness",
+                  "text_editor": "provider_harness",
+                  "computer": "provider_harness"
+                },
+                "harness": {
+                  "bash": {
+                    "kind": "shell",
+                    "name": "default"
+                  },
+                  "text_editor": {
+                    "kind": "editor",
+                    "name": "default"
+                  },
+                  "computer": {
+                    "kind": "browser",
+                    "name": "default"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 配置校验会在加载期拒绝：
@@ -569,84 +651,150 @@ name = "default"
 
 常见示例：
 
-```toml
-[providers.openai_chatgpt]
-defaults.adapter = "openai"
-defaults.model = "gpt-5.3-codex"
-
-[providers.openai_chatgpt.auth]
-mode = "credential"
-issuer = "openai_chatgpt"
-credential = { type = "oauth", issuer = "openai_chatgpt", refresh = "...", access = "...", expires_at_ms = 4102444800000, account_id = "acct-123" }
-
-[providers.openai_chatgpt.adapters.openai]
-enabled = true
-backend = "chatgpt_codex"
-
-[providers.openai_chatgpt.adapters.openai.models."gpt-5.3-codex"]
-enabled = true
+```json
+{
+  "providers": {
+    "openai_chatgpt": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-5.3-codex"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "openai_chatgpt",
+        "credential": {
+          "type": "oauth",
+          "issuer": "openai_chatgpt",
+          "refresh": "...",
+          "access": "...",
+          "expires_at_ms": 4102444800000,
+          "account_id": "acct-123"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "backend": "chatgpt_codex",
+          "models": {
+            "gpt-5.3-codex": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
-```toml
-[providers."github-copilot"]
-defaults.adapter = "openai"
-defaults.model = "gpt-4o-mini"
-
-[providers."github-copilot".auth]
-mode = "credential"
-issuer = "github_copilot"
-credential = { type = "oauth", issuer = "github_copilot", refresh = "...", access = "...", expires_at_ms = 4102444800000 }
-
-[providers."github-copilot".adapters.openai]
-enabled = true
-
-[providers."github-copilot".adapters.openai.models."gpt-4o-mini"]
-enabled = true
+```json
+{
+  "providers": {
+    "github-copilot": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4o-mini"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "github_copilot",
+        "credential": {
+          "type": "oauth",
+          "issuer": "github_copilot",
+          "refresh": "...",
+          "access": "...",
+          "expires_at_ms": 4102444800000
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-4o-mini": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
-```toml
-[providers.atomgit]
-defaults.adapter = "openai"
-defaults.model = "Kimi-K2-Instruct"
-
-[providers.atomgit.auth]
-mode = "credential"
-issuer = "atomgit"
-credential = { type = "oauth", issuer = "atomgit", refresh = "...", access = "...", expires_at_ms = 4102444800000, account_id = "atomgit-user" }
-
-[providers.atomgit.adapters.openai]
-enabled = true
-
-[providers.atomgit.adapters.openai.models."Kimi-K2-Instruct"]
-enabled = true
+```json
+{
+  "providers": {
+    "atomgit": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "Kimi-K2-Instruct"
+      },
+      "auth": {
+        "mode": "credential",
+        "issuer": "atomgit",
+        "credential": {
+          "type": "oauth",
+          "issuer": "atomgit",
+          "refresh": "...",
+          "access": "...",
+          "expires_at_ms": 4102444800000,
+          "account_id": "atomgit-user"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "Kimi-K2-Instruct": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
-```toml
-[providers.shared]
-defaults.adapter = "openai"
-defaults.model = "gpt-4.1-mini"
-
-[providers.shared.auth]
-mode = "api"
-base_url = "https://gateway.example.com"
-api_key_env = "SHARED_GATEWAY_API_KEY"
-
-[providers.shared.auth.protocol_paths]
-openai = "/v1"
-anthropic = "/v1"
-gemini = "/v1beta"
-
-[providers.shared.adapters.openai]
-enabled = true
-
-[providers.shared.adapters.openai.models."gpt-4.1-mini"]
-enabled = true
-
-[providers.shared.adapters.anthropic]
-enabled = true
-
-[providers.shared.adapters.anthropic.models."claude-sonnet-4"]
-enabled = true
+```json
+{
+  "providers": {
+    "shared": {
+      "defaults": {
+        "adapter": "openai",
+        "model": "gpt-4.1-mini"
+      },
+      "auth": {
+        "mode": "api",
+        "base_url": "https://gateway.example.com",
+        "api_key_env": "SHARED_GATEWAY_API_KEY",
+        "protocol_paths": {
+          "openai": "/v1",
+          "anthropic": "/v1",
+          "gemini": "/v1beta"
+        }
+      },
+      "adapters": {
+        "openai": {
+          "enabled": true,
+          "models": {
+            "gpt-4.1-mini": {
+              "enabled": true
+            }
+          }
+        },
+        "anthropic": {
+          "enabled": true,
+          "models": {
+            "claude-sonnet-4": {
+              "enabled": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 当一个 auth 网关同时提供多种协议时，`base_url` 表示共享根路径，`auth.protocol_paths` 显式指定每个 adapter 的协议前缀。默认值是：
@@ -663,42 +811,111 @@ canonical 路径是 `providers.<id>.adapters.<adapter>.models."<real-model-id>"`
 
 示例：
 
-```toml
-[providers.openai.adapters.openai.models."gpt-4.1-mini"]
-lifecycle = "active"
-context_window_tokens = 200000
-max_output_tokens = 16384
-description = "Fast general-purpose model."
-input = { supported = ["text", "image"], unsupported = ["audio"] }
-features = { supported = ["tool_calling", "streaming"], unsupported = ["temperature"] }
-
-[providers.openai.adapters.openai.models."gpt-4.1-mini".thinking_modes.light]
-display_name = "Light"
-thinking = { type = "effort", effort = "low" }
-
-[providers.openai.adapters.openai.models."gpt-4.1-mini".thinking_modes.deep]
-display_name = "Deep"
-thinking = { type = "effort", effort = "high" }
-
-[providers.openai.adapters.openai.models."gpt-4.1-mini".speed_modes.fast]
-display_name = "Fast"
-request_override = { body_patch = { service_tier = "priority" } }
+```json
+{
+  "providers": {
+    "openai": {
+      "adapters": {
+        "openai": {
+          "models": {
+            "gpt-4.1-mini": {
+              "lifecycle": "active",
+              "context_window_tokens": 200000,
+              "max_output_tokens": 16384,
+              "description": "Fast general-purpose model.",
+              "input": {
+                "supported": [
+                  "text",
+                  "image"
+                ],
+                "unsupported": [
+                  "audio"
+                ]
+              },
+              "features": {
+                "supported": [
+                  "tool_calling",
+                  "streaming"
+                ],
+                "unsupported": [
+                  "temperature"
+                ]
+              },
+              "thinking_modes": {
+                "light": {
+                  "display_name": "Light",
+                  "thinking": {
+                    "type": "effort",
+                    "effort": "low"
+                  }
+                },
+                "deep": {
+                  "display_name": "Deep",
+                  "thinking": {
+                    "type": "effort",
+                    "effort": "high"
+                  }
+                }
+              },
+              "speed_modes": {
+                "fast": {
+                  "display_name": "Fast",
+                  "request_override": {
+                    "body_patch": {
+                      "service_tier": "priority"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 模型节点本身建议只放会影响行为或能力元数据的字段；真正参与路由的是 provider、adapter、model 三级 id。`display_name` 不再作为 model 节点配置字段；mode 的 `display_name` 只用于展示。
 
 `input` 和 `features` 都支持 compact array：
 
-```toml
-input = ["text", "image"]
-features = ["tool_calling", "streaming"]
+```json
+{
+  "input": [
+    "text",
+    "image"
+  ],
+  "features": [
+    "tool_calling",
+    "streaming"
+  ]
+}
 ```
 
 也可以显式区分 `supported` 和 `unsupported`：
 
-```toml
-input = { supported = ["text", "document"], unsupported = ["audio", "video"] }
-features = { supported = ["reasoning"], unsupported = ["temperature"] }
+```json
+{
+  "input": {
+    "supported": [
+      "text",
+      "document"
+    ],
+    "unsupported": [
+      "audio",
+      "video"
+    ]
+  },
+  "features": {
+    "supported": [
+      "reasoning"
+    ],
+    "unsupported": [
+      "temperature"
+    ]
+  }
+}
 ```
 
 `supported` 和 `unsupported` 都可以只写其中一个。同一个值不能同时出现在两边。
@@ -744,10 +961,26 @@ deprecated
 
 `thinking` 写法：
 
-```toml
-thinking = { type = "budget", budget_tokens = 4096 }
-thinking = { type = "effort", effort = "medium" }
-thinking = { type = "disabled" }
+```json
+[
+  {
+    "thinking": {
+      "type": "budget",
+      "budget_tokens": 4096
+    }
+  },
+  {
+    "thinking": {
+      "type": "effort",
+      "effort": "medium"
+    }
+  },
+  {
+    "thinking": {
+      "type": "disabled"
+    }
+  }
+]
 ```
 
 `effort` 可选：
@@ -773,29 +1006,59 @@ max
 
 示例：
 
-```toml
-[providers.openai.adapters.openai.models."gpt-4.1-mini".speed_modes.fast]
-display_name = "Fast"
-description = "Prefer priority service tier"
-request_override = { body_patch = { service_tier = "priority" } }
-
-[providers.openai.adapters.openai.models."gpt-4.1-mini".speed_modes.fast.adapter_overrides.openai]
-headers = { openai-beta = "fast-mode-2026-02-01" }
+```json
+{
+  "providers": {
+    "openai": {
+      "adapters": {
+        "openai": {
+          "models": {
+            "gpt-4.1-mini": {
+              "speed_modes": {
+                "fast": {
+                  "display_name": "Fast",
+                  "description": "Prefer priority service tier",
+                  "request_override": {
+                    "body_patch": {
+                      "service_tier": "priority"
+                    }
+                  },
+                  "adapter_overrides": {
+                    "openai": {
+                      "headers": {
+                        "openai-beta": "fast-mode-2026-02-01"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 ## Agents
 
 Agent 可通过 JSON 配置，也可通过 `.agena/agents/*.md` 和 `~/.agena/agents/*.md` 发现。
 
-TOML 示例：
+JSON 示例：
 
-```toml
-[agents.plan]
-description = "Read-only planning agent"
-prompt = "You are a planning agent..."
-
-[agents.plan.defaults]
-model = "anthropic/claude-sonnet-4-6"
+```json
+{
+  "agents": {
+    "plan": {
+      "description": "Read-only planning agent",
+      "prompt": "You are a planning agent...",
+      "defaults": {
+        "model": "anthropic/claude-sonnet-4-6"
+      }
+    }
+  }
+}
 ```
 
 Markdown frontmatter 示例：
@@ -817,7 +1080,7 @@ permission:
 You are a planning agent...
 ```
 
-TOML agent 的 `prompt` 字段是 system prompt；Markdown agent 的正文是 system prompt。Markdown frontmatter 支持的字段和 TOML agent 基本一致，但不使用 `prompt` 和 `disabled`。
+JSON agent 的 `prompt` 字段是 system prompt；Markdown agent 的正文是 system prompt。Markdown frontmatter 支持的字段和 JSON agent 基本一致，但不使用 `prompt` 和 `disabled`。
 
 字段：
 
@@ -839,49 +1102,93 @@ deny
 
 顶层权限 schema：
 
-```toml
-[permission.path]
-workspace = { read = "allow", write = "ask" }
-external = { read = "ask", write = "ask" }
-
-[permission.network]
-internet = "ask"
-private = "deny"
-loopback = "deny"
-
-[permission.tools.tags]
-filesystem_read = "allow"
-filesystem_write = "ask"
-network = "ask"
-shell = "ask"
+```json
+{
+  "permission": {
+    "path": {
+      "workspace": {
+        "read": "allow",
+        "write": "ask"
+      },
+      "external": {
+        "read": "ask",
+        "write": "ask"
+      }
+    },
+    "network": {
+      "internet": "ask",
+      "private": "deny",
+      "loopback": "deny"
+    },
+    "tools": {
+      "tags": {
+        "filesystem_read": "allow",
+        "filesystem_write": "ask",
+        "network": "ask",
+        "shell": "ask"
+      }
+    }
+  }
+}
 ```
 
 Agent 也可以有自己的权限：
 
-```toml
-[agents.plan.permission.path]
-workspace = { read = "allow", write = "deny" }
-external = { read = "ask", write = "ask" }
-
-[agents.plan.permission.tools.names]
-plan = "allow"
-todo = "allow"
+```json
+{
+  "agents": {
+    "plan": {
+      "permission": {
+        "path": {
+          "workspace": {
+            "read": "allow",
+            "write": "deny"
+          },
+          "external": {
+            "read": "ask",
+            "write": "ask"
+          }
+        },
+        "tools": {
+          "names": {
+            "plan": "allow",
+            "todo": "allow"
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 Agent permission 会在顶层 permission 之上继续合并，不支持单独的 `inherit` 字段。
 
 ### Path permission
 
-```toml
-[permission.path]
-workspace = { read = "allow", write = "ask" }
-external = { read = "ask", write = "deny" }
-
-[permission.path.rules]
-"<cwd>/.env*" = { read = "ask", write = "deny" }
-"<cwd>/secrets/**" = "deny"
-"/tmp/allowed/**" = "read_write"
-"<home>/Downloads/*.txt" = "read"
+```json
+{
+  "permission": {
+    "path": {
+      "workspace": {
+        "read": "allow",
+        "write": "ask"
+      },
+      "external": {
+        "read": "ask",
+        "write": "deny"
+      },
+      "rules": {
+        "<cwd>/.env*": {
+          "read": "ask",
+          "write": "deny"
+        },
+        "<cwd>/secrets/**": "deny",
+        "/tmp/allowed/**": "read_write",
+        "<home>/Downloads/*.txt": "read"
+      }
+    }
+  }
+}
 ```
 
 `workspace`、`external` 和每条 path rule 都可以写 `{ read, write }`，其中 `read`、`write` 可以只写其中一个；path rule 还支持 shorthand：
@@ -916,21 +1223,26 @@ Path key 可以写 workspace 相对路径、绝对路径、alias 路径和 glob�
 
 ### Network permission
 
-```toml
-[permission.network]
-internet = "ask"
-private = "deny"
-loopback = "deny"
-
-[permission.network.rules]
-"github.com:443" = "allow"
-"api.github.com" = "allow"
-"*.corp.local" = "ask"
-"*.corp.local:8443" = "allow"
-"10.0.0.0/8" = "deny"
-"172.16.0.0/12:*" = "ask"
-"fd00::/8" = "deny"
-"[::1]:3000" = "ask"
+```json
+{
+  "permission": {
+    "network": {
+      "internet": "ask",
+      "private": "deny",
+      "loopback": "deny",
+      "rules": {
+        "github.com:443": "allow",
+        "api.github.com": "allow",
+        "*.corp.local": "ask",
+        "*.corp.local:8443": "allow",
+        "10.0.0.0/8": "deny",
+        "172.16.0.0/12:*": "ask",
+        "fd00::/8": "deny",
+        "[::1]:3000": "ask"
+      }
+    }
+  }
+}
 ```
 
 Network rule key 可以写成：
@@ -967,27 +1279,33 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 
 ### Tool permission
 
-```toml
-[permission.tools.tags]
-filesystem_read = "allow"
-filesystem_write = "ask"
-network = "ask"
-
-[permission.tools.names]
-shell = "ask"
-fs = "ask"
-"my-plugin.echo" = "ask"
-
-[permission.tools.rules]
-"my-plugin.echo" = "ask"
-
-[permission.tools.rules."my-plugin.echo"]
-"*" = "ask"
-
-[permission.tools.rules.shell]
-"git status" = "allow"
-"git push *" = "deny"
-"*" = "ask"
+```json
+{
+  "permission": {
+    "tools": {
+      "tags": {
+        "filesystem_read": "allow",
+        "filesystem_write": "ask",
+        "network": "ask"
+      },
+      "names": {
+        "shell": "ask",
+        "fs": "ask",
+        "my-plugin.echo": "ask"
+      },
+      "rules": {
+        "my-plugin.echo": {
+          "*": "ask"
+        },
+        "shell": {
+          "git status": "allow",
+          "git push *": "deny",
+          "*": "ask"
+        }
+      }
+    }
+  }
+}
 ```
 
 `tags` 用于 tool 没有精确规则时的默认策略。Tool 由 plugin manifest 声明自己的 tags，常见 tags 如 `filesystem_read`、`filesystem_write`、`network`、`internet`、`task`、`shell`。`names` 按 tool 名匹配；runtime-provided and user-configured plugin tools 使用同一个名字表。
@@ -996,15 +1314,29 @@ fs = "ask"
 
 ## Memory
 
-```toml
-[memory.project_instructions]
-enabled = true
-include_global = true
-
-[memory.retrieval]
-enabled = true
-limit = 3
-min_query_chars = 8
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.memory": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "project_instructions": {
+            "enabled": true,
+            "include_global": true
+          },
+          "retrieval": {
+            "enabled": true,
+            "limit": 3,
+            "min_query_chars": 8
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 `memory` 现在是“文件持久化 + 进程内 Tantivy 检索 + 会话前自动回忆”的组合，不再只是把 `MEMORY.md` 整体注入 prompt。
@@ -1017,16 +1349,13 @@ min_query_chars = 8
 - `retrieval.limit`: 自动回忆最多注入多少条命中。
 - `retrieval.min_query_chars`: 用户消息短于这个长度时跳过自动回忆。
 
-`memory` 顶层配置会驱动 `agena.memory` 插件；模型可见 tool 名是 `memory`，支持 `search`、`get`、`list`、`write`、`delete` 五个 action。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
+`plugins.list."agena.memory".config` 会驱动 `agena.memory` 插件；模型可见 tool 名是 `memory`，支持 `search`、`get`、`list`、`write`、`delete` 五个 action。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
 
 ## Workflow Tool Search
 
 `agena.workflow/tools` 的 `search` action 现在使用进程内 Tantivy 索引。每次搜索都会基于当前已注册的 tool catalog 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。
 
-兼容性说明：
-
-- 旧的 `plugins.list."agena.workflow".options.tool_search` 配置目前仍可保留，用于兼容已有配置文件。
-- 当前版本不会再读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
+旧的 external search backend 配置已经移除。当前版本不会读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
 
 ## Removed: `agena.hooks`
 
@@ -1041,62 +1370,102 @@ min_query_chars = 8
 
 Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力、LSP、skills、memory 等都会通过 plugin 或 plugin tool 接入 runtime。完整体系说明见 [Plugin 体系](plugin.md)。
 
-```toml
-[plugins]
-enabled = true
-timeouts = { init = "10s", tool_invoke = "60s", permission_ask = "10s", fast = "500ms" }
-
-[plugins.default_quota]
-rate_per_sec = 20
-burst = 40
-max_concurrent = 8
-
-[plugins.quotas.echo]
-rate_per_sec = 5
-burst = 10
-max_concurrent = 2
-
-[plugins.trusted_keys]
-acme = "0123456789abcdef..."
-
-[plugins.list.echo]
-kind = "stdio"
-command = "node"
-args = ["./plugins/echo/index.js"]
-env = { LOG_LEVEL = "info" }
-cwd = "."
-sha256 = "..."
-restart = { policy = "on-failure", min_backoff = "1s", max_backoff = "30s", max_retries = 5 }
-options = { uppercase = true }
-timeouts = { tool_invoke = "30s" }
+```json
+{
+  "plugins": {
+    "host": {
+      "timeouts": {
+        "init": "10s",
+        "tool_invoke": "60s",
+        "permission_ask": "10s",
+        "fast": "500ms"
+      },
+      "default_quota": {
+        "rate_per_sec": 20,
+        "burst": 40,
+        "max_concurrent": 8
+      },
+      "quotas": {
+        "echo": {
+          "rate_per_sec": 5,
+          "burst": 10,
+          "max_concurrent": 2
+        }
+      },
+      "trusted_keys": {
+        "acme": "0123456789abcdef..."
+      }
+    },
+    "list": {
+      "echo": {
+        "package": {
+          "kind": "stdio",
+          "command": "node",
+          "args": [
+            "./plugins/echo/index.js"
+          ],
+          "env": {
+            "LOG_LEVEL": "info"
+          },
+          "cwd": ".",
+          "sha256": "...",
+          "restart": {
+            "policy": "on-failure",
+            "min_backoff": "1s",
+            "max_backoff": "30s",
+            "max_retries": 5
+          }
+        },
+        "config": {
+          "uppercase": true
+        },
+        "timeouts": {
+          "tool_invoke": "30s"
+        }
+      }
+    }
+  }
+}
 ```
 
-顶层 `[plugins]` 字段：
+顶层 `plugins` 字段：
 
-- `enabled`
-- `timeouts`
+- `host`
+- `policy`
 - `list`
+
+`plugins.host` 字段：
+
+- `timeouts`
 - `default_quota`
 - `quotas`
 - `trusted_keys`
-- `tool_presentation`: 控制模型请求里的 tool 说明是完整发送，还是只发送短说明并引导调用 `tools help`。
+
+`plugins.policy.tool_presentation` 控制模型请求里的 tool 说明是完整发送，还是只发送短说明并引导调用 `tools help`。
 
 Tool presentation 支持全局、按 plugin、按 tool 覆盖。模式值：
 
 - `detailed`: 使用 tool manifest / `tool.definition` hook 给出的完整 `description`。
 - `help`: 只发送短说明和 help 引导，完整用法通过 `tools` tool 的 `help` action 读取。
 
-```toml
-[plugins.tool_presentation]
-default_mode = "help"
-
-[plugins.tool_presentation.plugins]
-"agena.skills" = "help"
-"agena.mcp" = "help"
-
-[plugins.tool_presentation.tools]
-fs = "detailed"
-"agena.workflow/tools" = "detailed"
+```json
+{
+  "plugins": {
+    "policy": {
+      "tool_presentation": {
+        "default_mode": "help",
+        "plugins": {
+          "agena.skills": "help",
+          "agena.mcp": "help"
+        },
+        "tools": {
+          "fs": "detailed",
+          "agena.workflow/tools": "detailed"
+        }
+      }
+    }
+  }
+}
 ```
 
 按 tool 覆盖可以使用模型可见名（如 `fs`）、`plugin_id/tool_name`（如 `agena.workflow/tools`），或无冲突的原始 tool 名。具体 tool 覆盖优先于 plugin 覆盖；plugin 覆盖优先于 manifest 的 `description_mode`；最后才使用 `default_mode`。
@@ -1111,46 +1480,94 @@ Plugin transport kind：
 
 每种 transport 的字段：
 
-```toml
-[plugins.list."agena.workflow"]
-kind = "static"
-timeouts = { init = "5s" }
-
-[plugins.list.native]
-kind = "cdylib"
-path = "./plugins/native/libnative.so"
-sha256 = "..."
-signature = { key_id = "acme", signature = "..." }
-options = { mode = "strict" }
-timeouts = { tool_invoke = "20s" }
-
-[plugins.list.worker]
-kind = "stdio"
-command = "node"
-args = ["./plugins/worker/index.js"]
-env = { LOG_LEVEL = "info" }
-cwd = "."
-sha256 = "..."
-restart = { policy = "always", min_backoff = "1s", max_backoff = "30s", max_retries = 5 }
-options = { project = "rust" }
-timeouts = { tool_invoke = "45s" }
-
-[plugins.list.policy]
-kind = "http"
-url = "https://policy.example.com/agena/rpc"
-auth = { kind = "bearer", token_env = "AGENA_POLICY_TOKEN" }
-options = { org_id = "acme" }
-timeouts = { fast = "2s" }
-
-[plugins.list.sandboxed]
-kind = "wasm"
-path = "./plugins/sandboxed/plugin.wasm"
-sha256 = "..."
-options = { }
-timeouts = { init = "20s" }
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.workflow": {
+        "package": {
+          "kind": "static"
+        },
+        "timeouts": {
+          "init": "5s"
+        }
+      },
+      "native": {
+        "package": {
+          "kind": "cdylib",
+          "path": "./plugins/native/libnative.so",
+          "sha256": "...",
+          "signature": {
+            "key_id": "acme",
+            "signature": "..."
+          }
+        },
+        "config": {
+          "mode": "strict"
+        },
+        "timeouts": {
+          "tool_invoke": "20s"
+        }
+      },
+      "worker": {
+        "package": {
+          "kind": "stdio",
+          "command": "node",
+          "args": [
+            "./plugins/worker/index.js"
+          ],
+          "env": {
+            "LOG_LEVEL": "info"
+          },
+          "cwd": ".",
+          "sha256": "...",
+          "restart": {
+            "policy": "always",
+            "min_backoff": "1s",
+            "max_backoff": "30s",
+            "max_retries": 5
+          }
+        },
+        "config": {
+          "project": "rust"
+        },
+        "timeouts": {
+          "tool_invoke": "45s"
+        }
+      },
+      "policy": {
+        "package": {
+          "kind": "http",
+          "url": "https://policy.example.com/agena/rpc",
+          "auth": {
+            "kind": "bearer",
+            "token_env": "AGENA_POLICY_TOKEN"
+          }
+        },
+        "config": {
+          "org_id": "acme"
+        },
+        "timeouts": {
+          "fast": "2s"
+        }
+      },
+      "sandboxed": {
+        "package": {
+          "kind": "wasm",
+          "path": "./plugins/sandboxed/plugin.wasm",
+          "sha256": "..."
+        },
+        "config": {},
+        "timeouts": {
+          "init": "20s"
+        }
+      }
+    }
+  }
+}
 ```
 
-`options` 是传给 plugin 的自由 JSON 配置；runtime-provided static plugin 也通过 `options` 接收自己的配置。
+`config` 是传给 plugin 的自由 JSON 配置；runtime-provided static plugin 也通过 `config` 接收自己的配置。
 
 Timeout 字段：
 
@@ -1172,20 +1589,29 @@ m
 h
 ```
 
-Timeout 值在 TOML 中写字符串。不写单位时按秒解析，例如 `"30"` 等价于 `"30s"`。
+Timeout 值在 JSON 中写字符串。不写单位时按秒解析，例如 `"30"` 等价于 `"30s"`。
 
 Quota 字段：
 
-```toml
-[plugins.default_quota]
-rate_per_sec = 20
-burst = 40
-max_concurrent = 8
-
-[plugins.quotas."cloud-policy"]
-rate_per_sec = 5
-burst = 10
-max_concurrent = 2
+```json
+{
+  "plugins": {
+    "host": {
+      "default_quota": {
+        "rate_per_sec": 20,
+        "burst": 40,
+        "max_concurrent": 8
+      },
+      "quotas": {
+        "cloud-policy": {
+          "rate_per_sec": 5,
+          "burst": 10,
+          "max_concurrent": 2
+        }
+      }
+    }
+  }
+}
 ```
 
 `rate_per_sec = 0` 表示不限制速率；`burst = 0` 表示使用 `rate_per_sec`；`rate_per_sec` 和 `burst` 都为 0 时关闭 token bucket。`max_concurrent = 0` 表示不限制并发。
@@ -1200,12 +1626,14 @@ Stdio restart policy：
 
 HTTP plugin auth 支持：
 
-```toml
-auth = { kind = "none" }
-auth = { kind = "bearer", token = "..." }
-auth = { kind = "bearer", token_env = "PLUGIN_TOKEN" }
-auth = { kind = "basic", username = "user", password = "..." }
-auth = { kind = "basic", username = "user", password_env = "PLUGIN_PASSWORD" }
+```json
+[
+  { "auth": { "kind": "none" } },
+  { "auth": { "kind": "bearer", "token": "..." } },
+  { "auth": { "kind": "bearer", "token_env": "PLUGIN_TOKEN" } },
+  { "auth": { "kind": "basic", "username": "user", "password": "..." } },
+  { "auth": { "kind": "basic", "username": "user", "password_env": "PLUGIN_PASSWORD" } }
+]
 ```
 
 Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell、web、workflow、skills、LSP、cron、memory、MCP、settings 等。它们和用户配置的 plugin 一样进入 plugin host 与 tool registry。
@@ -1214,27 +1642,66 @@ Runtime-provided static plugins 由 runtime 注册，包括文件系统、shell�
 
 ## MCP
 
-MCP server 直接配置在顶层 `mcp`。Runtime 会把配置后的 MCP servers 通过 `agena.mcp` static plugin 暴露成 plugin tools，并统一进入 plugin host 和 tool registry。
+MCP server 配置位于 `plugins.list."agena.mcp".config`。Runtime 会把配置后的 MCP servers 通过 `agena.mcp` static plugin 暴露成 plugin tools，并统一进入 plugin host 和 tool registry。
 
 Stdio:
 
-```toml
-[mcp.servers.filesystem]
-transport = "stdio"
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "."]
-env = { }
-cwd = "."
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.mcp": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "servers": {
+            "filesystem": {
+              "transport": "stdio",
+              "command": "npx",
+              "args": [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "."
+              ],
+              "env": {},
+              "cwd": "."
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 HTTP:
 
-```toml
-[mcp.servers.remote]
-transport = "http"
-url = "https://mcp.example.com"
-headers = { }
-auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.mcp": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "servers": {
+            "remote": {
+              "transport": "http",
+              "url": "https://mcp.example.com",
+              "headers": {},
+              "auth": {
+                "kind": "bearer_from_env",
+                "env": "MCP_TOKEN"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 MCP server transport：
@@ -1265,27 +1732,49 @@ HTTP transport 固定使用 streamable HTTP，不再支持 `mode` 字段，也�
 
 HTTP auth:
 
-```toml
-auth = { kind = "bearer", token = "..." }
-auth = { kind = "bearer_from_env", env = "MCP_TOKEN" }
-auth = { kind = "bearer_from_store" }
-auth = { kind = "custom", headers = { "X-Token" = "..." } }
+```json
+[
+  { "auth": { "kind": "bearer", "token": "..." } },
+  { "auth": { "kind": "bearer_from_env", "env": "MCP_TOKEN" } },
+  { "auth": { "kind": "bearer_from_store" } },
+  { "auth": { "kind": "custom", "headers": { "X-Token": "..." } } }
+]
 ```
 
 配置了 MCP server 时，runtime 会构建 `McpConnectionManager`，并注册 MCP static plugin。
 
 ## LSP
 
-LSP server 直接配置在顶层 `lsp`：
+LSP server 配置位于 `plugins.list."agena.lsp".config`：
 
-```toml
-[lsp.servers.rust]
-command = "rust-analyzer"
-args = []
-env = {}
-file_extensions = ["rs"]
-root_markers = ["Cargo.toml"]
-initialization_options = {}
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.lsp": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "servers": {
+            "rust": {
+              "command": "rust-analyzer",
+              "args": [],
+              "env": {},
+              "file_extensions": [
+                "rs"
+              ],
+              "root_markers": [
+                "Cargo.toml"
+              ],
+              "initialization_options": {}
+            }
+          }
+        }
+      }
+    }
+  }
+}
 ```
 
 LSP 字段：
@@ -1299,44 +1788,54 @@ root_markers
 initialization_options
 ```
 
-`file_extensions` 不带前导 `.`；写空数组表示该 server 匹配所有文件。`root_markers` 是用于识别项目根目录的文件名列表。`initialization_options` 是传给 language server 的 JSON/TOML object。
+`file_extensions` 不带前导 `.`；写空数组表示该 server 匹配所有文件。`root_markers` 是用于识别项目根目录的文件名列表。`initialization_options` 是传给 language server 的 JSON object。
 
 LSP registry 是 lazy-spawn 的。相关 tool 首次触及匹配文件时才会启动对应 server。
 
 ## Web
 
-```toml
-[web]
-fetch_enabled = true
-default_max_pages = 10
-max_pages_limit = 100
-default_max_depth = 1
-max_depth_limit = 4
-default_same_host_only = true
-request_delay_ms = 400
-fetch_timeout_secs = 30
-max_body_bytes = 5242880
-respect_robots_txt = true
-document_cache_ttl_secs = 86400
-fetch_cache_ttl_secs = 900
-fetch_cache_capacity = 128
-store_max_documents = 200
-store_max_bytes = 104857600
-default_chunk_chars = 1800
-near_duplicate_hamming_distance = 3
-search_default_limit = 5
-search_max_limit = 20
-list_default_limit = 20
-list_max_limit = 100
-browser_enabled = false
-# browser_executable_path = "/usr/bin/google-chrome"
-browser_wait_for_network_idle = true
-browser_wait_timeout_secs = 10
-# browser_wait_for_selector = "main"
-browser_wait_for_delay_ms = 0
+```json
+{
+  "plugins": {
+    "list": {
+      "agena.web": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "fetch_enabled": true,
+          "default_max_pages": 10,
+          "max_pages_limit": 100,
+          "default_max_depth": 1,
+          "max_depth_limit": 4,
+          "default_same_host_only": true,
+          "request_delay_ms": 400,
+          "fetch_timeout_secs": 30,
+          "max_body_bytes": 5242880,
+          "respect_robots_txt": true,
+          "document_cache_ttl_secs": 86400,
+          "fetch_cache_ttl_secs": 900,
+          "fetch_cache_capacity": 128,
+          "store_max_documents": 200,
+          "store_max_bytes": 104857600,
+          "default_chunk_chars": 1800,
+          "near_duplicate_hamming_distance": 3,
+          "search_default_limit": 5,
+          "search_max_limit": 20,
+          "list_default_limit": 20,
+          "list_max_limit": 100,
+          "browser_enabled": false,
+          "browser_wait_for_network_idle": true,
+          "browser_wait_timeout_secs": 10,
+          "browser_wait_for_delay_ms": 0
+        }
+      }
+    }
+  }
+}
 ```
 
-`[web]` 控制内建 `agena.web` plugin 的默认行为。这个 plugin 是现在推荐的本地网页入口：
+`plugins.list."agena.web".config` 控制内建 `agena.web` plugin 的默认行为。这个 plugin 是现在推荐的本地网页入口：
 
 - `fetch`: 单页抓取，带进程内 TTL cache，但不会写入本地索引。
 - `crawl`: 多页抓取、用 Spider 抓取页面、用 CRW extract 抽取 Markdown、落盘、维护 metadata、去重，并重建本地 Tantivy 索引。
@@ -1377,7 +1876,7 @@ browser_wait_for_delay_ms
 
 说明：
 
-- `web` 的 `crawl` 和 `fetch` action 都使用 Spider 抓取；旧的 `web_fetch` / `web_search` typed payload 会兼容映射到 `web` 的 `fetch` / `search` action。
+- `web` 的 `crawl` 和 `fetch` action 都使用 Spider 抓取。
 - `respect_robots_txt` 打开后 Spider 会按 robots.txt 约束抓取。
 - `document_cache_ttl_secs` 控制已保存文档在后续 crawl 中被直接复用的时长。
 - `fetch_cache_ttl_secs` / `fetch_cache_capacity` 控制进程内 HTTP fetch cache。
@@ -1391,9 +1890,7 @@ browser_wait_for_delay_ms
 
 如果你只是想临时拉一页内容，用 `web` 的 `fetch` action；如果你需要站内多页抓取、后续查询、或者想避免再接 Firecrawl 这类远程服务，用 `web` 的 `crawl` / `query` action。
 
-`[crawl]` 作为旧配置表名仍可被读取，但只作为 `[web]` 的兼容别名；新配置应写 `[web]`。旧的 `plugins.list."agena.crawl"` 不再是有效 plugin id，请改成 `plugins.list."agena.web"`。
-
-如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `[web]`，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
+如果要启用 OpenAI / Anthropic / Gemini 这类 provider-native remote tools，不要写在 `agena.web` plugin config，而是写在 `providers.<id>.adapters.<adapter>.models.<model>.native_tools.*`。
 
 ## Studio 服务配置
 

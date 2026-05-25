@@ -7,7 +7,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::config::MemoryConfig;
 use crate::memory::{
     MemoryEntry, MemoryError, MemoryIndex, MemorySearchDocument, MemoryStore, MemoryType, NewMemory,
 };
@@ -27,8 +26,49 @@ pub const MEMORY_PLUGIN_ID: &str = "agena.memory";
 const DEFAULT_MEMORY_SEARCH_LIMIT: usize = 5;
 const MAX_MEMORY_SEARCH_LIMIT: usize = 20;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemoryConfig {
+    pub project_instructions: ProjectInstructionsConfig,
+    pub retrieval: MemoryRetrievalConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProjectInstructionsConfig {
+    pub enabled: bool,
+    pub include_global: bool,
+}
+
+impl Default for ProjectInstructionsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            include_global: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct MemoryRetrievalConfig {
+    pub enabled: bool,
+    pub limit: u32,
+    pub min_query_chars: u32,
+}
+
+impl Default for MemoryRetrievalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            limit: 3,
+            min_query_chars: 8,
+        }
+    }
+}
+
 pub struct MemoryPlugin {
-    config: MemoryConfig,
+    config: OnceLock<MemoryConfig>,
     workspace_root: OnceLock<PathBuf>,
     sync_lock: Mutex<()>,
 }
@@ -119,12 +159,18 @@ struct MemoryRecordOutput {
 }
 
 impl MemoryPlugin {
-    pub fn new(config: MemoryConfig) -> Self {
+    pub fn new() -> Self {
         Self {
-            config,
+            config: OnceLock::new(),
             workspace_root: OnceLock::new(),
             sync_lock: Mutex::new(()),
         }
+    }
+
+    fn config(&self) -> SdkResult<&MemoryConfig> {
+        self.config
+            .get()
+            .ok_or_else(|| PluginError::new("memory plugin invoked before init"))
     }
 
     fn workspace_root(&self) -> SdkResult<&Path> {
@@ -316,20 +362,26 @@ impl MemoryPlugin {
         )
     }
 
-    fn memory_retrieval_query(&self, input: &ChatMessagesTransformInput) -> Option<String> {
+    fn memory_retrieval_query(
+        &self,
+        input: &ChatMessagesTransformInput,
+    ) -> SdkResult<Option<String>> {
         let latest_user = input
             .messages
             .iter()
             .rev()
             .find(|message| message.role == "user")
-            .and_then(ChatMessage::text)?
-            .trim()
-            .to_string();
+            .and_then(ChatMessage::text)
+            .map(str::to_string);
+        let Some(latest_user) = latest_user else {
+            return Ok(None);
+        };
+        let latest_user = latest_user.trim().to_string();
         if should_skip_memory_retrieval(latest_user.as_str()) {
-            return None;
+            return Ok(None);
         }
-        let min_chars = self.config.retrieval.min_query_chars as usize;
-        (latest_user.len() >= min_chars).then_some(latest_user)
+        let min_chars = self.config()?.retrieval.min_query_chars as usize;
+        Ok((latest_user.len() >= min_chars).then_some(latest_user))
     }
 }
 
@@ -344,11 +396,16 @@ impl Plugin for MemoryPlugin {
                     | HookSubscription::CHAT_SYSTEM_TRANSFORM
                     | HookSubscription::CHAT_MESSAGES_TRANSFORM,
             )
+            .config_schema(crate::entry::definition::json_schema_for::<MemoryConfig>())
             .tool(memory_decl())
             .build()
     }
 
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+        let config = parse_memory_config(ctx.config)?;
+        self.config
+            .set(config)
+            .map_err(|_| PluginError::new("memory plugin initialized more than once"))?;
         let _ = self.workspace_root.set(ctx.workspace_root);
         Ok(InitOutcome::ack(self.manifest()))
     }
@@ -405,11 +462,12 @@ impl Plugin for MemoryPlugin {
         _input: ChatSystemTransformInput,
     ) -> SdkResult<Option<ChatSystemTransformPatch>> {
         let workspace_root = self.workspace_root()?;
-        if !self.config.project_instructions.enabled {
+        let config = self.config()?;
+        if !config.project_instructions.enabled {
             return Ok(None);
         }
         let mut layers = Vec::new();
-        if self.config.project_instructions.include_global
+        if config.project_instructions.include_global
             && let Some(global) = super::discover_global()
         {
             layers.push(global);
@@ -428,14 +486,14 @@ impl Plugin for MemoryPlugin {
         &self,
         input: ChatMessagesTransformInput,
     ) -> SdkResult<Option<ChatMessagesTransformPatch>> {
-        if !self.config.retrieval.enabled {
+        let config = self.config()?;
+        if !config.retrieval.enabled {
             return Ok(None);
         }
-        let Some(query) = self.memory_retrieval_query(&input) else {
+        let Some(query) = self.memory_retrieval_query(&input)? else {
             return Ok(None);
         };
-        let limit = self
-            .config
+        let limit = config
             .retrieval
             .limit
             .clamp(1, MAX_MEMORY_SEARCH_LIMIT as u32) as usize;
@@ -470,6 +528,25 @@ fn memory_decl() -> PluginToolDecl {
 
 fn parse_memory_input(input: serde_json::Value) -> SdkResult<MemoryToolInput> {
     MemoryToolInput::parse_input(input)
+}
+
+fn parse_memory_config(value: serde_json::Value) -> SdkResult<MemoryConfig> {
+    if value.is_null() {
+        return Ok(MemoryConfig::default());
+    }
+    let config = serde_json::from_value::<MemoryConfig>(value)
+        .map_err(|err| PluginError::new(format!("invalid memory plugin config: {err}")))?;
+    if config.retrieval.limit == 0 {
+        return Err(PluginError::new(
+            "memory plugin config `retrieval.limit` must be greater than 0",
+        ));
+    }
+    if config.retrieval.min_query_chars == 0 {
+        return Err(PluginError::new(
+            "memory plugin config `retrieval.min_query_chars` must be greater than 0",
+        ));
+    }
+    Ok(config)
 }
 
 fn memory_error_to_plugin(err: MemoryError) -> PluginError {

@@ -52,7 +52,7 @@ impl Plugin for EchoPlugin {
     }
 
     async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
-        if let Some(b) = ctx.options.get("uppercase").and_then(|v| v.as_bool()) {
+        if let Some(b) = ctx.config.get("uppercase").and_then(|v| v.as_bool()) {
             self.uppercase.store(b, Ordering::Relaxed);
         }
         Ok(InitOutcome::ack(self.manifest()))

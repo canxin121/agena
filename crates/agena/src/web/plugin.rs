@@ -19,7 +19,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::config::WebConfig;
 use crate::plugin::PluginError;
 use crate::plugin::sdk::host_api::{HostClient, HostNetworkPermissionCheckRequest};
 use crate::plugin::sdk::{
@@ -30,13 +29,103 @@ use crate::plugin::sdk::{
 
 pub const WEB_PLUGIN_ID: &str = "agena.web";
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct WebConfig {
+    #[serde(default = "default_web_fetch_enabled")]
+    pub fetch_enabled: bool,
+    pub default_max_pages: u32,
+    pub max_pages_limit: u32,
+    pub default_max_depth: u32,
+    pub max_depth_limit: u32,
+    pub default_same_host_only: bool,
+    pub request_delay_ms: u64,
+    pub fetch_timeout_secs: u64,
+    pub max_body_bytes: u64,
+    pub respect_robots_txt: bool,
+    pub document_cache_ttl_secs: u64,
+    pub fetch_cache_ttl_secs: u64,
+    pub fetch_cache_capacity: u64,
+    pub store_max_documents: u32,
+    pub store_max_bytes: u64,
+    pub default_chunk_chars: u32,
+    pub near_duplicate_hamming_distance: u32,
+    pub search_default_limit: u32,
+    pub search_max_limit: u32,
+    pub list_default_limit: u32,
+    pub list_max_limit: u32,
+    pub browser_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_executable_path: Option<String>,
+    pub browser_wait_for_network_idle: bool,
+    pub browser_wait_timeout_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_wait_for_selector: Option<String>,
+    pub browser_wait_for_delay_ms: u64,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self {
+            fetch_enabled: true,
+            default_max_pages: 10,
+            max_pages_limit: 100,
+            default_max_depth: 1,
+            max_depth_limit: 4,
+            default_same_host_only: true,
+            request_delay_ms: 400,
+            fetch_timeout_secs: 30,
+            max_body_bytes: 5 * 1024 * 1024,
+            respect_robots_txt: true,
+            document_cache_ttl_secs: 24 * 60 * 60,
+            fetch_cache_ttl_secs: 15 * 60,
+            fetch_cache_capacity: 128,
+            store_max_documents: 200,
+            store_max_bytes: 100 * 1024 * 1024,
+            default_chunk_chars: 1800,
+            near_duplicate_hamming_distance: 3,
+            search_default_limit: 5,
+            search_max_limit: 20,
+            list_default_limit: 20,
+            list_max_limit: 100,
+            browser_enabled: false,
+            browser_executable_path: None,
+            browser_wait_for_network_idle: true,
+            browser_wait_timeout_secs: 10,
+            browser_wait_for_selector: None,
+            browser_wait_for_delay_ms: 0,
+        }
+    }
+}
+
+fn default_web_fetch_enabled() -> bool {
+    true
+}
+
 pub struct WebPlugin {
-    config: WebConfig,
+    state: OnceLock<WebPluginState>,
     workspace_root: OnceLock<PathBuf>,
     host: OnceLock<Arc<dyn HostClient>>,
+    sync_lock: Mutex<()>,
+}
+
+struct WebPluginState {
+    config: WebConfig,
     fetch_cache: Cache<String, FetchedPage>,
     host_limiter: DefaultKeyedRateLimiter<String>,
-    sync_lock: Mutex<()>,
+}
+
+impl WebPluginState {
+    fn new(config: WebConfig) -> Self {
+        Self {
+            fetch_cache: Cache::builder()
+                .time_to_live(Duration::from_secs(config.fetch_cache_ttl_secs))
+                .max_capacity(config.fetch_cache_capacity)
+                .build(),
+            host_limiter: build_host_limiter(config.request_delay_ms),
+            config,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, JsonSchema, StaticToolSurface)]
@@ -188,18 +277,23 @@ struct CrawlQueryOutput {
 }
 
 impl WebPlugin {
-    pub fn new(config: WebConfig) -> Self {
+    pub fn new() -> Self {
         Self {
-            fetch_cache: Cache::builder()
-                .time_to_live(Duration::from_secs(config.fetch_cache_ttl_secs))
-                .max_capacity(config.fetch_cache_capacity)
-                .build(),
-            host_limiter: build_host_limiter(config.request_delay_ms),
-            config,
+            state: OnceLock::new(),
             workspace_root: OnceLock::new(),
             host: OnceLock::new(),
             sync_lock: Mutex::new(()),
         }
+    }
+
+    fn state(&self) -> SdkResult<&WebPluginState> {
+        self.state
+            .get()
+            .ok_or_else(|| PluginError::new("web plugin invoked before init"))
+    }
+
+    fn config(&self) -> SdkResult<&WebConfig> {
+        Ok(&self.state()?.config)
     }
 
     fn workspace_root(&self) -> SdkResult<&Path> {
@@ -219,33 +313,33 @@ impl WebPlugin {
         Ok(CrawlStore::for_workspace(self.workspace_root()?))
     }
 
-    fn spider_fetch_options(&self, rendered: bool) -> SpiderFetchOptions {
-        let delay = (self.config.browser_wait_for_delay_ms > 0)
-            .then(|| Duration::from_millis(self.config.browser_wait_for_delay_ms));
-        SpiderFetchOptions {
-            max_body_bytes: self.config.max_body_bytes as usize,
-            timeout: Duration::from_secs(self.config.fetch_timeout_secs),
-            delay_ms: self.config.request_delay_ms,
+    fn spider_fetch_options(&self, rendered: bool) -> SdkResult<SpiderFetchOptions> {
+        let config = self.config()?;
+        let delay = (config.browser_wait_for_delay_ms > 0)
+            .then(|| Duration::from_millis(config.browser_wait_for_delay_ms));
+        Ok(SpiderFetchOptions {
+            max_body_bytes: config.max_body_bytes as usize,
+            timeout: Duration::from_secs(config.fetch_timeout_secs),
+            delay_ms: config.request_delay_ms,
             user_agent: crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string(),
-            respect_robots_txt: self.config.respect_robots_txt,
+            respect_robots_txt: config.respect_robots_txt,
             browser: BrowserRenderOptions {
                 enabled: rendered,
                 local_browser: LocalBrowserOptions {
-                    executable_path: self
-                        .config
+                    executable_path: config
                         .browser_executable_path
                         .as_deref()
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .map(PathBuf::from),
-                    startup_timeout: Duration::from_secs(self.config.browser_wait_timeout_secs),
+                    startup_timeout: Duration::from_secs(config.browser_wait_timeout_secs),
                 },
-                wait_for_network_idle: self.config.browser_wait_for_network_idle,
-                wait_for_selector: self.config.browser_wait_for_selector.clone(),
-                wait_timeout: Duration::from_secs(self.config.browser_wait_timeout_secs),
+                wait_for_network_idle: config.browser_wait_for_network_idle,
+                wait_for_selector: config.browser_wait_for_selector.clone(),
+                wait_timeout: Duration::from_secs(config.browser_wait_timeout_secs),
                 delay,
             },
-        }
+        })
     }
 
     async fn ensure_network_permission(&self, url: &url::Url) -> SdkResult<()> {
@@ -260,27 +354,29 @@ impl WebPlugin {
         use_cache: bool,
         render_js: bool,
     ) -> SdkResult<FetchedPage> {
+        let state = self.state()?;
         let cache_key = fetch_cache_key(url, render_js);
-        if use_cache && let Some(hit) = self.fetch_cache.get(cache_key.as_str()).await {
+        if use_cache && let Some(hit) = state.fetch_cache.get(cache_key.as_str()).await {
             return Ok(hit);
         }
         if let Some(host) = url.host_str() {
-            self.host_limiter.until_key_ready(&host.to_string()).await;
+            state.host_limiter.until_key_ready(&host.to_string()).await;
         }
         self.ensure_network_permission(url).await?;
-        let options = self.spider_fetch_options(render_js);
+        let options = self.spider_fetch_options(render_js)?;
         let page = fetch_page_with_spider(url, &options)
             .await
             .map_err(crawl_error_to_plugin)?;
         if use_cache {
-            self.fetch_cache.insert(cache_key, page.clone()).await;
+            state.fetch_cache.insert(cache_key, page.clone()).await;
         }
         Ok(page)
     }
 
     async fn invoke_fetch(&self, input: &CrawlFetchInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
-        let render_js = input.render_js.unwrap_or(self.config.browser_enabled);
+        let config = self.config()?;
+        let render_js = input.render_js.unwrap_or(config.browser_enabled);
         let page = self
             .fetch_page(&url, input.use_cache.unwrap_or(true), render_js)
             .await?;
@@ -297,27 +393,28 @@ impl WebPlugin {
             prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?;
         let store = self.store()?;
         let _guard = self.sync_lock.lock().await;
+        let config = self.config()?;
         let options = CrawlRunOptions {
             max_pages: clamp_limit(
                 input.max_pages,
-                self.config.default_max_pages as usize,
-                self.config.max_pages_limit as usize,
+                config.default_max_pages as usize,
+                config.max_pages_limit as usize,
             ),
             max_depth: input
                 .max_depth
-                .unwrap_or(self.config.default_max_depth)
-                .clamp(0, self.config.max_depth_limit),
+                .unwrap_or(config.default_max_depth)
+                .clamp(0, config.max_depth_limit),
             same_host_only: input
                 .same_host_only
-                .unwrap_or(self.config.default_same_host_only),
+                .unwrap_or(config.default_same_host_only),
             use_cache: input.use_cache.unwrap_or(true),
-            render_js: input.render_js.unwrap_or(self.config.browser_enabled),
-            document_cache_ttl: Duration::from_secs(self.config.document_cache_ttl_secs),
-            max_chunk_chars: self.config.default_chunk_chars as usize,
-            near_duplicate_hamming_distance: self.config.near_duplicate_hamming_distance,
+            render_js: input.render_js.unwrap_or(config.browser_enabled),
+            document_cache_ttl: Duration::from_secs(config.document_cache_ttl_secs),
+            max_chunk_chars: config.default_chunk_chars as usize,
+            near_duplicate_hamming_distance: config.near_duplicate_hamming_distance,
             store_retention: Some(CrawlStoreRetention {
-                max_documents: self.config.store_max_documents as usize,
-                max_total_bytes: self.config.store_max_bytes,
+                max_documents: config.store_max_documents as usize,
+                max_total_bytes: config.store_max_bytes,
             }),
         };
         let fetcher = PluginPageFetcher { plugin: self };
@@ -339,10 +436,11 @@ impl WebPlugin {
                 "web search requires a non-empty query",
             ));
         }
+        let config = self.config()?;
         let limit = clamp_limit(
             input.limit.or(input.max_results),
-            self.config.search_default_limit as usize,
-            self.config.search_max_limit as usize,
+            config.search_default_limit as usize,
+            config.search_max_limit as usize,
         );
         let engines = search_engines(input.engine);
         let explicit_engine = !matches!(input.engine, None | Some(WebSearchEngineSelection::Auto));
@@ -399,14 +497,16 @@ impl WebPlugin {
     ) -> SdkResult<Vec<WebSearchResult>> {
         let engine_url = url::Url::parse(engine.permission_url())
             .map_err(|err| PluginError::new(err.to_string()))?;
+        let state = self.state()?;
         if let Some(host) = engine_url.host_str() {
-            self.host_limiter.until_key_ready(&host.to_string()).await;
+            state.host_limiter.until_key_ready(&host.to_string()).await;
         }
         self.ensure_network_permission(&engine_url).await?;
+        let config = &state.config;
         let options = WebSearchOptions {
             engine,
             limit,
-            timeout: Duration::from_secs(self.config.fetch_timeout_secs),
+            timeout: Duration::from_secs(config.fetch_timeout_secs),
             user_agent: crate::provider::CLAUDE_USER_WEB_FETCH_USER_AGENT.to_string(),
         };
         Ok(search_web(query, &options)
@@ -427,10 +527,11 @@ impl WebPlugin {
                 "web query requires a non-empty query",
             ));
         }
+        let config = self.config()?;
         let limit = clamp_limit(
             input.limit.or(input.max_results),
-            self.config.search_default_limit as usize,
-            self.config.search_max_limit as usize,
+            config.search_default_limit as usize,
+            config.search_max_limit as usize,
         );
         let store = self.store()?;
         ensure_index_exists(&store).map_err(crawl_error_to_plugin)?;
@@ -500,10 +601,11 @@ impl WebPlugin {
     }
 
     async fn invoke_list(&self, input: &CrawlListInput) -> SdkResult<ToolInvokeOutput> {
+        let config = self.config()?;
         let limit = clamp_limit(
             input.limit,
-            self.config.list_default_limit as usize,
-            self.config.list_max_limit as usize,
+            config.list_default_limit as usize,
+            config.list_max_limit as usize,
         );
         let store = self.store()?;
         let documents = store.list_summaries(limit).map_err(crawl_error_to_plugin)?;
@@ -535,11 +637,16 @@ impl Plugin for WebPlugin {
                 "Local web search/fetch/crawl plugin with embedded storage, caching, and Tantivy retrieval.",
             )
             .hooks(HookSubscription::INIT | HookSubscription::TOOL_INVOKE)
+            .config_schema(crate::entry::definition::json_schema_for::<WebConfig>())
             .tool(web_decl())
             .build()
     }
 
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+        let config = parse_web_config(ctx.config)?;
+        self.state
+            .set(WebPluginState::new(config))
+            .map_err(|_| PluginError::new("web plugin initialized more than once"))?;
         let _ = self.workspace_root.set(ctx.workspace_root);
         let _ = self.host.set(host);
         Ok(InitOutcome::ack(self.manifest()))
@@ -656,6 +763,100 @@ fn clamp_limit(limit: Option<u32>, default_limit: usize, max_limit: usize) -> us
     limit
         .unwrap_or(default_limit as u32)
         .clamp(1, max_limit as u32) as usize
+}
+
+fn parse_web_config(value: serde_json::Value) -> SdkResult<WebConfig> {
+    let config = if value.is_null() {
+        WebConfig::default()
+    } else {
+        serde_json::from_value(value)
+            .map_err(|err| PluginError::new(format!("invalid web plugin config: {err}")))?
+    };
+    validate_web_config(&config)?;
+    Ok(config)
+}
+
+fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
+    for (label, value) in [
+        ("default_max_pages", web.default_max_pages),
+        ("max_pages_limit", web.max_pages_limit),
+        ("max_depth_limit", web.max_depth_limit),
+        ("default_chunk_chars", web.default_chunk_chars),
+        (
+            "near_duplicate_hamming_distance",
+            web.near_duplicate_hamming_distance,
+        ),
+        ("search_default_limit", web.search_default_limit),
+        ("search_max_limit", web.search_max_limit),
+        ("list_default_limit", web.list_default_limit),
+        ("list_max_limit", web.list_max_limit),
+    ] {
+        if value == 0 {
+            return Err(PluginError::new(format!(
+                "web plugin config `{label}` must be greater than 0"
+            )));
+        }
+    }
+    for (label, value) in [
+        ("request_delay_ms", web.request_delay_ms),
+        ("fetch_timeout_secs", web.fetch_timeout_secs),
+        ("max_body_bytes", web.max_body_bytes),
+        ("browser_wait_timeout_secs", web.browser_wait_timeout_secs),
+        ("document_cache_ttl_secs", web.document_cache_ttl_secs),
+        ("fetch_cache_ttl_secs", web.fetch_cache_ttl_secs),
+        ("fetch_cache_capacity", web.fetch_cache_capacity),
+        ("store_max_bytes", web.store_max_bytes),
+    ] {
+        if value == 0 {
+            return Err(PluginError::new(format!(
+                "web plugin config `{label}` must be greater than 0"
+            )));
+        }
+    }
+    if web.store_max_documents == 0 {
+        return Err(PluginError::new(
+            "web plugin config `store_max_documents` must be greater than 0",
+        ));
+    }
+    if web.default_max_pages > web.max_pages_limit {
+        return Err(PluginError::new(
+            "web plugin config `default_max_pages` must be less than or equal to `max_pages_limit`",
+        ));
+    }
+    if web.default_max_depth > web.max_depth_limit {
+        return Err(PluginError::new(
+            "web plugin config `default_max_depth` must be less than or equal to `max_depth_limit`",
+        ));
+    }
+    if web.search_default_limit > web.search_max_limit {
+        return Err(PluginError::new(
+            "web plugin config `search_default_limit` must be less than or equal to `search_max_limit`",
+        ));
+    }
+    if web.list_default_limit > web.list_max_limit {
+        return Err(PluginError::new(
+            "web plugin config `list_default_limit` must be less than or equal to `list_max_limit`",
+        ));
+    }
+    if web
+        .browser_executable_path
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(PluginError::new(
+            "web plugin config `browser_executable_path` must not be empty when set",
+        ));
+    }
+    if web
+        .browser_wait_for_selector
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
+        return Err(PluginError::new(
+            "web plugin config `browser_wait_for_selector` must not be empty when set",
+        ));
+    }
+    Ok(())
 }
 
 fn build_host_limiter(delay_ms: u64) -> DefaultKeyedRateLimiter<String> {

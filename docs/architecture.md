@@ -108,7 +108,7 @@ Vue 前端。主要通过 `packages/agena-studio-web/src/agena/lib/agenaApi.ts` 
 
 `crates/agena/src/lib.rs` 暴露 core 模块：
 
-- `config`: TOML schema、env overlay、CLI override、provider auth/adapters normalization、provider registry build。
+- `config`: JSON schema、env overlay、CLI override、provider auth/adapters normalization、provider registry build。
 - `runtime`: runtime builder、snapshot、reload、background tasks。
 - `session`: session manager、processor、history、store、cache、append-only prompt assembly。
 - `event`: event bus、publisher、store、filter、envelope。
@@ -464,18 +464,30 @@ Runtime starts two long-running tasks:
 
 Reload policy is controlled by:
 
-```toml
-[runtime.reload]
-enabled = true
-poll_interval_secs = 2
+```json
+{
+  "runtime": {
+    "reload": {
+      "enabled": true,
+      "poll_interval_secs": 2
+    }
+  }
+}
 ```
 
 Session GC policy:
 
-```toml
-[runtime.session.gc]
-enabled = true
-interval_secs = 30
+```json
+{
+  "runtime": {
+    "session": {
+      "gc": {
+        "enabled": true,
+        "interval_secs": 30
+      }
+    }
+  }
+}
 ```
 
 `runtime.shutdown()` signals task control and broadcasts session end events to plugins when possible.
@@ -486,7 +498,7 @@ Use these extension points depending on what you need:
 
 - New model backend: add provider implementation under `crates/agena/src/provider/` and materialize it in `config/registry.rs`, or provide a plugin provider through `provider.list`.
 - New provided tool: implement plugin tool under `crates/agena/src/plugins/provided/` or an internal tool module and register it in plugin host build.
-- External plugin tool/plugin: use `agena-plugin-sdk` and configure `[plugins.list.<id>]`.
+- External plugin tool/plugin: use `agena-plugin-sdk` and configure `plugins.list.<id>` in `config.json`.
 - New API operation: add type to `crates/agena-api`, map it in `crates/agena-api-server/src/dispatch.rs`, and expose REST route if Studio/Web needs direct HTTP.
 - New Studio UI feature: add API wrapper in `packages/agena-studio-web/src/agena/lib/agenaApi.ts`, then page/state/component code.
 - New config field: add raw type, merge behavior, env/override if needed, resolved type, validation, and example config coverage across the integration/e2e suite.

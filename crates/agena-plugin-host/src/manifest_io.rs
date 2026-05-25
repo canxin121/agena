@@ -1,4 +1,4 @@
-//! Read a `plugin.toml` manifest sitting next to a cdylib/stdio binary, or
+//! Read a JSON manifest sitting next to a cdylib/stdio binary, or
 //! materialize one from a `meta/manifest` JSON-RPC response.
 
 use std::path::Path;
@@ -7,10 +7,10 @@ use crate::error::HostError;
 use crate::sdk::PluginManifest;
 
 #[allow(clippy::result_large_err)]
-pub fn read_manifest_toml(path: &Path) -> Result<PluginManifest, HostError> {
+pub fn read_manifest_json_file(path: &Path) -> Result<PluginManifest, HostError> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| HostError::Config(format!("read manifest `{}`: {e}", path.display())))?;
-    let manifest: PluginManifest = toml::from_str(&raw)
+    let manifest: PluginManifest = serde_json::from_str(&raw)
         .map_err(|e| HostError::Config(format!("parse manifest `{}`: {e}", path.display())))?;
     Ok(manifest)
 }

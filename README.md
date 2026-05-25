@@ -69,7 +69,7 @@ export ANTHROPIC_API_KEY=...
 
 ```bash
 cargo run -p agena-cli -- config validate
-cargo run -p agena-cli -- config resolve --format toml
+cargo run -p agena-cli -- config resolve --format json
 ```
 
 启动终端 UI：

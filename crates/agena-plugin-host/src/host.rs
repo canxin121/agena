@@ -1892,10 +1892,9 @@ impl PluginHostBuilder {
         self
     }
 
-    /// Register a compiled-in plugin under a stable id. Matches the config
-    /// entry `kind = "static"` with the same key. If no such entry exists in
-    /// the current config, one is added automatically with default options
-    /// and timeouts so the plugin participates in the load loop.
+    /// Register a compiled-in plugin under a stable id. Static plugins are
+    /// loaded only when the active config contains a matching
+    /// `plugins.list.<id>` entry whose package kind is `static`.
     pub fn register_static<P: crate::sdk::Plugin>(
         mut self,
         id: impl Into<String>,
@@ -1909,14 +1908,6 @@ impl PluginHostBuilder {
                 builder: Box::new(move || Arc::new(inproc) as Arc<dyn PluginTransport>),
             },
         );
-        self.config
-            .list
-            .entry(id)
-            .or_insert_with(|| PluginEntry::Static {
-                options: serde_json::Value::Null,
-                timeouts: Default::default(),
-                disabled: false,
-            });
         self
     }
 
@@ -1942,9 +1933,9 @@ impl PluginHostBuilder {
             handle = handle.with_callback_base_url(url);
         }
         let quotas = Arc::new(crate::quota::QuotaRegistry::new(
-            self.config.default_quota.clone(),
+            self.config.host.default_quota.clone(),
         ));
-        for (plugin_id, quota) in &self.config.quotas {
+        for (plugin_id, quota) in &self.config.host.quotas {
             quotas.set_plugin(plugin_id.clone(), quota.clone());
         }
         handle.install_quota_registry(Arc::clone(&quotas));
@@ -2056,7 +2047,7 @@ impl PluginHostBuilder {
                 &self.agena_version,
                 &self.workspace_root,
                 &env_lookup,
-                &self.config.trusted_keys,
+                &self.config.host.trusted_keys,
             )
             .await
             {
@@ -2115,7 +2106,7 @@ impl PluginHostBuilder {
             entries: entries_shared,
             statuses: statuses_shared,
             logs: logs_shared,
-            timeouts: self.config.timeouts,
+            timeouts: self.config.host.timeouts,
             runtime: None,
             runtime_handle: tokio::runtime::Handle::try_current().ok(),
             _host_handle: host_handle,

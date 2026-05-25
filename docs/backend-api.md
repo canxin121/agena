@@ -350,12 +350,12 @@ Settings API 操作当前 runtime 使用的 `config.json`。读接口可以读 r
 | ------ | ---------------------------- | ------------------------------------------------------------------------- |
 | GET    | `/api/v1/settings`           | 读取一个 setting。query: `path`、`source=effective|file`                   |
 | GET    | `/api/v1/settings/entries`   | 列出 setting entries。query: `path`、`source=effective|file`、`recursive` |
-| PUT    | `/api/v1/settings`           | 设置一个 TOML path 的值                                                   |
-| PATCH  | `/api/v1/settings`           | 深度合并一个 JSON object 到目标 TOML table；`null` 表示删除 key           |
-| DELETE | `/api/v1/settings`           | 删除一个 TOML path。query: `path`、`dry_run`、`validate`、`reload`         |
+| PUT    | `/api/v1/settings`           | 设置一个 JSON path 的值                                                   |
+| PATCH  | `/api/v1/settings`           | 深度合并一个 JSON object 到目标 JSON object；`null` 表示删除 key          |
+| DELETE | `/api/v1/settings`           | 删除一个 JSON path。query: `path`、`dry_run`、`validate`、`reload`         |
 | POST   | `/api/v1/settings/validate`  | 校验当前 `config.json` 能否被 runtime 加载；body 可为空                     |
 
-Path 使用点分语法。带点的 table key 用引号包起来，例如 `mcp.servers.filesystem`。
+Path 使用点分语法。带点的 object key 用引号包起来，例如 `plugins.list."agena.mcp".config.servers.filesystem`。
 
 `source=effective` 读取已经应用默认值、文件、环境变量和 CLI override 后的 resolved config，path 根节点是 resolved config 本身，例如 `runtime.reload.enabled`。`source=file` 读取原始 `config.json`，不会补默认值。
 

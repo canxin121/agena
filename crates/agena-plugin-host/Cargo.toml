@@ -12,7 +12,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "io-util", "process", "sync", "time"] }
-toml = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 url = { workspace = true, features = ["serde"] }

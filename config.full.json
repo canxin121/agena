@@ -120,54 +120,122 @@
       }
     }
   },
-  "memory": {
-    "project_instructions": {
-      "enabled": true,
-      "include_global": true
+  "plugins": {
+    "policy": {
+      "tool_presentation": {
+        "default_mode": "detailed"
+      }
     },
-    "retrieval": {
-      "enabled": true,
-      "limit": 3,
-      "min_query_chars": 8
-    }
-  },
-  "web": {
-    "fetch_enabled": true,
-    "default_max_pages": 10,
-    "max_pages_limit": 100,
-    "default_max_depth": 1,
-    "max_depth_limit": 4,
-    "default_same_host_only": true,
-    "request_delay_ms": 400,
-    "fetch_timeout_secs": 30,
-    "max_body_bytes": 5242880,
-    "respect_robots_txt": true,
-    "document_cache_ttl_secs": 86400,
-    "fetch_cache_ttl_secs": 900,
-    "fetch_cache_capacity": 128,
-    "store_max_documents": 200,
-    "store_max_bytes": 104857600,
-    "default_chunk_chars": 1800,
-    "near_duplicate_hamming_distance": 3,
-    "search_default_limit": 5,
-    "search_max_limit": 20,
-    "list_default_limit": 20,
-    "list_max_limit": 100,
-    "browser_enabled": false,
-    "browser_executable_path": null,
-    "browser_wait_for_network_idle": true,
-    "browser_wait_timeout_secs": 10,
-    "browser_wait_for_selector": null,
-    "browser_wait_for_delay_ms": 0
-  },
-  "mcp": {
-    "servers": {
-      "docs": {
-        "transport": "http",
-        "url": "https://developers.openai.com/mcp",
-        "auth": {
-          "kind": "bearer_from_env",
-          "env": "DOCS_MCP_TOKEN"
+    "list": {
+      "agena.skills": {
+        "package": {
+          "kind": "static"
+        }
+      },
+      "agena.lsp": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "servers": {}
+        }
+      },
+      "agena.cron": {
+        "package": {
+          "kind": "static"
+        }
+      },
+      "agena.code": {
+        "package": {
+          "kind": "static"
+        }
+      },
+      "agena.fs": {
+        "package": {
+          "kind": "static"
+        }
+      },
+      "agena.settings": {
+        "package": {
+          "kind": "static"
+        }
+      },
+      "agena.shell": {
+        "package": {
+          "kind": "static"
+        }
+      },
+      "agena.workflow": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {}
+      },
+      "agena.memory": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "project_instructions": {
+            "enabled": true,
+            "include_global": true
+          },
+          "retrieval": {
+            "enabled": true,
+            "limit": 3,
+            "min_query_chars": 8
+          }
+        }
+      },
+      "agena.web": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "fetch_enabled": true,
+          "default_max_pages": 10,
+          "max_pages_limit": 100,
+          "default_max_depth": 1,
+          "max_depth_limit": 4,
+          "default_same_host_only": true,
+          "request_delay_ms": 400,
+          "fetch_timeout_secs": 30,
+          "max_body_bytes": 5242880,
+          "respect_robots_txt": true,
+          "document_cache_ttl_secs": 86400,
+          "fetch_cache_ttl_secs": 900,
+          "fetch_cache_capacity": 128,
+          "store_max_documents": 200,
+          "store_max_bytes": 104857600,
+          "default_chunk_chars": 1800,
+          "near_duplicate_hamming_distance": 3,
+          "search_default_limit": 5,
+          "search_max_limit": 20,
+          "list_default_limit": 20,
+          "list_max_limit": 100,
+          "browser_enabled": false,
+          "browser_executable_path": null,
+          "browser_wait_for_network_idle": true,
+          "browser_wait_timeout_secs": 10,
+          "browser_wait_for_selector": null,
+          "browser_wait_for_delay_ms": 0
+        }
+      },
+      "agena.mcp": {
+        "package": {
+          "kind": "static"
+        },
+        "config": {
+          "servers": {
+            "docs": {
+              "transport": "http",
+              "url": "https://developers.openai.com/mcp",
+              "auth": {
+                "kind": "bearer_from_env",
+                "env": "DOCS_MCP_TOKEN"
+              }
+            }
+          }
         }
       }
     }

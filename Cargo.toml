@@ -141,7 +141,6 @@ clap_complete = "4.6.3"
 cron = "0.16.0"
 crossterm = "0.29.0"
 derive_more = "2.1.1"
-fastembed = { version = "5.13.4", default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"] }
 fluent-templates = "0.14.0"
 futures-core = "0.3.32"
 gcp_auth = "0.12.6"

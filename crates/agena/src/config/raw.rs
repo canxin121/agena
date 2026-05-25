@@ -2300,10 +2300,6 @@ fn validate_crawl_config(crawl: &crate::config::types::CrawlConfig) -> Result<()
         ("crawl.search_max_limit", crawl.search_max_limit),
         ("crawl.list_default_limit", crawl.list_default_limit),
         ("crawl.list_max_limit", crawl.list_max_limit),
-        ("crawl.vector_candidate_limit", crawl.vector_candidate_limit),
-        ("crawl.min_vector_query_chars", crawl.min_vector_query_chars),
-        ("crawl.hybrid_rrf_k", crawl.hybrid_rrf_k),
-        ("crawl.rerank_limit", crawl.rerank_limit),
     ] {
         if value == 0 {
             return Err(ConfigError::Validation(format!(
@@ -2356,10 +2352,13 @@ fn validate_crawl_config(crawl: &crate::config::types::CrawlConfig) -> Result<()
                 .to_string(),
         ));
     }
-    if crawl.rerank_limit > crawl.vector_candidate_limit {
+    if crawl
+        .browser_executable_path
+        .as_deref()
+        .is_some_and(|value| value.trim().is_empty())
+    {
         return Err(ConfigError::Validation(
-            "crawl.rerank_limit must be less than or equal to crawl.vector_candidate_limit"
-                .to_string(),
+            "crawl.browser_executable_path must not be empty when set".to_string(),
         ));
     }
     if crawl
@@ -2717,21 +2716,6 @@ mod tests {
 
         assert!(err.to_string().contains(
             "crawl.default_max_pages must be less than or equal to crawl.max_pages_limit"
-        ));
-    }
-
-    #[test]
-    fn crawl_config_rejects_rerank_limit_above_vector_candidates() {
-        let err = resolve_config(json!({
-            "crawl": {
-                "vector_candidate_limit": 5,
-                "rerank_limit": 6
-            }
-        }))
-        .expect_err("invalid crawl config should fail");
-
-        assert!(err.to_string().contains(
-            "crawl.rerank_limit must be less than or equal to crawl.vector_candidate_limit"
         ));
     }
 

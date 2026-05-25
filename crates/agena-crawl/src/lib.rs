@@ -1,3 +1,4 @@
+mod browser;
 mod error;
 mod extract;
 mod fetch;
@@ -7,8 +8,6 @@ mod model;
 mod paths;
 mod spider;
 mod store;
-mod vector;
-mod vector_index;
 
 pub use error::CrawlError;
 pub use fetch::{
@@ -20,8 +19,7 @@ pub use model::{
     CrawlDocumentSummary, CrawlSearchHit, FetchedPage, StoredDocument, chunk_markdown, preview_text,
 };
 pub use paths::{CrawlDir, workspace_key};
-pub use spider::{BrowserRenderOptions, SpiderFetchOptions, fetch_page_with_spider};
-pub use store::CrawlStore;
-pub use vector::{
-    EmbeddingService, EmbeddingServiceConfig, HybridSearchOptions, hybrid_search_documents,
+pub use spider::{
+    BrowserRenderOptions, LocalBrowserOptions, SpiderFetchOptions, fetch_page_with_spider,
 };
+pub use store::CrawlStore;

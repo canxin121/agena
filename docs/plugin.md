@@ -129,7 +129,7 @@ Runtime build 注册：
 | `agena.fs` | 文件系统读写相关 tools |
 | `agena.shell` | shell exec / monitor 相关 tools |
 | `agena.web` | web search / web fetch tools |
-| `agena.crawl` | 本地 Spider/CRW crawl、持久化抓取、去重、进程内 cache、可选浏览器渲染、Tantivy BM25 和 redb chunk vector retrieval tools |
+| `agena.crawl` | 本地 Spider/CRW crawl、持久化抓取、去重、进程内 cache、可选 Agena 托管浏览器渲染和 Tantivy BM25/ngram 检索 tools |
 | `agena.code` | `ast-grep` / `tree-sitter` 驱动的结构化代码搜索 tools |
 | `agena.workflow` | plan mode、todo、worktree 等 workflow tools |
 | `agena.skills` | 扫描 `SKILL.md` 和 slash command，并动态注册 tools |

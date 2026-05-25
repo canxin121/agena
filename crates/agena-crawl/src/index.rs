@@ -180,8 +180,6 @@ fn document_from_hit(doc: &TantivyDocument, fields: &SearchFields, score: f32) -
         preview: first_text(doc, fields.preview),
         score,
         lexical_score: Some(score),
-        vector_score: None,
-        rerank_score: None,
         match_sources: vec!["lexical".to_string()],
     }
 }
@@ -220,10 +218,7 @@ mod tests {
             etag: None,
             last_modified: None,
             chunk_hashes: vec!["chunk-hash".to_string()],
-            chunk_embeddings: Vec::new(),
             hash: "hash".to_string(),
-            embedding_model: None,
-            embedding_dimension: None,
             depth: 0,
             fetched_at: chrono::Utc::now(),
         };
